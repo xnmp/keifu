@@ -17,13 +17,12 @@ pub fn stage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
 ///
 /// If HEAD does not exist (unborn branch), this removes the path from the index.
 pub fn unstage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
-    let head_commit = match repo.head() {
-        Ok(head) => head.peel_to_commit().ok(),
-        Err(_) => None,
-    };
+    // Use HEAD tree when available; otherwise treat as unborn branch.
+    // This can fail when HEAD points at a non-commit (rare), so fall back
+    // to the unborn-branch behavior instead of erroring.
+    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
 
-    if let Some(commit) = head_commit {
-        let tree = commit.tree()?;
+    if let Some(tree) = head_tree {
         repo.reset_default(Some(tree.as_object()), [path].as_slice())?;
         return Ok(());
     }
