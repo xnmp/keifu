@@ -55,6 +55,7 @@ pub enum AppMode {
     Normal,
     Files,
     Modal {
+        title: String,
         message: String,
     },
     Help,
@@ -1053,55 +1054,63 @@ impl App {
             }
             Action::FilesOpenModal => {
                 self.files_pane.select_current();
-                let message = self.build_selected_file_diff_preview()?;
-                self.mode = AppMode::Modal { message };
+                let (title, message) = self.build_selected_file_diff_preview()?;
+                self.mode = AppMode::Modal { title, message };
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn build_selected_file_diff_preview(&mut self) -> Result<String> {
+    fn build_selected_file_diff_preview(&mut self) -> Result<(String, String)> {
         let Some(diff) = self.cached_diff() else {
-            return Ok("Diff not loaded yet".to_string());
+            return Ok(("Diff".to_string(), "Diff not loaded yet".to_string()));
         };
         let Some(file_idx) = self.files_pane.selected_file_index else {
-            return Ok("No file selected".to_string());
+            return Ok(("Diff".to_string(), "No file selected".to_string()));
         };
         let Some(file) = diff.files.get(file_idx) else {
-            return Ok("No file selected".to_string());
+            return Ok(("Diff".to_string(), "No file selected".to_string()));
         };
 
         let Some(selected_node) = self.graph_list_state.selected() else {
-            return Ok("No commit selected".to_string());
+            return Ok((
+                file.path.to_string_lossy().to_string(),
+                "No commit selected".to_string(),
+            ));
         };
         let Some(node) = self.graph_layout.nodes.get(selected_node) else {
-            return Ok("No commit selected".to_string());
+            return Ok((
+                file.path.to_string_lossy().to_string(),
+                "No commit selected".to_string(),
+            ));
         };
         let commit_oid = node.commit.as_ref().map(|c| c.oid);
 
-        let repo = git2::Repository::open(&self.repo_path)?;
-
-        let text = if node.is_uncommitted {
-            crate::git::CommitDiffInfo::unified_diff_for_working_tree_file(
-                &repo,
-                file.path.as_path(),
-            )?
+        let backend = crate::diff_view::DiffBackend::Git;
+        let render = if node.is_uncommitted {
+            crate::diff_view::render_worktree_file_diff(&self.repo_path, file.path.as_path(), backend)?
         } else {
             let Some(commit_oid) = commit_oid else {
-                return Ok("No commit selected".to_string());
+                return Ok((
+                    file.path.to_string_lossy().to_string(),
+                    "No commit selected".to_string(),
+                ));
             };
-            crate::git::CommitDiffInfo::unified_diff_for_file(
-                &repo,
+            crate::diff_view::render_commit_file_diff(
+                &self.repo_path,
                 commit_oid,
                 file.path.as_path(),
+                backend,
             )?
         };
 
+        let text = render.ansi;
+
         if text.trim().is_empty() {
-            return Ok("(no diff output)".to_string());
+            return Ok((render.title, "(no diff output)".to_string()));
         }
-        Ok(text)
+        Ok((render.title, text))
     }
 
     fn handle_modal_action(&mut self, action: Action) {

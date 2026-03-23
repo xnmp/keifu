@@ -3,6 +3,7 @@
 pub mod action;
 pub mod app;
 pub mod config;
+pub mod diff_view;
 pub mod event;
 pub mod files_pane;
 pub mod git;

@@ -99,9 +99,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(HelpPopup, popup_area);
         }
-        AppMode::Modal { message } => {
+        AppMode::Modal { title, message } => {
             let popup_area = centered_rect(60, 30, area);
-            frame.render_widget(Modal::new(message), popup_area);
+            frame.render_widget(Modal::new(title, message), popup_area);
         }
         AppMode::Input {
             input,

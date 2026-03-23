@@ -9,12 +9,13 @@ use ratatui::{
 };
 
 pub struct Modal<'a> {
+    title: &'a str,
     message: &'a str,
 }
 
 impl<'a> Modal<'a> {
-    pub fn new(message: &'a str) -> Self {
-        Self { message }
+    pub fn new(title: &'a str, message: &'a str) -> Self {
+        Self { title, message }
     }
 }
 
@@ -23,7 +24,7 @@ impl<'a> Widget for Modal<'a> {
         Clear.render(area, buf);
 
         let block = Block::default()
-            .title(" Modal ")
+            .title(format!(" {} ", self.title))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .style(Style::default().bg(Color::Black));
