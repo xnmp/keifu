@@ -681,17 +681,42 @@ impl CommitDiffInfo {
 
         // Prefer a combined index+workdir diff against HEAD.
         // This catches staged changes and additions reliably.
-        let mut opts_combined = DiffOptions::new();
-        opts_combined.pathspec(path);
-        let combined = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
-
         let mut out = String::new();
-        combined.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-            if let Ok(s) = std::str::from_utf8(line.content()) {
-                out.push_str(s);
-            }
-            true
-        })?;
+        {
+            let mut opts_combined = DiffOptions::new();
+            opts_combined.pathspec(path);
+            let combined =
+                repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
+            combined.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+                if let Ok(s) = std::str::from_utf8(line.content()) {
+                    out.push_str(s);
+                }
+                true
+            })?;
+        }
+
+        // If no output, try explicit staged-only and unstaged-only diffs for the path.
+        if out.trim().is_empty() {
+            let mut opts_staged = DiffOptions::new();
+            opts_staged.pathspec(path);
+            let staged = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts_staged))?;
+            staged.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+                if let Ok(s) = std::str::from_utf8(line.content()) {
+                    out.push_str(s);
+                }
+                true
+            })?;
+
+            let mut opts_unstaged = DiffOptions::new();
+            opts_unstaged.pathspec(path);
+            let unstaged = repo.diff_index_to_workdir(None, Some(&mut opts_unstaged))?;
+            unstaged.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+                if let Ok(s) = std::str::from_utf8(line.content()) {
+                    out.push_str(s);
+                }
+                true
+            })?;
+        }
 
         // If there's still no patch output, it might be an untracked file (not in index).
         if out.trim().is_empty() {
