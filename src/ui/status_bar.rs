@@ -118,8 +118,10 @@ impl<'a> Widget for StatusBar<'a> {
                         spans.push(Span::raw("  "));
                     }
 
-                    spans.push(Span::styled(" j/k ", key_style));
+                    spans.push(Span::styled(" ↑/↓ ", key_style));
                     spans.push(Span::styled("move ", desc_style));
+                    spans.push(Span::styled(" ←/→ ", key_style));
+                    spans.push(Span::styled("panel ", desc_style));
                     spans.push(Span::styled(" Enter ", key_style));
                     spans.push(Span::styled("files ", desc_style));
                     spans.push(Span::styled(" c ", key_style));
@@ -139,10 +141,18 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled("close help", desc_style));
             }
             AppMode::Files => {
-                spans.push(Span::styled(" j/k ", key_style));
+                spans.push(Span::styled(" ↑/↓ ", key_style));
                 spans.push(Span::styled("move ", desc_style));
+                spans.push(Span::styled(" ←/→ ", key_style));
+                spans.push(Span::styled("panel ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
                 spans.push(Span::styled("open ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("back", desc_style));
+            }
+            AppMode::Detail => {
+                spans.push(Span::styled(" ←/→ ", key_style));
+                spans.push(Span::styled("panel ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
             }
@@ -184,6 +194,7 @@ impl<'a> Widget for StatusBar<'a> {
         let mode_text = match self.mode {
             AppMode::Normal => None,
             AppMode::Files => Some(" FILES "),
+            AppMode::Detail => Some(" DETAIL "),
             AppMode::Help => Some(" HELP "),
             AppMode::Modal { .. } => Some(" MODAL "),
             AppMode::Input { .. } => Some(" INPUT "),

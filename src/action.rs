@@ -14,6 +14,8 @@ pub enum Action {
     PrevBranch,
     BranchLeft,
     BranchRight,
+    FocusLeftPane,
+    FocusRightPane,
 
     // Git operations
     Checkout,

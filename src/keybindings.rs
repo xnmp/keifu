@@ -15,6 +15,7 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
     match mode {
         AppMode::Normal => map_normal_mode(key),
         AppMode::Files => map_files_mode(key),
+        AppMode::Detail => map_detail_mode(key),
         AppMode::Modal { .. } => map_modal_mode(key),
         AppMode::Help => map_help_mode(key),
         AppMode::Input { action, .. } => {
@@ -26,6 +27,15 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
+    }
+}
+
+fn map_detail_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
+        (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
+        _ => None,
     }
 }
 
@@ -51,12 +61,16 @@ fn map_modal_mode(key: KeyEvent) -> Option<Action> {
 fn map_normal_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         // Movement
-        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+        (KeyModifiers::NONE, KeyCode::Down) => {
             Some(Action::MoveDown)
         }
-        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+        (KeyModifiers::NONE, KeyCode::Up) => {
             Some(Action::MoveUp)
         }
+
+        // Focus between panes
+        (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
+        (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
 
         // Page scroll
         (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::PageDown),
@@ -82,12 +96,8 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
         }
 
         // Branch selection within same commit
-        (KeyModifiers::NONE, KeyCode::Char('h')) | (KeyModifiers::NONE, KeyCode::Left) => {
-            Some(Action::BranchLeft)
-        }
-        (KeyModifiers::NONE, KeyCode::Char('l')) | (KeyModifiers::NONE, KeyCode::Right) => {
-            Some(Action::BranchRight)
-        }
+        (KeyModifiers::NONE, KeyCode::Char('h')) => Some(Action::BranchLeft),
+        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::BranchRight),
 
         // Git operations
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::Checkout),
@@ -113,12 +123,10 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_files_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
-            Some(Action::MoveDown)
-        }
-        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
-            Some(Action::MoveUp)
-        }
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
+        (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
         (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
             Some(Action::PageDown)
         }

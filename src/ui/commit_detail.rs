@@ -253,11 +253,22 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
 
+        let left_border = if matches!(self.app.mode, AppMode::Files) {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        let right_border = if matches!(self.app.mode, AppMode::Detail) {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+
         // Left: file list
         let left_block = Block::default()
             .title(" Changed Files ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(left_border));
 
         let mut left_paragraph = Paragraph::new(self.file_lines)
             .block(left_block)
@@ -284,7 +295,7 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         let right_block = Block::default()
             .title(" Commit Detail ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(right_border));
 
         let right_paragraph = Paragraph::new(self.commit_lines)
             .block(right_block)

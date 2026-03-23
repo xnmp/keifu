@@ -54,6 +54,7 @@ fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
 pub enum AppMode {
     Normal,
     Files,
+    Detail,
     Modal {
         title: String,
         message: String,
@@ -949,6 +950,7 @@ impl App {
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
             AppMode::Files => self.handle_files_action(action)?,
+            AppMode::Detail => self.handle_detail_action(action)?,
             AppMode::Modal { .. } => self.handle_modal_action(action),
             AppMode::Help => self.handle_help_action(action),
             AppMode::Input { .. } => self.handle_input_action(action)?,
@@ -1003,6 +1005,16 @@ impl App {
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
+            }
+            Action::FocusLeftPane => {
+                self.mode = AppMode::Files;
+                // Keep existing selection if present.
+                if self.files_pane.list_state.selected().is_none() {
+                    self.files_pane.list_state.select(Some(0));
+                }
+            }
+            Action::FocusRightPane => {
+                self.mode = AppMode::Detail;
             }
             Action::Refresh => {
                 self.refresh(true)?;
@@ -1076,6 +1088,9 @@ impl App {
             Action::Cancel | Action::Quit => {
                 self.files_pane.exit(&mut self.mode);
             }
+            Action::FocusRightPane => {
+                self.mode = AppMode::Detail;
+            }
             Action::MoveUp => {
                 self.files_pane.move_selection(file_count, -1);
             }
@@ -1100,6 +1115,22 @@ impl App {
                     message,
                     scroll: 0,
                 };
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_detail_action(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::Cancel | Action::Quit => {
+                self.mode = AppMode::Normal;
+            }
+            Action::FocusLeftPane => {
+                self.mode = AppMode::Files;
+                if self.files_pane.list_state.selected().is_none() {
+                    self.files_pane.list_state.select(Some(0));
+                }
             }
             _ => {}
         }
