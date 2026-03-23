@@ -54,6 +54,9 @@ fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
 pub enum AppMode {
     Normal,
     Files,
+    Modal {
+        message: String,
+    },
     Help,
     Input {
         title: String,
@@ -905,6 +908,7 @@ impl App {
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
             AppMode::Files => self.handle_files_action(action)?,
+            AppMode::Modal { .. } => self.handle_modal_action(action),
             AppMode::Help => self.handle_help_action(action),
             AppMode::Input { .. } => self.handle_input_action(action)?,
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
@@ -1047,62 +1051,21 @@ impl App {
                 self.files_pane.select_current();
                 self.files_pane.exit(&mut self.mode);
             }
-            Action::FilesOpenDiff => {
+            Action::FilesOpenModal => {
                 self.files_pane.select_current();
-                self.open_difftastic_for_selected_file()?;
+                self.mode = AppMode::Modal {
+                    message: "your text here".to_string(),
+                };
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn open_difftastic_for_selected_file(&mut self) -> Result<()> {
-        let Some(diff) = self.cached_diff() else {
-            self.set_message("Diff not loaded yet".to_string());
-            return Ok(());
-        };
-        let Some(selected_idx) = self.files_pane.selected_file_index else {
-            return Ok(());
-        };
-        let Some(file) = diff.files.get(selected_idx) else {
-            return Ok(());
-        };
-        let Some(selected_node) = self.graph_list_state.selected() else {
-            return Ok(());
-        };
-        let Some(node) = self.graph_layout.nodes.get(selected_node) else {
-            return Ok(());
-        };
-        let Some(commit) = node.commit.as_ref() else {
-            return Ok(());
-        };
-
-        crate::tui::restore()?;
-
-        // Ensure keifu doesn't exit without restoring the terminal.
-        // (We intentionally don't return early after this point.)
-        let status = std::process::Command::new("git")
-            .args(["-C", &self.repo_path])
-            .args(["difftool", "--tool=difftastic", "-y"])
-            .arg(commit.oid.to_string())
-            .arg("--")
-            .arg(file.path.as_os_str())
-            .stdin(std::process::Stdio::inherit())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .status();
-
-        // Re-enter TUI.
-        let _ = crate::tui::init();
-
-        if let Err(e) = status {
-            self.set_message(format!("Failed to run difftastic: {e}"));
-        } else if let Ok(status) = status {
-            if !status.success() {
-                self.set_message(format!("difftastic exited with {status}"));
-            }
+    fn handle_modal_action(&mut self, action: Action) {
+        if matches!(action, Action::Cancel | Action::Confirm | Action::Quit) {
+            self.mode = AppMode::Files;
         }
-        Ok(())
     }
 
     fn enter_files_mode(&mut self) {

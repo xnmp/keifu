@@ -4,6 +4,7 @@ pub mod commit_detail;
 pub mod dialog;
 pub mod graph_view;
 pub mod help_popup;
+pub mod modal;
 pub mod search_dropdown;
 pub mod status_bar;
 
@@ -22,6 +23,7 @@ use self::{
     dialog::{BranchInfoPopup, ConfirmDialog, InputDialog},
     graph_view::GraphViewWidget,
     help_popup::HelpPopup,
+    modal::Modal,
     search_dropdown::{calculate_dropdown_height, SearchDropdown},
     status_bar::StatusBar,
 };
@@ -96,6 +98,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(HelpPopup, popup_area);
+        }
+        AppMode::Modal { message } => {
+            let popup_area = centered_rect(60, 30, area);
+            frame.render_widget(Modal::new(message), popup_area);
         }
         AppMode::Input {
             input,

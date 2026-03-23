@@ -15,6 +15,7 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
     match mode {
         AppMode::Normal => map_normal_mode(key),
         AppMode::Files => map_files_mode(key),
+        AppMode::Modal { .. } => map_modal_mode(key),
         AppMode::Help => map_help_mode(key),
         AppMode::Input { action, .. } => {
             if *action == crate::app::InputAction::Search {
@@ -25,6 +26,13 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
+    }
+}
+
+fn map_modal_mode(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Enter => Some(Action::Cancel),
+        _ => None,
     }
 }
 
@@ -105,7 +113,7 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
             Some(Action::PageUp)
         }
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenDiff),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenModal),
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }

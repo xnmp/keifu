@@ -19,7 +19,7 @@ pub enum Action {
     Checkout,
     FocusFiles,
     FilesSelect,
-    FilesOpenDiff,
+    FilesOpenModal,
     CreateBranch,
     DeleteBranch,
     Fetch,

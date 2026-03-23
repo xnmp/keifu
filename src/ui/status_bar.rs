@@ -142,9 +142,13 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" j/k ", key_style));
                 spans.push(Span::styled("move ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("difft ", desc_style));
+                spans.push(Span::styled("open ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
+            }
+            AppMode::Modal { .. } => {
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("close", desc_style));
             }
             AppMode::Input { .. } => {
                 spans.push(Span::styled(" Enter ", key_style));
@@ -181,6 +185,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Normal => None,
             AppMode::Files => Some(" FILES "),
             AppMode::Help => Some(" HELP "),
+            AppMode::Modal { .. } => Some(" MODAL "),
             AppMode::Input { .. } => Some(" INPUT "),
             AppMode::Confirm { .. } => Some(" CONFIRM "),
             AppMode::Error { .. } => Some(" ERROR "),
