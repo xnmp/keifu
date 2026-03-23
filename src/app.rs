@@ -1079,6 +1079,10 @@ impl App {
 
     /// Handle an action
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
+        if action == Action::QuitAll {
+            self.should_quit = true;
+            return Ok(());
+        }
         match &self.mode {
             AppMode::Graph => self.handle_graph_action(action)?,
             AppMode::Files => self.handle_files_action(action)?,

@@ -34,6 +34,14 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     let mods = key.modifiers;
     let code = key.code;
 
+    if mods == KeyModifiers::CONTROL && code == KeyCode::Char('q') {
+        return Some(Action::QuitAll);
+    }
+
+    if mods.is_empty() && code == KeyCode::Esc {
+        return Some(Action::FocusLeftPane);
+    }
+
     // Commit message editor keybindings (used when the uncommitted node is
     // selected). These are mapped here; the App will ignore them when not in
     // edit mode.
@@ -117,6 +125,7 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_modal_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
         (_, KeyCode::Esc) | (_, KeyCode::Enter) => Some(Action::Cancel),
         (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
             Some(Action::ModalScrollDown)
@@ -172,7 +181,7 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
         // Git operations
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::Checkout),
-        (KeyModifiers::NONE, KeyCode::Enter) => None,
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FocusRightPane),
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
@@ -193,6 +202,7 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_files_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
         (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
@@ -206,30 +216,34 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenModal),
         (KeyModifiers::NONE, KeyCode::Char('S')) => Some(Action::ToggleStage),
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusLeftPane),
         (KeyModifiers::NONE, KeyCode::F(12)) => Some(Action::ToggleKeyDebug),
         _ => None,
     }
 }
 
 fn map_help_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('?') => Some(Action::ToggleHelp),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
+        (_, KeyCode::Esc) | (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
         _ => None,
     }
 }
 
 fn map_input_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Enter => Some(Action::Confirm),
-        KeyCode::Esc => Some(Action::Cancel),
-        KeyCode::Backspace => Some(Action::InputBackspace),
-        KeyCode::Char(c) => Some(Action::InputChar(c)),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
+        (_, KeyCode::Enter) => Some(Action::Confirm),
+        (_, KeyCode::Esc) => Some(Action::Cancel),
+        (_, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (_, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
 }
 
 fn map_search_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
         // Navigation in dropdown (Tab doesn't move graph)
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::SearchSelectUp),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::SearchSelectDown),
@@ -247,16 +261,18 @@ fn map_search_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_confirm_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Char('y') | KeyCode::Enter => Some(Action::Confirm),
-        KeyCode::Char('n') | KeyCode::Esc => Some(Action::Cancel),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
+        (_, KeyCode::Char('y')) | (_, KeyCode::Enter) => Some(Action::Confirm),
+        (_, KeyCode::Char('n')) | (_, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }
 }
 
 fn map_error_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter => Some(Action::Cancel),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::QuitAll),
+        (_, KeyCode::Esc) | (_, KeyCode::Enter) => Some(Action::Cancel),
         _ => None,
     }
 }

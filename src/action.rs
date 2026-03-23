@@ -39,6 +39,7 @@ pub enum Action {
     ToggleHelp,
     Search,
     Refresh,
+    QuitAll,
     Quit,
     ToggleKeyDebug,
     CommitMessageToggleEdit,
