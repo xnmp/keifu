@@ -287,10 +287,22 @@ impl<'a> CommitDetailWidget<'a> {
                     )));
                 }
             } else {
-                lines.push(Line::from(Span::styled(
-                    "(focus Detail panel to type)",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                // When Detail loses focus, keep showing the commit message
+                // the user has typed (read-only, without cursor).
+                let msg = app.commit_message.clone();
+                if msg.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "(press Enter in Detail to edit commit message)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    for line in msg.lines() {
+                        lines.push(Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(Color::White),
+                        )));
+                    }
+                }
             }
 
             return lines;
