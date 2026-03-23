@@ -80,7 +80,7 @@ impl Widget for HelpPopup {
             Line::from(""),
             Line::from(Span::styled("Git Operations", header_style)),
             Line::from(vec![
-                Span::styled("  Enter      ", key_style),
+                Span::styled("  c          ", key_style),
                 Span::styled("Checkout selected branch/commit", desc_style),
             ]),
             Line::from(vec![

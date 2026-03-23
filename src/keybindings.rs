@@ -69,7 +69,7 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
         }
 
         // Git operations
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Checkout),
+        (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::Checkout),
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
