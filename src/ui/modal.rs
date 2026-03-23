@@ -3,10 +3,12 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
+
+use ansi_to_tui::IntoText;
 
 pub struct Modal<'a> {
     title: &'a str,
@@ -30,18 +32,20 @@ impl<'a> Widget for Modal<'a> {
             .style(Style::default().bg(Color::Black));
 
         let hint_style = Style::default().fg(Color::DarkGray);
-        let mut lines: Vec<Line> = Vec::new();
-        lines.push(Line::from(""));
-        for line in self.message.lines() {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(line.to_string(), Style::default().add_modifier(Modifier::BOLD)),
-            ]));
-        }
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("  Esc: close", hint_style)));
 
-        let paragraph = Paragraph::new(lines).block(block);
+        let mut text = self.message.as_bytes().into_text().unwrap_or_default();
+        for line in &mut text.lines {
+            line.spans.insert(0, Span::raw("  "));
+        }
+
+        // Add footer hint.
+        if !text.lines.is_empty() {
+            text.lines.push(Line::from(""));
+        }
+        text.lines
+            .push(Line::from(Span::styled("  Esc: close", hint_style)));
+
+        let paragraph = Paragraph::new(text).block(block);
         Widget::render(paragraph, area, buf);
     }
 }

@@ -100,7 +100,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame.render_widget(HelpPopup, popup_area);
         }
         AppMode::Modal { title, message } => {
-            let popup_area = centered_rect(60, 30, area);
+            let popup_area = centered_rect(80, 80, area);
             frame.render_widget(Modal::new(title, message), popup_area);
         }
         AppMode::Input {

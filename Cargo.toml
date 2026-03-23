@@ -34,6 +34,10 @@ fuzzy-matcher = "0.3"
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
+tempfile = "3.17"
+
+# ANSI -> ratatui text conversion
+ansi-to-tui = "7.0"
 
 [profile.release]
 lto = true
@@ -41,4 +45,3 @@ codegen-units = 1
 panic = "abort"
 
 [dev-dependencies]
-tempfile = "3.17"

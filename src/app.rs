@@ -1087,7 +1087,7 @@ impl App {
         };
         let commit_oid = node.commit.as_ref().map(|c| c.oid);
 
-        let backend = crate::diff_view::DiffBackend::Git;
+        let backend = crate::diff_view::DiffBackend::Difftastic;
         let render = if node.is_uncommitted {
             crate::diff_view::render_worktree_file_diff(&self.repo_path, file.path.as_path(), backend)?
         } else {
