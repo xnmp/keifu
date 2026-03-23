@@ -95,6 +95,11 @@ struct DiffResult {
     diff: Result<CommitDiffInfo, String>,
 }
 
+struct ModalDiffResult {
+    key: (DiffTarget, std::path::PathBuf),
+    value: Result<(String, String), String>,
+}
+
 /// Identifies the currently selected node for diff loading and caching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiffTarget {
@@ -213,6 +218,7 @@ pub struct App {
     // Diff modal cache (to avoid re-running external diff renderer)
     diff_modal_cache_key: Option<(DiffTarget, std::path::PathBuf)>,
     diff_modal_cache_value: Option<(String, String)>,
+    diff_modal_receiver: Option<Receiver<ModalDiffResult>>,
 
     // Flags
     pub should_quit: bool,
@@ -309,6 +315,7 @@ impl App {
             selected_diff_target_changed_at: now,
             diff_modal_cache_key: None,
             diff_modal_cache_value: None,
+            diff_modal_receiver: None,
             should_quit: false,
             message: initial_message,
             message_time: initial_message_time,
@@ -329,6 +336,7 @@ impl App {
         self.clear_uncommitted_diff_cache();
         self.diff_modal_cache_key = None;
         self.diff_modal_cache_value = None;
+        self.diff_modal_receiver = None;
     }
 
     /// Clear uncommitted diff cache only
@@ -892,6 +900,29 @@ impl App {
         }
     }
 
+    pub fn poll_modal_diff_results(&mut self) {
+        let Some(rx) = self.diff_modal_receiver.as_ref() else {
+            return;
+        };
+
+        let mut last_error: Option<String> = None;
+        while let Ok(result) = rx.try_recv() {
+            match result.value {
+                Ok(value) => {
+                    self.diff_modal_cache_key = Some(result.key);
+                    self.diff_modal_cache_value = Some(value);
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        if let Some(e) = last_error {
+            self.set_message(format!("Failed to render diff: {e}"));
+        }
+    }
+
     /// Get cached diff info for the currently selected node
     pub fn cached_diff(&self) -> Option<&CommitDiffInfo> {
         match self.current_diff_target()? {
@@ -1076,54 +1107,71 @@ impl App {
     }
 
     fn build_selected_file_diff_preview(&mut self) -> Result<(String, String)> {
-        let Some(diff) = self.cached_diff() else {
-            return Ok(("Diff".to_string(), "Diff not loaded yet".to_string()));
-        };
-        let Some(file_idx) = self.files_pane.selected_file_index else {
-            return Ok(("Diff".to_string(), "No file selected".to_string()));
-        };
-        let Some(file) = diff.files.get(file_idx) else {
-            return Ok(("Diff".to_string(), "No file selected".to_string()));
+        let file_path = {
+            let Some(diff) = self.cached_diff() else {
+                return Ok(("Diff".to_string(), "Diff not loaded yet".to_string()));
+            };
+            let Some(file_idx) = self.files_pane.selected_file_index else {
+                return Ok(("Diff".to_string(), "No file selected".to_string()));
+            };
+            let Some(file) = diff.files.get(file_idx) else {
+                return Ok(("Diff".to_string(), "No file selected".to_string()));
+            };
+            file.path.clone()
         };
 
         let Some(selected_node) = self.graph_list_state.selected() else {
             return Ok((
-                file.path.to_string_lossy().to_string(),
+                file_path.to_string_lossy().to_string(),
                 "No commit selected".to_string(),
             ));
         };
-        let Some(node) = self.graph_layout.nodes.get(selected_node) else {
+        let (is_uncommitted, commit_oid) = self
+            .graph_layout
+            .nodes
+            .get(selected_node)
+            .map(|n| (n.is_uncommitted, n.commit.as_ref().map(|c| c.oid)))
+            .unwrap_or((false, None));
+
+        if !is_uncommitted && commit_oid.is_none() {
             return Ok((
-                file.path.to_string_lossy().to_string(),
+                file_path.to_string_lossy().to_string(),
                 "No commit selected".to_string(),
             ));
-        };
-        let commit_oid = node.commit.as_ref().map(|c| c.oid);
+        }
 
         let backend = crate::diff_view::DiffBackend::Difftastic;
 
         let Some(target) = self.current_diff_target() else {
             return Ok(("Diff".to_string(), "No commit selected".to_string()));
         };
-        let cache_key = (target, file.path.clone());
+        let cache_key = (target, file_path.clone());
         if self.diff_modal_cache_key.as_ref() == Some(&cache_key) {
             if let Some(value) = self.diff_modal_cache_value.clone() {
                 return Ok(value);
             }
         }
-        let render = if node.is_uncommitted {
-            crate::diff_view::render_worktree_file_diff(&self.repo_path, file.path.as_path(), backend)?
+
+        // Opportunistically pick up any background-computed result.
+        self.poll_modal_diff_results();
+        if self.diff_modal_cache_key.as_ref() == Some(&cache_key) {
+            if let Some(value) = self.diff_modal_cache_value.clone() {
+                return Ok(value);
+            }
+        }
+        let render = if is_uncommitted {
+            crate::diff_view::render_worktree_file_diff(&self.repo_path, file_path.as_path(), backend)?
         } else {
             let Some(commit_oid) = commit_oid else {
                 return Ok((
-                    file.path.to_string_lossy().to_string(),
+                    file_path.to_string_lossy().to_string(),
                     "No commit selected".to_string(),
                 ));
             };
             crate::diff_view::render_commit_file_diff(
                 &self.repo_path,
                 commit_oid,
-                file.path.as_path(),
+                file_path.as_path(),
                 backend,
             )?
         };
@@ -1169,7 +1217,62 @@ impl App {
         let file_count = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
         if let Some(msg) = self.files_pane.enter(&mut self.mode, file_count) {
             self.set_message(msg);
+            return;
         }
+
+        // Start precomputing the diff for the initially-selected file.
+        self.start_modal_diff_precompute();
+    }
+
+    fn start_modal_diff_precompute(&mut self) {
+        let Some(target) = self.current_diff_target() else {
+            return;
+        };
+        let Some(diff) = self.cached_diff() else {
+            return;
+        };
+        let Some(file_idx) = self.files_pane.list_state.selected() else {
+            return;
+        };
+        let Some(file) = diff.files.get(file_idx) else {
+            return;
+        };
+
+        let key = (target, file.path.clone());
+        if self.diff_modal_cache_key.as_ref() == Some(&key) {
+            return;
+        }
+
+        let repo_path = self.repo_path.clone();
+        let path = file.path.clone();
+        let backend = crate::diff_view::DiffBackend::Difftastic;
+
+        let (tx, rx) = mpsc::channel();
+        self.diff_modal_receiver = Some(rx);
+
+        thread::spawn(move || {
+            let value = (|| -> Result<(String, String)> {
+                let render = match target {
+                    DiffTarget::Uncommitted => {
+                        crate::diff_view::render_worktree_file_diff(&repo_path, path.as_path(), backend)?
+                    }
+                    DiffTarget::Commit(oid) => crate::diff_view::render_commit_file_diff(
+                        &repo_path,
+                        oid,
+                        path.as_path(),
+                        backend,
+                    )?,
+                };
+                if render.ansi.trim().is_empty() {
+                    Ok((render.title, "(no diff output)".to_string()))
+                } else {
+                    Ok((render.title, render.ansi))
+                }
+            })()
+            .map_err(|e| e.to_string());
+
+            let _ = tx.send(ModalDiffResult { key, value });
+        });
     }
 
     fn handle_help_action(&mut self, action: Action) {
@@ -1597,6 +1700,7 @@ mod tests {
             selected_diff_target_changed_at: now,
             diff_modal_cache_key: None,
             diff_modal_cache_value: None,
+            diff_modal_receiver: None,
             should_quit: false,
             message: initial_message,
             message_time: initial_message_time,
@@ -1664,6 +1768,7 @@ mod tests {
             selected_diff_target_changed_at: Instant::now() - DIFF_LOAD_DEBOUNCE,
             diff_modal_cache_key: None,
             diff_modal_cache_value: None,
+            diff_modal_receiver: None,
             should_quit: false,
             message: None,
             message_time: None,

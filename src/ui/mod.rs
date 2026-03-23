@@ -49,6 +49,7 @@ pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     // Update the diff cache once before rendering
     app.update_diff_cache();
+    app.poll_modal_diff_results();
 
     let area = frame.area();
 
