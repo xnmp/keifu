@@ -235,25 +235,25 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
 
-        // Left: commit info
+        // Left: file list
         let left_block = Block::default()
-            .title(" Commit Detail ")
+            .title(" Changed Files ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        let left_paragraph = Paragraph::new(self.commit_lines)
+        let left_paragraph = Paragraph::new(self.file_lines)
             .block(left_block)
             .wrap(Wrap { trim: false });
 
         Widget::render(left_paragraph, chunks[0], buf);
 
-        // Right: file list
+        // Right: commit info
         let right_block = Block::default()
-            .title(" Changed Files ")
+            .title(" Commit Detail ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        let right_paragraph = Paragraph::new(self.file_lines)
+        let right_paragraph = Paragraph::new(self.commit_lines)
             .block(right_block)
             .wrap(Wrap { trim: false });
 
