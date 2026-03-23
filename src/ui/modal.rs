@@ -38,7 +38,21 @@ impl<'a> Widget for Modal<'a> {
 
         let hint_style = Style::default().fg(Color::DarkGray);
 
-        let mut text = self.message.as_bytes().into_text().unwrap_or_default();
+        // Parsing ANSI is relatively expensive; avoid it for large scroll offsets by
+        // trimming the message to a window of lines first.
+        let max_lines = area.height.saturating_sub(4) as usize;
+        let start = self.scroll as usize;
+        let end = start.saturating_add(max_lines * 2);
+
+        let window = self
+            .message
+            .lines()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut text = window.as_bytes().into_text().unwrap_or_default();
         for line in &mut text.lines {
             line.spans.insert(0, Span::raw("  "));
         }
@@ -52,9 +66,7 @@ impl<'a> Widget for Modal<'a> {
             hint_style,
         )));
 
-        let paragraph = Paragraph::new(text)
-            .block(block)
-            .scroll((self.scroll, 0));
+        let paragraph = Paragraph::new(text).block(block);
         Widget::render(paragraph, area, buf);
     }
 }
