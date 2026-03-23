@@ -1078,9 +1078,7 @@ impl App {
         let Some(node) = self.graph_layout.nodes.get(selected_node) else {
             return Ok("No commit selected".to_string());
         };
-        let Some(commit) = node.commit.as_ref() else {
-            return Ok("No commit selected".to_string());
-        };
+        let commit_oid = node.commit.as_ref().map(|c| c.oid);
 
         let repo = git2::Repository::open(&self.repo_path)?;
 
@@ -1090,9 +1088,12 @@ impl App {
                 file.path.as_path(),
             )?
         } else {
+            let Some(commit_oid) = commit_oid else {
+                return Ok("No commit selected".to_string());
+            };
             crate::git::CommitDiffInfo::unified_diff_for_file(
                 &repo,
-                commit.oid,
+                commit_oid,
                 file.path.as_path(),
             )?
         };
