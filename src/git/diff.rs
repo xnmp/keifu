@@ -40,6 +40,11 @@ pub struct FileDiffInfo {
     pub insertions: usize,
     /// Deletions
     pub deletions: usize,
+
+    /// True when the file currently has staged (index) changes.
+    ///
+    /// Only meaningful for working tree diffs; commit diffs set this to false.
+    pub is_staged: bool,
 }
 
 /// Commit diff info
@@ -96,8 +101,8 @@ impl CommitDiffInfo {
         // Unstaged tracked changes: index -> workdir
         let unstaged_diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
         let workdir = repo.workdir().unwrap_or_else(|| repo.path());
-        let staged_result = Self::scan_diff(&staged_diff)?;
-        let unstaged_result = Self::scan_diff(&unstaged_diff)?;
+        let staged_result = Self::scan_diff(&staged_diff, true)?;
+        let unstaged_result = Self::scan_diff(&unstaged_diff, false)?;
         let refresh_paths: HashSet<PathBuf> = staged_result
             .all_paths
             .intersection(&unstaged_result.all_paths)
@@ -146,7 +151,7 @@ impl CommitDiffInfo {
 
         let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
 
-        Self::build_info(Self::scan_diff(&diff)?, None)
+        Self::build_info(Self::scan_diff(&diff, false)?, None)
     }
 
     /// Return a textual unified diff for a specific file in a commit.
@@ -179,7 +184,7 @@ impl CommitDiffInfo {
         Ok(out)
     }
 
-    fn scan_diff(diff: &Diff) -> Result<DiffScan> {
+    fn scan_diff(diff: &Diff, is_staged: bool) -> Result<DiffScan> {
         let _ = diff.stats()?;
         let mut files = Vec::with_capacity(diff.deltas().len());
         let mut all_paths = HashSet::new();
@@ -203,6 +208,7 @@ impl CommitDiffInfo {
                 is_binary,
                 insertions,
                 deletions,
+                is_staged,
             });
         }
 
@@ -249,6 +255,7 @@ impl CommitDiffInfo {
                 is_binary: false,
                 insertions: 0,
                 deletions: 0,
+                is_staged: false,
             });
         }
 
@@ -311,6 +318,7 @@ impl CommitDiffInfo {
                     }
                     existing.insertions += file.insertions;
                     existing.deletions += file.deletions;
+                    existing.is_staged |= file.is_staged;
                 } else {
                     file_indexes.insert(file.path.clone(), files.len());
                     files.push(file);

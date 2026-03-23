@@ -5,6 +5,35 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository};
 
+/// Stage a single file (like `git add -- <path>`).
+pub fn stage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
+    let mut index = repo.index()?;
+    index.add_path(path)?;
+    index.write()?;
+    Ok(())
+}
+
+/// Unstage a single file (like `git reset HEAD -- <path>`).
+///
+/// If HEAD does not exist (unborn branch), this removes the path from the index.
+pub fn unstage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
+    let head_commit = match repo.head() {
+        Ok(head) => head.peel_to_commit().ok(),
+        Err(_) => None,
+    };
+
+    if let Some(commit) = head_commit {
+        let tree = commit.tree()?;
+        repo.reset_default(Some(tree.as_object()), [path].as_slice())?;
+        return Ok(());
+    }
+
+    let mut index = repo.index()?;
+    index.remove_path(path)?;
+    index.write()?;
+    Ok(())
+}
+
 /// Checkout a branch
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let branch = repo

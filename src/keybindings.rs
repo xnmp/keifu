@@ -129,6 +129,8 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::PageUp)
         }
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenModal),
+        (KeyModifiers::NONE, KeyCode::Char('S')) => Some(Action::ToggleStage),
+        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }

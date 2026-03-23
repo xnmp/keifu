@@ -24,6 +24,7 @@ pub enum Action {
     FocusFiles,
     FilesSelect,
     FilesOpenModal,
+    ToggleStage,
     ModalScrollUp,
     ModalScrollDown,
     ModalPageUp,

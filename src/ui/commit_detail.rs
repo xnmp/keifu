@@ -173,49 +173,43 @@ impl<'a> CommitDetailWidget<'a> {
 
         // File list
         // (Selection highlighting is done here; scrolling is handled by the widget via Paragraph::scroll.)
-        for (idx, file) in diff.files.iter().enumerate() {
-            let (indicator, color) = match file.kind {
-                FileChangeKind::Added => ("A", Color::Green),
-                FileChangeKind::Modified => ("M", Color::Yellow),
-                FileChangeKind::Deleted => ("D", Color::Red),
-                FileChangeKind::Renamed => ("R", Color::Cyan),
-                FileChangeKind::Copied => ("C", Color::Cyan),
-            };
 
-            let path_str = file.path.to_string_lossy().to_string();
+        let staged: Vec<(usize, &crate::git::FileDiffInfo)> = diff
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.is_staged)
+            .collect();
+        let unstaged: Vec<(usize, &crate::git::FileDiffInfo)> = diff
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.is_staged)
+            .collect();
 
-            let is_selected = selected == Some(idx);
-            let row_style = if is_selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
+        if !staged.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Staged",
                 Style::default()
-            };
-
-            let mut spans = vec![
-                Span::styled(format!(" {} ", indicator), row_style.fg(color)),
-                Span::styled(path_str, row_style),
-            ];
-
-            if file.is_binary {
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(
-                    "(binary)",
-                    Style::default().fg(Color::DarkGray),
-                ));
-            } else if file.insertions > 0 || file.deletions > 0 {
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(
-                    format!("+{}", file.insertions),
-                    Style::default().fg(Color::Green),
-                ));
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(
-                    format!("-{}", file.deletions),
-                    Style::default().fg(Color::Red),
-                ));
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for (idx, file) in staged {
+                Self::push_file_line(&mut lines, idx, file, selected);
             }
+            lines.push(Line::from(""));
+        }
 
-            lines.push(Line::from(spans));
+        if !unstaged.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Unstaged",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for (idx, file) in unstaged {
+                Self::push_file_line(&mut lines, idx, file, selected);
+            }
         }
 
         // Truncation message
@@ -231,6 +225,62 @@ impl<'a> CommitDetailWidget<'a> {
         }
 
         lines
+    }
+
+    fn push_file_line(
+        lines: &mut Vec<Line<'a>>,
+        idx: usize,
+        file: &crate::git::FileDiffInfo,
+        selected: Option<usize>,
+    ) {
+        let (indicator, color) = match file.kind {
+            FileChangeKind::Added => ("A", Color::Green),
+            FileChangeKind::Modified => ("M", Color::Yellow),
+            FileChangeKind::Deleted => ("D", Color::Red),
+            FileChangeKind::Renamed => ("R", Color::Cyan),
+            FileChangeKind::Copied => ("C", Color::Cyan),
+        };
+
+        let path_str = file.path.to_string_lossy().to_string();
+
+        let is_selected = selected == Some(idx);
+        let row_style = if is_selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+
+        let path_style = if file.is_staged {
+            row_style.fg(Color::Green)
+        } else {
+            row_style
+        };
+
+        let mut spans = vec![
+            Span::styled(format!(" {} ", indicator), row_style.fg(color)),
+            Span::styled(path_str, path_style),
+        ];
+
+        if file.is_binary {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                "(binary)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else if file.insertions > 0 || file.deletions > 0 {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("+{}", file.insertions),
+                Style::default().fg(Color::Green),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("-{}", file.deletions),
+                Style::default().fg(Color::Red),
+            ));
+        }
+
+        lines.push(Line::from(spans));
     }
 }
 

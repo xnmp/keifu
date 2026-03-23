@@ -1126,8 +1126,49 @@ impl App {
                     scroll: 0,
                 };
             }
+            Action::ToggleStage => {
+                self.toggle_stage_selected_file()?;
+            }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn toggle_stage_selected_file(&mut self) -> Result<()> {
+        let Some(target) = self.current_diff_target() else {
+            return Ok(());
+        };
+        if !matches!(target, DiffTarget::Uncommitted) {
+            self.set_message("Staging only available for uncommitted files".to_string());
+            return Ok(());
+        }
+
+        let Some(diff) = self.cached_diff() else {
+            return Ok(());
+        };
+        let Some(file_idx) = self.files_pane.list_state.selected() else {
+            return Ok(());
+        };
+        let Some(file) = diff.files.get(file_idx) else {
+            return Ok(());
+        };
+        let file_path = file.path.clone();
+        let was_staged = file.is_staged;
+
+        if was_staged {
+            crate::git::operations::unstage_path(&self.repo.repo, &file_path)?;
+        } else {
+            crate::git::operations::stage_path(&self.repo.repo, &file_path)?;
+        }
+
+        // Refresh and keep selection on the same path if it still exists.
+        self.refresh(true)?;
+        if let Some(new_diff) = self.cached_diff() {
+            if let Some(new_idx) = new_diff.files.iter().position(|f| f.path == file_path) {
+                self.files_pane.list_state.select(Some(new_idx));
+            }
+        }
+
         Ok(())
     }
 
