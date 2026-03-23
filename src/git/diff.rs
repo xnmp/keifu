@@ -679,25 +679,25 @@ impl CommitDiffInfo {
         let mut opts = DiffOptions::new();
         opts.pathspec(path);
 
+        let full_path = workdir.join(path);
+        let pathspec = if full_path.is_dir() {
+            let mut s = path.to_string_lossy().to_string();
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+            s
+        } else {
+            path.to_string_lossy().to_string()
+        };
+
         // Prefer a combined index+workdir diff against HEAD.
         // This catches staged changes and additions reliably.
         let mut out = String::new();
         {
             let mut opts_combined = DiffOptions::new();
-            let full_path = workdir.join(path);
-            let pathspec = if full_path.is_dir() {
-                let mut s = path.to_string_lossy().to_string();
-                if !s.ends_with('/') {
-                    s.push('/');
-                }
-                s
-            } else {
-                path.to_string_lossy().to_string()
-            };
-
             opts_combined.pathspec(&pathspec);
-            let combined =
-                repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
+            let combined = repo
+                .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
             combined.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                 if let Ok(s) = std::str::from_utf8(line.content()) {
                     out.push_str(s);
@@ -709,17 +709,6 @@ impl CommitDiffInfo {
         // If no output, try explicit staged-only and unstaged-only diffs for the path.
         if out.trim().is_empty() {
             let mut opts_staged = DiffOptions::new();
-            let full_path = workdir.join(path);
-            let pathspec = if full_path.is_dir() {
-                let mut s = path.to_string_lossy().to_string();
-                if !s.ends_with('/') {
-                    s.push('/');
-                }
-                s
-            } else {
-                path.to_string_lossy().to_string()
-            };
-
             opts_staged.pathspec(&pathspec);
             let staged = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts_staged))?;
             staged.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
@@ -742,22 +731,9 @@ impl CommitDiffInfo {
 
         // If there's still no patch output, it might be an untracked file (not in index).
         if out.trim().is_empty() {
-            let full_path = workdir.join(path);
             if full_path.exists() {
-                // Git may treat a directory pathspec specially; if the selected path is a
-                // directory, diff it as a pathspec prefix so we still get a patch.
-                let pathspec = if full_path.is_dir() {
-                    let mut s = path.to_string_lossy().to_string();
-                    if !s.ends_with('/') {
-                        s.push('/');
-                    }
-                    s
-                } else {
-                    path.to_string_lossy().to_string()
-                };
-
                 let mut opts_untracked = DiffOptions::new();
-                opts_untracked.pathspec(pathspec);
+                opts_untracked.pathspec(&pathspec);
                 let untracked = repo.diff_tree_to_workdir_with_index(None, Some(&mut opts_untracked))?;
                 untracked.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                     if let Ok(s) = std::str::from_utf8(line.content()) {
@@ -765,6 +741,22 @@ impl CommitDiffInfo {
                     }
                     true
                 })?;
+            }
+        }
+
+        // If we still can't produce a patch, fall back to the CLI for reliability.
+        // This handles tricky cases like new files in nested repos/submodules.
+        if out.trim().is_empty() {
+            let output = std::process::Command::new("git")
+                .args(["-C", workdir.to_string_lossy().as_ref()])
+                .args(["diff", "--no-color", "--"])
+                .arg(&pathspec)
+                .output();
+
+            if let Ok(outp) = output {
+                if outp.status.success() {
+                    out.push_str(&String::from_utf8_lossy(&outp.stdout));
+                }
             }
         }
 
