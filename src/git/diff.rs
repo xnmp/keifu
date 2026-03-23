@@ -745,7 +745,8 @@ impl CommitDiffInfo {
         }
 
         // If we still can't produce a patch, fall back to the CLI for reliability.
-        // This handles tricky cases like new files in nested repos/submodules.
+        // Note: for truly untracked files, `git diff` shows nothing; use `git diff --no-index`
+        // against /dev/null to get a patch.
         if out.trim().is_empty() {
             let output = std::process::Command::new("git")
                 .args(["-C", workdir.to_string_lossy().as_ref()])
@@ -755,6 +756,23 @@ impl CommitDiffInfo {
 
             if let Ok(outp) = output {
                 if outp.status.success() {
+                    out.push_str(&String::from_utf8_lossy(&outp.stdout));
+                }
+            }
+        }
+
+        // Untracked file fallback.
+        if out.trim().is_empty() && full_path.is_file() {
+            let output = std::process::Command::new("git")
+                .args(["-C", workdir.to_string_lossy().as_ref()])
+                .args(["diff", "--no-color", "--no-index", "--"]) 
+                .arg("/dev/null")
+                .arg(full_path.as_os_str())
+                .output();
+
+            if let Ok(outp) = output {
+                // git diff --no-index returns 1 when differences exist.
+                if outp.status.success() || outp.status.code() == Some(1) {
                     out.push_str(&String::from_utf8_lossy(&outp.stdout));
                 }
             }
