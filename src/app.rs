@@ -1083,11 +1083,19 @@ impl App {
         };
 
         let repo = git2::Repository::open(&self.repo_path)?;
-        let text = crate::git::CommitDiffInfo::unified_diff_for_file(
-            &repo,
-            commit.oid,
-            file.path.as_path(),
-        )?;
+
+        let text = if node.is_uncommitted {
+            crate::git::CommitDiffInfo::unified_diff_for_working_tree_file(
+                &repo,
+                file.path.as_path(),
+            )?
+        } else {
+            crate::git::CommitDiffInfo::unified_diff_for_file(
+                &repo,
+                commit.oid,
+                file.path.as_path(),
+            )?
+        };
 
         if text.trim().is_empty() {
             return Ok("(no diff output)".to_string());

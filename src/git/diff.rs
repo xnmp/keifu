@@ -659,4 +659,62 @@ impl CommitDiffInfo {
 
         Some((kind, path, delta.flags().is_binary()))
     }
+
+    /// Return a textual unified diff for a specific path in the working tree.
+    ///
+    /// Includes staged + unstaged + untracked changes (when present).
+    pub fn unified_diff_for_working_tree_file(repo: &Repository, path: &Path) -> Result<String> {
+        let workdir = repo.workdir().unwrap_or_else(|| repo.path());
+
+        let head_tree = match repo.head() {
+            Ok(head) => Some(head.peel_to_tree()?),
+            Err(err)
+                if err.code() == ErrorCode::UnbornBranch || err.code() == ErrorCode::NotFound =>
+            {
+                None
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        let mut opts = DiffOptions::new();
+        opts.pathspec(path);
+
+        // HEAD -> index (staged)
+        let staged = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
+
+        // index -> workdir (unstaged tracked)
+        let mut opts2 = DiffOptions::new();
+        opts2.pathspec(path);
+        let unstaged = repo.diff_index_to_workdir(None, Some(&mut opts2))?;
+
+        // Untracked file (if any): compare empty tree -> workdir file
+        let mut out = String::new();
+        for diff in [&staged, &unstaged] {
+            diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+                if let Ok(s) = std::str::from_utf8(line.content()) {
+                    out.push_str(s);
+                }
+                true
+            })?;
+        }
+
+        // If there's no patch output, it might be an untracked file.
+        if out.trim().is_empty() {
+            let full_path = workdir.join(path);
+            if full_path.exists() {
+                let mut opts3 = DiffOptions::new();
+                opts3.pathspec(path);
+                // Compare empty tree -> workdir
+                let untracked = repo.diff_tree_to_workdir_with_index(None, Some(&mut opts3))?;
+                untracked.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+                    if let Ok(s) = std::str::from_utf8(line.content()) {
+                        out.push_str(s);
+                    }
+                    true
+                })?;
+            }
+        }
+
+        Ok(out)
+    }
 }
