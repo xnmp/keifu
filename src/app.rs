@@ -3,6 +3,7 @@
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{path::PathBuf, process::Command};
 
 use anyhow::Result;
 use ratatui::widgets::ListState;
@@ -206,6 +207,10 @@ pub struct App {
     diff_loading_oid: Option<Oid>,
     diff_receiver: Option<Receiver<DiffResult>>,
 
+    // Fast commit file list cache (for instant rendering)
+    commit_files_cache_oid: Option<Oid>,
+    commit_files_cache: Option<Vec<PathBuf>>,
+
     // Uncommitted diff cache
     uncommitted_diff_cache: Option<CommitDiffInfo>,
     uncommitted_diff_failed: bool,
@@ -240,6 +245,39 @@ pub struct App {
 }
 
 impl App {
+    pub fn cached_commit_files(&mut self) -> Option<&[PathBuf]> {
+        let DiffTarget::Commit(oid) = self.current_diff_target()? else {
+            return None;
+        };
+
+        if self.commit_files_cache_oid == Some(oid) {
+            return self.commit_files_cache.as_deref();
+        }
+
+        let output = Command::new("git")
+            .args(["-C", self.repo_path.as_str()])
+            .args(["diff-tree", "--no-commit-id", "--name-only", "-r"])
+            .arg(oid.to_string())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut paths: Vec<PathBuf> = stdout
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(PathBuf::from)
+            .collect();
+        paths.sort();
+        paths.dedup();
+
+        self.commit_files_cache_oid = Some(oid);
+        self.commit_files_cache = Some(paths);
+        self.commit_files_cache.as_deref()
+    }
+
     fn working_tree_status_snapshot(
         repo: &GitRepository,
     ) -> (Option<WorkingTreeStatus>, Option<String>) {
@@ -307,6 +345,8 @@ impl App {
             diff_cache_oid: None,
             diff_loading_oid: None,
             diff_receiver: None,
+            commit_files_cache_oid: None,
+            commit_files_cache: None,
             uncommitted_diff_cache: None,
             uncommitted_diff_failed: false,
             uncommitted_diff_loading: false,
@@ -334,6 +374,8 @@ impl App {
         self.diff_cache_oid = None;
         self.diff_loading_oid = None;
         self.diff_receiver = None;
+        self.commit_files_cache_oid = None;
+        self.commit_files_cache = None;
         self.clear_uncommitted_diff_cache();
         self.diff_modal_cache_key = None;
         self.diff_modal_cache_value = None;
@@ -539,6 +581,8 @@ impl App {
                 self.diff_cache_oid = None;
                 self.diff_loading_oid = None;
                 self.diff_receiver = None;
+                self.commit_files_cache_oid = None;
+                self.commit_files_cache = None;
             }
 
             // Keep uncommitted diff cache only if:
@@ -1095,6 +1139,8 @@ impl App {
     fn handle_files_action(&mut self, action: Action) -> Result<()> {
         let file_count = if let Some(diff) = self.cached_diff() {
             diff.files.len()
+        } else if let Some(paths) = self.cached_commit_files() {
+            paths.len()
         } else {
             self.working_tree_status
                 .as_ref()
@@ -1793,6 +1839,8 @@ mod tests {
             diff_cache_oid: None,
             diff_loading_oid: None,
             diff_receiver: None,
+            commit_files_cache_oid: None,
+            commit_files_cache: None,
             uncommitted_diff_cache: None,
             uncommitted_diff_failed: false,
             uncommitted_diff_loading: false,
@@ -1861,6 +1909,8 @@ mod tests {
             diff_cache_oid: None,
             diff_loading_oid: None,
             diff_receiver: None,
+            commit_files_cache_oid: None,
+            commit_files_cache: None,
             uncommitted_diff_cache: None,
             uncommitted_diff_failed: false,
             uncommitted_diff_loading: false,

@@ -18,13 +18,13 @@ use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 const VERTICAL_LAYOUT_THRESHOLD: u16 = 56;
 
 pub struct CommitDetailWidget<'a> {
-    app: &'a App,
+    app: &'a mut App,
     commit_lines: Vec<Line<'a>>,
     file_lines: Vec<Line<'a>>,
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &'a App) -> Self {
+    pub fn new(app: &'a mut App) -> Self {
         let commit_lines = Self::build_commit_lines(app);
         let file_lines = Self::build_file_lines(app);
         Self {
@@ -34,7 +34,7 @@ impl<'a> CommitDetailWidget<'a> {
         }
     }
 
-    fn build_file_lines(app: &App) -> Vec<Line<'a>> {
+    fn build_file_lines(app: &mut App) -> Vec<Line<'a>> {
         let show_staged_sections = app
             .graph_list_state
             .selected()
@@ -52,6 +52,14 @@ impl<'a> CommitDetailWidget<'a> {
             return Self::build_file_list_lines_from(Some(diff), selected, show_staged_sections);
         }
 
+        // Fast path: for commit diffs, show an instant file list (no +/- stats)
+        // from a cached git CLI query while the full diff loads.
+        if !show_staged_sections {
+            if let Some(paths) = app.cached_commit_files() {
+                return Self::build_file_list_lines_from_commit_paths(paths, selected);
+            }
+        }
+
         // Fast path: for uncommitted changes, show an instant file list from
         // the working tree status while the full diff (with +/- stats) loads.
         if show_staged_sections {
@@ -67,6 +75,39 @@ impl<'a> CommitDetailWidget<'a> {
             ))];
         }
         Self::build_file_list_lines_from(None, selected, show_staged_sections)
+    }
+
+    fn build_file_list_lines_from_commit_paths(
+        paths: &[std::path::PathBuf],
+        selected: Option<usize>,
+    ) -> Vec<Line<'a>> {
+        let mut lines = Vec::new();
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} files changed", paths.len()),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled("(stats loading…)", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+
+        for (idx, path) in paths.iter().enumerate() {
+            let is_selected = selected == Some(idx);
+            let row_style = if is_selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let path_str = path.to_string_lossy().to_string();
+            lines.push(Line::from(vec![
+                Span::styled(" ? ".to_string(), row_style.fg(Color::DarkGray)),
+                Span::styled(path_str, row_style),
+            ]));
+        }
+
+        lines
     }
 
     fn build_file_list_lines_from_worktree_status(
