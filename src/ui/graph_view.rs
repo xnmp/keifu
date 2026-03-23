@@ -330,8 +330,8 @@ fn render_graph_line<'a>(
             CellType::Pipe(color_idx) => ('│', get_color_by_index(*color_idx)),
             CellType::Commit(color_idx) => {
                 // Make checked-out commit visually prominent.
-                // Use a circled dot for HEAD, filled dot otherwise.
-                let ch = if node.is_head { '⊙' } else { '●' };
+                // Use a larger bullseye for HEAD, filled dot otherwise.
+                let ch = if node.is_head { '◎' } else { '●' };
                 // Main branch (blue) stays blue; other HEADs are green
                 let is_main = *color_idx == crate::graph::colors::MAIN_BRANCH_COLOR;
                 let color = if node.is_head && !is_main {
@@ -404,6 +404,12 @@ fn render_graph_line<'a>(
         Style::default()
     };
 
+    // If the checked-out commit isn't in the current graph slice, fall back to
+    // making any branch label that includes "HEAD" stand out.
+    let head_branch_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+
     // === Left-aligned: branch names + message ===
 
     // Optimize branch names (compact when local matches origin/local)
@@ -444,7 +450,12 @@ fn render_graph_line<'a>(
             left_width += 1;
         }
         left_width += display_width(label);
-        spans.push(Span::styled(label.clone(), *style));
+        let style = if !node.is_head && label.contains("HEAD") {
+            head_branch_style
+        } else {
+            *style
+        };
+        spans.push(Span::styled(label.clone(), style));
     }
     if !branch_display.is_empty() {
         spans.push(Span::raw(" "));
