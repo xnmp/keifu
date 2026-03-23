@@ -92,8 +92,7 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     // Basic cursor movement in commit editor
     if mods.is_empty() {
         match code {
-            KeyCode::Left => return Some(Action::CommitMessageMoveLeft),
-            KeyCode::Right => return Some(Action::CommitMessageMoveRight),
+            // Left/Right are used for panel focus when not editing.
             KeyCode::Home => return Some(Action::CommitMessageMoveHome),
             KeyCode::End => return Some(Action::CommitMessageMoveEnd),
             KeyCode::Backspace => return Some(Action::InputBackspace),
