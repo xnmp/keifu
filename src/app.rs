@@ -1078,12 +1078,18 @@ impl App {
         };
 
         crate::tui::restore()?;
+
+        // Ensure keifu doesn't exit without restoring the terminal.
+        // (We intentionally don't return early after this point.)
         let status = std::process::Command::new("git")
             .args(["-C", &self.repo_path])
             .args(["difftool", "--tool=difftastic", "-y"])
             .arg(commit.oid.to_string())
             .arg("--")
             .arg(file.path.as_os_str())
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
             .status();
 
         // Re-enter TUI.
@@ -1091,6 +1097,10 @@ impl App {
 
         if let Err(e) = status {
             self.set_message(format!("Failed to run difftastic: {e}"));
+        } else if let Ok(status) = status {
+            if !status.success() {
+                self.set_message(format!("difftastic exited with {status}"));
+            }
         }
         Ok(())
     }
