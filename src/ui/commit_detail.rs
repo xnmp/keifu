@@ -219,7 +219,11 @@ impl<'a> CommitDetailWidget<'a> {
                         .fg(Color::Black)
                         .bg(Color::Yellow)
                         .add_modifier(Modifier::BOLD);
-                    let text_style = Style::default().fg(Color::Yellow);
+                    let text_style = if app.commit_message_editing {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
                     let selection_style = Style::default().fg(Color::Black).bg(Color::LightYellow);
 
                     let chars: Vec<char> = msg.chars().collect();
