@@ -35,17 +35,22 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     let code = key.code;
 
     // Commit message editor keybindings (used when the uncommitted node is
-    // selected). These are mapped here unconditionally; the App will ignore
-    // them when not applicable.
+    // selected). These are mapped here; the App will ignore them when not in
+    // edit mode.
 
     // Commit
     if mods == KeyModifiers::ALT && code == KeyCode::Enter {
         return Some(Action::CommitMessageCommit);
     }
 
-    // Insert newline
+    // Enter: if editing, insert newline; otherwise begin editing.
     if mods.is_empty() && code == KeyCode::Enter {
-        return Some(Action::CommitMessageInsertNewline);
+        return Some(Action::CommitMessageToggleEdit);
+    }
+
+    // Exit edit mode
+    if code == KeyCode::Esc {
+        return Some(Action::CommitMessageStopEdit);
     }
 
     // Ctrl+Shift+Home/End: select to start/end of text
@@ -95,6 +100,15 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
             KeyCode::Delete => return Some(Action::CommitMessageDeleteForward),
             KeyCode::Char(c) => return Some(Action::InputChar(c)),
             KeyCode::F(12) => return Some(Action::ToggleKeyDebug),
+            _ => {}
+        }
+    }
+
+    // Panel focus (when not editing the commit message).
+    if mods.is_empty() {
+        match code {
+            KeyCode::Left => return Some(Action::FocusLeftPane),
+            KeyCode::Right => return Some(Action::FocusRightPane),
             _ => {}
         }
     }

@@ -41,6 +41,8 @@ pub enum Action {
     Refresh,
     Quit,
     ToggleKeyDebug,
+    CommitMessageToggleEdit,
+    CommitMessageStopEdit,
 
     // Dialogs
     Confirm,

@@ -240,6 +240,7 @@ pub struct App {
     // Commit message editor (used when the uncommitted node is selected)
     pub commit_message: String,
     pub commit_message_cursor: usize,
+    pub commit_message_editing: bool,
     commit_message_selection_anchor: Option<usize>,
 
     // Async fetch
@@ -422,6 +423,7 @@ impl App {
             message_time: initial_message_time,
             commit_message: String::new(),
             commit_message_cursor: 0,
+            commit_message_editing: false,
             commit_message_selection_anchor: None,
             fetch_receiver: None,
             fetch_silent: false,
@@ -1316,133 +1318,163 @@ impl App {
                 self.mode = AppMode::Graph;
             }
             Action::FocusLeftPane => {
-                self.mode = AppMode::Files;
-                if self.files_pane.list_state.selected().is_none() {
-                    self.files_pane.list_state.select(Some(0));
+                if self.commit_message_editing {
+                    // When editing commit message, Left/Right navigates the cursor.
+                    self.clear_commit_message_selection();
+                    self.move_commit_message_left();
+                } else {
+                    self.mode = AppMode::Files;
+                    self.clear_commit_message_selection();
+                    if self.files_pane.list_state.selected().is_none() {
+                        self.files_pane.list_state.select(Some(0));
+                    }
                 }
             }
             Action::FocusRightPane => {
-                // No-op: detail is the rightmost panel.
+                if self.commit_message_editing {
+                    // When editing commit message, Left/Right navigates the cursor.
+                    self.clear_commit_message_selection();
+                    self.move_commit_message_right();
+                } else {
+                    // No-op: detail is the rightmost panel.
+                }
             }
             Action::InputChar(c) => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.replace_commit_message_selection_if_any();
                     self.insert_commit_message_char(c);
                 }
             }
             Action::InputBackspace => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     if !self.delete_commit_message_selection_if_any() {
                         self.delete_commit_message_backspace();
                     }
                 }
             }
             Action::CommitMessageDeleteForward => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     if !self.delete_commit_message_selection_if_any() {
                         self.delete_commit_message_forward();
                     }
                 }
             }
             Action::CommitMessageInsertNewline => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.replace_commit_message_selection_if_any();
                     self.insert_commit_message_char('\n');
                 }
             }
-            Action::CommitMessageMoveLeft => {
+            Action::CommitMessageToggleEdit => {
                 if self.is_uncommitted_selected() {
+                    if self.commit_message_editing {
+                        // Enter while editing inserts a newline.
+                        self.replace_commit_message_selection_if_any();
+                        self.insert_commit_message_char('\n');
+                    } else {
+                        self.commit_message_editing = true;
+                    }
+                }
+            }
+            Action::CommitMessageStopEdit => {
+                if self.commit_message_editing {
+                    self.commit_message_editing = false;
+                    self.clear_commit_message_selection();
+                }
+            }
+            Action::CommitMessageMoveLeft => {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.move_commit_message_left();
                 }
             }
             Action::CommitMessageMoveRight => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.move_commit_message_right();
                 }
             }
             Action::CommitMessageMoveHome => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.move_commit_message_home();
                 }
             }
             Action::CommitMessageMoveEnd => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.move_commit_message_end();
                 }
             }
             Action::CommitMessageMoveStart => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.commit_message_cursor = 0;
                 }
             }
             Action::CommitMessageMoveFinish => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.commit_message_cursor = self.commit_message.chars().count();
                 }
             }
             Action::CommitMessageSelectLeft => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.extend_selection();
                     self.move_commit_message_left();
                 }
             }
             Action::CommitMessageSelectRight => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.extend_selection();
                     self.move_commit_message_right();
                 }
             }
             Action::CommitMessageSelectHome => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.extend_selection();
                     self.move_commit_message_home();
                 }
             }
             Action::CommitMessageSelectEnd => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.extend_selection();
                     self.move_commit_message_end();
                 }
             }
             Action::CommitMessageSelectStart => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.extend_selection();
                     self.commit_message_cursor = 0;
                 }
             }
             Action::CommitMessageSelectFinish => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.extend_selection();
                     self.commit_message_cursor = self.commit_message.chars().count();
                 }
             }
             Action::CommitMessageMoveWordLeft => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.move_commit_message_word_left();
                 }
             }
             Action::CommitMessageMoveWordRight => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     self.clear_commit_message_selection();
                     self.move_commit_message_word_right();
                 }
             }
             Action::CommitMessageDeleteWordBack => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     if !self.delete_commit_message_selection_if_any() {
                         self.delete_commit_message_word_back();
                     }
                 }
             }
             Action::CommitMessageDeleteWordForward => {
-                if self.is_uncommitted_selected() {
+                if self.is_uncommitted_selected() && self.commit_message_editing {
                     if !self.delete_commit_message_selection_if_any() {
                         self.delete_commit_message_word_forward();
                     }
@@ -1454,6 +1486,7 @@ impl App {
                     self.commit_message.clear();
                     self.commit_message_cursor = 0;
                     self.commit_message_selection_anchor = None;
+                    self.commit_message_editing = false;
                     self.refresh(true)?;
                 }
             }

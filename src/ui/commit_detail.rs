@@ -205,7 +205,11 @@ impl<'a> CommitDetailWidget<'a> {
 
                 if msg.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        "(type here; Alt-Enter to commit)",
+                        if app.commit_message_editing {
+                            "(type here; Alt-Enter to commit)"
+                        } else {
+                            "(press Enter to edit; Alt-Enter to commit)"
+                        },
                         Style::default().fg(Color::DarkGray),
                     )));
                 } else {
@@ -239,7 +243,7 @@ impl<'a> CommitDetailWidget<'a> {
                                     // EOL before a newline.
                                 }
 
-                                let is_cursor = j == cursor;
+                                let is_cursor = app.commit_message_editing && j == cursor;
                                 let is_selected =
                                     selection.map(|(s, e)| j >= s && j < e).unwrap_or(false);
 
