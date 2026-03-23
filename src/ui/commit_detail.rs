@@ -201,38 +201,73 @@ impl<'a> CommitDetailWidget<'a> {
             if matches!(app.mode, AppMode::Detail) {
                 let msg = app.commit_message.clone();
                 let cursor = app.commit_message_cursor.min(msg.chars().count());
+                let selection = app.selection_range();
 
-                let mut spans: Vec<Span> = Vec::new();
                 if msg.is_empty() {
-                    spans.push(Span::styled(
+                    lines.push(Line::from(Span::styled(
                         "(type here; Alt-Enter to commit)",
                         Style::default().fg(Color::DarkGray),
-                    ));
+                    )));
                 } else {
-                    let left: String = msg.chars().take(cursor).collect();
-                    let cur: Option<char> = msg.chars().nth(cursor);
-                    let right: String = msg
-                        .chars()
-                        .skip(cursor + cur.map(|_| 1).unwrap_or(0))
-                        .collect();
-
-                    spans.push(Span::styled(left, Style::default().fg(Color::Yellow)));
-
-                    // Render a visible cursor by reversing the character under it,
-                    // or showing a reversed space at end-of-line.
+                    // Render as multiple lines while preserving explicit newlines.
+                    // We also render selection + cursor.
                     let cursor_style = Style::default()
                         .fg(Color::Black)
                         .bg(Color::Yellow)
                         .add_modifier(Modifier::BOLD);
-                    match cur {
-                        Some(ch) => spans.push(Span::styled(ch.to_string(), cursor_style)),
-                        None => spans.push(Span::styled(" ", cursor_style)),
+                    let text_style = Style::default().fg(Color::Yellow);
+                    let selection_style = Style::default().fg(Color::Black).bg(Color::LightYellow);
+
+                    let chars: Vec<char> = msg.chars().collect();
+                    let mut line_start = 0usize;
+                    let mut i = 0usize;
+                    while i <= chars.len() {
+                        let at_end = i == chars.len();
+                        let at_newline = !at_end && chars[i] == '\n';
+                        if at_end || at_newline {
+                            let line_end = i;
+
+                            // Build spans for this line.
+                            let mut spans: Vec<Span> = Vec::new();
+                            for j in line_start..=line_end {
+                                // j == line_end is an "end-of-line position" to
+                                // allow rendering the cursor at EOL.
+                                let ch = if j < line_end { Some(chars[j]) } else { None };
+
+                                // Skip rendering the newline itself.
+                                if j == line_end && at_newline {
+                                    // EOL before a newline.
+                                }
+
+                                let is_cursor = j == cursor;
+                                let is_selected =
+                                    selection.map(|(s, e)| j >= s && j < e).unwrap_or(false);
+
+                                let mut style = if is_selected {
+                                    selection_style
+                                } else {
+                                    text_style
+                                };
+                                if is_cursor {
+                                    style = cursor_style;
+                                }
+
+                                match ch {
+                                    Some(c) => spans.push(Span::styled(c.to_string(), style)),
+                                    None => {
+                                        if is_cursor {
+                                            spans.push(Span::styled(" ", cursor_style));
+                                        }
+                                    }
+                                }
+                            }
+
+                            lines.push(Line::from(spans));
+                            line_start = i + 1;
+                        }
+                        i += 1;
                     }
-
-                    spans.push(Span::styled(right, Style::default().fg(Color::Yellow)));
                 }
-
-                lines.push(Line::from(spans));
             } else {
                 lines.push(Line::from(Span::styled(
                     "(focus Detail panel to type)",

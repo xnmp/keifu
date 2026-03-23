@@ -31,24 +31,75 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
 }
 
 fn map_detail_mode(key: KeyEvent) -> Option<Action> {
-    match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
-        (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
-        (KeyModifiers::ALT, KeyCode::Enter) => Some(Action::CommitMessageCommit),
+    let mods = key.modifiers;
+    let code = key.code;
 
-        // Many terminals send Meta+arrow sequences as Alt-b / Alt-f.
-        (KeyModifiers::ALT, KeyCode::Char('b')) => Some(Action::CommitMessageMoveWordLeft),
-        (KeyModifiers::ALT, KeyCode::Char('f')) => Some(Action::CommitMessageMoveWordRight),
-        // Delete word backward is commonly Alt-Backspace.
-        (KeyModifiers::ALT, KeyCode::Backspace) => Some(Action::CommitMessageDeleteWordBack),
-        // Delete word forward commonly arrives as Alt-d.
-        (KeyModifiers::ALT, KeyCode::Char('d')) => Some(Action::CommitMessageDeleteWordForward),
-        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
-        (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::CommitMessageDeleteForward),
-        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
-        (KeyModifiers::NONE, KeyCode::F(12)) => Some(Action::ToggleKeyDebug),
-        _ => None,
+    // Commit message editor keybindings (used when the uncommitted node is
+    // selected). These are mapped here unconditionally; the App will ignore
+    // them when not applicable.
+
+    // Commit
+    if mods == KeyModifiers::ALT && code == KeyCode::Enter {
+        return Some(Action::CommitMessageCommit);
     }
+
+    // Insert newline
+    if mods.is_empty() && code == KeyCode::Enter {
+        return Some(Action::CommitMessageInsertNewline);
+    }
+
+    // Ctrl+Shift+Home/End: select to start/end of text
+    if mods.contains(KeyModifiers::CONTROL) && mods.contains(KeyModifiers::SHIFT) {
+        return match code {
+            KeyCode::Home => Some(Action::CommitMessageSelectStart),
+            KeyCode::End => Some(Action::CommitMessageSelectFinish),
+            _ => None,
+        };
+    }
+
+    // Shift+Left/Right/Home/End: extend selection while moving
+    if mods == KeyModifiers::SHIFT {
+        return match code {
+            KeyCode::Left => Some(Action::CommitMessageSelectLeft),
+            KeyCode::Right => Some(Action::CommitMessageSelectRight),
+            KeyCode::Home => Some(Action::CommitMessageSelectHome),
+            KeyCode::End => Some(Action::CommitMessageSelectEnd),
+            _ => None,
+        };
+    }
+
+    // Alt+Home/End: move to start/end of entire text
+    if mods == KeyModifiers::ALT {
+        match code {
+            KeyCode::Home => return Some(Action::CommitMessageMoveStart),
+            KeyCode::End => return Some(Action::CommitMessageMoveFinish),
+            // Many terminals send Meta+arrow sequences as Alt-b / Alt-f.
+            KeyCode::Char('b') => return Some(Action::CommitMessageMoveWordLeft),
+            KeyCode::Char('f') => return Some(Action::CommitMessageMoveWordRight),
+            // Delete word backward is commonly Alt-Backspace.
+            KeyCode::Backspace => return Some(Action::CommitMessageDeleteWordBack),
+            // Delete word forward commonly arrives as Alt-d.
+            KeyCode::Char('d') => return Some(Action::CommitMessageDeleteWordForward),
+            _ => {}
+        }
+    }
+
+    // Basic cursor movement in commit editor
+    if mods.is_empty() {
+        match code {
+            KeyCode::Left => return Some(Action::CommitMessageMoveLeft),
+            KeyCode::Right => return Some(Action::CommitMessageMoveRight),
+            KeyCode::Home => return Some(Action::CommitMessageMoveHome),
+            KeyCode::End => return Some(Action::CommitMessageMoveEnd),
+            KeyCode::Backspace => return Some(Action::InputBackspace),
+            KeyCode::Delete => return Some(Action::CommitMessageDeleteForward),
+            KeyCode::Char(c) => return Some(Action::InputChar(c)),
+            KeyCode::F(12) => return Some(Action::ToggleKeyDebug),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn map_modal_mode(key: KeyEvent) -> Option<Action> {

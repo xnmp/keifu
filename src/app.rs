@@ -240,6 +240,7 @@ pub struct App {
     // Commit message editor (used when the uncommitted node is selected)
     pub commit_message: String,
     pub commit_message_cursor: usize,
+    commit_message_selection_anchor: Option<usize>,
 
     // Async fetch
     fetch_receiver: Option<Receiver<Result<(), String>>>,
@@ -421,6 +422,7 @@ impl App {
             message_time: initial_message_time,
             commit_message: String::new(),
             commit_message_cursor: 0,
+            commit_message_selection_anchor: None,
             fetch_receiver: None,
             fetch_silent: false,
             config,
@@ -1324,37 +1326,126 @@ impl App {
             }
             Action::InputChar(c) => {
                 if self.is_uncommitted_selected() {
+                    self.replace_commit_message_selection_if_any();
                     self.insert_commit_message_char(c);
                 }
             }
             Action::InputBackspace => {
                 if self.is_uncommitted_selected() {
-                    self.delete_commit_message_backspace();
+                    if !self.delete_commit_message_selection_if_any() {
+                        self.delete_commit_message_backspace();
+                    }
                 }
             }
             Action::CommitMessageDeleteForward => {
                 if self.is_uncommitted_selected() {
-                    self.delete_commit_message_forward();
+                    if !self.delete_commit_message_selection_if_any() {
+                        self.delete_commit_message_forward();
+                    }
+                }
+            }
+            Action::CommitMessageInsertNewline => {
+                if self.is_uncommitted_selected() {
+                    self.replace_commit_message_selection_if_any();
+                    self.insert_commit_message_char('\n');
+                }
+            }
+            Action::CommitMessageMoveLeft => {
+                if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
+                    self.move_commit_message_left();
+                }
+            }
+            Action::CommitMessageMoveRight => {
+                if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
+                    self.move_commit_message_right();
+                }
+            }
+            Action::CommitMessageMoveHome => {
+                if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
+                    self.move_commit_message_home();
+                }
+            }
+            Action::CommitMessageMoveEnd => {
+                if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
+                    self.move_commit_message_end();
+                }
+            }
+            Action::CommitMessageMoveStart => {
+                if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
+                    self.commit_message_cursor = 0;
+                }
+            }
+            Action::CommitMessageMoveFinish => {
+                if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
+                    self.commit_message_cursor = self.commit_message.chars().count();
+                }
+            }
+            Action::CommitMessageSelectLeft => {
+                if self.is_uncommitted_selected() {
+                    self.extend_selection();
+                    self.move_commit_message_left();
+                }
+            }
+            Action::CommitMessageSelectRight => {
+                if self.is_uncommitted_selected() {
+                    self.extend_selection();
+                    self.move_commit_message_right();
+                }
+            }
+            Action::CommitMessageSelectHome => {
+                if self.is_uncommitted_selected() {
+                    self.extend_selection();
+                    self.move_commit_message_home();
+                }
+            }
+            Action::CommitMessageSelectEnd => {
+                if self.is_uncommitted_selected() {
+                    self.extend_selection();
+                    self.move_commit_message_end();
+                }
+            }
+            Action::CommitMessageSelectStart => {
+                if self.is_uncommitted_selected() {
+                    self.extend_selection();
+                    self.commit_message_cursor = 0;
+                }
+            }
+            Action::CommitMessageSelectFinish => {
+                if self.is_uncommitted_selected() {
+                    self.extend_selection();
+                    self.commit_message_cursor = self.commit_message.chars().count();
                 }
             }
             Action::CommitMessageMoveWordLeft => {
                 if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
                     self.move_commit_message_word_left();
                 }
             }
             Action::CommitMessageMoveWordRight => {
                 if self.is_uncommitted_selected() {
+                    self.clear_commit_message_selection();
                     self.move_commit_message_word_right();
                 }
             }
             Action::CommitMessageDeleteWordBack => {
                 if self.is_uncommitted_selected() {
-                    self.delete_commit_message_word_back();
+                    if !self.delete_commit_message_selection_if_any() {
+                        self.delete_commit_message_word_back();
+                    }
                 }
             }
             Action::CommitMessageDeleteWordForward => {
                 if self.is_uncommitted_selected() {
-                    self.delete_commit_message_word_forward();
+                    if !self.delete_commit_message_selection_if_any() {
+                        self.delete_commit_message_word_forward();
+                    }
                 }
             }
             Action::CommitMessageCommit => {
@@ -1362,6 +1453,7 @@ impl App {
                     commit_with_message(&self.repo_path, &self.commit_message)?;
                     self.commit_message.clear();
                     self.commit_message_cursor = 0;
+                    self.commit_message_selection_anchor = None;
                     self.refresh(true)?;
                 }
             }
@@ -1376,6 +1468,82 @@ impl App {
         chars.insert(cursor, c);
         self.commit_message = chars.into_iter().collect();
         self.commit_message_cursor = cursor + 1;
+    }
+
+    fn clear_commit_message_selection(&mut self) {
+        self.commit_message_selection_anchor = None;
+    }
+
+    fn extend_selection(&mut self) {
+        if self.commit_message_selection_anchor.is_none() {
+            self.commit_message_selection_anchor = Some(self.commit_message_cursor);
+        }
+    }
+
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.commit_message_selection_anchor?;
+        let a = anchor.min(self.commit_message_cursor);
+        let b = anchor.max(self.commit_message_cursor);
+        if a == b {
+            None
+        } else {
+            Some((a, b))
+        }
+    }
+
+    fn delete_commit_message_selection_if_any(&mut self) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let mut chars: Vec<char> = self.commit_message.chars().collect();
+        let end = end.min(chars.len());
+        let start = start.min(end);
+        chars.drain(start..end);
+        self.commit_message = chars.into_iter().collect();
+        self.commit_message_cursor = start;
+        self.commit_message_selection_anchor = None;
+        true
+    }
+
+    fn replace_commit_message_selection_if_any(&mut self) {
+        let _ = self.delete_commit_message_selection_if_any();
+    }
+
+    fn move_commit_message_left(&mut self) {
+        if self.commit_message_cursor > 0 {
+            self.commit_message_cursor -= 1;
+        }
+    }
+
+    fn move_commit_message_right(&mut self) {
+        let len = self.commit_message.chars().count();
+        if self.commit_message_cursor < len {
+            self.commit_message_cursor += 1;
+        }
+    }
+
+    fn move_commit_message_home(&mut self) {
+        let chars: Vec<char> = self.commit_message.chars().collect();
+        let mut i = self.commit_message_cursor.min(chars.len());
+        while i > 0 {
+            if chars[i - 1] == '\n' {
+                break;
+            }
+            i -= 1;
+        }
+        self.commit_message_cursor = i;
+    }
+
+    fn move_commit_message_end(&mut self) {
+        let chars: Vec<char> = self.commit_message.chars().collect();
+        let mut i = self.commit_message_cursor.min(chars.len());
+        while i < chars.len() {
+            if chars[i] == '\n' {
+                break;
+            }
+            i += 1;
+        }
+        self.commit_message_cursor = i;
     }
 
     fn delete_commit_message_backspace(&mut self) {
@@ -2085,6 +2253,7 @@ mod tests {
             message_time: initial_message_time,
             commit_message: String::new(),
             commit_message_cursor: 0,
+            commit_message_selection_anchor: None,
             fetch_receiver: None,
             fetch_silent: false,
             config: Config::default(),
@@ -2159,6 +2328,7 @@ mod tests {
             message_time: None,
             commit_message: String::new(),
             commit_message_cursor: 0,
+            commit_message_selection_anchor: None,
             fetch_receiver: None,
             fetch_silent: false,
             config: Config::default(),
