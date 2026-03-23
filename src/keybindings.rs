@@ -30,8 +30,20 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
 }
 
 fn map_modal_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter => Some(Action::Cancel),
+    match (key.modifiers, key.code) {
+        (_, KeyCode::Esc) | (_, KeyCode::Enter) => Some(Action::Cancel),
+        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+            Some(Action::ModalScrollDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+            Some(Action::ModalScrollUp)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::ModalPageDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::ModalPageUp)
+        }
         _ => None,
     }
 }

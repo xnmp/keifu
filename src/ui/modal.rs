@@ -13,11 +13,16 @@ use ansi_to_tui::IntoText;
 pub struct Modal<'a> {
     title: &'a str,
     message: &'a str,
+    scroll: u16,
 }
 
 impl<'a> Modal<'a> {
-    pub fn new(title: &'a str, message: &'a str) -> Self {
-        Self { title, message }
+    pub fn new(title: &'a str, message: &'a str, scroll: u16) -> Self {
+        Self {
+            title,
+            message,
+            scroll,
+        }
     }
 }
 
@@ -42,10 +47,14 @@ impl<'a> Widget for Modal<'a> {
         if !text.lines.is_empty() {
             text.lines.push(Line::from(""));
         }
-        text.lines
-            .push(Line::from(Span::styled("  Esc: close", hint_style)));
+        text.lines.push(Line::from(Span::styled(
+            "  j/k: scroll  PgUp/PgDn: page  Esc: close",
+            hint_style,
+        )));
 
-        let paragraph = Paragraph::new(text).block(block);
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .scroll((self.scroll, 0));
         Widget::render(paragraph, area, buf);
     }
 }

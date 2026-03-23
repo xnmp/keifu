@@ -57,6 +57,7 @@ pub enum AppMode {
     Modal {
         title: String,
         message: String,
+        scroll: u16,
     },
     Help,
     Input {
@@ -1055,7 +1056,11 @@ impl App {
             Action::FilesOpenModal => {
                 self.files_pane.select_current();
                 let (title, message) = self.build_selected_file_diff_preview()?;
-                self.mode = AppMode::Modal { title, message };
+                self.mode = AppMode::Modal {
+                    title,
+                    message,
+                    scroll: 0,
+                };
             }
             _ => {}
         }
@@ -1114,8 +1119,26 @@ impl App {
     }
 
     fn handle_modal_action(&mut self, action: Action) {
-        if matches!(action, Action::Cancel | Action::Confirm | Action::Quit) {
-            self.mode = AppMode::Files;
+        match &mut self.mode {
+            AppMode::Modal { scroll, .. } => match action {
+                Action::Cancel | Action::Confirm | Action::Quit => {
+                    self.mode = AppMode::Files;
+                }
+                Action::ModalScrollUp => {
+                    *scroll = scroll.saturating_sub(1);
+                }
+                Action::ModalScrollDown => {
+                    *scroll = scroll.saturating_add(1);
+                }
+                Action::ModalPageUp => {
+                    *scroll = scroll.saturating_sub(10);
+                }
+                Action::ModalPageDown => {
+                    *scroll = scroll.saturating_add(10);
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
 
