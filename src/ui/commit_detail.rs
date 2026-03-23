@@ -34,7 +34,7 @@ impl<'a> CommitDetailWidget<'a> {
 
     fn build_file_lines(app: &App) -> Vec<Line<'a>> {
         let selected = if matches!(app.mode, crate::app::AppMode::Files) {
-            app.files_list_state.selected()
+            app.files_pane.list_state.selected()
         } else {
             None
         };

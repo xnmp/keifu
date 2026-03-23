@@ -12,6 +12,7 @@ use git2::Oid;
 use crate::{
     action::Action,
     config::Config,
+    files_pane::FilesPane,
     git::{
         build_graph,
         graph::GraphLayout,
@@ -174,8 +175,7 @@ pub struct App {
 
     // UI state
     pub graph_list_state: ListState,
-    pub files_list_state: ListState,
-    pub selected_file_index: Option<usize>,
+    pub files_pane: FilesPane,
 
     // Branch selection state
     /// List of (node_index, branch_name) for all branches
@@ -255,7 +255,7 @@ impl App {
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
 
-        let files_list_state = ListState::default();
+        let files_pane = FilesPane::default();
 
         // Build branch positions
         let branch_positions = Self::build_branch_positions(&graph_layout);
@@ -282,8 +282,7 @@ impl App {
             branches,
             graph_layout,
             graph_list_state,
-            files_list_state,
-            selected_file_index: None,
+            files_pane,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -1027,25 +1026,26 @@ impl App {
     }
 
     fn handle_files_action(&mut self, action: Action) -> Result<()> {
+        let file_count = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
         match action {
             Action::Cancel | Action::Quit => {
-                self.exit_files_mode();
+                self.files_pane.exit(&mut self.mode);
             }
             Action::MoveUp => {
-                self.move_files_selection(-1);
+                self.files_pane.move_selection(file_count, -1);
             }
             Action::MoveDown => {
-                self.move_files_selection(1);
+                self.files_pane.move_selection(file_count, 1);
             }
             Action::PageUp => {
-                self.move_files_selection(-10);
+                self.files_pane.move_selection(file_count, -10);
             }
             Action::PageDown => {
-                self.move_files_selection(10);
+                self.files_pane.move_selection(file_count, 10);
             }
             Action::FilesSelect => {
-                self.selected_file_index = self.files_list_state.selected();
-                self.exit_files_mode();
+                self.files_pane.select_current();
+                self.files_pane.exit(&mut self.mode);
             }
             _ => {}
         }
@@ -1053,35 +1053,10 @@ impl App {
     }
 
     fn enter_files_mode(&mut self) {
-        let len = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
-        if len == 0 {
-            self.set_message("No files changed".to_string());
-            return;
+        let file_count = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
+        if let Some(msg) = self.files_pane.enter(&mut self.mode, file_count) {
+            self.set_message(msg);
         }
-
-        let selected = self
-            .selected_file_index
-            .unwrap_or(0)
-            .min(len.saturating_sub(1));
-        self.files_list_state.select(Some(selected));
-        self.mode = AppMode::Files;
-    }
-
-    fn exit_files_mode(&mut self) {
-        self.mode = AppMode::Normal;
-        self.files_list_state.select(None);
-    }
-
-    fn move_files_selection(&mut self, delta: isize) {
-        let len = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
-        if len == 0 {
-            self.files_list_state.select(None);
-            return;
-        }
-
-        let cur = self.files_list_state.selected().unwrap_or(0) as isize;
-        let next = (cur + delta).clamp(0, (len - 1) as isize) as usize;
-        self.files_list_state.select(Some(next));
     }
 
     fn handle_help_action(&mut self, action: Action) {
@@ -1469,7 +1444,7 @@ mod tests {
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
 
-        let files_list_state = ListState::default();
+        let files_pane = FilesPane::default();
 
         let branch_positions = App::build_branch_positions(&graph_layout);
         let has_uncommitted_node = graph_layout
@@ -1491,8 +1466,7 @@ mod tests {
             branches,
             graph_layout,
             graph_list_state,
-            files_list_state,
-            selected_file_index: None,
+            files_pane,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -1541,7 +1515,7 @@ mod tests {
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
 
-        let files_list_state = ListState::default();
+        let files_pane = FilesPane::default();
 
         let commits = node.commit.iter().cloned().collect();
 
@@ -1557,8 +1531,7 @@ mod tests {
                 max_lane: 0,
             },
             graph_list_state,
-            files_list_state,
-            selected_file_index: None,
+            files_pane,
             branch_positions: Vec::new(),
             selected_branch_position: None,
             search_state: SearchState::default(),

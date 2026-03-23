@@ -4,6 +4,7 @@ pub mod action;
 pub mod app;
 pub mod config;
 pub mod event;
+pub mod files_pane;
 pub mod git;
 pub mod graph;
 pub mod keybindings;
