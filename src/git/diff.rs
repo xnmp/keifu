@@ -679,33 +679,27 @@ impl CommitDiffInfo {
         let mut opts = DiffOptions::new();
         opts.pathspec(path);
 
-        // HEAD -> index (staged)
-        let staged = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
+        // Prefer a combined index+workdir diff against HEAD.
+        // This catches staged changes and additions reliably.
+        let mut opts_combined = DiffOptions::new();
+        opts_combined.pathspec(path);
+        let combined = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
 
-        // index -> workdir (unstaged tracked)
-        let mut opts2 = DiffOptions::new();
-        opts2.pathspec(path);
-        let unstaged = repo.diff_index_to_workdir(None, Some(&mut opts2))?;
-
-        // Untracked file (if any): compare empty tree -> workdir file
         let mut out = String::new();
-        for diff in [&staged, &unstaged] {
-            diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-                if let Ok(s) = std::str::from_utf8(line.content()) {
-                    out.push_str(s);
-                }
-                true
-            })?;
-        }
+        combined.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            if let Ok(s) = std::str::from_utf8(line.content()) {
+                out.push_str(s);
+            }
+            true
+        })?;
 
-        // If there's no patch output, it might be an untracked file.
+        // If there's still no patch output, it might be an untracked file (not in index).
         if out.trim().is_empty() {
             let full_path = workdir.join(path);
             if full_path.exists() {
-                let mut opts3 = DiffOptions::new();
-                opts3.pathspec(path);
-                // Compare empty tree -> workdir
-                let untracked = repo.diff_tree_to_workdir_with_index(None, Some(&mut opts3))?;
+                let mut opts_untracked = DiffOptions::new();
+                opts_untracked.pathspec(path);
+                let untracked = repo.diff_tree_to_workdir_with_index(None, Some(&mut opts_untracked))?;
                 untracked.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                     if let Ok(s) = std::str::from_utf8(line.content()) {
                         out.push_str(s);
