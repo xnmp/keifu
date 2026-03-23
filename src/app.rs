@@ -1047,7 +1047,50 @@ impl App {
                 self.files_pane.select_current();
                 self.files_pane.exit(&mut self.mode);
             }
+            Action::FilesOpenDiff => {
+                self.files_pane.select_current();
+                self.open_difftastic_for_selected_file()?;
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn open_difftastic_for_selected_file(&mut self) -> Result<()> {
+        let Some(diff) = self.cached_diff() else {
+            self.set_message("Diff not loaded yet".to_string());
+            return Ok(());
+        };
+        let Some(selected_idx) = self.files_pane.selected_file_index else {
+            return Ok(());
+        };
+        let Some(file) = diff.files.get(selected_idx) else {
+            return Ok(());
+        };
+        let Some(selected_node) = self.graph_list_state.selected() else {
+            return Ok(());
+        };
+        let Some(node) = self.graph_layout.nodes.get(selected_node) else {
+            return Ok(());
+        };
+        let Some(commit) = node.commit.as_ref() else {
+            return Ok(());
+        };
+
+        crate::tui::restore()?;
+        let status = std::process::Command::new("git")
+            .args(["-C", &self.repo_path])
+            .args(["difftool", "--tool=difftastic", "-y"])
+            .arg(commit.oid.to_string())
+            .arg("--")
+            .arg(file.path.as_os_str())
+            .status();
+
+        // Re-enter TUI.
+        let _ = crate::tui::init();
+
+        if let Err(e) = status {
+            self.set_message(format!("Failed to run difftastic: {e}"));
         }
         Ok(())
     }

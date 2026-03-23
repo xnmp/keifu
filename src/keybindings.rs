@@ -105,7 +105,7 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
             Some(Action::PageUp)
         }
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesSelect),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenDiff),
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }

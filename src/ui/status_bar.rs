@@ -142,7 +142,7 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" j/k ", key_style));
                 spans.push(Span::styled("move ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("select ", desc_style));
+                spans.push(Span::styled("difft ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
             }

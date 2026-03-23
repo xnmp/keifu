@@ -19,6 +19,7 @@ pub enum Action {
     Checkout,
     FocusFiles,
     FilesSelect,
+    FilesOpenDiff,
     CreateBranch,
     DeleteBranch,
     Fetch,
