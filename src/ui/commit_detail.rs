@@ -205,7 +205,7 @@ impl<'a> CommitDetailWidget<'a> {
                 let mut spans: Vec<Span> = Vec::new();
                 if msg.is_empty() {
                     spans.push(Span::styled(
-                        "(type here; Shift-Enter to commit)",
+                        "(type here; Alt-Enter to commit)",
                         Style::default().fg(Color::DarkGray),
                     ));
                 } else {

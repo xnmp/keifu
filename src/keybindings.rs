@@ -34,11 +34,15 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
         (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
-        (KeyModifiers::SHIFT, KeyCode::Enter) => Some(Action::CommitMessageCommit),
-        (KeyModifiers::ALT, KeyCode::Left) => Some(Action::CommitMessageMoveWordLeft),
-        (KeyModifiers::ALT, KeyCode::Right) => Some(Action::CommitMessageMoveWordRight),
+        (KeyModifiers::ALT, KeyCode::Enter) => Some(Action::CommitMessageCommit),
+
+        // Many terminals send Meta+arrow sequences as Alt-b / Alt-f.
+        (KeyModifiers::ALT, KeyCode::Char('b')) => Some(Action::CommitMessageMoveWordLeft),
+        (KeyModifiers::ALT, KeyCode::Char('f')) => Some(Action::CommitMessageMoveWordRight),
+        // Delete word backward is commonly Alt-Backspace.
         (KeyModifiers::ALT, KeyCode::Backspace) => Some(Action::CommitMessageDeleteWordBack),
-        (KeyModifiers::ALT, KeyCode::Delete) => Some(Action::CommitMessageDeleteWordForward),
+        // Delete word forward commonly arrives as Alt-d.
+        (KeyModifiers::ALT, KeyCode::Char('d')) => Some(Action::CommitMessageDeleteWordForward),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::CommitMessageDeleteForward),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
