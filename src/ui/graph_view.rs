@@ -329,8 +329,9 @@ fn render_graph_line<'a>(
             CellType::Empty => (' ', Color::Reset),
             CellType::Pipe(color_idx) => ('│', get_color_by_index(*color_idx)),
             CellType::Commit(color_idx) => {
-                // HEAD uses a double circle, others use a filled circle
-                let ch = if node.is_head { '◉' } else { '●' };
+                // Make checked-out commit visually prominent.
+                // Use a circled dot for HEAD, filled dot otherwise.
+                let ch = if node.is_head { '⊙' } else { '●' };
                 // Main branch (blue) stays blue; other HEADs are green
                 let is_main = *color_idx == crate::graph::colors::MAIN_BRANCH_COLOR;
                 let color = if node.is_head && !is_main {
@@ -397,7 +398,7 @@ fn render_graph_line<'a>(
     let hash_style = Style::default().fg(Color::Yellow);
     let author_style = Style::default().fg(Color::Cyan);
     let date_style = Style::default().fg(Color::DarkGray);
-    let msg_style = if is_selected {
+    let msg_style = if node.is_head || is_selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
