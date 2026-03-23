@@ -185,6 +185,7 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
+        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Push),
         // TODO: merge and rebase will be implemented in the future
         // (KeyModifiers::NONE, KeyCode::Char('m')) => Some(Action::Merge),
         // (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::Rebase),

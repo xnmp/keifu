@@ -275,3 +275,21 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
 
     Ok(())
 }
+
+/// Push the currently checked out branch to its upstream.
+///
+/// This only works when HEAD is attached to a local branch.
+pub fn push_current_branch(repo_path: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["push"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git push")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git push failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}

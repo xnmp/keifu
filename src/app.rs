@@ -1173,6 +1173,21 @@ impl App {
                     self.start_fetch(true, false); // silent=false for manual fetch
                 }
             }
+            Action::Push => {
+                let head_name = self.repo.head_name();
+                if head_name.as_deref() == Some("HEAD") {
+                    self.set_message("Cannot push: detached HEAD".to_string());
+                } else if head_name.is_none() {
+                    self.set_message("Cannot push: detached HEAD".to_string());
+                } else {
+                    if let Err(e) = crate::git::operations::push_current_branch(&self.repo_path) {
+                        self.set_message(e.to_string());
+                    } else {
+                        self.set_message("Pushed".to_string());
+                        self.refresh(true)?;
+                    }
+                }
+            }
             Action::Checkout => {
                 self.do_checkout()?;
             }
