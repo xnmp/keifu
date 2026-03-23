@@ -107,9 +107,7 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
-        (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {
-            Some(Action::Quit)
-        }
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Quit),
 
         _ => None,
     }
@@ -136,7 +134,7 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_help_mode(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => Some(Action::ToggleHelp),
+        KeyCode::Esc | KeyCode::Char('?') => Some(Action::ToggleHelp),
         _ => None,
     }
 }
@@ -179,7 +177,7 @@ fn map_confirm_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_error_mode(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Action::Cancel),
+        KeyCode::Esc | KeyCode::Enter => Some(Action::Cancel),
         _ => None,
     }
 }

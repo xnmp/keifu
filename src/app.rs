@@ -1182,7 +1182,7 @@ impl App {
                 .unwrap_or(0)
         };
         match action {
-            Action::Cancel | Action::Quit => {
+            Action::Quit => {
                 self.files_pane.exit(&mut self.mode);
             }
             Action::FocusLeftPane => {
@@ -1265,7 +1265,7 @@ impl App {
 
     fn handle_detail_action(&mut self, action: Action) -> Result<()> {
         match action {
-            Action::Cancel | Action::Quit => {
+            Action::Quit => {
                 self.mode = AppMode::Graph;
             }
             Action::FocusLeftPane => {

@@ -131,12 +131,12 @@ impl<'a> Widget for StatusBar<'a> {
                     spans.push(Span::styled("fetch ", desc_style));
                     spans.push(Span::styled(" ? ", key_style));
                     spans.push(Span::styled("help ", desc_style));
-                    spans.push(Span::styled(" q ", key_style));
+                    spans.push(Span::styled(" Esc ", key_style));
                     spans.push(Span::styled("quit", desc_style));
                 }
             },
             AppMode::Help => {
-                spans.push(Span::styled(" Esc/q ", key_style));
+                spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("close help", desc_style));
             }
             AppMode::Files => {
