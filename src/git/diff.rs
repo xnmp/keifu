@@ -684,7 +684,18 @@ impl CommitDiffInfo {
         let mut out = String::new();
         {
             let mut opts_combined = DiffOptions::new();
-            opts_combined.pathspec(path);
+            let full_path = workdir.join(path);
+            let pathspec = if full_path.is_dir() {
+                let mut s = path.to_string_lossy().to_string();
+                if !s.ends_with('/') {
+                    s.push('/');
+                }
+                s
+            } else {
+                path.to_string_lossy().to_string()
+            };
+
+            opts_combined.pathspec(&pathspec);
             let combined =
                 repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
             combined.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
@@ -698,7 +709,18 @@ impl CommitDiffInfo {
         // If no output, try explicit staged-only and unstaged-only diffs for the path.
         if out.trim().is_empty() {
             let mut opts_staged = DiffOptions::new();
-            opts_staged.pathspec(path);
+            let full_path = workdir.join(path);
+            let pathspec = if full_path.is_dir() {
+                let mut s = path.to_string_lossy().to_string();
+                if !s.ends_with('/') {
+                    s.push('/');
+                }
+                s
+            } else {
+                path.to_string_lossy().to_string()
+            };
+
+            opts_staged.pathspec(&pathspec);
             let staged = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts_staged))?;
             staged.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                 if let Ok(s) = std::str::from_utf8(line.content()) {
@@ -708,7 +730,7 @@ impl CommitDiffInfo {
             })?;
 
             let mut opts_unstaged = DiffOptions::new();
-            opts_unstaged.pathspec(path);
+            opts_unstaged.pathspec(&pathspec);
             let unstaged = repo.diff_index_to_workdir(None, Some(&mut opts_unstaged))?;
             unstaged.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                 if let Ok(s) = std::str::from_utf8(line.content()) {
@@ -722,8 +744,20 @@ impl CommitDiffInfo {
         if out.trim().is_empty() {
             let full_path = workdir.join(path);
             if full_path.exists() {
+                // Git may treat a directory pathspec specially; if the selected path is a
+                // directory, diff it as a pathspec prefix so we still get a patch.
+                let pathspec = if full_path.is_dir() {
+                    let mut s = path.to_string_lossy().to_string();
+                    if !s.ends_with('/') {
+                        s.push('/');
+                    }
+                    s
+                } else {
+                    path.to_string_lossy().to_string()
+                };
+
                 let mut opts_untracked = DiffOptions::new();
-                opts_untracked.pathspec(path);
+                opts_untracked.pathspec(pathspec);
                 let untracked = repo.diff_tree_to_workdir_with_index(None, Some(&mut opts_untracked))?;
                 untracked.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                     if let Ok(s) = std::str::from_utf8(line.content()) {
