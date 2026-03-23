@@ -175,7 +175,7 @@ impl<'a> CommitDetailWidget<'a> {
 
         // Handle uncommitted changes node
         if node.is_uncommitted {
-            return vec![
+            let mut lines = vec![
                 Line::from(Span::styled(
                     "Uncommitted Changes",
                     Style::default()
@@ -190,7 +190,32 @@ impl<'a> CommitDetailWidget<'a> {
                     },
                     Style::default().fg(Color::DarkGray),
                 )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Commit message:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
             ];
+
+            // Show the editor only when the Detail panel is focused.
+            if matches!(app.mode, AppMode::Detail) {
+                let msg = if app.commit_message.is_empty() {
+                    "(type here; Shift-Enter to commit)".to_string()
+                } else {
+                    app.commit_message.clone()
+                };
+                lines.push(Line::from(Span::styled(
+                    msg,
+                    Style::default().fg(Color::Yellow),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "(focus Detail panel to type)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            return lines;
         }
 
         // Handle connector rows (no commit)

@@ -18,8 +18,8 @@ use crate::{
         build_graph,
         graph::GraphLayout,
         operations::{
-            checkout_branch, checkout_commit, checkout_remote_branch, create_branch, delete_branch,
-            fetch_origin, merge_branch, rebase_branch,
+            checkout_branch, checkout_commit, checkout_remote_branch, commit_with_message,
+            create_branch, delete_branch, fetch_origin, merge_branch, rebase_branch,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, GitRepository, WorkingTreeStatus,
     },
@@ -233,6 +233,9 @@ pub struct App {
     message: Option<String>,
     message_time: Option<std::time::Instant>,
 
+    // Commit message editor (used when the uncommitted node is selected)
+    pub commit_message: String,
+
     // Async fetch
     fetch_receiver: Option<Receiver<Result<(), String>>>,
     /// Whether to suppress error dialogs for fetch failures (for auto-fetch)
@@ -394,6 +397,7 @@ impl App {
             should_quit: false,
             message: initial_message,
             message_time: initial_message_time,
+            commit_message: String::new(),
             fetch_receiver: None,
             fetch_silent: false,
             config,
@@ -1277,9 +1281,33 @@ impl App {
             Action::FocusRightPane => {
                 // No-op: detail is the rightmost panel.
             }
+            Action::InputChar(c) => {
+                if self.is_uncommitted_selected() {
+                    self.commit_message.push(c);
+                }
+            }
+            Action::InputBackspace => {
+                if self.is_uncommitted_selected() {
+                    self.commit_message.pop();
+                }
+            }
+            Action::CommitMessageCommit => {
+                if self.is_uncommitted_selected() {
+                    commit_with_message(&self.repo_path, &self.commit_message)?;
+                    self.commit_message.clear();
+                    self.refresh(true)?;
+                }
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    fn is_uncommitted_selected(&self) -> bool {
+        self.graph_list_state
+            .selected()
+            .and_then(|idx| self.graph_layout.nodes.get(idx))
+            .is_some_and(|node| node.is_uncommitted)
     }
 
     fn build_selected_file_diff_preview(&mut self) -> Result<(String, String)> {
@@ -1888,6 +1916,7 @@ mod tests {
             should_quit: false,
             message: initial_message,
             message_time: initial_message_time,
+            commit_message: String::new(),
             fetch_receiver: None,
             fetch_silent: false,
             config: Config::default(),
@@ -1958,6 +1987,7 @@ mod tests {
             should_quit: false,
             message: None,
             message_time: None,
+            commit_message: String::new(),
             fetch_receiver: None,
             fetch_silent: false,
             config: Config::default(),

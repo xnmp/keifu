@@ -46,6 +46,7 @@ pub enum Action {
     Cancel,
     InputChar(char),
     InputBackspace,
+    CommitMessageCommit,
 
     // Search dropdown
     SearchSelectUp,

@@ -34,6 +34,9 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
         (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
+        (KeyModifiers::SHIFT, KeyCode::Enter) => Some(Action::CommitMessageCommit),
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
 }

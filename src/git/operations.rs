@@ -48,6 +48,26 @@ pub fn unstage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Create a commit with the provided message.
+pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
+    if message.trim().is_empty() {
+        bail!("Commit message cannot be empty");
+    }
+
+    let output = Command::new("git")
+        .args(["-C", repo_path])
+        .args(["commit", "-m", message])
+        .output()
+        .context("Failed to execute git commit")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git commit failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 /// Checkout a branch
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let branch = repo
