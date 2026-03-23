@@ -263,6 +263,25 @@ impl App {
         self.last_key_debug.as_deref()
     }
 
+    pub fn debug_commit_cursor(&self) -> String {
+        let msg_chars: Vec<char> = self.commit_message.chars().collect();
+        let cursor = self.commit_message_cursor.min(msg_chars.len());
+
+        let prev = cursor
+            .checked_sub(1)
+            .and_then(|i| msg_chars.get(i).copied());
+        let cur = msg_chars.get(cursor).copied();
+
+        format!(
+            "editing={} cursor={}/{} prev={:?} cur={:?}",
+            self.commit_message_editing,
+            cursor,
+            msg_chars.len(),
+            prev,
+            cur
+        )
+    }
+
     pub fn record_key_debug(&mut self, key: &crossterm::event::KeyEvent) {
         if !self.key_debug_enabled {
             return;

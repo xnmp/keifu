@@ -277,6 +277,15 @@ impl<'a> CommitDetailWidget<'a> {
                         }
                     }
                 }
+
+                // Debug overlay for commit message cursor/rendering.
+                if app.is_key_debug_enabled() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        app.debug_commit_cursor(),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
             } else {
                 lines.push(Line::from(Span::styled(
                     "(focus Detail panel to type)",
