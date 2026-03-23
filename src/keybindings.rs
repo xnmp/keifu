@@ -39,7 +39,7 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     }
 
     if mods.is_empty() && code == KeyCode::Esc {
-        return Some(Action::FocusLeftPane);
+        return Some(Action::Quit);
     }
 
     // Commit message editor keybindings (used when the uncommitted node is
