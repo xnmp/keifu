@@ -29,18 +29,18 @@ impl<'a> Widget for Modal<'a> {
             .style(Style::default().bg(Color::Black));
 
         let hint_style = Style::default().fg(Color::DarkGray);
-        let lines = vec![
-            Line::from(""),
-            Line::from(vec![
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(""));
+        for line in self.message.lines() {
+            lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(self.message, Style::default().add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("  Esc: close", hint_style)),
-        ];
+                Span::styled(line.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  Esc: close", hint_style)));
 
         let paragraph = Paragraph::new(lines).block(block);
         Widget::render(paragraph, area, buf);
     }
 }
-

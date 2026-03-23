@@ -1053,13 +1053,46 @@ impl App {
             }
             Action::FilesOpenModal => {
                 self.files_pane.select_current();
-                self.mode = AppMode::Modal {
-                    message: "your text here".to_string(),
-                };
+                let message = self.build_selected_file_diff_preview()?;
+                self.mode = AppMode::Modal { message };
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn build_selected_file_diff_preview(&mut self) -> Result<String> {
+        let Some(diff) = self.cached_diff() else {
+            return Ok("Diff not loaded yet".to_string());
+        };
+        let Some(file_idx) = self.files_pane.selected_file_index else {
+            return Ok("No file selected".to_string());
+        };
+        let Some(file) = diff.files.get(file_idx) else {
+            return Ok("No file selected".to_string());
+        };
+
+        let Some(selected_node) = self.graph_list_state.selected() else {
+            return Ok("No commit selected".to_string());
+        };
+        let Some(node) = self.graph_layout.nodes.get(selected_node) else {
+            return Ok("No commit selected".to_string());
+        };
+        let Some(commit) = node.commit.as_ref() else {
+            return Ok("No commit selected".to_string());
+        };
+
+        let repo = git2::Repository::open(&self.repo_path)?;
+        let text = crate::git::CommitDiffInfo::unified_diff_for_file(
+            &repo,
+            commit.oid,
+            file.path.as_path(),
+        )?;
+
+        if text.trim().is_empty() {
+            return Ok("(no diff output)".to_string());
+        }
+        Ok(text)
     }
 
     fn handle_modal_action(&mut self, action: Action) {

@@ -149,6 +149,32 @@ impl CommitDiffInfo {
         Self::build_info(Self::scan_diff(&diff)?, None)
     }
 
+    /// Return a textual unified diff for a specific file in a commit.
+    ///
+    /// Intended for in-TUI preview.
+    pub fn unified_diff_for_file(repo: &Repository, commit_oid: Oid, path: &Path) -> Result<String> {
+        let commit = repo.find_commit(commit_oid)?;
+        let new_tree = commit.tree()?;
+        let old_tree = if commit.parent_count() > 0 {
+            Some(commit.parent(0)?.tree()?)
+        } else {
+            None
+        };
+
+        let mut opts = DiffOptions::new();
+        opts.pathspec(path);
+
+        let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
+        let mut out = String::new();
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            if let Ok(s) = std::str::from_utf8(line.content()) {
+                out.push_str(s);
+            }
+            true
+        })?;
+        Ok(out)
+    }
+
     fn scan_diff(diff: &Diff) -> Result<DiffScan> {
         let _ = diff.stats()?;
         let mut files = Vec::with_capacity(diff.deltas().len());
