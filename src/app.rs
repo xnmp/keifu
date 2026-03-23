@@ -210,6 +210,10 @@ pub struct App {
     selected_diff_target: Option<DiffTarget>,
     selected_diff_target_changed_at: Instant,
 
+    // Diff modal cache (to avoid re-running external diff renderer)
+    diff_modal_cache_key: Option<(DiffTarget, std::path::PathBuf)>,
+    diff_modal_cache_value: Option<(String, String)>,
+
     // Flags
     pub should_quit: bool,
 
@@ -303,6 +307,8 @@ impl App {
             uncommitted_cache_key: None,
             selected_diff_target: None,
             selected_diff_target_changed_at: now,
+            diff_modal_cache_key: None,
+            diff_modal_cache_value: None,
             should_quit: false,
             message: initial_message,
             message_time: initial_message_time,
@@ -321,6 +327,8 @@ impl App {
         self.diff_loading_oid = None;
         self.diff_receiver = None;
         self.clear_uncommitted_diff_cache();
+        self.diff_modal_cache_key = None;
+        self.diff_modal_cache_value = None;
     }
 
     /// Clear uncommitted diff cache only
@@ -1093,6 +1101,16 @@ impl App {
         let commit_oid = node.commit.as_ref().map(|c| c.oid);
 
         let backend = crate::diff_view::DiffBackend::Difftastic;
+
+        let Some(target) = self.current_diff_target() else {
+            return Ok(("Diff".to_string(), "No commit selected".to_string()));
+        };
+        let cache_key = (target, file.path.clone());
+        if self.diff_modal_cache_key.as_ref() == Some(&cache_key) {
+            if let Some(value) = self.diff_modal_cache_value.clone() {
+                return Ok(value);
+            }
+        }
         let render = if node.is_uncommitted {
             crate::diff_view::render_worktree_file_diff(&self.repo_path, file.path.as_path(), backend)?
         } else {
@@ -1112,10 +1130,15 @@ impl App {
 
         let text = render.ansi;
 
-        if text.trim().is_empty() {
-            return Ok((render.title, "(no diff output)".to_string()));
-        }
-        Ok((render.title, text))
+        let value = if text.trim().is_empty() {
+            (render.title, "(no diff output)".to_string())
+        } else {
+            (render.title, text)
+        };
+
+        self.diff_modal_cache_key = Some(cache_key);
+        self.diff_modal_cache_value = Some(value.clone());
+        Ok(value)
     }
 
     fn handle_modal_action(&mut self, action: Action) {
@@ -1572,6 +1595,8 @@ mod tests {
             uncommitted_cache_key: None,
             selected_diff_target: None,
             selected_diff_target_changed_at: now,
+            diff_modal_cache_key: None,
+            diff_modal_cache_value: None,
             should_quit: false,
             message: initial_message,
             message_time: initial_message_time,
@@ -1637,6 +1662,8 @@ mod tests {
             uncommitted_cache_key: None,
             selected_diff_target: Some(diff_target),
             selected_diff_target_changed_at: Instant::now() - DIFF_LOAD_DEBOUNCE,
+            diff_modal_cache_key: None,
+            diff_modal_cache_value: None,
             should_quit: false,
             message: None,
             message_time: None,

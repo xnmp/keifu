@@ -23,6 +23,21 @@ pub struct DiffRender {
     pub ansi: String,
 }
 
+fn run_difftastic(old_path: &Path, new_path: &Path) -> Result<String> {
+    let output = std::process::Command::new("difft")
+        .args([
+            "--color=always",
+            "--display=inline",
+            "--background=dark",
+            "--width=120",
+        ])
+        .arg(old_path)
+        .arg(new_path)
+        .output()?;
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 pub fn render_commit_file_diff(
     repo_path: &str,
     commit_oid: Oid,
@@ -65,15 +80,9 @@ pub fn render_commit_file_diff(
             old_file.write_all(old_content.as_bytes())?;
             new_file.write_all(new_content.as_bytes())?;
 
-            let output = std::process::Command::new("difft")
-                .args(["--color=always", "--display=inline"])
-                .arg(old_file.path())
-                .arg(new_file.path())
-                .output()?;
-
             Ok(DiffRender {
                 title: path.to_string_lossy().to_string(),
-                ansi: String::from_utf8_lossy(&output.stdout).to_string(),
+                ansi: run_difftastic(old_file.path(), new_file.path())?,
             })
         }
     }
@@ -117,15 +126,9 @@ pub fn render_worktree_file_diff(
             old_file.write_all(old_content.as_bytes())?;
             new_file.write_all(new_content.as_bytes())?;
 
-            let output = std::process::Command::new("difft")
-                .args(["--color=always", "--display=inline"])
-                .arg(old_file.path())
-                .arg(new_file.path())
-                .output()?;
-
             Ok(DiffRender {
                 title: path.to_string_lossy().to_string(),
-                ansi: String::from_utf8_lossy(&output.stdout).to_string(),
+                ansi: run_difftastic(old_file.path(), new_file.path())?,
             })
         }
     }
