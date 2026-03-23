@@ -226,54 +226,55 @@ impl<'a> CommitDetailWidget<'a> {
                     };
                     let selection_style = Style::default().fg(Color::Black).bg(Color::LightYellow);
 
-                    let chars: Vec<char> = msg.chars().collect();
                     let mut line_start = 0usize;
-                    let mut i = 0usize;
-                    while i <= chars.len() {
-                        let at_end = i == chars.len();
-                        let at_newline = !at_end && chars[i] == '\n';
-                        if at_end || at_newline {
-                            let line_end = i;
+                    let line_count = msg.split('\n').count();
+                    for (line_idx, raw_line) in msg.split('\n').enumerate() {
+                        // Preserve empty lines and compute the corresponding
+                        // absolute char indices in the full text.
+                        let line_len = raw_line.chars().count();
+                        let line_end = line_start + line_len;
 
-                            // Build spans for this line.
-                            let mut spans: Vec<Span> = Vec::new();
-                            for j in line_start..=line_end {
-                                // j == line_end is an "end-of-line position" to
-                                // allow rendering the cursor at EOL.
-                                let ch = if j < line_end { Some(chars[j]) } else { None };
+                        let mut spans: Vec<Span> = Vec::new();
+                        // Render line content plus a possible cursor at EOL.
+                        for j in line_start..=line_end {
+                            let rel = j.saturating_sub(line_start);
+                            let ch = if j < line_end {
+                                raw_line.chars().nth(rel)
+                            } else {
+                                None
+                            };
 
-                                // Skip rendering the newline itself.
-                                if j == line_end && at_newline {
-                                    // EOL before a newline.
-                                }
+                            let is_cursor = app.commit_message_editing && j == cursor;
+                            let is_selected =
+                                selection.map(|(s, e)| j >= s && j < e).unwrap_or(false);
 
-                                let is_cursor = app.commit_message_editing && j == cursor;
-                                let is_selected =
-                                    selection.map(|(s, e)| j >= s && j < e).unwrap_or(false);
+                            let mut style = if is_selected {
+                                selection_style
+                            } else {
+                                text_style
+                            };
+                            if is_cursor {
+                                style = cursor_style;
+                            }
 
-                                let mut style = if is_selected {
-                                    selection_style
-                                } else {
-                                    text_style
-                                };
-                                if is_cursor {
-                                    style = cursor_style;
-                                }
-
-                                match ch {
-                                    Some(c) => spans.push(Span::styled(c.to_string(), style)),
-                                    None => {
-                                        if is_cursor {
-                                            spans.push(Span::styled(" ", cursor_style));
-                                        }
+                            match ch {
+                                Some(c) => spans.push(Span::styled(c.to_string(), style)),
+                                None => {
+                                    if is_cursor {
+                                        spans.push(Span::styled(" ", cursor_style));
                                     }
                                 }
                             }
-
-                            lines.push(Line::from(spans));
-                            line_start = i + 1;
                         }
-                        i += 1;
+
+                        lines.push(Line::from(spans));
+
+                        // Advance start past this line and its newline (except
+                        // after the last split segment).
+                        line_start = line_end;
+                        if line_idx + 1 < line_count {
+                            line_start += 1;
+                        }
                     }
                 }
             } else {
