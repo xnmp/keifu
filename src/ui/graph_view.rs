@@ -330,8 +330,8 @@ fn render_graph_line<'a>(
             CellType::Pipe(color_idx) => ('│', get_color_by_index(*color_idx)),
             CellType::Commit(color_idx) => {
                 // Make checked-out commit visually prominent.
-                // Use a larger bullseye for HEAD, filled dot otherwise.
-                let ch = if node.is_head { '◎' } else { '●' };
+                // Use a prominent "play" marker for HEAD, filled dot otherwise.
+                let ch = if node.is_head { '▶' } else { '●' };
                 // Main branch (blue) stays blue; other HEADs are green
                 let is_main = *color_idx == crate::graph::colors::MAIN_BRANCH_COLOR;
                 let color = if node.is_head && !is_main {
