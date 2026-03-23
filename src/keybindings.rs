@@ -14,6 +14,7 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
     }
     match mode {
         AppMode::Normal => map_normal_mode(key),
+        AppMode::Files => map_files_mode(key),
         AppMode::Help => map_help_mode(key),
         AppMode::Input { action, .. } => {
             if *action == crate::app::InputAction::Search {
@@ -70,6 +71,7 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
 
         // Git operations
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::Checkout),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FocusFiles),
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
@@ -85,6 +87,26 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::Quit)
         }
 
+        _ => None,
+    }
+}
+
+fn map_files_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesSelect),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }
 }

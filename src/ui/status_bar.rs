@@ -120,6 +120,8 @@ impl<'a> Widget for StatusBar<'a> {
 
                     spans.push(Span::styled(" j/k ", key_style));
                     spans.push(Span::styled("move ", desc_style));
+                    spans.push(Span::styled(" Enter ", key_style));
+                    spans.push(Span::styled("files ", desc_style));
                     spans.push(Span::styled(" c ", key_style));
                     spans.push(Span::styled("checkout ", desc_style));
                     spans.push(Span::styled(" b ", key_style));
@@ -135,6 +137,14 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Help => {
                 spans.push(Span::styled(" Esc/q ", key_style));
                 spans.push(Span::styled("close help", desc_style));
+            }
+            AppMode::Files => {
+                spans.push(Span::styled(" j/k ", key_style));
+                spans.push(Span::styled("move ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("select ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("back", desc_style));
             }
             AppMode::Input { .. } => {
                 spans.push(Span::styled(" Enter ", key_style));
@@ -169,6 +179,7 @@ impl<'a> Widget for StatusBar<'a> {
         // Show the mode on the right (only for non-Normal modes)
         let mode_text = match self.mode {
             AppMode::Normal => None,
+            AppMode::Files => Some(" FILES "),
             AppMode::Help => Some(" HELP "),
             AppMode::Input { .. } => Some(" INPUT "),
             AppMode::Confirm { .. } => Some(" CONFIRM "),

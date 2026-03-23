@@ -84,6 +84,10 @@ impl Widget for HelpPopup {
                 Span::styled("Checkout selected branch/commit", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  Enter      ", key_style),
+                Span::styled("Focus changed files", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  b          ", key_style),
                 Span::styled("Create new branch", desc_style),
             ]),

@@ -52,6 +52,7 @@ fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
 #[derive(Debug, Clone)]
 pub enum AppMode {
     Normal,
+    Files,
     Help,
     Input {
         title: String,
@@ -173,6 +174,8 @@ pub struct App {
 
     // UI state
     pub graph_list_state: ListState,
+    pub files_list_state: ListState,
+    pub selected_file_index: Option<usize>,
 
     // Branch selection state
     /// List of (node_index, branch_name) for all branches
@@ -252,6 +255,8 @@ impl App {
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
 
+        let files_list_state = ListState::default();
+
         // Build branch positions
         let branch_positions = Self::build_branch_positions(&graph_layout);
 
@@ -277,6 +282,8 @@ impl App {
             branches,
             graph_layout,
             graph_list_state,
+            files_list_state,
+            selected_file_index: None,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -898,6 +905,7 @@ impl App {
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
+            AppMode::Files => self.handle_files_action(action)?,
             AppMode::Help => self.handle_help_action(action),
             AppMode::Input { .. } => self.handle_input_action(action)?,
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
@@ -964,6 +972,9 @@ impl App {
             Action::Checkout => {
                 self.do_checkout()?;
             }
+            Action::FocusFiles => {
+                self.enter_files_mode();
+            }
             Action::CreateBranch => {
                 self.mode = AppMode::Input {
                     title: "New Branch Name".to_string(),
@@ -1013,6 +1024,64 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_files_action(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::Cancel | Action::Quit => {
+                self.exit_files_mode();
+            }
+            Action::MoveUp => {
+                self.move_files_selection(-1);
+            }
+            Action::MoveDown => {
+                self.move_files_selection(1);
+            }
+            Action::PageUp => {
+                self.move_files_selection(-10);
+            }
+            Action::PageDown => {
+                self.move_files_selection(10);
+            }
+            Action::FilesSelect => {
+                self.selected_file_index = self.files_list_state.selected();
+                self.exit_files_mode();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn enter_files_mode(&mut self) {
+        let len = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
+        if len == 0 {
+            self.set_message("No files changed".to_string());
+            return;
+        }
+
+        let selected = self
+            .selected_file_index
+            .unwrap_or(0)
+            .min(len.saturating_sub(1));
+        self.files_list_state.select(Some(selected));
+        self.mode = AppMode::Files;
+    }
+
+    fn exit_files_mode(&mut self) {
+        self.mode = AppMode::Normal;
+        self.files_list_state.select(None);
+    }
+
+    fn move_files_selection(&mut self, delta: isize) {
+        let len = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
+        if len == 0 {
+            self.files_list_state.select(None);
+            return;
+        }
+
+        let cur = self.files_list_state.selected().unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, (len - 1) as isize) as usize;
+        self.files_list_state.select(Some(next));
     }
 
     fn handle_help_action(&mut self, action: Action) {
@@ -1400,6 +1469,8 @@ mod tests {
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
 
+        let files_list_state = ListState::default();
+
         let branch_positions = App::build_branch_positions(&graph_layout);
         let has_uncommitted_node = graph_layout
             .nodes
@@ -1420,6 +1491,8 @@ mod tests {
             branches,
             graph_layout,
             graph_list_state,
+            files_list_state,
+            selected_file_index: None,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -1468,6 +1541,8 @@ mod tests {
         let mut graph_list_state = ListState::default();
         graph_list_state.select(Some(0));
 
+        let files_list_state = ListState::default();
+
         let commits = node.commit.iter().cloned().collect();
 
         App {
@@ -1482,6 +1557,8 @@ mod tests {
                 max_lane: 0,
             },
             graph_list_state,
+            files_list_state,
+            selected_file_index: None,
             branch_positions: Vec::new(),
             selected_branch_position: None,
             search_state: SearchState::default(),

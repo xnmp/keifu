@@ -17,6 +17,8 @@ pub enum Action {
 
     // Git operations
     Checkout,
+    FocusFiles,
+    FilesSelect,
     CreateBranch,
     DeleteBranch,
     Fetch,

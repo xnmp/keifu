@@ -33,10 +33,11 @@ impl<'a> CommitDetailWidget<'a> {
     }
 
     fn build_file_lines(app: &App) -> Vec<Line<'a>> {
+        let selected = app.files_list_state.selected();
         // Prefer cached data (even if stale) over a loading indicator so that
         // auto-refresh doesn't cause the file list to flicker.
         if let Some(diff) = app.cached_diff() {
-            return Self::build_file_list_lines_from(Some(diff));
+            return Self::build_file_list_lines_from(Some(diff), selected);
         }
         if app.is_diff_loading() {
             return vec![Line::from(Span::styled(
@@ -44,7 +45,7 @@ impl<'a> CommitDetailWidget<'a> {
                 Style::default().fg(Color::DarkGray),
             ))];
         }
-        Self::build_file_list_lines_from(None)
+        Self::build_file_list_lines_from(None, selected)
     }
 
     fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
@@ -135,7 +136,10 @@ impl<'a> CommitDetailWidget<'a> {
         lines
     }
 
-    fn build_file_list_lines_from(diff: Option<&CommitDiffInfo>) -> Vec<Line<'a>> {
+    fn build_file_list_lines_from(
+        diff: Option<&CommitDiffInfo>,
+        selected: Option<usize>,
+    ) -> Vec<Line<'a>> {
         let mut lines = Vec::new();
 
         let Some(diff) = diff else {
@@ -162,7 +166,7 @@ impl<'a> CommitDetailWidget<'a> {
         lines.push(Line::from(""));
 
         // File list
-        for file in &diff.files {
+        for (idx, file) in diff.files.iter().enumerate() {
             let (indicator, color) = match file.kind {
                 FileChangeKind::Added => ("A", Color::Green),
                 FileChangeKind::Modified => ("M", Color::Yellow),
@@ -173,8 +177,12 @@ impl<'a> CommitDetailWidget<'a> {
 
             let path_str = file.path.to_string_lossy().to_string();
 
+            let prefix = if selected == Some(idx) { ">" } else { " " };
+
             let mut spans = vec![
-                Span::styled(format!(" {} ", indicator), Style::default().fg(color)),
+                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(format!("{} ", indicator), Style::default().fg(color)),
                 Span::raw(path_str),
             ];
 
