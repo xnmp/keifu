@@ -129,6 +129,8 @@ impl<'a> Widget for StatusBar<'a> {
                     spans.push(Span::styled("branch ", desc_style));
                     spans.push(Span::styled(" f ", key_style));
                     spans.push(Span::styled("fetch ", desc_style));
+                    spans.push(Span::styled(" p ", key_style));
+                    spans.push(Span::styled("push ", desc_style));
                     spans.push(Span::styled(" ? ", key_style));
                     spans.push(Span::styled("help ", desc_style));
                     spans.push(Span::styled(" Esc ", key_style));
