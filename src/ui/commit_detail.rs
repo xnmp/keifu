@@ -55,8 +55,8 @@ impl<'a> CommitDetailWidget<'a> {
         // Fast path: for commit diffs, show an instant file list (no +/- stats)
         // from a cached git CLI query while the full diff loads.
         if !show_staged_sections {
-            if let Some(paths) = app.cached_commit_files() {
-                return Self::build_file_list_lines_from_commit_paths(paths, selected);
+            if let Some(entries) = app.cached_commit_files() {
+                return Self::build_file_list_lines_from_commit_paths(entries, selected);
             }
         }
 
@@ -78,14 +78,14 @@ impl<'a> CommitDetailWidget<'a> {
     }
 
     fn build_file_list_lines_from_commit_paths(
-        paths: &[std::path::PathBuf],
+        entries: &[(crate::git::FileChangeKind, std::path::PathBuf)],
         selected: Option<usize>,
     ) -> Vec<Line<'a>> {
         let mut lines = Vec::new();
 
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{} files changed", paths.len()),
+                format!("{} files changed", entries.len()),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -93,7 +93,7 @@ impl<'a> CommitDetailWidget<'a> {
         ]));
         lines.push(Line::from(""));
 
-        for (idx, path) in paths.iter().enumerate() {
+        for (idx, (kind, path)) in entries.iter().enumerate() {
             let is_selected = selected == Some(idx);
             let row_style = if is_selected {
                 Style::default().add_modifier(Modifier::REVERSED)
@@ -101,8 +101,16 @@ impl<'a> CommitDetailWidget<'a> {
                 Style::default()
             };
             let path_str = path.to_string_lossy().to_string();
+
+            let (indicator, color) = match kind {
+                crate::git::FileChangeKind::Added => ("A", Color::Green),
+                crate::git::FileChangeKind::Modified => ("M", Color::Yellow),
+                crate::git::FileChangeKind::Deleted => ("D", Color::Red),
+                crate::git::FileChangeKind::Renamed => ("R", Color::Cyan),
+                crate::git::FileChangeKind::Copied => ("C", Color::Cyan),
+            };
             lines.push(Line::from(vec![
-                Span::styled(" ? ".to_string(), row_style.fg(Color::DarkGray)),
+                Span::styled(format!(" {} ", indicator), row_style.fg(color)),
                 Span::styled(path_str, row_style),
             ]));
         }

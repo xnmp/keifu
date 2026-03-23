@@ -209,7 +209,7 @@ pub struct App {
 
     // Fast commit file list cache (for instant rendering)
     commit_files_cache_oid: Option<Oid>,
-    commit_files_cache: Option<Vec<PathBuf>>,
+    commit_files_cache: Option<Vec<(crate::git::FileChangeKind, PathBuf)>>,
 
     // Uncommitted diff cache
     uncommitted_diff_cache: Option<CommitDiffInfo>,
@@ -245,7 +245,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn cached_commit_files(&mut self) -> Option<&[PathBuf]> {
+    pub fn cached_commit_files(&mut self) -> Option<&[(crate::git::FileChangeKind, PathBuf)]> {
         let DiffTarget::Commit(oid) = self.current_diff_target()? else {
             return None;
         };
@@ -256,7 +256,7 @@ impl App {
 
         let output = Command::new("git")
             .args(["-C", self.repo_path.as_str()])
-            .args(["diff-tree", "--no-commit-id", "--name-only", "-r"])
+            .args(["diff-tree", "--no-commit-id", "--name-status", "-r"])
             .arg(oid.to_string())
             .output()
             .ok()?;
@@ -265,16 +265,50 @@ impl App {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut paths: Vec<PathBuf> = stdout
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(PathBuf::from)
-            .collect();
-        paths.sort();
-        paths.dedup();
+        let mut entries: Vec<(crate::git::FileChangeKind, PathBuf)> = Vec::new();
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // Format examples:
+            // M\tpath
+            // A\tpath
+            // D\tpath
+            // R100\told\tnew
+            // C100\told\tnew
+            let mut parts = line.split('\t');
+            let Some(status) = parts.next() else {
+                continue;
+            };
+            let status_char = status.chars().next().unwrap_or('?');
+            let kind = match status_char {
+                'A' => crate::git::FileChangeKind::Added,
+                'D' => crate::git::FileChangeKind::Deleted,
+                'R' => crate::git::FileChangeKind::Renamed,
+                'C' => crate::git::FileChangeKind::Copied,
+                _ => crate::git::FileChangeKind::Modified,
+            };
+
+            // For rename/copy we want to display the destination path.
+            let path = match kind {
+                crate::git::FileChangeKind::Renamed | crate::git::FileChangeKind::Copied => {
+                    // status, old, new
+                    let _old = parts.next();
+                    parts.next().unwrap_or("")
+                }
+                _ => parts.next().unwrap_or(""),
+            };
+            if path.is_empty() {
+                continue;
+            }
+            entries.push((kind, PathBuf::from(path)));
+        }
+        entries.sort_by(|a, b| a.1.cmp(&b.1));
+        entries.dedup_by(|a, b| a.1 == b.1);
 
         self.commit_files_cache_oid = Some(oid);
-        self.commit_files_cache = Some(paths);
+        self.commit_files_cache = Some(entries);
         self.commit_files_cache.as_deref()
     }
 
