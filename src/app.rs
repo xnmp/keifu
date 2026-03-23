@@ -112,7 +112,7 @@ type UncommittedDiffResult = (Result<CommitDiffInfo, String>, Option<WorkingTree
 
 /// Delay before starting a diff load after selection changes.
 /// Prevents unnecessary computation during fast scrolling.
-const DIFF_LOAD_DEBOUNCE: Duration = Duration::from_millis(120);
+const DIFF_LOAD_DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Search state for branch search feature
 #[derive(Debug, Clone, Default)]
@@ -933,6 +933,10 @@ impl App {
         }
     }
 
+    pub fn working_tree_status(&self) -> Option<&WorkingTreeStatus> {
+        self.working_tree_status.as_ref()
+    }
+
     /// Whether diff is loading or pending (debouncing) for the selected node
     pub fn is_diff_loading(&self) -> bool {
         let Some(target) = self.current_diff_target() else {
@@ -1089,7 +1093,14 @@ impl App {
     }
 
     fn handle_files_action(&mut self, action: Action) -> Result<()> {
-        let file_count = self.cached_diff().map(|d| d.files.len()).unwrap_or(0);
+        let file_count = if let Some(diff) = self.cached_diff() {
+            diff.files.len()
+        } else {
+            self.working_tree_status
+                .as_ref()
+                .map(|s| s.file_paths.len())
+                .unwrap_or(0)
+        };
         match action {
             Action::Cancel | Action::Quit => {
                 self.files_pane.exit(&mut self.mode);

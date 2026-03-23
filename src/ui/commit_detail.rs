@@ -51,6 +51,15 @@ impl<'a> CommitDetailWidget<'a> {
         if let Some(diff) = app.cached_diff() {
             return Self::build_file_list_lines_from(Some(diff), selected, show_staged_sections);
         }
+
+        // Fast path: for uncommitted changes, show an instant file list from
+        // the working tree status while the full diff (with +/- stats) loads.
+        if show_staged_sections {
+            if let Some(status) = app.working_tree_status() {
+                return Self::build_file_list_lines_from_worktree_status(status, selected);
+            }
+        }
+
         if app.is_diff_loading() {
             return vec![Line::from(Span::styled(
                 "Loading...",
@@ -58,6 +67,49 @@ impl<'a> CommitDetailWidget<'a> {
             ))];
         }
         Self::build_file_list_lines_from(None, selected, show_staged_sections)
+    }
+
+    fn build_file_list_lines_from_worktree_status(
+        status: &crate::git::WorkingTreeStatus,
+        selected: Option<usize>,
+    ) -> Vec<Line<'a>> {
+        let mut lines = Vec::new();
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} files changed", status.file_count()),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled("(stats loading…)", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(""));
+
+        // We don't yet have per-file staged status here; the grouping still
+        // renders (headers) but files will be shown under Unstaged for now.
+        // Once the full diff loads, staging grouping and +/- stats will appear.
+        lines.push(Line::from(Span::styled(
+            "Unstaged",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+
+        for (idx, path) in status.file_paths.iter().enumerate() {
+            let is_selected = selected == Some(idx);
+            let row_style = if is_selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let path_str = path.to_string_lossy().to_string();
+            lines.push(Line::from(vec![
+                Span::styled(" ? ".to_string(), row_style.fg(Color::DarkGray)),
+                Span::styled(path_str, row_style),
+            ]));
+        }
+
+        lines
     }
 
     fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
