@@ -398,7 +398,22 @@ fn render_graph_line<'a>(
     let hash_style = Style::default().fg(Color::Yellow);
     let author_style = Style::default().fg(Color::Cyan);
     let date_style = Style::default().fg(Color::DarkGray);
-    let msg_style = if node.is_head || is_selected {
+    let head_msg_color = if node.is_head {
+        let is_main = node.color_index == crate::graph::colors::MAIN_BRANCH_COLOR;
+        if !is_main {
+            Color::Green
+        } else {
+            get_color_by_index(node.color_index)
+        }
+    } else {
+        Color::Reset
+    };
+
+    let msg_style = if node.is_head {
+        Style::default()
+            .fg(head_msg_color)
+            .add_modifier(Modifier::BOLD)
+    } else if is_selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
