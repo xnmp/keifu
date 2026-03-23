@@ -18,7 +18,10 @@ impl BranchInfo {
 
         // Get HEAD
         let head_oid = repo.head().ok().and_then(|r| r.target());
-        let head_shorthand = repo.head().ok().and_then(|h| h.shorthand().map(|s| s.to_string()));
+        let head_shorthand = repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(|s| s.to_string()));
 
         // Local branches
         for branch_result in repo.branches(Some(BranchType::Local))? {

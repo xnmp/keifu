@@ -152,7 +152,11 @@ impl CommitDiffInfo {
     /// Return a textual unified diff for a specific file in a commit.
     ///
     /// Intended for in-TUI preview.
-    pub fn unified_diff_for_file(repo: &Repository, commit_oid: Oid, path: &Path) -> Result<String> {
+    pub fn unified_diff_for_file(
+        repo: &Repository,
+        commit_oid: Oid,
+        path: &Path,
+    ) -> Result<String> {
         let commit = repo.find_commit(commit_oid)?;
         let new_tree = commit.tree()?;
         let old_tree = if commit.parent_count() > 0 {
@@ -696,8 +700,8 @@ impl CommitDiffInfo {
         {
             let mut opts_combined = DiffOptions::new();
             opts_combined.pathspec(&pathspec);
-            let combined = repo
-                .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
+            let combined =
+                repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts_combined))?;
             combined.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                 if let Ok(s) = std::str::from_utf8(line.content()) {
                     out.push_str(s);
@@ -710,7 +714,8 @@ impl CommitDiffInfo {
         if out.trim().is_empty() {
             let mut opts_staged = DiffOptions::new();
             opts_staged.pathspec(&pathspec);
-            let staged = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts_staged))?;
+            let staged =
+                repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts_staged))?;
             staged.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                 if let Ok(s) = std::str::from_utf8(line.content()) {
                     out.push_str(s);
@@ -734,7 +739,8 @@ impl CommitDiffInfo {
             if full_path.exists() {
                 let mut opts_untracked = DiffOptions::new();
                 opts_untracked.pathspec(&pathspec);
-                let untracked = repo.diff_tree_to_workdir_with_index(None, Some(&mut opts_untracked))?;
+                let untracked =
+                    repo.diff_tree_to_workdir_with_index(None, Some(&mut opts_untracked))?;
                 untracked.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
                     if let Ok(s) = std::str::from_utf8(line.content()) {
                         out.push_str(s);
@@ -765,7 +771,7 @@ impl CommitDiffInfo {
         if out.trim().is_empty() && full_path.is_file() {
             let output = std::process::Command::new("git")
                 .args(["-C", workdir.to_string_lossy().as_ref()])
-                .args(["diff", "--no-color", "--no-index", "--"]) 
+                .args(["diff", "--no-color", "--no-index", "--"])
                 .arg("/dev/null")
                 .arg(full_path.as_os_str())
                 .output();

@@ -83,8 +83,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let detail_area = content_vertical[1];
 
     // Render widgets
+    let graph_selected = matches!(app.mode, AppMode::Graph);
     frame.render_stateful_widget(
-        GraphViewWidget::new(app, graph_area.width),
+        GraphViewWidget::new(app, graph_area.width, graph_selected),
         graph_area,
         &mut app.graph_list_state,
     );
@@ -143,8 +144,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn render_branch_info_popup(frame: &mut Frame, app: &App, graph_area: Rect) {
     let selected_branches = app.selected_node_branches();
 
-    // Only show popup in Normal mode with multiple branches
-    if selected_branches.len() <= 1 || !matches!(app.mode, crate::app::AppMode::Normal) {
+    // Only show popup in Graph mode with multiple branches
+    if selected_branches.len() <= 1 || !matches!(app.mode, crate::app::AppMode::Graph) {
         return;
     }
 

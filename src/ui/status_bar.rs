@@ -92,7 +92,7 @@ impl<'a> Widget for StatusBar<'a> {
 
         // Key hints (vary by mode)
         match self.mode {
-            AppMode::Normal => match self.message {
+            AppMode::Graph => match self.message {
                 Some(msg) => {
                     // Yellow for in-progress, Cyan for success
                     let bg = if self.is_fetching {
@@ -122,8 +122,7 @@ impl<'a> Widget for StatusBar<'a> {
                     spans.push(Span::styled("move ", desc_style));
                     spans.push(Span::styled(" ←/→ ", key_style));
                     spans.push(Span::styled("panel ", desc_style));
-                    spans.push(Span::styled(" Enter ", key_style));
-                    spans.push(Span::styled("files ", desc_style));
+                    // (Enter intentionally unused in Graph mode)
                     spans.push(Span::styled(" c ", key_style));
                     spans.push(Span::styled("checkout ", desc_style));
                     spans.push(Span::styled(" b ", key_style));
@@ -190,9 +189,9 @@ impl<'a> Widget for StatusBar<'a> {
         let line = Line::from(spans);
         buf.set_line(area.x, area.y, &line, area.width);
 
-        // Show the mode on the right (only for non-Normal modes)
+        // Show the mode on the right (only for non-Graph modes)
         let mode_text = match self.mode {
-            AppMode::Normal => None,
+            AppMode::Graph => None,
             AppMode::Files => Some(" FILES "),
             AppMode::Detail => Some(" DETAIL "),
             AppMode::Help => Some(" HELP "),

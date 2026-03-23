@@ -18,14 +18,17 @@ impl FilesPane {
             return Some("No files changed".to_string());
         }
 
-        let selected = self.selected_file_index.unwrap_or(0).min(len.saturating_sub(1));
+        let selected = self
+            .selected_file_index
+            .unwrap_or(0)
+            .min(len.saturating_sub(1));
         self.list_state.select(Some(selected));
         *mode = AppMode::Files;
         None
     }
 
     pub fn exit(&mut self, mode: &mut AppMode) {
-        *mode = AppMode::Normal;
+        *mode = AppMode::Graph;
         self.list_state.select(None);
     }
 

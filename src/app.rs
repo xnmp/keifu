@@ -52,7 +52,7 @@ fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
 /// Application modes
 #[derive(Debug, Clone)]
 pub enum AppMode {
-    Normal,
+    Graph,
     Files,
     Detail,
     Modal {
@@ -290,7 +290,7 @@ impl App {
         };
 
         Ok(Self {
-            mode: AppMode::Normal,
+            mode: AppMode::Graph,
             repo,
             repo_path,
             head_name,
@@ -948,7 +948,7 @@ impl App {
     /// Handle an action
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         match &self.mode {
-            AppMode::Normal => self.handle_normal_action(action)?,
+            AppMode::Graph => self.handle_graph_action(action)?,
             AppMode::Files => self.handle_files_action(action)?,
             AppMode::Detail => self.handle_detail_action(action)?,
             AppMode::Modal { .. } => self.handle_modal_action(action),
@@ -965,7 +965,7 @@ impl App {
         self.mode = AppMode::Error { message };
     }
 
-    fn handle_normal_action(&mut self, action: Action) -> Result<()> {
+    fn handle_graph_action(&mut self, action: Action) -> Result<()> {
         match action {
             Action::Quit => {
                 self.should_quit = true;
@@ -1007,14 +1007,20 @@ impl App {
                 self.mode = AppMode::Help;
             }
             Action::FocusLeftPane => {
+                // No-op: graph is the leftmost panel.
+            }
+            Action::FocusRightPane => {
                 self.mode = AppMode::Files;
                 // Keep existing selection if present.
                 if self.files_pane.list_state.selected().is_none() {
                     self.files_pane.list_state.select(Some(0));
                 }
             }
-            Action::FocusRightPane => {
-                self.mode = AppMode::Detail;
+            Action::FocusDownPane => {
+                self.mode = AppMode::Files;
+                if self.files_pane.list_state.selected().is_none() {
+                    self.files_pane.list_state.select(Some(0));
+                }
             }
             Action::Refresh => {
                 self.refresh(true)?;
@@ -1088,6 +1094,10 @@ impl App {
             Action::Cancel | Action::Quit => {
                 self.files_pane.exit(&mut self.mode);
             }
+            Action::FocusLeftPane => {
+                self.mode = AppMode::Graph;
+                self.files_pane.list_state.select(None);
+            }
             Action::FocusRightPane => {
                 self.mode = AppMode::Detail;
             }
@@ -1124,13 +1134,16 @@ impl App {
     fn handle_detail_action(&mut self, action: Action) -> Result<()> {
         match action {
             Action::Cancel | Action::Quit => {
-                self.mode = AppMode::Normal;
+                self.mode = AppMode::Graph;
             }
             Action::FocusLeftPane => {
                 self.mode = AppMode::Files;
                 if self.files_pane.list_state.selected().is_none() {
                     self.files_pane.list_state.select(Some(0));
                 }
+            }
+            Action::FocusRightPane => {
+                // No-op: detail is the rightmost panel.
             }
             _ => {}
         }
@@ -1191,7 +1204,11 @@ impl App {
             }
         }
         let render = if is_uncommitted {
-            crate::diff_view::render_worktree_file_diff(&self.repo_path, file_path.as_path(), backend)?
+            crate::diff_view::render_worktree_file_diff(
+                &self.repo_path,
+                file_path.as_path(),
+                backend,
+            )?
         } else {
             let Some(commit_oid) = commit_oid else {
                 return Ok((
@@ -1284,9 +1301,11 @@ impl App {
         thread::spawn(move || {
             let value = (|| -> Result<(String, String)> {
                 let render = match target {
-                    DiffTarget::Uncommitted => {
-                        crate::diff_view::render_worktree_file_diff(&repo_path, path.as_path(), backend)?
-                    }
+                    DiffTarget::Uncommitted => crate::diff_view::render_worktree_file_diff(
+                        &repo_path,
+                        path.as_path(),
+                        backend,
+                    )?,
                     DiffTarget::Commit(oid) => crate::diff_view::render_commit_file_diff(
                         &repo_path,
                         oid,
@@ -1308,14 +1327,14 @@ impl App {
 
     fn handle_help_action(&mut self, action: Action) {
         if matches!(action, Action::ToggleHelp | Action::Quit | Action::Cancel) {
-            self.mode = AppMode::Normal;
+            self.mode = AppMode::Graph;
         }
     }
 
     fn handle_error_action(&mut self, action: Action) {
         // Close the error on any key
         if matches!(action, Action::Quit | Action::Cancel | Action::Confirm) {
-            self.mode = AppMode::Normal;
+            self.mode = AppMode::Graph;
         }
     }
 
@@ -1350,7 +1369,7 @@ impl App {
                 }
                 // Clear search state after confirming
                 self.search_state = SearchState::default();
-                self.mode = AppMode::Normal;
+                self.mode = AppMode::Graph;
             }
             Action::Cancel => {
                 // Restore position when canceling search
@@ -1358,7 +1377,7 @@ impl App {
                     self.restore_search_position();
                 }
                 self.search_state = SearchState::default();
-                self.mode = AppMode::Normal;
+                self.mode = AppMode::Graph;
             }
             Action::InputChar(c) => {
                 input.push(c);
@@ -1382,7 +1401,7 @@ impl App {
                         self.restore_search_position();
                     }
                     self.search_state = SearchState::default();
-                    self.mode = AppMode::Normal;
+                    self.mode = AppMode::Graph;
                     return Ok(());
                 }
 
@@ -1445,10 +1464,10 @@ impl App {
                     }
                 }
                 self.refresh(true)?;
-                self.mode = AppMode::Normal;
+                self.mode = AppMode::Graph;
             }
             Action::Cancel => {
-                self.mode = AppMode::Normal;
+                self.mode = AppMode::Graph;
             }
             _ => {}
         }
@@ -1705,7 +1724,7 @@ mod tests {
         };
 
         App {
-            mode: AppMode::Normal,
+            mode: AppMode::Graph,
             repo,
             repo_path: String::new(),
             head_name: None,
@@ -1770,7 +1789,7 @@ mod tests {
         let commits = node.commit.iter().cloned().collect();
 
         App {
-            mode: AppMode::Normal,
+            mode: AppMode::Graph,
             repo_path: repo.path.clone(),
             repo,
             head_name: None,

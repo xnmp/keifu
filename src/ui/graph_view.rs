@@ -55,10 +55,11 @@ fn display_width(s: &str) -> usize {
 
 pub struct GraphViewWidget<'a> {
     items: Vec<ListItem<'a>>,
+    is_selected: bool,
 }
 
 impl<'a> GraphViewWidget<'a> {
-    pub fn new(app: &App, width: u16) -> Self {
+    pub fn new(app: &App, width: u16, is_selected: bool) -> Self {
         let max_lane = app.graph_layout.max_lane;
         // Actual width minus borders
         let inner_width = width.saturating_sub(2) as usize;
@@ -84,7 +85,7 @@ impl<'a> GraphViewWidget<'a> {
             })
             .collect();
 
-        Self { items }
+        Self { items, is_selected }
     }
 }
 
@@ -523,10 +524,16 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
             return;
         }
 
+        let border_color = if self.is_selected {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+
         let block = Block::default()
             .title(" Commits ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(border_color));
 
         let highlight_style = Style::default()
             .bg(Color::DarkGray)

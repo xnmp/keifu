@@ -13,7 +13,7 @@ pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
         return None;
     }
     match mode {
-        AppMode::Normal => map_normal_mode(key),
+        AppMode::Graph => map_graph_mode(key),
         AppMode::Files => map_files_mode(key),
         AppMode::Detail => map_detail_mode(key),
         AppMode::Modal { .. } => map_modal_mode(key),
@@ -58,18 +58,13 @@ fn map_modal_mode(key: KeyEvent) -> Option<Action> {
     }
 }
 
-fn map_normal_mode(key: KeyEvent) -> Option<Action> {
+fn map_graph_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         // Movement
-        (KeyModifiers::NONE, KeyCode::Down) => {
-            Some(Action::MoveDown)
-        }
-        (KeyModifiers::NONE, KeyCode::Up) => {
-            Some(Action::MoveUp)
-        }
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
 
         // Focus between panes
-        (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
         (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
 
         // Page scroll
@@ -101,7 +96,7 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
 
         // Git operations
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::Checkout),
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FocusFiles),
+        (KeyModifiers::NONE, KeyCode::Enter) => None,
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
