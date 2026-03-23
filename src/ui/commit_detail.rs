@@ -35,6 +35,12 @@ impl<'a> CommitDetailWidget<'a> {
     }
 
     fn build_file_lines(app: &App) -> Vec<Line<'a>> {
+        let show_staged_sections = app
+            .graph_list_state
+            .selected()
+            .and_then(|idx| app.graph_layout.nodes.get(idx))
+            .is_some_and(|node| node.is_uncommitted);
+
         let selected = if matches!(app.mode, crate::app::AppMode::Files) {
             app.files_pane.list_state.selected()
         } else {
@@ -43,7 +49,7 @@ impl<'a> CommitDetailWidget<'a> {
         // Prefer cached data (even if stale) over a loading indicator so that
         // auto-refresh doesn't cause the file list to flicker.
         if let Some(diff) = app.cached_diff() {
-            return Self::build_file_list_lines_from(Some(diff), selected);
+            return Self::build_file_list_lines_from(Some(diff), selected, show_staged_sections);
         }
         if app.is_diff_loading() {
             return vec![Line::from(Span::styled(
@@ -51,7 +57,7 @@ impl<'a> CommitDetailWidget<'a> {
                 Style::default().fg(Color::DarkGray),
             ))];
         }
-        Self::build_file_list_lines_from(None, selected)
+        Self::build_file_list_lines_from(None, selected, show_staged_sections)
     }
 
     fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
@@ -145,6 +151,7 @@ impl<'a> CommitDetailWidget<'a> {
     fn build_file_list_lines_from(
         diff: Option<&CommitDiffInfo>,
         selected: Option<usize>,
+        show_staged_sections: bool,
     ) -> Vec<Line<'a>> {
         let mut lines = Vec::new();
 
@@ -174,39 +181,45 @@ impl<'a> CommitDetailWidget<'a> {
         // File list
         // (Selection highlighting is done here; scrolling is handled by the widget via Paragraph::scroll.)
 
-        let staged: Vec<(usize, &crate::git::FileDiffInfo)> = diff
-            .files
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| f.is_staged)
-            .collect();
-        let unstaged: Vec<(usize, &crate::git::FileDiffInfo)> = diff
-            .files
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| !f.is_staged)
-            .collect();
+        if show_staged_sections {
+            let staged: Vec<(usize, &crate::git::FileDiffInfo)> = diff
+                .files
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.is_staged)
+                .collect();
+            let unstaged: Vec<(usize, &crate::git::FileDiffInfo)> = diff
+                .files
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| !f.is_staged)
+                .collect();
 
-        if !staged.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "Staged",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for (idx, file) in staged {
-                Self::push_file_line(&mut lines, idx, file, selected);
+            if !staged.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "Staged",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for (idx, file) in staged {
+                    Self::push_file_line(&mut lines, idx, file, selected);
+                }
             }
-        }
 
-        if !unstaged.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "Unstaged",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for (idx, file) in unstaged {
+            if !unstaged.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "Unstaged",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for (idx, file) in unstaged {
+                    Self::push_file_line(&mut lines, idx, file, selected);
+                }
+            }
+        } else {
+            for (idx, file) in diff.files.iter().enumerate() {
                 Self::push_file_line(&mut lines, idx, file, selected);
             }
         }
@@ -329,24 +342,30 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             if let Some(selected) = self.app.files_pane.list_state.selected() {
                 let inner_height = chunks[0].height.saturating_sub(2) as usize; // borders
                 if inner_height > 0 {
-                    // We build the file list lines with:
-                    // - 2 header lines (summary + blank)
-                    // - optional "Staged" header
-                    // - optional "Unstaged" header
-                    // We want the scroll computation to account for those.
                     let mut line_idx = 2usize + selected;
-                    if let Some(diff) = self.app.cached_diff() {
-                        let has_staged = diff.files.iter().any(|f| f.is_staged);
-                        let has_unstaged = diff.files.iter().any(|f| !f.is_staged);
-                        if has_staged {
-                            line_idx += 1;
-                        }
-                        if has_unstaged {
-                            // If the selected file is in the unstaged section, add the
-                            // "Unstaged" header line as well.
-                            if let Some(file) = diff.files.get(selected) {
-                                if !file.is_staged {
-                                    line_idx += 1;
+
+                    // When the uncommitted node is selected, we render additional
+                    // "Staged"/"Unstaged" section headers above the file entries.
+                    let show_staged_sections = self
+                        .app
+                        .graph_list_state
+                        .selected()
+                        .and_then(|idx| self.app.graph_layout.nodes.get(idx))
+                        .is_some_and(|node| node.is_uncommitted);
+                    if show_staged_sections {
+                        if let Some(diff) = self.app.cached_diff() {
+                            let has_staged = diff.files.iter().any(|f| f.is_staged);
+                            let has_unstaged = diff.files.iter().any(|f| !f.is_staged);
+                            if has_staged {
+                                line_idx += 1;
+                            }
+                            if has_unstaged {
+                                // If the selected file is in the unstaged section, add the
+                                // "Unstaged" header line as well.
+                                if let Some(file) = diff.files.get(selected) {
+                                    if !file.is_staged {
+                                        line_idx += 1;
+                                    }
                                 }
                             }
                         }
