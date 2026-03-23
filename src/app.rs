@@ -235,6 +235,7 @@ pub struct App {
 
     // Commit message editor (used when the uncommitted node is selected)
     pub commit_message: String,
+    commit_message_cursor: usize,
 
     // Async fetch
     fetch_receiver: Option<Receiver<Result<(), String>>>,
@@ -398,6 +399,7 @@ impl App {
             message: initial_message,
             message_time: initial_message_time,
             commit_message: String::new(),
+            commit_message_cursor: 0,
             fetch_receiver: None,
             fetch_silent: false,
             config,
@@ -1283,24 +1285,148 @@ impl App {
             }
             Action::InputChar(c) => {
                 if self.is_uncommitted_selected() {
-                    self.commit_message.push(c);
+                    self.insert_commit_message_char(c);
                 }
             }
             Action::InputBackspace => {
                 if self.is_uncommitted_selected() {
-                    self.commit_message.pop();
+                    self.delete_commit_message_backspace();
+                }
+            }
+            Action::CommitMessageDeleteForward => {
+                if self.is_uncommitted_selected() {
+                    self.delete_commit_message_forward();
+                }
+            }
+            Action::CommitMessageMoveWordLeft => {
+                if self.is_uncommitted_selected() {
+                    self.move_commit_message_word_left();
+                }
+            }
+            Action::CommitMessageMoveWordRight => {
+                if self.is_uncommitted_selected() {
+                    self.move_commit_message_word_right();
+                }
+            }
+            Action::CommitMessageDeleteWordBack => {
+                if self.is_uncommitted_selected() {
+                    self.delete_commit_message_word_back();
+                }
+            }
+            Action::CommitMessageDeleteWordForward => {
+                if self.is_uncommitted_selected() {
+                    self.delete_commit_message_word_forward();
                 }
             }
             Action::CommitMessageCommit => {
                 if self.is_uncommitted_selected() {
                     commit_with_message(&self.repo_path, &self.commit_message)?;
                     self.commit_message.clear();
+                    self.commit_message_cursor = 0;
                     self.refresh(true)?;
                 }
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn insert_commit_message_char(&mut self, c: char) {
+        let mut chars: Vec<char> = self.commit_message.chars().collect();
+        let cursor = self.commit_message_cursor.min(chars.len());
+        chars.insert(cursor, c);
+        self.commit_message = chars.into_iter().collect();
+        self.commit_message_cursor = cursor + 1;
+    }
+
+    fn delete_commit_message_backspace(&mut self) {
+        if self.commit_message.is_empty() || self.commit_message_cursor == 0 {
+            return;
+        }
+        let mut chars: Vec<char> = self.commit_message.chars().collect();
+        let cursor = self.commit_message_cursor.min(chars.len());
+        chars.remove(cursor - 1);
+        self.commit_message = chars.into_iter().collect();
+        self.commit_message_cursor = cursor - 1;
+    }
+
+    fn delete_commit_message_forward(&mut self) {
+        let mut chars: Vec<char> = self.commit_message.chars().collect();
+        let cursor = self.commit_message_cursor.min(chars.len());
+        if cursor >= chars.len() {
+            return;
+        }
+        chars.remove(cursor);
+        self.commit_message = chars.into_iter().collect();
+        self.commit_message_cursor = cursor;
+    }
+
+    fn is_word_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    fn move_commit_message_word_left(&mut self) {
+        let chars: Vec<char> = self.commit_message.chars().collect();
+        let mut i = self.commit_message_cursor.min(chars.len());
+
+        while i > 0 && chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && Self::is_word_char(chars[i - 1]) {
+            i -= 1;
+        }
+        self.commit_message_cursor = i;
+    }
+
+    fn move_commit_message_word_right(&mut self) {
+        let chars: Vec<char> = self.commit_message.chars().collect();
+        let mut i = self.commit_message_cursor.min(chars.len());
+
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        while i < chars.len() && Self::is_word_char(chars[i]) {
+            i += 1;
+        }
+        self.commit_message_cursor = i;
+    }
+
+    fn delete_commit_message_word_back(&mut self) {
+        if self.commit_message_cursor == 0 {
+            return;
+        }
+        let mut chars: Vec<char> = self.commit_message.chars().collect();
+        let mut start = self.commit_message_cursor.min(chars.len());
+
+        while start > 0 && chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && Self::is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        let end = self.commit_message_cursor.min(chars.len());
+        chars.drain(start..end);
+        self.commit_message = chars.into_iter().collect();
+        self.commit_message_cursor = start;
+    }
+
+    fn delete_commit_message_word_forward(&mut self) {
+        let mut chars: Vec<char> = self.commit_message.chars().collect();
+        let start = self.commit_message_cursor.min(chars.len());
+        let mut end = start;
+
+        while end < chars.len() && chars[end].is_whitespace() {
+            end += 1;
+        }
+        while end < chars.len() && Self::is_word_char(chars[end]) {
+            end += 1;
+        }
+        if end == start {
+            return;
+        }
+        chars.drain(start..end);
+        self.commit_message = chars.into_iter().collect();
+        self.commit_message_cursor = start;
     }
 
     fn is_uncommitted_selected(&self) -> bool {
@@ -1917,6 +2043,7 @@ mod tests {
             message: initial_message,
             message_time: initial_message_time,
             commit_message: String::new(),
+            commit_message_cursor: 0,
             fetch_receiver: None,
             fetch_silent: false,
             config: Config::default(),
@@ -1988,6 +2115,7 @@ mod tests {
             message: None,
             message_time: None,
             commit_message: String::new(),
+            commit_message_cursor: 0,
             fetch_receiver: None,
             fetch_silent: false,
             config: Config::default(),

@@ -46,6 +46,11 @@ pub enum Action {
     Cancel,
     InputChar(char),
     InputBackspace,
+    CommitMessageMoveWordLeft,
+    CommitMessageMoveWordRight,
+    CommitMessageDeleteWordBack,
+    CommitMessageDeleteWordForward,
+    CommitMessageDeleteForward,
     CommitMessageCommit,
 
     // Search dropdown

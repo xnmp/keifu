@@ -35,7 +35,12 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
         (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
         (KeyModifiers::SHIFT, KeyCode::Enter) => Some(Action::CommitMessageCommit),
+        (KeyModifiers::CONTROL, KeyCode::Left) => Some(Action::CommitMessageMoveWordLeft),
+        (KeyModifiers::CONTROL, KeyCode::Right) => Some(Action::CommitMessageMoveWordRight),
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::CommitMessageDeleteWordBack),
+        (KeyModifiers::CONTROL, KeyCode::Delete) => Some(Action::CommitMessageDeleteWordForward),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::CommitMessageDeleteForward),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
