@@ -40,6 +40,8 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
         // Page scroll
         (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::PageDown),
         (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::PageUp),
+        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::PageDown),
+        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::PageUp),
 
         // Top/bottom
         (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {

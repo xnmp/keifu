@@ -54,7 +54,15 @@ impl Widget for HelpPopup {
                 Span::styled("Page down", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  PageDown   ", key_style),
+                Span::styled("Page down", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  Ctrl+u     ", key_style),
+                Span::styled("Page up", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  PageUp     ", key_style),
                 Span::styled("Page up", desc_style),
             ]),
             Line::from(vec![
