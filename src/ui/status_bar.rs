@@ -148,14 +148,10 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled("stage ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
                 spans.push(Span::styled("open ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("back", desc_style));
             }
             AppMode::Detail => {
                 spans.push(Span::styled(" ←/→ ", key_style));
                 spans.push(Span::styled("panel ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("back", desc_style));
             }
             AppMode::Modal { .. } => {
                 spans.push(Span::styled(" Esc ", key_style));

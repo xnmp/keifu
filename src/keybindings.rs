@@ -34,7 +34,6 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Left) => Some(Action::FocusLeftPane),
         (KeyModifiers::NONE, KeyCode::Right) => Some(Action::FocusRightPane),
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }
 }
@@ -131,7 +130,6 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenModal),
         (KeyModifiers::NONE, KeyCode::Char('S')) => Some(Action::ToggleStage),
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }
 }
