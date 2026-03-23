@@ -197,7 +197,6 @@ impl<'a> CommitDetailWidget<'a> {
             for (idx, file) in staged {
                 Self::push_file_line(&mut lines, idx, file, selected);
             }
-            lines.push(Line::from(""));
         }
 
         if !unstaged.is_empty() {
@@ -330,8 +329,29 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             if let Some(selected) = self.app.files_pane.list_state.selected() {
                 let inner_height = chunks[0].height.saturating_sub(2) as usize; // borders
                 if inner_height > 0 {
-                    let header_lines = 2usize;
-                    let line_idx = header_lines + selected;
+                    // We build the file list lines with:
+                    // - 2 header lines (summary + blank)
+                    // - optional "Staged" header
+                    // - optional "Unstaged" header
+                    // We want the scroll computation to account for those.
+                    let mut line_idx = 2usize + selected;
+                    if let Some(diff) = self.app.cached_diff() {
+                        let has_staged = diff.files.iter().any(|f| f.is_staged);
+                        let has_unstaged = diff.files.iter().any(|f| !f.is_staged);
+                        if has_staged {
+                            line_idx += 1;
+                        }
+                        if has_unstaged {
+                            // If the selected file is in the unstaged section, add the
+                            // "Unstaged" header line as well.
+                            if let Some(file) = diff.files.get(selected) {
+                                if !file.is_staged {
+                                    line_idx += 1;
+                                }
+                            }
+                        }
+                    }
+
                     // Keep selection within viewport.
                     let scroll = line_idx.saturating_sub(inner_height.saturating_sub(1));
                     left_paragraph = left_paragraph.scroll((scroll as u16, 0));
