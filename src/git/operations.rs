@@ -17,19 +17,34 @@ pub fn stage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
 ///
 /// If HEAD does not exist (unborn branch), this removes the path from the index.
 pub fn unstage_path(repo: &Repository, path: &std::path::Path) -> Result<()> {
-    // Use HEAD tree when available; otherwise treat as unborn branch.
-    // This can fail when HEAD points at a non-commit (rare), so fall back
-    // to the unborn-branch behavior instead of erroring.
-    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+    // Prefer the CLI for correctness across all HEAD states.
+    // This matches `git reset HEAD -- <path>` for normal repos.
+    // For unborn branches, fall back to `git rm --cached -- <path>`.
+    let workdir = repo.workdir().unwrap_or_else(|| repo.path());
 
-    if let Some(tree) = head_tree {
-        repo.reset_default(Some(tree.as_object()), [path].as_slice())?;
+    let reset = Command::new("git")
+        .args(["-C", workdir.to_string_lossy().as_ref()])
+        .args(["reset", "HEAD", "--"])
+        .arg(path)
+        .output()
+        .context("Failed to execute git reset")?;
+
+    if reset.status.success() {
         return Ok(());
     }
 
-    let mut index = repo.index()?;
-    index.remove_path(path)?;
-    index.write()?;
+    let rm_cached = Command::new("git")
+        .args(["-C", workdir.to_string_lossy().as_ref()])
+        .args(["rm", "--cached", "--"])
+        .arg(path)
+        .output()
+        .context("Failed to execute git rm --cached")?;
+
+    if !rm_cached.status.success() {
+        let stderr = String::from_utf8_lossy(&rm_cached.stderr);
+        bail!("git rm --cached failed: {}", stderr.trim());
+    }
+
     Ok(())
 }
 
