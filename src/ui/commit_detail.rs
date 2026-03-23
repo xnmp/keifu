@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::app::App;
+use crate::app::{App, AppMode};
 use crate::git::{CommitDiffInfo, FileChangeKind};
 
 use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
@@ -18,15 +18,17 @@ use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 const VERTICAL_LAYOUT_THRESHOLD: u16 = 56;
 
 pub struct CommitDetailWidget<'a> {
+    app: &'a App,
     commit_lines: Vec<Line<'a>>,
     file_lines: Vec<Line<'a>>,
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &App) -> Self {
+    pub fn new(app: &'a App) -> Self {
         let commit_lines = Self::build_commit_lines(app);
         let file_lines = Self::build_file_lines(app);
         Self {
+            app,
             commit_lines,
             file_lines,
         }
@@ -170,6 +172,7 @@ impl<'a> CommitDetailWidget<'a> {
         lines.push(Line::from(""));
 
         // File list
+        // (Selection highlighting is done here; scrolling is handled by the widget via Paragraph::scroll.)
         for (idx, file) in diff.files.iter().enumerate() {
             let (indicator, color) = match file.kind {
                 FileChangeKind::Added => ("A", Color::Green),
@@ -256,9 +259,24 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
-        let left_paragraph = Paragraph::new(self.file_lines)
+        let mut left_paragraph = Paragraph::new(self.file_lines)
             .block(left_block)
             .wrap(Wrap { trim: false });
+
+        // Scroll the file list so the selected entry stays visible.
+        // Approximate: header (2 lines) + selected index.
+        if matches!(self.app.mode, AppMode::Files) {
+            if let Some(selected) = self.app.files_pane.list_state.selected() {
+                let inner_height = chunks[0].height.saturating_sub(2) as usize; // borders
+                if inner_height > 0 {
+                    let header_lines = 2usize;
+                    let line_idx = header_lines + selected;
+                    // Keep selection within viewport.
+                    let scroll = line_idx.saturating_sub(inner_height.saturating_sub(1));
+                    left_paragraph = left_paragraph.scroll((scroll as u16, 0));
+                }
+            }
+        }
 
         Widget::render(left_paragraph, chunks[0], buf);
 
