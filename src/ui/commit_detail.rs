@@ -199,15 +199,40 @@ impl<'a> CommitDetailWidget<'a> {
 
             // Show the editor only when the Detail panel is focused.
             if matches!(app.mode, AppMode::Detail) {
-                let msg = if app.commit_message.is_empty() {
-                    "(type here; Shift-Enter to commit)".to_string()
+                let msg = app.commit_message.clone();
+                let cursor = app.commit_message_cursor.min(msg.chars().count());
+
+                let mut spans: Vec<Span> = Vec::new();
+                if msg.is_empty() {
+                    spans.push(Span::styled(
+                        "(type here; Shift-Enter to commit)",
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 } else {
-                    app.commit_message.clone()
-                };
-                lines.push(Line::from(Span::styled(
-                    msg,
-                    Style::default().fg(Color::Yellow),
-                )));
+                    let left: String = msg.chars().take(cursor).collect();
+                    let cur: Option<char> = msg.chars().nth(cursor);
+                    let right: String = msg
+                        .chars()
+                        .skip(cursor + cur.map(|_| 1).unwrap_or(0))
+                        .collect();
+
+                    spans.push(Span::styled(left, Style::default().fg(Color::Yellow)));
+
+                    // Render a visible cursor by reversing the character under it,
+                    // or showing a reversed space at end-of-line.
+                    let cursor_style = Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD);
+                    match cur {
+                        Some(ch) => spans.push(Span::styled(ch.to_string(), cursor_style)),
+                        None => spans.push(Span::styled(" ", cursor_style)),
+                    }
+
+                    spans.push(Span::styled(right, Style::default().fg(Color::Yellow)));
+                }
+
+                lines.push(Line::from(spans));
             } else {
                 lines.push(Line::from(Span::styled(
                     "(focus Detail panel to type)",

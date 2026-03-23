@@ -235,7 +235,7 @@ pub struct App {
 
     // Commit message editor (used when the uncommitted node is selected)
     pub commit_message: String,
-    commit_message_cursor: usize,
+    pub commit_message_cursor: usize,
 
     // Async fetch
     fetch_receiver: Option<Receiver<Result<(), String>>>,
