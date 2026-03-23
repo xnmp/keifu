@@ -42,6 +42,7 @@ fn map_detail_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::CommitMessageDeleteForward),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        (KeyModifiers::NONE, KeyCode::F(12)) => Some(Action::ToggleKeyDebug),
         _ => None,
     }
 }
@@ -115,6 +116,7 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
+        (KeyModifiers::NONE, KeyCode::F(12)) => Some(Action::ToggleKeyDebug),
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Quit),
 
         _ => None,
@@ -136,6 +138,7 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FilesOpenModal),
         (KeyModifiers::NONE, KeyCode::Char('S')) => Some(Action::ToggleStage),
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
+        (KeyModifiers::NONE, KeyCode::F(12)) => Some(Action::ToggleKeyDebug),
         _ => None,
     }
 }

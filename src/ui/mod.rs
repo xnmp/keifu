@@ -28,6 +28,8 @@ use self::{
     status_bar::StatusBar,
 };
 
+use ratatui::style::Modifier;
+
 /// Minimum terminal width required for rendering
 const MIN_WIDTH: u16 = 20;
 /// Minimum terminal height required for rendering
@@ -92,6 +94,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(CommitDetailWidget::new(app), detail_area);
     frame.render_widget(StatusBar::new(app), status_area);
 
+    if app.is_key_debug_enabled() {
+        render_key_debug_popup(frame, app, area);
+    }
+
     // Branch info popup (when multiple branches exist on selected node)
     render_branch_info_popup(frame, app, graph_area);
 
@@ -138,6 +144,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         _ => {}
     }
+}
+
+fn render_key_debug_popup(frame: &mut Frame, app: &App, area: Rect) {
+    let height: u16 = 3;
+    let popup_area = Rect::new(
+        area.x + 1,
+        area.y + area.height - height - 1,
+        area.width - 2,
+        height,
+    );
+    let block = Block::default()
+        .title(" Key Debug (F12) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black));
+
+    let text = app.last_key_debug().unwrap_or("Press keys to see events…");
+    let paragraph = Paragraph::new(text).block(block).style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(paragraph, popup_area);
 }
 
 /// Render branch info popup when multiple branches exist on selected node

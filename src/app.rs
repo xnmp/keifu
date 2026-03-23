@@ -229,6 +229,10 @@ pub struct App {
     // Flags
     pub should_quit: bool,
 
+    // Debug: key event inspector
+    key_debug_enabled: bool,
+    last_key_debug: Option<String>,
+
     // Status message with auto-clear
     message: Option<String>,
     message_time: Option<std::time::Instant>,
@@ -249,6 +253,21 @@ pub struct App {
 }
 
 impl App {
+    pub fn is_key_debug_enabled(&self) -> bool {
+        self.key_debug_enabled
+    }
+
+    pub fn last_key_debug(&self) -> Option<&str> {
+        self.last_key_debug.as_deref()
+    }
+
+    pub fn record_key_debug(&mut self, key: &crossterm::event::KeyEvent) {
+        if !self.key_debug_enabled {
+            return;
+        }
+        self.last_key_debug = Some(format!("code={:?} mods={:?}", key.code, key.modifiers));
+    }
+
     pub fn cached_commit_files(&mut self) -> Option<&[(crate::git::FileChangeKind, PathBuf)]> {
         let DiffTarget::Commit(oid) = self.current_diff_target()? else {
             return None;
@@ -396,6 +415,8 @@ impl App {
             diff_modal_cache_value: None,
             diff_modal_receiver: None,
             should_quit: false,
+            key_debug_enabled: false,
+            last_key_debug: None,
             message: initial_message,
             message_time: initial_message_time,
             commit_message: String::new(),
@@ -1055,6 +1076,12 @@ impl App {
 
     fn handle_graph_action(&mut self, action: Action) -> Result<()> {
         match action {
+            Action::ToggleKeyDebug => {
+                self.key_debug_enabled = !self.key_debug_enabled;
+                if !self.key_debug_enabled {
+                    self.last_key_debug = None;
+                }
+            }
             Action::Quit => {
                 self.should_quit = true;
             }
@@ -1188,6 +1215,12 @@ impl App {
                 .unwrap_or(0)
         };
         match action {
+            Action::ToggleKeyDebug => {
+                self.key_debug_enabled = !self.key_debug_enabled;
+                if !self.key_debug_enabled {
+                    self.last_key_debug = None;
+                }
+            }
             Action::Quit => {
                 self.files_pane.exit(&mut self.mode);
             }
@@ -1271,6 +1304,12 @@ impl App {
 
     fn handle_detail_action(&mut self, action: Action) -> Result<()> {
         match action {
+            Action::ToggleKeyDebug => {
+                self.key_debug_enabled = !self.key_debug_enabled;
+                if !self.key_debug_enabled {
+                    self.last_key_debug = None;
+                }
+            }
             Action::Quit => {
                 self.mode = AppMode::Graph;
             }
@@ -2040,6 +2079,8 @@ mod tests {
             diff_modal_cache_value: None,
             diff_modal_receiver: None,
             should_quit: false,
+            key_debug_enabled: false,
+            last_key_debug: None,
             message: initial_message,
             message_time: initial_message_time,
             commit_message: String::new(),
@@ -2112,6 +2153,8 @@ mod tests {
             diff_modal_cache_value: None,
             diff_modal_receiver: None,
             should_quit: false,
+            key_debug_enabled: false,
+            last_key_debug: None,
             message: None,
             message_time: None,
             commit_message: String::new(),

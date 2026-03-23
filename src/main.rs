@@ -57,6 +57,7 @@ fn main() -> Result<()> {
         // Event handling
         if let Some(event) = poll_event()? {
             if let Some(key) = get_key_event(&event) {
+                app.record_key_debug(&key);
                 if let Some(action) = map_key_to_action(key, &app.mode) {
                     if let Err(e) = app.handle_action(action) {
                         // Show errors in the UI

@@ -40,6 +40,7 @@ pub enum Action {
     Search,
     Refresh,
     Quit,
+    ToggleKeyDebug,
 
     // Dialogs
     Confirm,
