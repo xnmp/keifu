@@ -33,7 +33,11 @@ impl<'a> CommitDetailWidget<'a> {
     }
 
     fn build_file_lines(app: &App) -> Vec<Line<'a>> {
-        let selected = app.files_list_state.selected();
+        let selected = if matches!(app.mode, crate::app::AppMode::Files) {
+            app.files_list_state.selected()
+        } else {
+            None
+        };
         // Prefer cached data (even if stale) over a loading indicator so that
         // auto-refresh doesn't cause the file list to flicker.
         if let Some(diff) = app.cached_diff() {
@@ -177,13 +181,16 @@ impl<'a> CommitDetailWidget<'a> {
 
             let path_str = file.path.to_string_lossy().to_string();
 
-            let prefix = if selected == Some(idx) { ">" } else { " " };
+            let is_selected = selected == Some(idx);
+            let row_style = if is_selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
 
             let mut spans = vec![
-                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-                Span::raw(" "),
-                Span::styled(format!("{} ", indicator), Style::default().fg(color)),
-                Span::raw(path_str),
+                Span::styled(format!(" {} ", indicator), row_style.fg(color)),
+                Span::styled(path_str, row_style),
             ];
 
             if file.is_binary {
