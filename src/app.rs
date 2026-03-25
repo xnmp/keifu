@@ -1445,17 +1445,31 @@ impl App {
             }
             Action::OpenWithDefault => {
                 if self.file_selected_index < file_count {
+                    use std::process::{Command, Stdio};
                     let path = self.file_list_cache[self.file_selected_index].path.clone();
                     let full_path = std::path::Path::new(&self.repo_path).join(&path);
                     let result = if cfg!(target_os = "macos") {
-                        std::process::Command::new("open").arg(&full_path).spawn()
+                        Command::new("open")
+                            .arg(&full_path)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .stdin(Stdio::null())
+                            .spawn()
                     } else if cfg!(target_os = "windows") {
-                        std::process::Command::new("cmd")
+                        Command::new("cmd")
                             .args(["/C", "start", ""])
                             .arg(&full_path)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .stdin(Stdio::null())
                             .spawn()
                     } else {
-                        std::process::Command::new("xdg-open").arg(&full_path).spawn()
+                        Command::new("xdg-open")
+                            .arg(&full_path)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .stdin(Stdio::null())
+                            .spawn()
                     };
                     match result {
                         Ok(_) => self.set_message(format!("Opening {}", path.display())),
