@@ -31,6 +31,7 @@ pub enum Action {
 
     // Commit menu
     OpenCommitMenu,
+    OpenBranchFilter,
     MenuSelect,
 
     // File staging

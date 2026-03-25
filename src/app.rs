@@ -155,6 +155,11 @@ pub enum AppMode {
         items: Vec<CommitMenuItem>,
         selected: usize,
     },
+    BranchFilter {
+        filter: String,
+        selected: usize,
+        all_branches: Vec<String>,
+    },
     FileSelect {
         selected_index: usize,
         file_list: Vec<FileDiffInfo>,
@@ -286,6 +291,7 @@ pub struct App {
     // UI state
     pub graph_list_state: ListState,
     pub focused_panel: FocusedPanel,
+    pub hidden_branches: std::collections::HashSet<String>,
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
 
@@ -402,6 +408,7 @@ impl App {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             branch_positions,
@@ -592,10 +599,16 @@ impl App {
 
         self.commits = self.repo.get_commits(500)?;
         self.branches = self.repo.get_branches()?;
+        let visible_branches: Vec<BranchInfo> = self
+            .branches
+            .iter()
+            .filter(|b| !self.hidden_branches.contains(&b.name))
+            .cloned()
+            .collect();
         let head_commit_oid = self.repo.head_oid();
         self.graph_layout = build_graph(
             &self.commits,
-            &self.branches,
+            &visible_branches,
             uncommitted_count,
             head_commit_oid,
         );
@@ -1124,6 +1137,7 @@ impl App {
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
+            AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileSelect { .. } => self.handle_file_select_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }
@@ -1227,6 +1241,9 @@ impl App {
             }
             Action::OpenCommitMenu => {
                 self.open_commit_menu();
+            }
+            Action::OpenBranchFilter => {
+                self.open_branch_filter();
             }
             Action::CreateBranch => {
                 self.mode = AppMode::Input {
@@ -1459,6 +1476,135 @@ impl App {
             }
             Action::Cancel | Action::Quit => {
                 self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn open_branch_filter(&mut self) {
+        let mut all_branches: Vec<String> = self
+            .branches
+            .iter()
+            .map(|b| b.name.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        all_branches.sort();
+        self.mode = AppMode::BranchFilter {
+            filter: String::new(),
+            selected: 0,
+            all_branches,
+        };
+    }
+
+    fn handle_branch_filter_action(&mut self, action: Action) -> Result<()> {
+        let AppMode::BranchFilter {
+            filter,
+            selected,
+            all_branches,
+        } = &self.mode
+        else {
+            return Ok(());
+        };
+        let filter = filter.clone();
+        let selected = *selected;
+        let all_branches = all_branches.clone();
+
+        // Compute filtered list for navigation
+        let filtered: Vec<&String> = all_branches
+            .iter()
+            .filter(|b| b.to_lowercase().contains(&filter.to_lowercase()))
+            .collect();
+
+        match action {
+            Action::MoveUp => {
+                if filtered.is_empty() {
+                    return Ok(());
+                }
+                let new = if selected == 0 {
+                    filtered.len().saturating_sub(1)
+                } else {
+                    selected - 1
+                };
+                self.mode = AppMode::BranchFilter {
+                    filter,
+                    selected: new,
+                    all_branches,
+                };
+            }
+            Action::MoveDown => {
+                if filtered.is_empty() {
+                    return Ok(());
+                }
+                let new = if selected + 1 >= filtered.len() {
+                    0
+                } else {
+                    selected + 1
+                };
+                self.mode = AppMode::BranchFilter {
+                    filter,
+                    selected: new,
+                    all_branches,
+                };
+            }
+            Action::Confirm | Action::MenuSelect => {
+                // Toggle the selected branch
+                if let Some(branch_name) = filtered.get(selected) {
+                    let name = (*branch_name).clone();
+                    if self.hidden_branches.contains(&name) {
+                        self.hidden_branches.remove(&name);
+                    } else {
+                        self.hidden_branches.insert(name);
+                    }
+                }
+                // Stay in BranchFilter mode
+                self.mode = AppMode::BranchFilter {
+                    filter,
+                    selected,
+                    all_branches,
+                };
+            }
+            Action::InputChar('a') => {
+                self.hidden_branches.clear();
+                self.mode = AppMode::BranchFilter {
+                    filter,
+                    selected,
+                    all_branches,
+                };
+            }
+            Action::InputChar('n') => {
+                for b in &all_branches {
+                    self.hidden_branches.insert(b.clone());
+                }
+                self.mode = AppMode::BranchFilter {
+                    filter,
+                    selected,
+                    all_branches,
+                };
+            }
+            Action::InputChar(c) => {
+                let mut new_filter = filter;
+                new_filter.push(c);
+                // Reset selection when filter changes
+                self.mode = AppMode::BranchFilter {
+                    filter: new_filter,
+                    selected: 0,
+                    all_branches,
+                };
+            }
+            Action::InputBackspace => {
+                let mut new_filter = filter;
+                new_filter.pop();
+                self.mode = AppMode::BranchFilter {
+                    filter: new_filter,
+                    selected: 0,
+                    all_branches,
+                };
+            }
+            Action::Cancel | Action::Quit => {
+                self.mode = AppMode::Normal;
+                self.refresh(true)?;
             }
             _ => {}
         }
@@ -2347,6 +2493,7 @@ mod tests {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             branch_positions,
@@ -2417,6 +2564,7 @@ mod tests {
             },
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             branch_positions: Vec::new(),

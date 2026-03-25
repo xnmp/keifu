@@ -189,6 +189,16 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("cancel", desc_style));
             }
+            AppMode::BranchFilter { .. } => {
+                spans.push(Span::styled(" Space ", key_style));
+                spans.push(Span::styled("toggle ", desc_style));
+                spans.push(Span::styled(" a ", key_style));
+                spans.push(Span::styled("all ", desc_style));
+                spans.push(Span::styled(" n ", key_style));
+                spans.push(Span::styled("none ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("close", desc_style));
+            }
         }
 
         let line = Line::from(spans);
@@ -202,6 +212,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Confirm { .. } => Some(" CONFIRM "),
             AppMode::Error { .. } => Some(" ERROR "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
+            AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileSelect { .. } => Some(" FILE SELECT "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
         };

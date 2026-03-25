@@ -36,6 +36,7 @@ pub fn map_key_to_action(
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
+        AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileSelect { .. } => map_file_select_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }
@@ -106,6 +107,9 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
         // Space still opens file select for quick access
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::EnterFileSelect),
+
+        // Branch filter
+        (KeyModifiers::SHIFT, KeyCode::Char('B')) => Some(Action::OpenBranchFilter),
 
         // UI
         (_, KeyCode::Char('/')) => Some(Action::Search),
@@ -254,6 +258,22 @@ fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }
+        _ => None,
+    }
+}
+
+fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::MenuSelect),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
 }

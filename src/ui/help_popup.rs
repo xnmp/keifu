@@ -86,6 +86,10 @@ impl Widget for HelpPopup {
                 Span::styled("  f          ", key_style),
                 Span::styled("Fetch from origin", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  B          ", key_style),
+                Span::styled("Branch filter", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
             Line::from(vec![

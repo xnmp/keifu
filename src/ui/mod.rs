@@ -1,5 +1,6 @@
 //! UI components
 
+pub mod branch_filter;
 pub mod commit_detail;
 pub mod commit_menu;
 pub mod dialog;
@@ -20,6 +21,7 @@ use ratatui::{
 use crate::app::{App, AppMode, InputAction};
 
 use self::{
+    branch_filter::BranchFilterWidget,
     commit_detail::CommitDetailWidget,
     commit_menu::CommitMenuWidget,
     dialog::{BranchInfoPopup, ConfirmDialog, InputDialog},
@@ -168,6 +170,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let menu_width = 42;
             let popup_area = centered_rect_fixed(menu_width, menu_height, area);
             frame.render_widget(CommitMenuWidget::new(items, *selected), popup_area);
+        }
+        AppMode::BranchFilter {
+            filter,
+            selected,
+            all_branches,
+        } => {
+            let filtered_count = all_branches
+                .iter()
+                .filter(|b| b.to_lowercase().contains(&filter.to_lowercase()))
+                .count();
+            // +3 for borders and footer
+            let popup_height = (filtered_count + 3).min(24) as u16;
+            let max_name_len = all_branches.iter().map(|b| b.len()).max().unwrap_or(10);
+            let popup_width = (max_name_len + 10).clamp(46, 60) as u16;
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected),
+                popup_area,
+            );
         }
         _ => {}
     }
