@@ -27,22 +27,15 @@ pub struct CommitDetailWidget<'a> {
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &App) -> Self {
+    pub fn new(app: &App, detail_width: u16) -> Self {
         let commit_lines = Self::build_commit_lines(app);
-        let file_lines = Self::build_file_lines(app);
-        // Find the rendered line index for the selected file
-        let mut selected_line_index = 0u16;
-        let mut file_idx = 0usize;
-        for (line_idx, item) in app.files_pane_items().iter().enumerate() {
-            if matches!(item, crate::app::FilesPaneItem::File(_)) {
-                if file_idx == app.file_selected_index {
-                    // +2 for the summary header and blank line
-                    selected_line_index = (line_idx + 2) as u16;
-                    break;
-                }
-                file_idx += 1;
-            }
-        }
+        // Files pane gets ~half the detail width minus borders
+        let files_inner_width = if detail_width <= VERTICAL_LAYOUT_THRESHOLD {
+            detail_width.saturating_sub(2) as usize
+        } else {
+            (detail_width / 2).saturating_sub(2) as usize
+        };
+        let (file_lines, selected_line_index) = Self::build_file_lines(app, files_inner_width);
 
         Self {
             commit_lines,
@@ -64,7 +57,8 @@ impl<'a> CommitDetailWidget<'a> {
         }
     }
 
-    fn build_file_lines(app: &App) -> Vec<Line<'a>> {
+    /// Returns (lines, selected_line_index)
+    fn build_file_lines(app: &App, max_width: usize) -> (Vec<Line<'a>>, u16) {
         use crate::app::FilesPaneItem;
 
         let selected_file_index = if app.focused_panel == FocusedPanel::Files {
@@ -75,23 +69,22 @@ impl<'a> CommitDetailWidget<'a> {
 
         let line_stats_loading = app.is_line_stats_loading();
 
-        // Use files_pane_items which respects folder grouping and fuzzy filter
         let items = app.files_pane_items();
         if items.is_empty() {
             if app.is_diff_loading() {
-                return vec![Line::from(Span::styled(
+                return (vec![Line::from(Span::styled(
                     "Loading...",
                     Style::default().fg(Color::DarkGray),
-                ))];
+                ))], 0);
             }
-            // Show summary from diff if available
             if let Some(diff) = app.cached_diff_or_quick() {
-                return Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading);
+                return (Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading), 0);
             }
-            return Vec::new();
+            return (Vec::new(), 0);
         }
 
         let mut lines = Vec::new();
+        let mut selected_line_idx: u16 = 0;
 
         // Summary header
         if let Some(diff) = app.cached_diff_or_quick() {
@@ -118,7 +111,9 @@ impl<'a> CommitDetailWidget<'a> {
             lines.push(Line::from(""));
         }
 
-        // Track file index for selection highlighting
+        let indent = "  ";
+        let prefix_len = 2; // "M " is 2 chars
+
         let mut file_idx = 0;
         for item in &items {
             match item {
@@ -130,6 +125,9 @@ impl<'a> CommitDetailWidget<'a> {
                 }
                 FilesPaneItem::File(file) => {
                     let is_selected = selected_file_index == Some(file_idx);
+                    if is_selected {
+                        selected_line_idx = lines.len() as u16;
+                    }
                     let (indicator, color) = match file.kind {
                         FileChangeKind::Added => ("A", Color::Green),
                         FileChangeKind::Modified => ("M", Color::Yellow),
@@ -139,34 +137,74 @@ impl<'a> CommitDetailWidget<'a> {
                     };
 
                     let path_str = file.path.to_string_lossy().to_string();
-                    let mut spans = vec![
-                        Span::styled(format!("{} ", indicator), Style::default().fg(color)),
-                        Span::raw(path_str),
-                    ];
 
-                    if file.is_binary {
-                        spans.push(Span::raw(" "));
-                        spans.push(Span::styled("(binary)", Style::default().fg(Color::DarkGray)));
+                    // Build suffix (stats)
+                    let suffix = if file.is_binary {
+                        " (binary)".to_string()
                     } else if line_stats_loading {
-                        spans.push(Span::styled(" ...", Style::default().fg(Color::DarkGray)));
+                        " ...".to_string()
                     } else if file.insertions > 0 || file.deletions > 0 {
-                        spans.push(Span::raw(" "));
-                        spans.push(Span::styled(format!("+{}", file.insertions), Style::default().fg(Color::Green)));
-                        spans.push(Span::raw(" "));
-                        spans.push(Span::styled(format!("-{}", file.deletions), Style::default().fg(Color::Red)));
-                    }
+                        format!(" +{} -{}", file.insertions, file.deletions)
+                    } else {
+                        String::new()
+                    };
 
-                    let mut line = Line::from(spans);
-                    if is_selected {
-                        line = line.style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD));
+                    let full_text = format!("{}{}", path_str, suffix);
+                    let avail = max_width.saturating_sub(prefix_len);
+
+                    let select_style = if is_selected {
+                        Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+
+                    if avail == 0 || full_text.len() <= avail {
+                        // Fits on one line
+                        let mut spans = vec![
+                            Span::styled(format!("{} ", indicator), Style::default().fg(color)),
+                        ];
+                        spans.push(Span::raw(path_str));
+                        if file.is_binary {
+                            spans.push(Span::styled(" (binary)", Style::default().fg(Color::DarkGray)));
+                        } else if line_stats_loading {
+                            spans.push(Span::styled(" ...", Style::default().fg(Color::DarkGray)));
+                        } else if file.insertions > 0 || file.deletions > 0 {
+                            spans.push(Span::raw(" "));
+                            spans.push(Span::styled(format!("+{}", file.insertions), Style::default().fg(Color::Green)));
+                            spans.push(Span::raw(" "));
+                            spans.push(Span::styled(format!("-{}", file.deletions), Style::default().fg(Color::Red)));
+                        }
+                        lines.push(Line::from(spans).style(select_style));
+                    } else {
+                        // Wrap: first line has indicator + start of path
+                        // continuation lines have indent + rest of path
+                        let mut remaining = full_text.as_str();
+                        let first_chunk_len = avail.min(remaining.len());
+                        let first_chunk = &remaining[..first_chunk_len];
+                        remaining = &remaining[first_chunk_len..];
+
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("{} ", indicator), Style::default().fg(color)),
+                            Span::raw(first_chunk.to_string()),
+                        ]).style(select_style));
+
+                        let cont_avail = max_width.saturating_sub(indent.len());
+                        while !remaining.is_empty() {
+                            let chunk_len = cont_avail.min(remaining.len());
+                            let chunk = &remaining[..chunk_len];
+                            remaining = &remaining[chunk_len..];
+                            lines.push(Line::from(vec![
+                                Span::raw(indent.to_string()),
+                                Span::raw(chunk.to_string()),
+                            ]).style(select_style));
+                        }
                     }
-                    lines.push(line);
                     file_idx += 1;
                 }
             }
         }
 
-        lines
+        (lines, selected_line_idx)
     }
 
     fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
