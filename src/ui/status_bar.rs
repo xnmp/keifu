@@ -8,10 +8,11 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::app::{App, AppMode, InputAction};
+use crate::app::{App, AppMode, FocusedPanel, InputAction};
 
 pub struct StatusBar<'a> {
     mode: &'a AppMode,
+    focused_panel: FocusedPanel,
     repo_path: &'a str,
     head_name: Option<&'a str>,
     error_message: Option<&'a str>,
@@ -45,6 +46,7 @@ impl<'a> StatusBar<'a> {
 
         Self {
             mode: &app.mode,
+            focused_panel: app.focused_panel,
             repo_path: &app.repo_path,
             head_name: app.head_name.as_deref(),
             error_message,
@@ -118,16 +120,40 @@ impl<'a> Widget for StatusBar<'a> {
                         spans.push(Span::raw("  "));
                     }
 
-                    spans.push(Span::styled(" ↑↓ ", key_style));
-                    spans.push(Span::styled("move ", desc_style));
-                    spans.push(Span::styled(" Enter ", key_style));
-                    spans.push(Span::styled("actions ", desc_style));
-                    spans.push(Span::styled(" ←→ ", key_style));
-                    spans.push(Span::styled("panels ", desc_style));
-                    spans.push(Span::styled(" B ", key_style));
-                    spans.push(Span::styled("branches ", desc_style));
-                    spans.push(Span::styled(" ? ", key_style));
-                    spans.push(Span::styled("help", desc_style));
+                    match self.focused_panel {
+                        FocusedPanel::Graph => {
+                            spans.push(Span::styled(" ↑↓ ", key_style));
+                            spans.push(Span::styled("move ", desc_style));
+                            spans.push(Span::styled(" Enter ", key_style));
+                            spans.push(Span::styled("actions ", desc_style));
+                            spans.push(Span::styled(" ←→ ", key_style));
+                            spans.push(Span::styled("panels ", desc_style));
+                            spans.push(Span::styled(" B ", key_style));
+                            spans.push(Span::styled("branches ", desc_style));
+                            spans.push(Span::styled(" ? ", key_style));
+                            spans.push(Span::styled("help", desc_style));
+                        }
+                        FocusedPanel::Files => {
+                            spans.push(Span::styled(" ↑↓ ", key_style));
+                            spans.push(Span::styled("select ", desc_style));
+                            spans.push(Span::styled(" Enter ", key_style));
+                            spans.push(Span::styled("diff ", desc_style));
+                            spans.push(Span::styled(" s ", key_style));
+                            spans.push(Span::styled("stage ", desc_style));
+                            spans.push(Span::styled(" ←→ ", key_style));
+                            spans.push(Span::styled("panels ", desc_style));
+                            spans.push(Span::styled(" Esc ", key_style));
+                            spans.push(Span::styled("graph", desc_style));
+                        }
+                        FocusedPanel::CommitDetail => {
+                            spans.push(Span::styled(" Enter ", key_style));
+                            spans.push(Span::styled("edit msg ", desc_style));
+                            spans.push(Span::styled(" ←→ ", key_style));
+                            spans.push(Span::styled("panels ", desc_style));
+                            spans.push(Span::styled(" Esc ", key_style));
+                            spans.push(Span::styled("graph", desc_style));
+                        }
+                    }
                 }
             },
             AppMode::Help => {
@@ -182,9 +208,9 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::BranchFilter { .. } => {
                 spans.push(Span::styled(" Space ", key_style));
                 spans.push(Span::styled("toggle ", desc_style));
-                spans.push(Span::styled(" a ", key_style));
+                spans.push(Span::styled(" C-a ", key_style));
                 spans.push(Span::styled("all ", desc_style));
-                spans.push(Span::styled(" n ", key_style));
+                spans.push(Span::styled(" C-o ", key_style));
                 spans.push(Span::styled("none ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("close", desc_style));

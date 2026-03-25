@@ -1443,6 +1443,26 @@ impl App {
                     }
                 }
             }
+            Action::OpenWithDefault => {
+                if self.file_selected_index < file_count {
+                    let path = self.file_list_cache[self.file_selected_index].path.clone();
+                    let full_path = std::path::Path::new(&self.repo_path).join(&path);
+                    let result = if cfg!(target_os = "macos") {
+                        std::process::Command::new("open").arg(&full_path).spawn()
+                    } else if cfg!(target_os = "windows") {
+                        std::process::Command::new("cmd")
+                            .args(["/C", "start", ""])
+                            .arg(&full_path)
+                            .spawn()
+                    } else {
+                        std::process::Command::new("xdg-open").arg(&full_path).spawn()
+                    };
+                    match result {
+                        Ok(_) => self.set_message(format!("Opening {}", path.display())),
+                        Err(e) => self.set_message(format!("Cannot open file: {e}")),
+                    }
+                }
+            }
             Action::ToggleStage => {
                 self.toggle_stage_selected_file()?;
             }
@@ -1701,7 +1721,7 @@ impl App {
                     all_branches,
                 };
             }
-            Action::InputChar('a') => {
+            Action::SelectAll => {
                 self.hidden_branches.clear();
                 self.mode = AppMode::BranchFilter {
                     filter,
@@ -1709,7 +1729,7 @@ impl App {
                     all_branches,
                 };
             }
-            Action::InputChar('n') => {
+            Action::SelectNone => {
                 for b in &all_branches {
                     self.hidden_branches.insert(b.clone());
                 }
@@ -2115,23 +2135,21 @@ impl App {
             return;
         }
 
-        match &mut self.mode {
-            AppMode::FileDiff {
-                file_index,
-                file_list,
-                ..
-            } => {
-                let current_path = file_list.get(*file_index).map(|f| f.path.clone());
-                *file_list = new_files;
-                if let Some(path) = current_path {
-                    if let Some(new_idx) = file_list.iter().position(|f| f.path == path) {
-                        *file_index = new_idx;
-                    } else if *file_index >= file_list.len() {
-                        *file_index = file_list.len() - 1;
-                    }
+        if let AppMode::FileDiff {
+            file_index,
+            file_list,
+            ..
+        } = &mut self.mode
+        {
+            let current_path = file_list.get(*file_index).map(|f| f.path.clone());
+            *file_list = new_files;
+            if let Some(path) = current_path {
+                if let Some(new_idx) = file_list.iter().position(|f| f.path == path) {
+                    *file_index = new_idx;
+                } else if *file_index >= file_list.len() {
+                    *file_index = file_list.len() - 1;
                 }
             }
-            _ => {}
         }
     }
 

@@ -111,7 +111,7 @@ impl<'a> Widget for BranchFilterWidget<'a> {
         let footer_y = inner.y + inner.height.saturating_sub(1);
         let footer_style = Style::default().fg(Color::DarkGray);
         let footer = Line::from(Span::styled(
-            "Space: toggle  a: all  n: none  Esc: close",
+            "Space: toggle  C-a: all  C-o: none  Esc: close",
             footer_style,
         ));
         buf.set_line(inner.x, footer_y, &footer, inner.width);

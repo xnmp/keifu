@@ -33,6 +33,11 @@ pub enum Action {
     OpenCommitMenu,
     OpenBranchFilter,
     MenuSelect,
+    SelectAll,
+    SelectNone,
+
+    // Files
+    OpenWithDefault,
 
     // File operations
     ToggleStage,

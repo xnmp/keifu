@@ -72,8 +72,12 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
 
         // Page scroll
-        (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::PageDown),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::PageUp),
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
 
         // Top/bottom
         (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {
@@ -127,8 +131,12 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Movement
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
-        (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::PageDown),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::PageUp),
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
         (KeyModifiers::NONE, KeyCode::Home) => Some(Action::GoToTop),
         (KeyModifiers::NONE, KeyCode::End) => Some(Action::GoToBottom),
 
@@ -137,6 +145,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
+
+        // Alt+Enter opens file with default app
+        (m, KeyCode::Enter) if m.contains(KeyModifiers::ALT) => Some(Action::OpenWithDefault),
 
         // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
@@ -272,11 +283,11 @@ fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::MenuSelect),
+        (KeyModifiers::CONTROL, KeyCode::Char('a')) => Some(Action::SelectAll),
+        (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::SelectNone),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
-        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
-            Some(Action::Cancel)
-        }
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,

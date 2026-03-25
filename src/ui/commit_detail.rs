@@ -20,7 +20,7 @@ const VERTICAL_LAYOUT_THRESHOLD: u16 = 56;
 pub struct CommitDetailWidget<'a> {
     commit_lines: Vec<Line<'a>>,
     file_lines: Vec<Line<'a>>,
-    file_scroll: u16,
+    selected_line_index: u16,
     is_focused: bool,
     is_files_focused: bool,
     files_title: String,
@@ -30,11 +30,24 @@ impl<'a> CommitDetailWidget<'a> {
     pub fn new(app: &App) -> Self {
         let commit_lines = Self::build_commit_lines(app);
         let file_lines = Self::build_file_lines(app);
-        let file_scroll = app.file_selected_index as u16;
+        // Find the rendered line index for the selected file
+        let mut selected_line_index = 0u16;
+        let mut file_idx = 0usize;
+        for (line_idx, item) in app.files_pane_items().iter().enumerate() {
+            if matches!(item, crate::app::FilesPaneItem::File(_)) {
+                if file_idx == app.file_selected_index {
+                    // +2 for the summary header and blank line
+                    selected_line_index = (line_idx + 2) as u16;
+                    break;
+                }
+                file_idx += 1;
+            }
+        }
+
         Self {
             commit_lines,
             file_lines,
-            file_scroll,
+            selected_line_index,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             is_files_focused: app.focused_panel == FocusedPanel::Files,
             files_title: {
@@ -127,7 +140,7 @@ impl<'a> CommitDetailWidget<'a> {
 
                     let path_str = file.path.to_string_lossy().to_string();
                     let mut spans = vec![
-                        Span::styled(format!(" {} ", indicator), Style::default().fg(color)),
+                        Span::styled(format!("{} ", indicator), Style::default().fg(color)),
                         Span::raw(path_str),
                     ];
 
@@ -327,7 +340,7 @@ impl<'a> CommitDetailWidget<'a> {
             let path_str = file.path.to_string_lossy().to_string();
 
             let mut spans = vec![
-                Span::styled(format!(" {} ", indicator), Style::default().fg(color)),
+                Span::styled(format!("{} ", indicator), Style::default().fg(color)),
                 Span::raw(path_str),
             ];
 
@@ -415,10 +428,9 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         // Scroll file list so selected file stays visible.
         let visible_height = chunks[0].height.saturating_sub(2);
         let total_lines = self.file_lines.len() as u16;
-        let selected_line = self.file_scroll + 2; // offset for header lines
         let max_scroll = total_lines.saturating_sub(visible_height);
-        let scroll_y = if visible_height > 0 && selected_line >= visible_height {
-            (selected_line - visible_height / 2).min(max_scroll)
+        let scroll_y = if visible_height > 0 && self.selected_line_index >= visible_height {
+            (self.selected_line_index - visible_height / 2).min(max_scroll)
         } else {
             0
         };
