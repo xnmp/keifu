@@ -301,6 +301,10 @@ pub struct App {
     // Latest working tree status snapshot
     working_tree_status: Option<WorkingTreeStatus>,
 
+    // Quick diff cache (synchronous, file names only, no line stats)
+    quick_diff_cache: Option<CommitDiffInfo>,
+    quick_diff_target: Option<DiffTarget>,
+
     // Diff cache (async load)
     diff_cache: Option<CommitDiffInfo>,
     diff_cache_oid: Option<Oid>,
@@ -404,6 +408,8 @@ impl App {
             selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
+            quick_diff_cache: None,
+            quick_diff_target: None,
             diff_cache: None,
             diff_cache_oid: None,
             diff_loading_oid: None,
@@ -431,6 +437,8 @@ impl App {
 
     /// Clear all diff caches
     fn clear_all_diff_caches(&mut self) {
+        self.quick_diff_cache = None;
+        self.quick_diff_target = None;
         self.diff_cache = None;
         self.diff_cache_oid = None;
         self.diff_loading_oid = None;
@@ -501,6 +509,21 @@ impl App {
         if self.selected_diff_target != target {
             self.selected_diff_target = target;
             self.selected_diff_target_changed_at = Instant::now();
+
+            // Compute quick file list synchronously for instant display
+            if let Some(t) = target {
+                if self.quick_diff_target != Some(t) {
+                    self.quick_diff_target = Some(t);
+                    self.quick_diff_cache = match t {
+                        DiffTarget::Commit(oid) => {
+                            CommitDiffInfo::quick_file_list_for_commit(&self.repo.repo, oid).ok()
+                        }
+                        DiffTarget::Uncommitted => {
+                            CommitDiffInfo::quick_file_list_for_working_tree(&self.repo.repo).ok()
+                        }
+                    };
+                }
+            }
         }
         target
     }
@@ -1023,6 +1046,16 @@ impl App {
         }
     }
 
+    /// Get the best available diff: full if cached, otherwise quick file list
+    pub fn cached_diff_or_quick(&self) -> Option<&CommitDiffInfo> {
+        self.cached_diff().or(self.quick_diff_cache.as_ref())
+    }
+
+    /// Whether line stats are still loading (full diff not yet available but quick is)
+    pub fn is_line_stats_loading(&self) -> bool {
+        self.cached_diff().is_none() && self.quick_diff_cache.is_some()
+    }
+
     /// Whether diff is loading or pending (debouncing) for the selected node
     pub fn is_diff_loading(&self) -> bool {
         let Some(target) = self.current_diff_target() else {
@@ -1046,8 +1079,10 @@ impl App {
     /// Get the file list for the files pane (staged then unstaged for uncommitted,
     /// or flat list for committed)
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
+        // Use full diff or quick file list
+        let diff = self.cached_diff_or_quick();
         if self.is_uncommitted_selected() {
-            if let Some(diff) = self.cached_diff() {
+            if let Some(diff) = diff {
                 let mut items = Vec::new();
                 if !diff.staged_files.is_empty() {
                     items.push(FilesPaneItem::Header("Staged Changes".to_string()));
@@ -1062,13 +1097,12 @@ impl App {
                     }
                 }
                 if items.is_empty() {
-                    // Fall back to merged list
                     return diff.files.iter().map(|f| FilesPaneItem::File(f.clone())).collect();
                 }
                 return items;
             }
         }
-        if let Some(diff) = self.cached_diff() {
+        if let Some(diff) = diff {
             diff.files.iter().map(|f| FilesPaneItem::File(f.clone())).collect()
         } else {
             Vec::new()
@@ -2319,6 +2353,8 @@ mod tests {
             selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
+            quick_diff_cache: None,
+            quick_diff_target: None,
             diff_cache: None,
             diff_cache_oid: None,
             diff_loading_oid: None,
@@ -2387,6 +2423,8 @@ mod tests {
             selected_branch_position: None,
             search_state: SearchState::default(),
             working_tree_status,
+            quick_diff_cache: None,
+            quick_diff_target: None,
             diff_cache: None,
             diff_cache_oid: None,
             diff_loading_oid: None,

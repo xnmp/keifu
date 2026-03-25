@@ -48,10 +48,10 @@ impl<'a> CommitDetailWidget<'a> {
             _ => None,
         };
 
-        // Prefer cached data (even if stale) over a loading indicator so that
-        // auto-refresh doesn't cause the file list to flicker.
-        if let Some(diff) = app.cached_diff() {
-            return Self::build_file_list_lines_from(Some(diff), selected_file_index);
+        // Use full diff if available, otherwise quick file list for instant display
+        let line_stats_loading = app.is_line_stats_loading();
+        if let Some(diff) = app.cached_diff_or_quick() {
+            return Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading);
         }
         if app.is_diff_loading() {
             return vec![Line::from(Span::styled(
@@ -59,7 +59,7 @@ impl<'a> CommitDetailWidget<'a> {
                 Style::default().fg(Color::DarkGray),
             ))];
         }
-        Self::build_file_list_lines_from(None, None)
+        Self::build_file_list_lines_from(None, None, false)
     }
 
     fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
@@ -181,6 +181,7 @@ impl<'a> CommitDetailWidget<'a> {
     fn build_file_list_lines_from(
         diff: Option<&CommitDiffInfo>,
         selected_file_index: Option<usize>,
+        line_stats_loading: bool,
     ) -> Vec<Line<'a>> {
         let mut lines = Vec::new();
 
@@ -189,22 +190,32 @@ impl<'a> CommitDetailWidget<'a> {
         };
 
         // Header row
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} files changed", diff.total_files),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("+{}", diff.total_insertions),
-                Style::default().fg(Color::Green),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                format!("-{}", diff.total_deletions),
-                Style::default().fg(Color::Red),
-            ),
-        ]));
+        if line_stats_loading {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} files changed", diff.total_files),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ...", Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} files changed", diff.total_files),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("+{}", diff.total_insertions),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("-{}", diff.total_deletions),
+                    Style::default().fg(Color::Red),
+                ),
+            ]));
+        }
         lines.push(Line::from(""));
 
         // File list
@@ -230,6 +241,11 @@ impl<'a> CommitDetailWidget<'a> {
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(
                     "(binary)",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            } else if line_stats_loading {
+                spans.push(Span::styled(
+                    " ...",
                     Style::default().fg(Color::DarkGray),
                 ));
             } else if file.insertions > 0 || file.deletions > 0 {

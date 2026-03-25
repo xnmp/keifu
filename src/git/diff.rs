@@ -186,6 +186,114 @@ impl CommitDiffInfo {
         Self::build_info(Self::scan_diff(&diff)?, None)
     }
 
+    /// Quick file list for a commit - just paths and change kinds, no line stats.
+    /// Much faster than full diff computation since it skips patch analysis.
+    pub fn quick_file_list_for_commit(repo: &Repository, commit_oid: Oid) -> Result<Self> {
+        let commit = repo.find_commit(commit_oid)?;
+        let new_tree = commit.tree()?;
+        let old_tree = if commit.parent_count() > 0 {
+            Some(commit.parent(0)?.tree()?)
+        } else {
+            None
+        };
+
+        let mut opts = DiffOptions::new();
+        opts.minimal(false);
+        opts.ignore_submodules(true);
+        opts.context_lines(0);
+        let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
+
+        let mut files = Vec::new();
+        for delta in diff.deltas() {
+            let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
+                continue;
+            };
+            files.push(FileDiffInfo {
+                path: path.to_path_buf(),
+                kind,
+                is_binary,
+                insertions: 0,
+                deletions: 0,
+                stage_status: None,
+            });
+        }
+        let total_files = files.len();
+        Ok(Self {
+            files,
+            total_insertions: 0,
+            total_deletions: 0,
+            total_files,
+            truncated: false,
+            staged_files: Vec::new(),
+            unstaged_files: Vec::new(),
+        })
+    }
+
+    /// Quick file list for working tree - uses git status for fast results.
+    pub fn quick_file_list_for_working_tree(repo: &Repository) -> Result<Self> {
+        let head_tree = match repo.head() {
+            Ok(head) => Some(head.peel_to_tree()?),
+            Err(err)
+                if err.code() == ErrorCode::UnbornBranch || err.code() == ErrorCode::NotFound =>
+            {
+                None
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        let mut opts = DiffOptions::new();
+        opts.ignore_submodules(true);
+        opts.context_lines(0);
+
+        let staged_diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
+        let unstaged_diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
+
+        let mut staged_files = Vec::new();
+        for delta in staged_diff.deltas() {
+            let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
+                continue;
+            };
+            staged_files.push(FileDiffInfo {
+                path: path.to_path_buf(),
+                kind,
+                is_binary,
+                insertions: 0,
+                deletions: 0,
+                stage_status: Some(StageStatus::Staged),
+            });
+        }
+
+        let mut unstaged_files = Vec::new();
+        for delta in unstaged_diff.deltas() {
+            let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
+                continue;
+            };
+            unstaged_files.push(FileDiffInfo {
+                path: path.to_path_buf(),
+                kind,
+                is_binary,
+                insertions: 0,
+                deletions: 0,
+                stage_status: Some(StageStatus::Unstaged),
+            });
+        }
+
+        // Merge for the flat files list
+        let mut all_files = staged_files.clone();
+        all_files.extend(unstaged_files.clone());
+        let total_files = all_files.len();
+
+        Ok(Self {
+            files: all_files,
+            total_insertions: 0,
+            total_deletions: 0,
+            total_files,
+            truncated: false,
+            staged_files,
+            unstaged_files,
+        })
+    }
+
     fn scan_diff(diff: &Diff) -> Result<DiffScan> {
         let _ = diff.stats()?;
         let mut files = Vec::with_capacity(diff.deltas().len());
