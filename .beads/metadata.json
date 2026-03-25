@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "keifu",
+  "project_id": "4a79b310-5d75-4375-976e-f6acf5c5f962"
+}
