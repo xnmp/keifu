@@ -291,6 +291,8 @@ pub struct App {
     // UI state
     pub graph_list_state: ListState,
     pub focused_panel: FocusedPanel,
+    pub files_group_by_folder: bool,
+    pub files_filter: String,
     pub hidden_branches: std::collections::HashSet<String>,
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
@@ -408,6 +410,8 @@ impl App {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            files_group_by_folder: false,
+            files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
@@ -1092,34 +1096,103 @@ impl App {
     /// Get the file list for the files pane (staged then unstaged for uncommitted,
     /// or flat list for committed)
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
-        // Use full diff or quick file list
         let diff = self.cached_diff_or_quick();
-        if self.is_uncommitted_selected() {
+
+        let raw_files: Vec<FileDiffInfo> = if self.is_uncommitted_selected() {
             if let Some(diff) = diff {
-                let mut items = Vec::new();
-                if !diff.staged_files.is_empty() {
-                    items.push(FilesPaneItem::Header("Staged Changes".to_string()));
-                    for f in &diff.staged_files {
-                        items.push(FilesPaneItem::File(f.clone()));
-                    }
+                if !diff.staged_files.is_empty() || !diff.unstaged_files.is_empty() {
+                    // Return staged + unstaged separately (handled below)
+                    let mut all = diff.staged_files.clone();
+                    all.extend(diff.unstaged_files.clone());
+                    all
+                } else {
+                    diff.files.clone()
                 }
-                if !diff.unstaged_files.is_empty() {
-                    items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
-                    for f in &diff.unstaged_files {
-                        items.push(FilesPaneItem::File(f.clone()));
-                    }
-                }
-                if items.is_empty() {
-                    return diff.files.iter().map(|f| FilesPaneItem::File(f.clone())).collect();
-                }
-                return items;
+            } else {
+                return Vec::new();
+            }
+        } else if let Some(diff) = diff {
+            diff.files.clone()
+        } else {
+            return Vec::new();
+        };
+
+        // Apply fuzzy filter
+        let filtered: Vec<FileDiffInfo> = if self.files_filter.is_empty() {
+            raw_files
+        } else {
+            let query = self.files_filter.to_lowercase();
+            raw_files
+                .into_iter()
+                .filter(|f| {
+                    let path = f.path.to_string_lossy().to_lowercase();
+                    // Simple substring matching (fuzzy-ish)
+                    query.chars().all(|c| path.contains(c))
+                })
+                .collect()
+        };
+
+        // Build items with optional folder grouping
+        if self.files_group_by_folder {
+            self.build_folder_grouped_items(&filtered)
+        } else if self.is_uncommitted_selected() {
+            self.build_staged_unstaged_items(&filtered)
+        } else {
+            filtered.into_iter().map(FilesPaneItem::File).collect()
+        }
+    }
+
+    fn build_staged_unstaged_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
+        let staged: Vec<_> = files
+            .iter()
+            .filter(|f| matches!(f.stage_status, Some(StageStatus::Staged)))
+            .cloned()
+            .collect();
+        let unstaged: Vec<_> = files
+            .iter()
+            .filter(|f| !matches!(f.stage_status, Some(StageStatus::Staged)))
+            .cloned()
+            .collect();
+
+        let mut items = Vec::new();
+        if !staged.is_empty() {
+            items.push(FilesPaneItem::Header("Staged Changes".to_string()));
+            items.extend(staged.into_iter().map(FilesPaneItem::File));
+        }
+        if !unstaged.is_empty() {
+            items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
+            items.extend(unstaged.into_iter().map(FilesPaneItem::File));
+        }
+        items
+    }
+
+    fn build_folder_grouped_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
+        use std::collections::BTreeMap;
+
+        // Group files by parent directory
+        let mut folders: BTreeMap<String, Vec<FileDiffInfo>> = BTreeMap::new();
+        for file in files {
+            let folder = file
+                .path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let key = if folder.is_empty() {
+                ".".to_string()
+            } else {
+                folder
+            };
+            folders.entry(key).or_default().push(file.clone());
+        }
+
+        let mut items = Vec::new();
+        for (folder, folder_files) in &folders {
+            items.push(FilesPaneItem::Header(format!("{}/", folder)));
+            for f in folder_files {
+                items.push(FilesPaneItem::File(f.clone()));
             }
         }
-        if let Some(diff) = diff {
-            diff.files.iter().map(|f| FilesPaneItem::File(f.clone())).collect()
-        } else {
-            Vec::new()
-        }
+        items
     }
 
     /// Handle an action
@@ -1173,8 +1246,14 @@ impl App {
             Action::FocusGraph => {
                 if self.editing_commit_message {
                     self.editing_commit_message = false;
+                } else if !self.files_filter.is_empty()
+                    && self.focused_panel == FocusedPanel::Files
+                {
+                    // First Esc clears filter, second Esc goes to graph
+                    self.files_filter.clear();
                 } else {
                     self.focused_panel = FocusedPanel::Graph;
+                    self.files_filter.clear();
                 }
                 return Ok(());
             }
@@ -1316,6 +1395,23 @@ impl App {
             }
             Action::ToggleStage => {
                 self.toggle_stage_selected_file()?;
+            }
+            Action::ToggleFolderView => {
+                self.files_group_by_folder = !self.files_group_by_folder;
+            }
+            Action::FilesFilterChar(c) => {
+                self.files_filter.push(c);
+            }
+            Action::FilesFilterBackspace => {
+                if !self.files_filter.is_empty() {
+                    self.files_filter.pop();
+                } else {
+                    // Empty filter + backspace = return to graph
+                    self.focused_panel = FocusedPanel::Graph;
+                }
+            }
+            Action::FilesFilterClear => {
+                self.files_filter.clear();
             }
             Action::EnterFileSelect => {
                 if let Some(diff) = self.cached_diff() {
@@ -2493,6 +2589,8 @@ mod tests {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            files_group_by_folder: false,
+            files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
@@ -2564,6 +2662,8 @@ mod tests {
             },
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            files_group_by_folder: false,
+            files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,

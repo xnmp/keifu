@@ -136,17 +136,27 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Stage/unstage
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
 
+        // Folder view toggle
+        (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
+
         // Enter file select for diff viewing
         (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
             Some(Action::EnterFileSelect)
         }
 
-        // Esc returns to graph
+        // Esc returns to graph (or clears filter)
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
+
+        // Backspace for filter
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilesFilterBackspace),
 
         // Help / quit
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
         (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
+
+        // Other characters become filter input
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::FilesFilterChar(c)),
+        (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::FilesFilterChar(c)),
 
         _ => None,
     }

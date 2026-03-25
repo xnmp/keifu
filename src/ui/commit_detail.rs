@@ -23,6 +23,7 @@ pub struct CommitDetailWidget<'a> {
     file_scroll: u16,
     is_focused: bool,
     is_files_focused: bool,
+    files_title: String,
 }
 
 impl<'a> CommitDetailWidget<'a> {
@@ -39,6 +40,17 @@ impl<'a> CommitDetailWidget<'a> {
             file_scroll,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             is_files_focused: app.focused_panel == FocusedPanel::Files,
+            files_title: {
+                let mut title = String::from(" Changed Files");
+                if app.files_group_by_folder {
+                    title.push_str(" [folders]");
+                }
+                if !app.files_filter.is_empty() {
+                    title.push_str(&format!(" [{}]", app.files_filter));
+                }
+                title.push(' ');
+                title
+            },
         }
     }
 
@@ -331,7 +343,7 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             Color::DarkGray
         };
         let right_block = Block::default()
-            .title(" Changed Files ")
+            .title(self.files_title.as_str())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(files_border));
 

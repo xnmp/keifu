@@ -34,8 +34,12 @@ pub enum Action {
     OpenBranchFilter,
     MenuSelect,
 
-    // File staging
+    // File operations
     ToggleStage,
+    ToggleFolderView,
+    FilesFilterChar(char),
+    FilesFilterBackspace,
+    FilesFilterClear,
 
     // Commit editor
     StartEditing,
