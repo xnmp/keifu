@@ -81,9 +81,6 @@ pub enum Action {
     SearchSelectDownQuiet, // Tab navigation (no graph jump)
 
     // File diff
-    EnterFileSelect,
-    FileSelectUp,
-    FileSelectDown,
     OpenFileDiff,
     ScrollUp,
     ScrollDown,

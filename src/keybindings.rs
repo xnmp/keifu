@@ -37,7 +37,6 @@ pub fn map_key_to_action(
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
-        AppMode::FileSelect { .. } => map_file_select_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }
 }
@@ -105,8 +104,8 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
 
-        // Space still opens file select for quick access
-        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::EnterFileSelect),
+        // Space opens file diff for quick access
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenFileDiff),
 
         // Branch filter
         (KeyModifiers::SHIFT, KeyCode::Char('B')) => Some(Action::OpenBranchFilter),
@@ -139,9 +138,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
 
-        // Enter file select for diff viewing
+        // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
-            Some(Action::EnterFileSelect)
+            Some(Action::OpenFileDiff)
         }
 
         // Esc returns to graph (or clears filter)
@@ -328,21 +327,6 @@ fn map_confirm_mode(key: KeyEvent) -> Option<Action> {
 fn map_error_mode(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Action::Cancel),
-        _ => None,
-    }
-}
-
-fn map_file_select_mode(key: KeyEvent) -> Option<Action> {
-    match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::FileSelectDown),
-        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::FileSelectUp),
-        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::PageDown),
-        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::PageUp),
-        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
-        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),
-        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
-            Some(Action::Cancel)
-        }
         _ => None,
     }
 }

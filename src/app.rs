@@ -162,10 +162,6 @@ pub enum AppMode {
         selected: usize,
         all_branches: Vec<String>,
     },
-    FileSelect {
-        selected_index: usize,
-        file_list: Vec<FileDiffInfo>,
-    },
     FileDiff {
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
@@ -293,6 +289,8 @@ pub struct App {
     // UI state
     pub graph_list_state: ListState,
     pub focused_panel: FocusedPanel,
+    pub file_selected_index: usize,
+    pub file_list_cache: Vec<FileDiffInfo>,
     pub files_group_by_folder: bool,
     pub files_filter: String,
     pub hidden_branches: std::collections::HashSet<String>,
@@ -412,6 +410,8 @@ impl App {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            file_selected_index: 0,
+            file_list_cache: Vec::new(),
             files_group_by_folder: false,
             files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -802,7 +802,7 @@ impl App {
                 self.reset_timers();
                 if matches!(
                     self.mode,
-                    AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
+                    AppMode::FileDiff { .. }
                 ) {
                     self.pending_refresh = true;
                 } else {
@@ -840,7 +840,7 @@ impl App {
         }
         if matches!(
             self.mode,
-            AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
+            AppMode::FileDiff { .. }
         ) {
             return;
         }
@@ -1105,6 +1105,23 @@ impl App {
             .is_some_and(|node| node.is_uncommitted)
     }
 
+    /// Sync the file list cache from the current diff. Call after selection changes or refresh.
+    pub fn sync_file_list_cache(&mut self) {
+        if let Some(diff) = self.cached_diff_or_quick() {
+            if self.file_list_cache.len() != diff.files.len()
+                || self.file_list_cache.first().map(|f| &f.path) != diff.files.first().map(|f| &f.path)
+            {
+                self.file_list_cache = diff.files.clone();
+                self.file_selected_index = self.file_selected_index.min(
+                    self.file_list_cache.len().saturating_sub(1),
+                );
+            }
+        } else {
+            self.file_list_cache.clear();
+            self.file_selected_index = 0;
+        }
+    }
+
     /// Get the file list for the files pane (staged then unstaged for uncommitted,
     /// or flat list for committed)
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
@@ -1223,7 +1240,6 @@ impl App {
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
-            AppMode::FileSelect { .. } => self.handle_file_select_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }
         Ok(())
@@ -1361,16 +1377,13 @@ impl App {
                     }
                 }
             }
-            Action::EnterFileSelect => {
-                if let Some(diff) = self.cached_diff() {
-                    if diff.files.is_empty() {
-                        self.set_message("No changed files in this diff");
-                    } else {
-                        let file_list = diff.files.clone();
-                        self.mode = AppMode::FileSelect {
-                            selected_index: 0,
-                            file_list,
-                        };
+            Action::OpenFileDiff => {
+                self.sync_file_list_cache();
+                if !self.file_list_cache.is_empty() {
+                    let file_list = self.file_list_cache.clone();
+                    let path = file_list[self.file_selected_index].path.clone();
+                    if let Err(e) = self.enter_file_diff(self.file_selected_index, file_list, &path) {
+                        self.set_message(format!("Cannot open diff: {e}"));
                     }
                 } else if self.is_diff_loading() {
                     self.set_message("Loading diff...");
@@ -1384,32 +1397,50 @@ impl App {
     }
 
     fn handle_files_action(&mut self, action: Action) -> Result<()> {
+        self.sync_file_list_cache();
+        let file_count = self.file_list_cache.len();
+
         match action {
             Action::Quit => {
                 self.should_quit = true;
             }
-            Action::MoveUp | Action::MoveDown | Action::PageUp | Action::PageDown
-            | Action::GoToTop | Action::GoToBottom => {
-                // Auto-enter FileSelect mode if not already in it
-                if !matches!(self.mode, AppMode::FileSelect { .. }) {
-                    if let Some(diff) = self.cached_diff() {
-                        if !diff.files.is_empty() {
-                            let file_list = diff.files.clone();
-                            self.mode = AppMode::FileSelect {
-                                selected_index: 0,
-                                file_list,
-                            };
-                        }
-                    }
+            Action::MoveUp => {
+                if self.file_selected_index > 0 {
+                    self.file_selected_index -= 1;
                 }
-                // Now delegate the actual movement to the FileSelect handler
-                if matches!(self.mode, AppMode::FileSelect { .. }) {
-                    let mapped = match action {
-                        Action::MoveUp => Action::FileSelectUp,
-                        Action::MoveDown => Action::FileSelectDown,
-                        _ => action,
-                    };
-                    self.handle_file_select_action(mapped)?;
+            }
+            Action::MoveDown => {
+                if file_count > 0 && self.file_selected_index + 1 < file_count {
+                    self.file_selected_index += 1;
+                }
+            }
+            Action::PageUp => {
+                self.file_selected_index = self.file_selected_index.saturating_sub(10);
+            }
+            Action::PageDown => {
+                if file_count > 0 {
+                    self.file_selected_index =
+                        (self.file_selected_index + 10).min(file_count - 1);
+                }
+            }
+            Action::GoToTop => {
+                self.file_selected_index = 0;
+            }
+            Action::GoToBottom => {
+                if file_count > 0 {
+                    self.file_selected_index = file_count - 1;
+                }
+            }
+            Action::OpenFileDiff => {
+                // Open diff for the selected file
+                if self.file_selected_index < file_count {
+                    let file_list = self.file_list_cache.clone();
+                    let path = file_list[self.file_selected_index].path.clone();
+                    if let Err(e) =
+                        self.enter_file_diff(self.file_selected_index, file_list, &path)
+                    {
+                        self.set_message(format!("Cannot open diff: {e}"));
+                    }
                 }
             }
             Action::ToggleStage => {
@@ -1425,23 +1456,11 @@ impl App {
                 if !self.files_filter.is_empty() {
                     self.files_filter.pop();
                 } else {
-                    // Empty filter + backspace = return to graph
                     self.focused_panel = FocusedPanel::Graph;
                 }
             }
             Action::FilesFilterClear => {
                 self.files_filter.clear();
-            }
-            Action::EnterFileSelect => {
-                if let Some(diff) = self.cached_diff() {
-                    if !diff.files.is_empty() {
-                        let file_list = diff.files.clone();
-                        self.mode = AppMode::FileSelect {
-                            selected_index: 0,
-                            file_list,
-                        };
-                    }
-                }
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
@@ -1850,18 +1869,7 @@ impl App {
             return Ok(());
         }
 
-        // Get the selected file - from FileSelect mode or first file
-        let file_to_toggle = if let AppMode::FileSelect {
-            selected_index,
-            file_list,
-        } = &self.mode
-        {
-            file_list.get(*selected_index).cloned()
-        } else {
-            // Not in FileSelect mode - try to get the first file from diff
-            self.cached_diff()
-                .and_then(|diff| diff.files.first().cloned())
-        };
+        let file_to_toggle = self.file_list_cache.get(self.file_selected_index).cloned();
 
         if let Some(file) = file_to_toggle {
             let path_str = file.path.to_string_lossy().to_string();
@@ -1871,22 +1879,7 @@ impl App {
             }
             self.clear_uncommitted_diff_cache();
             self.refresh(true)?;
-
-            // Re-enter FileSelect mode if we were in it, keeping position
-            if let Some(diff) = self.cached_diff() {
-                if !diff.files.is_empty() {
-                    let file_list = diff.files.clone();
-                    let idx = if let AppMode::FileSelect { selected_index, .. } = &self.mode {
-                        (*selected_index).min(file_list.len().saturating_sub(1))
-                    } else {
-                        0
-                    };
-                    self.mode = AppMode::FileSelect {
-                        selected_index: idx,
-                        file_list,
-                    };
-                }
-            }
+            self.sync_file_list_cache();
         }
         Ok(())
     }
@@ -1902,68 +1895,6 @@ impl App {
         if matches!(action, Action::Quit | Action::Cancel | Action::Confirm) {
             self.mode = AppMode::Normal;
         }
-    }
-
-    fn handle_file_select_action(&mut self, action: Action) -> Result<()> {
-        let AppMode::FileSelect {
-            selected_index,
-            file_list,
-        } = &self.mode
-        else {
-            return Ok(());
-        };
-        let selected_index = *selected_index;
-        let file_count = file_list.len();
-
-        match action {
-            Action::FileSelectUp => {
-                if selected_index > 0 {
-                    if let AppMode::FileSelect { selected_index, .. } = &mut self.mode {
-                        *selected_index -= 1;
-                    }
-                }
-            }
-            Action::FileSelectDown => {
-                if selected_index + 1 < file_count {
-                    if let AppMode::FileSelect { selected_index, .. } = &mut self.mode {
-                        *selected_index += 1;
-                    }
-                }
-            }
-            Action::PageUp => {
-                if let AppMode::FileSelect { selected_index, .. } = &mut self.mode {
-                    *selected_index = selected_index.saturating_sub(10);
-                }
-            }
-            Action::PageDown => {
-                if let AppMode::FileSelect { selected_index, .. } = &mut self.mode {
-                    *selected_index = (*selected_index + 10).min(file_count.saturating_sub(1));
-                }
-            }
-            Action::ToggleStage => {
-                self.toggle_stage_selected_file()?;
-            }
-            Action::OpenFileDiff => {
-                let file_list_snapshot = if let AppMode::FileSelect { file_list, .. } = &self.mode {
-                    file_list.clone()
-                } else {
-                    return Ok(());
-                };
-
-                if selected_index < file_list_snapshot.len() {
-                    let path = file_list_snapshot[selected_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(selected_index, file_list_snapshot, &path)
-                    {
-                        self.set_message(format!("Cannot open diff: {e}"));
-                    }
-                }
-            }
-            Action::Cancel | Action::Quit => {
-                self.return_to_normal();
-            }
-            _ => {}
-        }
-        Ok(())
     }
 
     fn handle_file_diff_action(&mut self, action: Action) -> Result<()> {
@@ -2110,21 +2041,12 @@ impl App {
                 }
             }
             Action::Cancel | Action::Quit => {
-                // Return to FileSelect with file_index preserved
-                let (file_index, file_list) = if let AppMode::FileDiff {
-                    file_index,
-                    file_list,
-                    ..
-                } = &self.mode
-                {
-                    (*file_index, file_list.clone())
-                } else {
-                    return Ok(());
-                };
-                self.mode = AppMode::FileSelect {
-                    selected_index: file_index,
-                    file_list,
-                };
+                // Return to normal with files panel focused, preserving file index
+                if let AppMode::FileDiff { file_index, .. } = &self.mode {
+                    self.file_selected_index = *file_index;
+                }
+                self.focused_panel = FocusedPanel::Files;
+                self.return_to_normal();
             }
             _ => {}
         }
@@ -2172,7 +2094,7 @@ impl App {
         }
     }
 
-    /// Sync the file_list held by FileSelect / FileDiff with the latest
+    /// Sync the file_list held by FileDiff with the latest
     /// uncommitted diff cache.  Called right after `uncommitted_diff_cache` is
     /// updated so that navigation and display stay consistent.
     fn sync_file_list_with_uncommitted_diff(&mut self) {
@@ -2186,10 +2108,7 @@ impl App {
         };
 
         if new_files.is_empty() {
-            if matches!(
-                self.mode,
-                AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
-            ) {
+            if matches!(self.mode, AppMode::FileDiff { .. }) {
                 self.mode = AppMode::Normal;
                 self.set_message("No changed files in this diff");
             }
@@ -2197,15 +2116,6 @@ impl App {
         }
 
         match &mut self.mode {
-            AppMode::FileSelect {
-                selected_index,
-                file_list,
-            } => {
-                *file_list = new_files;
-                if *selected_index >= file_list.len() {
-                    *selected_index = file_list.len() - 1;
-                }
-            }
             AppMode::FileDiff {
                 file_index,
                 file_list,
@@ -2657,6 +2567,8 @@ mod tests {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            file_selected_index: 0,
+            file_list_cache: Vec::new(),
             files_group_by_folder: false,
             files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -2730,6 +2642,8 @@ mod tests {
             },
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
+            file_selected_index: 0,
+            file_list_cache: Vec::new(),
             files_group_by_folder: false,
             files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),

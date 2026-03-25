@@ -159,16 +159,6 @@ impl<'a> Widget for StatusBar<'a> {
                     spans.push(Span::styled("close", desc_style));
                 }
             }
-            AppMode::FileSelect { .. } => {
-                spans.push(Span::styled(" ↑↓ ", key_style));
-                spans.push(Span::styled("select ", desc_style));
-                spans.push(Span::styled(" s ", key_style));
-                spans.push(Span::styled("stage ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("diff ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("back", desc_style));
-            }
             AppMode::FileDiff { .. } => {
                 spans.push(Span::styled(" n/N ", key_style));
                 spans.push(Span::styled("file ", desc_style));
@@ -213,7 +203,6 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Error { .. } => Some(" ERROR "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
-            AppMode::FileSelect { .. } => Some(" FILE SELECT "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
         };
         if let Some(text) = mode_text {

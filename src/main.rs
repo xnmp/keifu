@@ -79,15 +79,6 @@ fn main() -> Result<()> {
                         };
                         (a, 3)
                     }
-                    AppMode::FileSelect { .. } => {
-                        // File select: mouse wheel moves selection
-                        let a = if scroll > 0 {
-                            keifu::action::Action::FileSelectDown
-                        } else {
-                            keifu::action::Action::FileSelectUp
-                        };
-                        (a, 1)
-                    }
                     _ => {
                         // Normal/other modes: standard graph movement
                         let a = if scroll > 0 {

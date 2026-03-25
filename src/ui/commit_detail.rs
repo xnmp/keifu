@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::app::{App, AppMode, FocusedPanel};
+use crate::app::{App, FocusedPanel};
 use crate::git::{CommitDiffInfo, FileChangeKind};
 
 use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
@@ -30,10 +30,7 @@ impl<'a> CommitDetailWidget<'a> {
     pub fn new(app: &App) -> Self {
         let commit_lines = Self::build_commit_lines(app);
         let file_lines = Self::build_file_lines(app);
-        let file_scroll = match &app.mode {
-            AppMode::FileSelect { selected_index, .. } => *selected_index as u16,
-            _ => 0,
-        };
+        let file_scroll = app.file_selected_index as u16;
         Self {
             commit_lines,
             file_lines,
@@ -57,9 +54,10 @@ impl<'a> CommitDetailWidget<'a> {
     fn build_file_lines(app: &App) -> Vec<Line<'a>> {
         use crate::app::FilesPaneItem;
 
-        let selected_file_index = match &app.mode {
-            AppMode::FileSelect { selected_index, .. } => Some(*selected_index),
-            _ => None,
+        let selected_file_index = if app.focused_panel == FocusedPanel::Files {
+            Some(app.file_selected_index)
+        } else {
+            None
         };
 
         let line_stats_loading = app.is_line_stats_loading();
