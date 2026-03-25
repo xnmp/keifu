@@ -138,12 +138,12 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("select ", desc_style));
                             spans.push(Span::styled(" Enter ", key_style));
                             spans.push(Span::styled("diff ", desc_style));
+                            spans.push(Span::styled(" o ", key_style));
+                            spans.push(Span::styled("open ", desc_style));
                             spans.push(Span::styled(" s ", key_style));
                             spans.push(Span::styled("stage ", desc_style));
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
-                            spans.push(Span::styled(" Esc ", key_style));
-                            spans.push(Span::styled("graph", desc_style));
                         }
                         FocusedPanel::CommitDetail => {
                             spans.push(Span::styled(" Enter ", key_style));

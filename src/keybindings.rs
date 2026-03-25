@@ -146,8 +146,8 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
 
-        // Alt+Enter opens file with default app
-        (m, KeyCode::Enter) if m.contains(KeyModifiers::ALT) => Some(Action::OpenWithDefault),
+        // Open file with default app
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenWithDefault),
 
         // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
