@@ -437,7 +437,6 @@ impl<'a> Widget for CommitDetailWidget<'a> {
 
         let files_paragraph = Paragraph::new(self.file_lines)
             .block(files_block)
-            .wrap(Wrap { trim: false })
             .scroll((scroll_y, 0));
 
         Widget::render(files_paragraph, chunks[0], buf);
