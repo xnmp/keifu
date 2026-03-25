@@ -359,9 +359,19 @@ fn determine_syntax(path: &std::path::Path) -> &'static SyntaxReference {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    // Try full filename first (handles Dockerfile, Makefile, etc.), then extension
+    // Map file types that syntect doesn't know about to similar languages
+    let mapped_ext = match ext {
+        "svelte" | "vue" | "astro" => "html",
+        "tsx" => "jsx",
+        "mts" | "cts" => "ts",
+        "mjs" | "cjs" => "js",
+        _ => ext,
+    };
+
+    // Try full filename first (handles Dockerfile, Makefile, etc.), then mapped extension, then original
     SYNTAX_SET
         .find_syntax_by_extension(file_name)
+        .or_else(|| SYNTAX_SET.find_syntax_by_extension(mapped_ext))
         .or_else(|| SYNTAX_SET.find_syntax_by_extension(ext))
         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
 }

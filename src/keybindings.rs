@@ -258,12 +258,8 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
-            Some(Action::MoveUp)
-        }
-        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
-            Some(Action::MoveDown)
-        }
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
@@ -338,12 +334,10 @@ fn map_error_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_file_select_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
-            Some(Action::FileSelectDown)
-        }
-        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
-            Some(Action::FileSelectUp)
-        }
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::FileSelectDown),
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::FileSelectUp),
+        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::PageDown),
+        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::PageUp),
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
@@ -355,12 +349,8 @@ fn map_file_select_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
-            Some(Action::ScrollDown)
-        }
-        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
-            Some(Action::ScrollUp)
-        }
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::ScrollDown),
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::ScrollUp),
         (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ScrollPageDown),
         (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::ScrollPageUp),
         (KeyModifiers::CONTROL, KeyCode::Char('f')) | (KeyModifiers::NONE, KeyCode::PageDown) => {

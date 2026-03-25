@@ -94,35 +94,37 @@ pub enum FocusedPanel {
 /// Items in the commit context menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitMenuItem {
+    Push,
     Checkout,
     CreateBranch,
     MergeIntoCurrent,
     CherryPick,
     Rebase,
+    Reset,
     ResetSoft,
     ResetMixed,
     ResetHard,
     AddTag,
     Revert,
     CopyHash,
-    Push,
 }
 
 impl CommitMenuItem {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::Push => "Push to origin",
             Self::Checkout => "Checkout",
             Self::CreateBranch => "Create branch here",
             Self::MergeIntoCurrent => "Merge into current branch",
             Self::CherryPick => "Cherry-pick",
             Self::Rebase => "Rebase current branch onto this",
-            Self::ResetSoft => "Reset (soft) to this commit",
-            Self::ResetMixed => "Reset (mixed) to this commit",
-            Self::ResetHard => "Reset (hard) to this commit",
+            Self::Reset => "Reset to this commit...",
+            Self::ResetSoft => "Soft (keep changes staged)",
+            Self::ResetMixed => "Mixed (keep changes unstaged)",
+            Self::ResetHard => "Hard (discard all changes)",
             Self::AddTag => "Add tag",
             Self::Revert => "Revert this commit",
             Self::CopyHash => "Copy commit hash",
-            Self::Push => "Push to origin",
         }
     }
 }
@@ -803,10 +805,20 @@ impl App {
                     AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
                 ) {
                     self.pending_refresh = true;
-                    self.set_message("Fetched from origin");
                 } else {
+                    // Snapshot state before refresh to detect changes
+                    let prev_head = self.repo.head_oid();
+                    let prev_branch_count = self.branches.len();
                     match self.refresh(true) {
-                        Ok(()) => self.set_message("Fetched from origin"),
+                        Ok(()) => {
+                            let new_head = self.repo.head_oid();
+                            let new_branch_count = self.branches.len();
+                            if prev_head != new_head
+                                || prev_branch_count != new_branch_count
+                            {
+                                self.set_message("Fetched from origin");
+                            }
+                        }
                         Err(e) => self.show_error(format!("Refresh failed: {e}")),
                     }
                 }
@@ -1378,10 +1390,8 @@ impl App {
             }
             Action::MoveUp | Action::MoveDown | Action::PageUp | Action::PageDown
             | Action::GoToTop | Action::GoToBottom => {
-                // Navigate file list using FileSelect-like logic
-                // Delegate to existing EnterFileSelect + FileSelect navigation
+                // Auto-enter FileSelect mode if not already in it
                 if !matches!(self.mode, AppMode::FileSelect { .. }) {
-                    // Enter file select mode if not already in it
                     if let Some(diff) = self.cached_diff() {
                         if !diff.files.is_empty() {
                             let file_list = diff.files.clone();
@@ -1391,6 +1401,15 @@ impl App {
                             };
                         }
                     }
+                }
+                // Now delegate the actual movement to the FileSelect handler
+                if matches!(self.mode, AppMode::FileSelect { .. }) {
+                    let mapped = match action {
+                        Action::MoveUp => Action::FileSelectUp,
+                        Action::MoveDown => Action::FileSelectDown,
+                        _ => action,
+                    };
+                    self.handle_file_select_action(mapped)?;
                 }
             }
             Action::ToggleStage => {
@@ -1510,7 +1529,15 @@ impl App {
         }
 
         let has_branch = self.selected_branch().is_some();
-        let mut items = vec![CommitMenuItem::Checkout, CommitMenuItem::CreateBranch];
+        let mut items = Vec::new();
+
+        // Push at top if available
+        if has_branch {
+            items.push(CommitMenuItem::Push);
+        }
+
+        items.push(CommitMenuItem::Checkout);
+        items.push(CommitMenuItem::CreateBranch);
 
         if has_branch {
             if let Some(branch) = self.selected_branch() {
@@ -1531,17 +1558,11 @@ impl App {
         }
 
         items.extend([
-            CommitMenuItem::ResetSoft,
-            CommitMenuItem::ResetMixed,
-            CommitMenuItem::ResetHard,
+            CommitMenuItem::Reset,
             CommitMenuItem::AddTag,
             CommitMenuItem::Revert,
             CommitMenuItem::CopyHash,
         ]);
-
-        if has_branch {
-            items.push(CommitMenuItem::Push);
-        }
 
         self.mode = AppMode::CommitMenu {
             items,
@@ -1752,6 +1773,17 @@ impl App {
                     }
                 }
             }
+            CommitMenuItem::Reset => {
+                // Open reset submenu
+                self.mode = AppMode::CommitMenu {
+                    items: vec![
+                        CommitMenuItem::ResetSoft,
+                        CommitMenuItem::ResetMixed,
+                        CommitMenuItem::ResetHard,
+                    ],
+                    selected: 0,
+                };
+            }
             CommitMenuItem::ResetSoft => {
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
@@ -1771,7 +1803,10 @@ impl App {
             CommitMenuItem::ResetHard => {
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
-                        message: format!("Reset (HARD) to {}? This will discard changes!", &oid.to_string()[..7]),
+                        message: format!(
+                            "Reset (HARD) to {}? This will discard changes!",
+                            &oid.to_string()[..7]
+                        ),
                         action: ConfirmAction::ResetHard(oid),
                     };
                 }
@@ -1814,23 +1849,43 @@ impl App {
         if !self.is_uncommitted_selected() {
             return Ok(());
         }
-        let _items = self.files_pane_items();
-        // Use FileSelect index if in that mode, otherwise first file
-        let selected_idx = match &self.mode {
-            AppMode::FileSelect { selected_index, .. } => *selected_index,
-            _ => return Ok(()),
+
+        // Get the selected file - from FileSelect mode or first file
+        let file_to_toggle = if let AppMode::FileSelect {
+            selected_index,
+            file_list,
+        } = &self.mode
+        {
+            file_list.get(*selected_index).cloned()
+        } else {
+            // Not in FileSelect mode - try to get the first file from diff
+            self.cached_diff()
+                .and_then(|diff| diff.files.first().cloned())
         };
-        // Map FileSelect index to files_pane_items index
-        // FileSelect uses diff.files directly, so find the matching file
-        if let AppMode::FileSelect { file_list, .. } = &self.mode {
-            if let Some(file) = file_list.get(selected_idx) {
-                let path_str = file.path.to_string_lossy().to_string();
-                match file.stage_status {
-                    Some(StageStatus::Staged) => unstage_file(&self.repo_path, &path_str)?,
-                    _ => stage_file(&self.repo_path, &path_str)?,
+
+        if let Some(file) = file_to_toggle {
+            let path_str = file.path.to_string_lossy().to_string();
+            match file.stage_status {
+                Some(StageStatus::Staged) => unstage_file(&self.repo_path, &path_str)?,
+                _ => stage_file(&self.repo_path, &path_str)?,
+            }
+            self.clear_uncommitted_diff_cache();
+            self.refresh(true)?;
+
+            // Re-enter FileSelect mode if we were in it, keeping position
+            if let Some(diff) = self.cached_diff() {
+                if !diff.files.is_empty() {
+                    let file_list = diff.files.clone();
+                    let idx = if let AppMode::FileSelect { selected_index, .. } = &self.mode {
+                        (*selected_index).min(file_list.len().saturating_sub(1))
+                    } else {
+                        0
+                    };
+                    self.mode = AppMode::FileSelect {
+                        selected_index: idx,
+                        file_list,
+                    };
                 }
-                self.clear_uncommitted_diff_cache();
-                self.refresh(true)?;
             }
         }
         Ok(())
@@ -1874,6 +1929,19 @@ impl App {
                         *selected_index += 1;
                     }
                 }
+            }
+            Action::PageUp => {
+                if let AppMode::FileSelect { selected_index, .. } = &mut self.mode {
+                    *selected_index = selected_index.saturating_sub(10);
+                }
+            }
+            Action::PageDown => {
+                if let AppMode::FileSelect { selected_index, .. } = &mut self.mode {
+                    *selected_index = (*selected_index + 10).min(file_count.saturating_sub(1));
+                }
+            }
+            Action::ToggleStage => {
+                self.toggle_stage_selected_file()?;
             }
             Action::OpenFileDiff => {
                 let file_list_snapshot = if let AppMode::FileSelect { file_list, .. } = &self.mode {

@@ -68,13 +68,21 @@ impl<'a> Widget for BranchFilterWidget<'a> {
         // Reserve last row for footer
         let list_height = inner.height.saturating_sub(1) as usize;
 
-        for (i, branch) in filtered.iter().enumerate() {
+        // Calculate scroll offset to keep selected item visible
+        let scroll_offset = if self.selected >= list_height {
+            self.selected - list_height + 1
+        } else {
+            0
+        };
+
+        for (i, branch) in filtered.iter().skip(scroll_offset).enumerate() {
             if i >= list_height {
                 break;
             }
 
+            let actual_index = i + scroll_offset;
             let y = inner.y + i as u16;
-            let is_selected = i == self.selected;
+            let is_selected = actual_index == self.selected;
             let is_visible = !self.hidden_branches.contains(branch.as_str());
 
             let checkbox = if is_visible { "[x] " } else { "[ ] " };

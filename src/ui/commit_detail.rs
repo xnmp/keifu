@@ -55,23 +55,107 @@ impl<'a> CommitDetailWidget<'a> {
     }
 
     fn build_file_lines(app: &App) -> Vec<Line<'a>> {
+        use crate::app::FilesPaneItem;
+
         let selected_file_index = match &app.mode {
             AppMode::FileSelect { selected_index, .. } => Some(*selected_index),
             _ => None,
         };
 
-        // Use full diff if available, otherwise quick file list for instant display
         let line_stats_loading = app.is_line_stats_loading();
+
+        // Use files_pane_items which respects folder grouping and fuzzy filter
+        let items = app.files_pane_items();
+        if items.is_empty() {
+            if app.is_diff_loading() {
+                return vec![Line::from(Span::styled(
+                    "Loading...",
+                    Style::default().fg(Color::DarkGray),
+                ))];
+            }
+            // Show summary from diff if available
+            if let Some(diff) = app.cached_diff_or_quick() {
+                return Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading);
+            }
+            return Vec::new();
+        }
+
+        let mut lines = Vec::new();
+
+        // Summary header
         if let Some(diff) = app.cached_diff_or_quick() {
-            return Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading);
+            if line_stats_loading {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} files changed", diff.total_files),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("  ...", Style::default().fg(Color::DarkGray)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} files changed", diff.total_files),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(format!("+{}", diff.total_insertions), Style::default().fg(Color::Green)),
+                    Span::raw(" "),
+                    Span::styled(format!("-{}", diff.total_deletions), Style::default().fg(Color::Red)),
+                ]));
+            }
+            lines.push(Line::from(""));
         }
-        if app.is_diff_loading() {
-            return vec![Line::from(Span::styled(
-                "Loading...",
-                Style::default().fg(Color::DarkGray),
-            ))];
+
+        // Track file index for selection highlighting
+        let mut file_idx = 0;
+        for item in &items {
+            match item {
+                FilesPaneItem::Header(text) => {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", text),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    )));
+                }
+                FilesPaneItem::File(file) => {
+                    let is_selected = selected_file_index == Some(file_idx);
+                    let (indicator, color) = match file.kind {
+                        FileChangeKind::Added => ("A", Color::Green),
+                        FileChangeKind::Modified => ("M", Color::Yellow),
+                        FileChangeKind::Deleted => ("D", Color::Red),
+                        FileChangeKind::Renamed => ("R", Color::Cyan),
+                        FileChangeKind::Copied => ("C", Color::Cyan),
+                    };
+
+                    let path_str = file.path.to_string_lossy().to_string();
+                    let mut spans = vec![
+                        Span::styled(format!(" {} ", indicator), Style::default().fg(color)),
+                        Span::raw(path_str),
+                    ];
+
+                    if file.is_binary {
+                        spans.push(Span::raw(" "));
+                        spans.push(Span::styled("(binary)", Style::default().fg(Color::DarkGray)));
+                    } else if line_stats_loading {
+                        spans.push(Span::styled(" ...", Style::default().fg(Color::DarkGray)));
+                    } else if file.insertions > 0 || file.deletions > 0 {
+                        spans.push(Span::raw(" "));
+                        spans.push(Span::styled(format!("+{}", file.insertions), Style::default().fg(Color::Green)));
+                        spans.push(Span::raw(" "));
+                        spans.push(Span::styled(format!("-{}", file.deletions), Style::default().fg(Color::Red)));
+                    }
+
+                    let mut line = Line::from(spans);
+                    if is_selected {
+                        line = line.style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD));
+                    }
+                    lines.push(line);
+                    file_idx += 1;
+                }
+            }
         }
-        Self::build_file_list_lines_from(None, None, false)
+
+        lines
     }
 
     fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
@@ -319,38 +403,19 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
 
-        // Left: commit info
-        let commit_border = if self.is_focused {
-            Color::Green
-        } else {
-            Color::DarkGray
-        };
-        let left_block = Block::default()
-            .title(" Commit Detail ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(commit_border));
-
-        let left_paragraph = Paragraph::new(self.commit_lines)
-            .block(left_block)
-            .wrap(Wrap { trim: false });
-
-        Widget::render(left_paragraph, chunks[0], buf);
-
-        // Right: file list
+        // Left: file list (files pane)
         let files_border = if self.is_files_focused {
             Color::Green
         } else {
             Color::DarkGray
         };
-        let right_block = Block::default()
+        let files_block = Block::default()
             .title(self.files_title.as_str())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(files_border));
 
         // Scroll file list so selected file stays visible.
-        // File lines: 2 header lines (summary + blank) + file entries.
-        // Scroll so the selected file is near the middle of the visible area.
-        let visible_height = chunks[1].height.saturating_sub(2); // minus block borders
+        let visible_height = chunks[0].height.saturating_sub(2);
         let total_lines = self.file_lines.len() as u16;
         let selected_line = self.file_scroll + 2; // offset for header lines
         let max_scroll = total_lines.saturating_sub(visible_height);
@@ -360,11 +425,28 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             0
         };
 
-        let right_paragraph = Paragraph::new(self.file_lines)
-            .block(right_block)
+        let files_paragraph = Paragraph::new(self.file_lines)
+            .block(files_block)
             .wrap(Wrap { trim: false })
             .scroll((scroll_y, 0));
 
-        Widget::render(right_paragraph, chunks[1], buf);
+        Widget::render(files_paragraph, chunks[0], buf);
+
+        // Right: commit detail
+        let commit_border = if self.is_focused {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        let commit_block = Block::default()
+            .title(" Commit Detail ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(commit_border));
+
+        let commit_paragraph = Paragraph::new(self.commit_lines)
+            .block(commit_block)
+            .wrap(Wrap { trim: false });
+
+        Widget::render(commit_paragraph, chunks[1], buf);
     }
 }

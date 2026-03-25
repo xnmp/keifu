@@ -118,18 +118,16 @@ impl<'a> Widget for StatusBar<'a> {
                         spans.push(Span::raw("  "));
                     }
 
-                    spans.push(Span::styled(" j/k ", key_style));
+                    spans.push(Span::styled(" ↑↓ ", key_style));
                     spans.push(Span::styled("move ", desc_style));
                     spans.push(Span::styled(" Enter ", key_style));
-                    spans.push(Span::styled("checkout ", desc_style));
-                    spans.push(Span::styled(" b ", key_style));
-                    spans.push(Span::styled("branch ", desc_style));
-                    spans.push(Span::styled(" f ", key_style));
-                    spans.push(Span::styled("fetch ", desc_style));
+                    spans.push(Span::styled("actions ", desc_style));
+                    spans.push(Span::styled(" ←→ ", key_style));
+                    spans.push(Span::styled("panels ", desc_style));
+                    spans.push(Span::styled(" B ", key_style));
+                    spans.push(Span::styled("branches ", desc_style));
                     spans.push(Span::styled(" ? ", key_style));
-                    spans.push(Span::styled("help ", desc_style));
-                    spans.push(Span::styled(" q ", key_style));
-                    spans.push(Span::styled("quit", desc_style));
+                    spans.push(Span::styled("help", desc_style));
                 }
             },
             AppMode::Help => {
@@ -162,10 +160,12 @@ impl<'a> Widget for StatusBar<'a> {
                 }
             }
             AppMode::FileSelect { .. } => {
-                spans.push(Span::styled(" j/k ", key_style));
+                spans.push(Span::styled(" ↑↓ ", key_style));
                 spans.push(Span::styled("select ", desc_style));
+                spans.push(Span::styled(" s ", key_style));
+                spans.push(Span::styled("stage ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("open diff ", desc_style));
+                spans.push(Span::styled("diff ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
             }
@@ -174,9 +174,9 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled("file ", desc_style));
                 spans.push(Span::styled(" ]/[ ", key_style));
                 spans.push(Span::styled("hunk ", desc_style));
-                spans.push(Span::styled(" j/k ", key_style));
+                spans.push(Span::styled(" ↑↓ ", key_style));
                 spans.push(Span::styled("scroll ", desc_style));
-                spans.push(Span::styled(" h/l ", key_style));
+                spans.push(Span::styled(" ←→ ", key_style));
                 spans.push(Span::styled("pan ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));

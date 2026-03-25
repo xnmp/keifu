@@ -129,6 +129,33 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(CommitDetailWidget::new(app), detail_area);
     frame.render_widget(StatusBar::new(app), status_area);
 
+    // Show cursor when editing commit message
+    if app.editing_commit_message && app.focused_panel == crate::app::FocusedPanel::CommitDetail {
+        let (cursor_row, cursor_col) = app.commit_editor.cursor_position();
+        // Calculate cursor position within the commit detail panel
+        // The detail area is split 50/50; commit detail is on the RIGHT (chunks[1])
+        let direction = if detail_area.width <= 56 {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        };
+        let chunks = Layout::default()
+            .direction(direction)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(detail_area);
+        let commit_inner_x = chunks[1].x + 1; // +1 for border
+        let commit_inner_y = chunks[1].y + 1; // +1 for border
+        // Editor content starts after: "Uncommitted Changes", blank, prompt, blank = 4 lines
+        let editor_start_line = 4;
+        let cursor_x = commit_inner_x + cursor_col as u16;
+        let cursor_y = commit_inner_y + (editor_start_line + cursor_row) as u16;
+        if cursor_y < chunks[1].y + chunks[1].height - 1
+            && cursor_x < chunks[1].x + chunks[1].width - 1
+        {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+
     // Branch info popup (when multiple branches exist on selected node)
     render_branch_info_popup(frame, app, graph_area);
 
