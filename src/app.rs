@@ -1240,18 +1240,18 @@ impl App {
             Action::PanelLeft => {
                 self.editing_commit_message = false;
                 self.focused_panel = match self.focused_panel {
-                    FocusedPanel::Graph => FocusedPanel::Files,
-                    FocusedPanel::Files => FocusedPanel::CommitDetail,
-                    FocusedPanel::CommitDetail => FocusedPanel::Graph,
+                    FocusedPanel::Graph => FocusedPanel::CommitDetail,
+                    FocusedPanel::CommitDetail => FocusedPanel::Files,
+                    FocusedPanel::Files => FocusedPanel::Graph,
                 };
                 return Ok(());
             }
             Action::PanelRight => {
                 self.editing_commit_message = false;
                 self.focused_panel = match self.focused_panel {
-                    FocusedPanel::Graph => FocusedPanel::CommitDetail,
-                    FocusedPanel::CommitDetail => FocusedPanel::Files,
-                    FocusedPanel::Files => FocusedPanel::Graph,
+                    FocusedPanel::Graph => FocusedPanel::Files,
+                    FocusedPanel::Files => FocusedPanel::CommitDetail,
+                    FocusedPanel::CommitDetail => FocusedPanel::Graph,
                 };
                 return Ok(());
             }
