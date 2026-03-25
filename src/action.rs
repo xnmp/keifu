@@ -15,6 +15,12 @@ pub enum Action {
     BranchLeft,
     BranchRight,
 
+    // Panel navigation
+    PanelLeft,
+    PanelRight,
+    FocusGraph,
+    ForceQuit,
+
     // Git operations
     Checkout,
     CreateBranch,
@@ -22,6 +28,34 @@ pub enum Action {
     Fetch,
     Merge,
     Rebase,
+
+    // Commit menu
+    OpenCommitMenu,
+    MenuSelect,
+
+    // File staging
+    ToggleStage,
+
+    // Commit editor
+    StartEditing,
+    StopEditing,
+    CommitChanges,
+    EditorChar(char),
+    EditorNewline,
+    EditorBackspace,
+    EditorDelete,
+    EditorLeft(bool),
+    EditorRight(bool),
+    EditorUp(bool),
+    EditorDown(bool),
+    EditorHome(bool),
+    EditorEnd(bool),
+    EditorWordLeft(bool),
+    EditorWordRight(bool),
+    EditorBackspaceWord,
+    EditorDeleteWord,
+    EditorTextStart(bool),
+    EditorTextEnd(bool),
 
     // UI
     ToggleHelp,

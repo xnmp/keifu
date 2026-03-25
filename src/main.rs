@@ -57,7 +57,12 @@ fn main() -> Result<()> {
         // Event handling
         if let Some(event) = poll_event()? {
             if let Some(key) = get_key_event(&event) {
-                if let Some(action) = map_key_to_action(key, &app.mode) {
+                if let Some(action) = map_key_to_action(
+                    key,
+                    &app.mode,
+                    app.focused_panel,
+                    app.editing_commit_message,
+                ) {
                     if let Err(e) = app.handle_action(action) {
                         // Show errors in the UI
                         app.show_error(format!("{}", e));

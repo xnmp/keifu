@@ -55,6 +55,7 @@ fn display_width(s: &str) -> usize {
 
 pub struct GraphViewWidget<'a> {
     items: Vec<ListItem<'a>>,
+    is_focused: bool,
 }
 
 impl<'a> GraphViewWidget<'a> {
@@ -84,7 +85,10 @@ impl<'a> GraphViewWidget<'a> {
             })
             .collect();
 
-        Self { items }
+        Self {
+            items,
+            is_focused: app.focused_panel == crate::app::FocusedPanel::Graph,
+        }
     }
 }
 
@@ -496,10 +500,16 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
             return;
         }
 
+        let border_color = if self.is_focused {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+
         let block = Block::default()
             .title(" Commits ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(border_color));
 
         let highlight_style = Style::default()
             .bg(Color::DarkGray)

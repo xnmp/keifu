@@ -12,7 +12,7 @@ pub use branch::BranchInfo;
 pub use commit::CommitInfo;
 pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,
-    FileDiffContent, FileDiffInfo,
+    FileDiffContent, FileDiffInfo, StageStatus,
 };
 pub use extensions::configure_git_extensions;
 pub use graph::build_graph;

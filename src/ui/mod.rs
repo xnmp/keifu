@@ -1,6 +1,7 @@
 //! UI components
 
 pub mod commit_detail;
+pub mod commit_menu;
 pub mod dialog;
 pub mod file_diff_view;
 pub mod graph_view;
@@ -20,6 +21,7 @@ use crate::app::{App, AppMode, InputAction};
 
 use self::{
     commit_detail::CommitDetailWidget,
+    commit_menu::CommitMenuWidget,
     dialog::{BranchInfoPopup, ConfirmDialog, InputDialog},
     file_diff_view::FileDiffViewWidget,
     graph_view::GraphViewWidget,
@@ -161,6 +163,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect(50, 20, area);
             frame.render_widget(ConfirmDialog::new(message), popup_area);
         }
+        AppMode::CommitMenu { items, selected } => {
+            let menu_height = (items.len() + 2).min(20) as u16;
+            let menu_width = 42;
+            let popup_area = centered_rect_fixed(menu_width, menu_height, area);
+            frame.render_widget(CommitMenuWidget::new(items, *selected), popup_area);
+        }
         _ => {}
     }
 }
@@ -226,6 +234,13 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Calculate a centered rectangle with fixed pixel dimensions
+fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect::new(x, y, width.min(area.width), height.min(area.height))
 }
 
 /// Calculate a bottom-aligned rectangle (for dropdowns)

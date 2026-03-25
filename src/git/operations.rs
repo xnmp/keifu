@@ -212,3 +212,141 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
 
     Ok(())
 }
+
+/// Cherry-pick a commit
+pub fn cherry_pick(repo_path: &str, commit_oid: Oid) -> Result<()> {
+    let output = Command::new("git")
+        .args(["cherry-pick", &commit_oid.to_string()])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git cherry-pick")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git cherry-pick failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Reset mode for `reset_to_commit`
+pub enum ResetMode {
+    Soft,
+    Mixed,
+    Hard,
+}
+
+/// Reset HEAD to a commit with the specified mode
+pub fn reset_to_commit(repo_path: &str, commit_oid: Oid, mode: ResetMode) -> Result<()> {
+    let mode_flag = match mode {
+        ResetMode::Soft => "--soft",
+        ResetMode::Mixed => "--mixed",
+        ResetMode::Hard => "--hard",
+    };
+
+    let output = Command::new("git")
+        .args(["reset", mode_flag, &commit_oid.to_string()])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git reset")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git reset failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Create a lightweight tag at the specified commit
+pub fn add_tag(repo: &Repository, tag_name: &str, commit_oid: Oid) -> Result<()> {
+    let obj = repo
+        .find_object(commit_oid, None)
+        .context("Commit not found")?;
+    let signature = repo.signature()?;
+
+    repo.tag(tag_name, &obj, &signature, "", false)
+        .context(format!("Failed to create tag '{}'", tag_name))?;
+
+    Ok(())
+}
+
+/// Revert a commit without opening an editor
+pub fn revert_commit(repo_path: &str, commit_oid: Oid) -> Result<()> {
+    let output = Command::new("git")
+        .args(["revert", "--no-edit", &commit_oid.to_string()])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git revert")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git revert failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Push current branch to origin
+pub fn push_to_origin(repo_path: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["push", "origin", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git push")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git push failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Stage a file
+pub fn stage_file(repo_path: &str, file_path: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["add", "--", file_path])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git add")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git add failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Unstage a file
+pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["reset", "HEAD", "--", file_path])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git reset")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git reset failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Create a commit with the given message
+pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git commit")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git commit failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}

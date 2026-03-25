@@ -27,6 +27,14 @@ pub enum FileChangeKind {
     Copied,
 }
 
+/// Stage status for working tree files
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageStatus {
+    Staged,
+    Unstaged,
+    Untracked,
+}
+
 /// Per-file diff info
 #[derive(Debug, Clone)]
 pub struct FileDiffInfo {
@@ -40,6 +48,8 @@ pub struct FileDiffInfo {
     pub insertions: usize,
     /// Deletions
     pub deletions: usize,
+    /// Stage status (only set for working tree diffs)
+    pub stage_status: Option<StageStatus>,
 }
 
 /// Commit diff info
@@ -55,6 +65,10 @@ pub struct CommitDiffInfo {
     pub total_files: usize,
     /// Whether truncated
     pub truncated: bool,
+    /// Staged files (only for working tree diffs)
+    pub staged_files: Vec<FileDiffInfo>,
+    /// Unstaged files including untracked (only for working tree diffs)
+    pub unstaged_files: Vec<FileDiffInfo>,
 }
 
 /// Intermediate scan result carrying both display info and the full set of
@@ -96,15 +110,30 @@ impl CommitDiffInfo {
         // Unstaged tracked changes: index -> workdir
         let unstaged_diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
         let workdir = repo.workdir().unwrap_or_else(|| repo.path());
-        let staged_result = Self::scan_diff(&staged_diff)?;
-        let unstaged_result = Self::scan_diff(&unstaged_diff)?;
+        let mut staged_result = Self::scan_diff(&staged_diff)?;
+        for file in &mut staged_result.files {
+            file.stage_status = Some(StageStatus::Staged);
+        }
+        let mut unstaged_result = Self::scan_diff(&unstaged_diff)?;
+        for file in &mut unstaged_result.files {
+            file.stage_status = Some(StageStatus::Unstaged);
+        }
         let refresh_paths: HashSet<PathBuf> = staged_result
             .all_paths
             .intersection(&unstaged_result.all_paths)
             .cloned()
             .collect();
         let untracked_display_limit = MAX_FILES_TO_DISPLAY;
-        let untracked_result = Self::scan_untracked_worktree(repo, untracked_display_limit)?;
+        let mut untracked_result = Self::scan_untracked_worktree(repo, untracked_display_limit)?;
+        for file in &mut untracked_result.files {
+            file.stage_status = Some(StageStatus::Untracked);
+        }
+
+        // Save copies before merging for staged/unstaged separation
+        let pre_staged = staged_result.files.clone();
+        let pre_unstaged = unstaged_result.files.clone();
+        let pre_untracked = untracked_result.files.clone();
+
         let mut worktree_refresh_paths = HashSet::new();
         let mut scan = Self::merge_scans(
             [staged_result, unstaged_result, untracked_result],
@@ -120,7 +149,15 @@ impl CommitDiffInfo {
             &worktree_refresh_paths,
             &staged_diff,
         )?;
-        Self::build_info(scan, Some((total_insertions, total_deletions)))
+        let mut info = Self::build_info(scan, Some((total_insertions, total_deletions)))?;
+
+        // Populate separated staged/unstaged lists
+        info.staged_files = pre_staged;
+        let mut unstaged_combined = pre_unstaged;
+        unstaged_combined.extend(pre_untracked);
+        info.unstaged_files = unstaged_combined;
+
+        Ok(info)
     }
 
     /// Get diff info for a commit
@@ -173,6 +210,7 @@ impl CommitDiffInfo {
                 is_binary,
                 insertions,
                 deletions,
+                stage_status: None,
             });
         }
 
@@ -219,6 +257,7 @@ impl CommitDiffInfo {
                 is_binary: false,
                 insertions: 0,
                 deletions: 0,
+                stage_status: None,
             });
         }
 
@@ -416,6 +455,8 @@ impl CommitDiffInfo {
             total_deletions,
             total_files,
             truncated,
+            staged_files: Vec::new(),
+            unstaged_files: Vec::new(),
         })
     }
 

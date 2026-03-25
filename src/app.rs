@@ -16,14 +16,48 @@ use crate::{
         build_graph,
         graph::GraphLayout,
         operations::{
-            checkout_branch, checkout_commit, checkout_remote_branch, create_branch, delete_branch,
-            fetch_origin, merge_branch, rebase_branch,
+            add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
+            commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
+            push_to_origin, rebase_branch, reset_to_commit, revert_commit, stage_file,
+            unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
-        WorkingTreeStatus,
+        StageStatus, WorkingTreeStatus,
     },
     search::{fuzzy_search_branches, FuzzySearchResult},
 };
+
+/// Copy text to system clipboard using platform-specific commands
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let commands: &[(&str, &[&str])] = &[
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+        ("wl-copy", &[]),
+        ("pbcopy", &[]),
+    ];
+
+    for (cmd, args) in commands {
+        if let Ok(mut child) = Command::new(cmd)
+            .args(*args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if child.wait().is_ok() {
+                return Ok(());
+            }
+        }
+    }
+
+    anyhow::bail!("No clipboard tool found (install xclip, xsel, or wl-copy)")
+}
 
 /// Filter branch names to exclude remote branches that have matching local branches
 /// Returns branches in order: local branches first, then remote-only branches
@@ -49,6 +83,57 @@ fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
         .collect()
 }
 
+/// Which panel is focused
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPanel {
+    Graph,
+    Files,
+    CommitDetail,
+}
+
+/// Items in the commit context menu
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitMenuItem {
+    Checkout,
+    CreateBranch,
+    MergeIntoCurrent,
+    CherryPick,
+    Rebase,
+    ResetSoft,
+    ResetMixed,
+    ResetHard,
+    AddTag,
+    Revert,
+    CopyHash,
+    Push,
+}
+
+impl CommitMenuItem {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Checkout => "Checkout",
+            Self::CreateBranch => "Create branch here",
+            Self::MergeIntoCurrent => "Merge into current branch",
+            Self::CherryPick => "Cherry-pick",
+            Self::Rebase => "Rebase current branch onto this",
+            Self::ResetSoft => "Reset (soft) to this commit",
+            Self::ResetMixed => "Reset (mixed) to this commit",
+            Self::ResetHard => "Reset (hard) to this commit",
+            Self::AddTag => "Add tag",
+            Self::Revert => "Revert this commit",
+            Self::CopyHash => "Copy commit hash",
+            Self::Push => "Push to origin",
+        }
+    }
+}
+
+/// Item in the files pane (header or file entry)
+#[derive(Debug, Clone)]
+pub enum FilesPaneItem {
+    Header(String),
+    File(FileDiffInfo),
+}
+
 /// Application modes
 #[derive(Debug, Clone)]
 pub enum AppMode {
@@ -65,6 +150,10 @@ pub enum AppMode {
     },
     Error {
         message: String,
+    },
+    CommitMenu {
+        items: Vec<CommitMenuItem>,
+        selected: usize,
     },
     FileSelect {
         selected_index: usize,
@@ -87,6 +176,7 @@ pub enum AppMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputAction {
     CreateBranch,
+    AddTag,
     Search,
 }
 
@@ -96,6 +186,12 @@ pub enum ConfirmAction {
     DeleteBranch(String),
     Merge(String),
     Rebase(String),
+    CherryPick(Oid),
+    Revert(Oid),
+    ResetSoft(Oid),
+    ResetMixed(Oid),
+    ResetHard(Oid),
+    Push,
 }
 
 /// Result of async diff computation
@@ -189,6 +285,9 @@ pub struct App {
 
     // UI state
     pub graph_list_state: ListState,
+    pub focused_panel: FocusedPanel,
+    pub commit_editor: crate::text_editor::TextEditor,
+    pub editing_commit_message: bool,
 
     // Branch selection state
     /// List of (node_index, branch_name) for all branches
@@ -298,6 +397,9 @@ impl App {
             branches,
             graph_layout,
             graph_list_state,
+            focused_panel: FocusedPanel::Graph,
+            commit_editor: crate::text_editor::TextEditor::new(),
+            editing_commit_message: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -933,14 +1035,61 @@ impl App {
                 || self.has_in_flight_diff())
     }
 
+    /// Check if the currently selected node is the uncommitted changes node
+    pub fn is_uncommitted_selected(&self) -> bool {
+        self.graph_list_state
+            .selected()
+            .and_then(|idx| self.graph_layout.nodes.get(idx))
+            .is_some_and(|node| node.is_uncommitted)
+    }
+
+    /// Get the file list for the files pane (staged then unstaged for uncommitted,
+    /// or flat list for committed)
+    pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
+        if self.is_uncommitted_selected() {
+            if let Some(diff) = self.cached_diff() {
+                let mut items = Vec::new();
+                if !diff.staged_files.is_empty() {
+                    items.push(FilesPaneItem::Header("Staged Changes".to_string()));
+                    for f in &diff.staged_files {
+                        items.push(FilesPaneItem::File(f.clone()));
+                    }
+                }
+                if !diff.unstaged_files.is_empty() {
+                    items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
+                    for f in &diff.unstaged_files {
+                        items.push(FilesPaneItem::File(f.clone()));
+                    }
+                }
+                if items.is_empty() {
+                    // Fall back to merged list
+                    return diff.files.iter().map(|f| FilesPaneItem::File(f.clone())).collect();
+                }
+                return items;
+            }
+        }
+        if let Some(diff) = self.cached_diff() {
+            diff.files.iter().map(|f| FilesPaneItem::File(f.clone())).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Handle an action
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
+        // Ctrl+Q always quits
+        if matches!(action, Action::ForceQuit) {
+            self.should_quit = true;
+            return Ok(());
+        }
+
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
             AppMode::Help => self.handle_help_action(action),
             AppMode::Input { .. } => self.handle_input_action(action)?,
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
             AppMode::Error { .. } => self.handle_error_action(action),
+            AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::FileSelect { .. } => self.handle_file_select_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }
@@ -953,6 +1102,46 @@ impl App {
     }
 
     fn handle_normal_action(&mut self, action: Action) -> Result<()> {
+        // Panel navigation works from any panel
+        match action {
+            Action::PanelLeft => {
+                self.editing_commit_message = false;
+                self.focused_panel = match self.focused_panel {
+                    FocusedPanel::Graph => FocusedPanel::Files,
+                    FocusedPanel::Files => FocusedPanel::CommitDetail,
+                    FocusedPanel::CommitDetail => FocusedPanel::Graph,
+                };
+                return Ok(());
+            }
+            Action::PanelRight => {
+                self.editing_commit_message = false;
+                self.focused_panel = match self.focused_panel {
+                    FocusedPanel::Graph => FocusedPanel::CommitDetail,
+                    FocusedPanel::CommitDetail => FocusedPanel::Files,
+                    FocusedPanel::Files => FocusedPanel::Graph,
+                };
+                return Ok(());
+            }
+            Action::FocusGraph => {
+                if self.editing_commit_message {
+                    self.editing_commit_message = false;
+                } else {
+                    self.focused_panel = FocusedPanel::Graph;
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Route to panel-specific handler
+        match self.focused_panel {
+            FocusedPanel::Graph => self.handle_graph_action(action),
+            FocusedPanel::Files => self.handle_files_action(action),
+            FocusedPanel::CommitDetail => self.handle_commit_detail_action(action),
+        }
+    }
+
+    fn handle_graph_action(&mut self, action: Action) -> Result<()> {
         match action {
             Action::Quit => {
                 self.should_quit = true;
@@ -999,11 +1188,11 @@ impl App {
             }
             Action::Fetch => {
                 if !self.is_fetching() {
-                    self.start_fetch(true, false); // silent=false for manual fetch
+                    self.start_fetch(true, false);
                 }
             }
-            Action::Checkout => {
-                self.do_checkout()?;
+            Action::OpenCommitMenu => {
+                self.open_commit_menu();
             }
             Action::CreateBranch => {
                 self.mode = AppMode::Input {
@@ -1013,7 +1202,6 @@ impl App {
                 };
             }
             Action::Search => {
-                // Save position for cancel restoration
                 self.save_search_position();
                 self.mode = AppMode::Input {
                     title: "Search branches".to_string(),
@@ -1027,26 +1215,6 @@ impl App {
                         self.mode = AppMode::Confirm {
                             message: format!("Delete branch '{}'?", branch.name),
                             action: ConfirmAction::DeleteBranch(branch.name.clone()),
-                        };
-                    }
-                }
-            }
-            Action::Merge => {
-                if let Some(branch) = self.selected_branch() {
-                    if !branch.is_head {
-                        self.mode = AppMode::Confirm {
-                            message: format!("Merge '{}' into current branch?", branch.name),
-                            action: ConfirmAction::Merge(branch.name.clone()),
-                        };
-                    }
-                }
-            }
-            Action::Rebase => {
-                if let Some(branch) = self.selected_branch() {
-                    if !branch.is_head {
-                        self.mode = AppMode::Confirm {
-                            message: format!("Rebase current branch onto '{}'?", branch.name),
-                            action: ConfirmAction::Rebase(branch.name.clone()),
                         };
                     }
                 }
@@ -1069,6 +1237,325 @@ impl App {
                 }
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_files_action(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::Quit => {
+                self.should_quit = true;
+            }
+            Action::MoveUp | Action::MoveDown | Action::PageUp | Action::PageDown
+            | Action::GoToTop | Action::GoToBottom => {
+                // Navigate file list using FileSelect-like logic
+                // Delegate to existing EnterFileSelect + FileSelect navigation
+                if !matches!(self.mode, AppMode::FileSelect { .. }) {
+                    // Enter file select mode if not already in it
+                    if let Some(diff) = self.cached_diff() {
+                        if !diff.files.is_empty() {
+                            let file_list = diff.files.clone();
+                            self.mode = AppMode::FileSelect {
+                                selected_index: 0,
+                                file_list,
+                            };
+                        }
+                    }
+                }
+            }
+            Action::ToggleStage => {
+                self.toggle_stage_selected_file()?;
+            }
+            Action::EnterFileSelect => {
+                if let Some(diff) = self.cached_diff() {
+                    if !diff.files.is_empty() {
+                        let file_list = diff.files.clone();
+                        self.mode = AppMode::FileSelect {
+                            selected_index: 0,
+                            file_list,
+                        };
+                    }
+                }
+            }
+            Action::ToggleHelp => {
+                self.mode = AppMode::Help;
+            }
+            Action::Refresh => {
+                self.refresh(true)?;
+                self.reset_timers();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_commit_detail_action(&mut self, action: Action) -> Result<()> {
+        if self.editing_commit_message {
+            return self.handle_editor_action(action);
+        }
+
+        match action {
+            Action::Quit => {
+                self.should_quit = true;
+            }
+            Action::StartEditing => {
+                if self.is_uncommitted_selected() {
+                    self.editing_commit_message = true;
+                }
+            }
+            Action::ToggleHelp => {
+                self.mode = AppMode::Help;
+            }
+            Action::Refresh => {
+                self.refresh(true)?;
+                self.reset_timers();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_editor_action(&mut self, action: Action) -> Result<()> {
+        match action {
+            Action::StopEditing => {
+                self.editing_commit_message = false;
+            }
+            Action::CommitChanges => {
+                let msg = self.commit_editor.text.trim().to_string();
+                if !msg.is_empty() {
+                    commit_with_message(&self.repo_path, &msg)?;
+                    self.commit_editor = crate::text_editor::TextEditor::new();
+                    self.editing_commit_message = false;
+                    self.refresh(true)?;
+                    self.set_message("Changes committed");
+                }
+            }
+            Action::EditorChar(c) => self.commit_editor.insert_char(c),
+            Action::EditorNewline => self.commit_editor.insert_newline(),
+            Action::EditorBackspace => self.commit_editor.backspace(),
+            Action::EditorDelete => self.commit_editor.delete(),
+            Action::EditorLeft(s) => self.commit_editor.move_left(s),
+            Action::EditorRight(s) => self.commit_editor.move_right(s),
+            Action::EditorUp(s) => self.commit_editor.move_up(s),
+            Action::EditorDown(s) => self.commit_editor.move_down(s),
+            Action::EditorHome(s) => self.commit_editor.move_home(s),
+            Action::EditorEnd(s) => self.commit_editor.move_end(s),
+            Action::EditorWordLeft(s) => self.commit_editor.move_word_left(s),
+            Action::EditorWordRight(s) => self.commit_editor.move_word_right(s),
+            Action::EditorBackspaceWord => self.commit_editor.backspace_word(),
+            Action::EditorDeleteWord => self.commit_editor.delete_word(),
+            Action::EditorTextStart(s) => self.commit_editor.move_text_start(s),
+            Action::EditorTextEnd(s) => self.commit_editor.move_text_end(s),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn open_commit_menu(&mut self) {
+        let Some(node) = self.selected_commit_node() else {
+            return;
+        };
+
+        if node.is_uncommitted {
+            // For uncommitted node, go to files panel
+            self.focused_panel = FocusedPanel::Files;
+            return;
+        }
+
+        let has_branch = self.selected_branch().is_some();
+        let mut items = vec![CommitMenuItem::Checkout, CommitMenuItem::CreateBranch];
+
+        if has_branch {
+            if let Some(branch) = self.selected_branch() {
+                if !branch.is_head {
+                    items.push(CommitMenuItem::MergeIntoCurrent);
+                }
+            }
+        }
+
+        items.push(CommitMenuItem::CherryPick);
+
+        if has_branch {
+            if let Some(branch) = self.selected_branch() {
+                if !branch.is_head {
+                    items.push(CommitMenuItem::Rebase);
+                }
+            }
+        }
+
+        items.extend([
+            CommitMenuItem::ResetSoft,
+            CommitMenuItem::ResetMixed,
+            CommitMenuItem::ResetHard,
+            CommitMenuItem::AddTag,
+            CommitMenuItem::Revert,
+            CommitMenuItem::CopyHash,
+        ]);
+
+        if has_branch {
+            items.push(CommitMenuItem::Push);
+        }
+
+        self.mode = AppMode::CommitMenu {
+            items,
+            selected: 0,
+        };
+    }
+
+    fn handle_commit_menu_action(&mut self, action: Action) -> Result<()> {
+        let AppMode::CommitMenu { items, selected } = &self.mode else {
+            return Ok(());
+        };
+        let items = items.clone();
+        let selected = *selected;
+
+        match action {
+            Action::MoveUp => {
+                let new = if selected == 0 { items.len().saturating_sub(1) } else { selected - 1 };
+                self.mode = AppMode::CommitMenu { items, selected: new };
+            }
+            Action::MoveDown => {
+                let new = if selected + 1 >= items.len() { 0 } else { selected + 1 };
+                self.mode = AppMode::CommitMenu { items, selected: new };
+            }
+            Action::MenuSelect | Action::Confirm => {
+                if let Some(item) = items.get(selected) {
+                    self.execute_menu_item(*item)?;
+                }
+            }
+            Action::Cancel | Action::Quit => {
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_menu_item(&mut self, item: CommitMenuItem) -> Result<()> {
+        self.mode = AppMode::Normal;
+
+        let commit_oid = self
+            .selected_commit_node()
+            .and_then(|n| n.commit.as_ref())
+            .map(|c| c.oid);
+
+        match item {
+            CommitMenuItem::Checkout => self.do_checkout()?,
+            CommitMenuItem::CreateBranch => {
+                self.mode = AppMode::Input {
+                    title: "New Branch Name".to_string(),
+                    input: String::new(),
+                    action: InputAction::CreateBranch,
+                };
+            }
+            CommitMenuItem::MergeIntoCurrent => {
+                if let Some(branch) = self.selected_branch() {
+                    if !branch.is_head {
+                        self.mode = AppMode::Confirm {
+                            message: format!("Merge '{}' into current branch?", branch.name),
+                            action: ConfirmAction::Merge(branch.name.clone()),
+                        };
+                    }
+                }
+            }
+            CommitMenuItem::CherryPick => {
+                if let Some(oid) = commit_oid {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Cherry-pick commit {}?", &oid.to_string()[..7]),
+                        action: ConfirmAction::CherryPick(oid),
+                    };
+                }
+            }
+            CommitMenuItem::Rebase => {
+                if let Some(branch) = self.selected_branch() {
+                    if !branch.is_head {
+                        self.mode = AppMode::Confirm {
+                            message: format!("Rebase current branch onto '{}'?", branch.name),
+                            action: ConfirmAction::Rebase(branch.name.clone()),
+                        };
+                    }
+                }
+            }
+            CommitMenuItem::ResetSoft => {
+                if let Some(oid) = commit_oid {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Reset (soft) to {}?", &oid.to_string()[..7]),
+                        action: ConfirmAction::ResetSoft(oid),
+                    };
+                }
+            }
+            CommitMenuItem::ResetMixed => {
+                if let Some(oid) = commit_oid {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Reset (mixed) to {}?", &oid.to_string()[..7]),
+                        action: ConfirmAction::ResetMixed(oid),
+                    };
+                }
+            }
+            CommitMenuItem::ResetHard => {
+                if let Some(oid) = commit_oid {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Reset (HARD) to {}? This will discard changes!", &oid.to_string()[..7]),
+                        action: ConfirmAction::ResetHard(oid),
+                    };
+                }
+            }
+            CommitMenuItem::AddTag => {
+                self.mode = AppMode::Input {
+                    title: "Tag Name".to_string(),
+                    input: String::new(),
+                    action: InputAction::AddTag,
+                };
+            }
+            CommitMenuItem::Revert => {
+                if let Some(oid) = commit_oid {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Revert commit {}?", &oid.to_string()[..7]),
+                        action: ConfirmAction::Revert(oid),
+                    };
+                }
+            }
+            CommitMenuItem::CopyHash => {
+                if let Some(oid) = commit_oid {
+                    let hash = oid.to_string();
+                    match copy_to_clipboard(&hash) {
+                        Ok(()) => self.set_message(format!("Copied {}", &hash[..7])),
+                        Err(e) => self.set_message(format!("Clipboard error: {}", e)),
+                    }
+                }
+            }
+            CommitMenuItem::Push => {
+                self.mode = AppMode::Confirm {
+                    message: "Push current branch to origin?".to_string(),
+                    action: ConfirmAction::Push,
+                };
+            }
+        }
+        Ok(())
+    }
+
+    fn toggle_stage_selected_file(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+        let _items = self.files_pane_items();
+        // Use FileSelect index if in that mode, otherwise first file
+        let selected_idx = match &self.mode {
+            AppMode::FileSelect { selected_index, .. } => *selected_index,
+            _ => return Ok(()),
+        };
+        // Map FileSelect index to files_pane_items index
+        // FileSelect uses diff.files directly, so find the matching file
+        if let AppMode::FileSelect { file_list, .. } = &self.mode {
+            if let Some(file) = file_list.get(selected_idx) {
+                let path_str = file.path.to_string_lossy().to_string();
+                match file.stage_status {
+                    Some(StageStatus::Staged) => unstage_file(&self.repo_path, &path_str)?,
+                    _ => stage_file(&self.repo_path, &path_str)?,
+                }
+                self.clear_uncommitted_diff_cache();
+                self.refresh(true)?;
+            }
         }
         Ok(())
     }
@@ -1428,8 +1915,18 @@ impl App {
                             }
                         }
                     }
+                    InputAction::AddTag => {
+                        if !input.is_empty() {
+                            if let Some(node) = self.selected_commit_node() {
+                                if let Some(commit) = &node.commit {
+                                    add_tag(&self.repo.repo, &input, commit.oid)?;
+                                    self.refresh(true)?;
+                                    self.set_message(format!("Tag '{}' created", input));
+                                }
+                            }
+                        }
+                    }
                     InputAction::Search => {
-                        // Jump to selected result and exit search mode
                         self.jump_to_search_result();
                     }
                 }
@@ -1527,6 +2024,25 @@ impl App {
                     }
                     ConfirmAction::Rebase(name) => {
                         rebase_branch(&self.repo.repo, &name)?;
+                    }
+                    ConfirmAction::CherryPick(oid) => {
+                        cherry_pick(&self.repo_path, oid)?;
+                    }
+                    ConfirmAction::Revert(oid) => {
+                        revert_commit(&self.repo_path, oid)?;
+                    }
+                    ConfirmAction::ResetSoft(oid) => {
+                        reset_to_commit(&self.repo_path, oid, ResetMode::Soft)?;
+                    }
+                    ConfirmAction::ResetMixed(oid) => {
+                        reset_to_commit(&self.repo_path, oid, ResetMode::Mixed)?;
+                    }
+                    ConfirmAction::ResetHard(oid) => {
+                        reset_to_commit(&self.repo_path, oid, ResetMode::Hard)?;
+                    }
+                    ConfirmAction::Push => {
+                        push_to_origin(&self.repo_path)?;
+                        self.set_message("Pushed to origin");
                     }
                 }
                 self.refresh(true)?;
@@ -1796,6 +2312,9 @@ mod tests {
             branches,
             graph_layout,
             graph_list_state,
+            focused_panel: FocusedPanel::Graph,
+            commit_editor: crate::text_editor::TextEditor::new(),
+            editing_commit_message: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -1861,6 +2380,9 @@ mod tests {
                 max_lane: 0,
             },
             graph_list_state,
+            focused_panel: FocusedPanel::Graph,
+            commit_editor: crate::text_editor::TextEditor::new(),
+            editing_commit_message: false,
             branch_positions: Vec::new(),
             selected_branch_position: None,
             search_state: SearchState::default(),

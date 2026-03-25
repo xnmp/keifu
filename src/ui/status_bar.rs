@@ -181,6 +181,14 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
             }
+            AppMode::CommitMenu { .. } => {
+                spans.push(Span::styled(" ↑/↓ ", key_style));
+                spans.push(Span::styled("select ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("confirm ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("cancel", desc_style));
+            }
         }
 
         let line = Line::from(spans);
@@ -193,6 +201,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Input { .. } => Some(" INPUT "),
             AppMode::Confirm { .. } => Some(" CONFIRM "),
             AppMode::Error { .. } => Some(" ERROR "),
+            AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::FileSelect { .. } => Some(" FILE SELECT "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
         };

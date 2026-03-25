@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::app::{App, AppMode};
+use crate::app::{App, AppMode, FocusedPanel};
 use crate::git::{CommitDiffInfo, FileChangeKind};
 
 use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
@@ -21,6 +21,8 @@ pub struct CommitDetailWidget<'a> {
     commit_lines: Vec<Line<'a>>,
     file_lines: Vec<Line<'a>>,
     file_scroll: u16,
+    is_focused: bool,
+    is_files_focused: bool,
 }
 
 impl<'a> CommitDetailWidget<'a> {
@@ -35,6 +37,8 @@ impl<'a> CommitDetailWidget<'a> {
             commit_lines,
             file_lines,
             file_scroll,
+            is_focused: app.focused_panel == FocusedPanel::CommitDetail,
+            is_files_focused: app.focused_panel == FocusedPanel::Files,
         }
     }
 
@@ -72,7 +76,7 @@ impl<'a> CommitDetailWidget<'a> {
 
         // Handle uncommitted changes node
         if node.is_uncommitted {
-            return vec![
+            let mut lines = vec![
                 Line::from(Span::styled(
                     "Uncommitted Changes",
                     Style::default()
@@ -80,14 +84,42 @@ impl<'a> CommitDetailWidget<'a> {
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
+            ];
+
+            if app.editing_commit_message {
+                lines.push(Line::from(Span::styled(
+                    "Commit Message (Alt+Enter to commit, Esc to stop):",
+                    Style::default().fg(Color::Cyan),
+                )));
+            } else if !app.commit_editor.text.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "Commit Message (Enter to edit):",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else if app.focused_panel == FocusedPanel::CommitDetail {
+                lines.push(Line::from(Span::styled(
+                    "Press Enter to type a commit message",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
                     match node.uncommitted_count {
                         Some(count) => format!("{} files with changes", count),
                         None => "files with changes".to_string(),
                     },
                     Style::default().fg(Color::DarkGray),
-                )),
-            ];
+                )));
+            }
+
+            // Show editor content
+            if app.editing_commit_message || !app.commit_editor.text.is_empty() {
+                lines.push(Line::from(""));
+                for line_text in app.commit_editor.lines() {
+                    lines.push(Line::from(Span::raw(line_text.to_string())));
+                }
+            }
+
+            return lines;
         }
 
         // Handle connector rows (no commit)
@@ -260,10 +292,15 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .split(area);
 
         // Left: commit info
+        let commit_border = if self.is_focused {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
         let left_block = Block::default()
             .title(" Commit Detail ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(commit_border));
 
         let left_paragraph = Paragraph::new(self.commit_lines)
             .block(left_block)
@@ -272,10 +309,15 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         Widget::render(left_paragraph, chunks[0], buf);
 
         // Right: file list
+        let files_border = if self.is_files_focused {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
         let right_block = Block::default()
             .title(" Changed Files ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(files_border));
 
         // Scroll file list so selected file stays visible.
         // File lines: 2 header lines (summary + blank) + file entries.

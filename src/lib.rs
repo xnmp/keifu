@@ -8,5 +8,6 @@ pub mod git;
 pub mod graph;
 pub mod keybindings;
 pub mod search;
+pub mod text_editor;
 pub mod tui;
 pub mod ui;
