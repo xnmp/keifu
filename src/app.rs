@@ -309,6 +309,7 @@ pub struct App {
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
     pub commit_detail_scroll: u16,
+    pub commit_detail_max_scroll: u16,
     pub files_filter_active: bool,
 
     // Branch selection state
@@ -439,6 +440,7 @@ impl App {
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             commit_detail_scroll: 0,
+            commit_detail_max_scroll: 0,
             files_filter_active: false,
             branch_positions,
             selected_branch_position,
@@ -1697,13 +1699,15 @@ impl App {
                 self.commit_detail_scroll = self.commit_detail_scroll.saturating_sub(1);
             }
             Action::MoveDown => {
-                self.commit_detail_scroll += 1;
+                self.commit_detail_scroll =
+                    (self.commit_detail_scroll + 1).min(self.commit_detail_max_scroll);
             }
             Action::PageUp => {
                 self.commit_detail_scroll = self.commit_detail_scroll.saturating_sub(10);
             }
             Action::PageDown => {
-                self.commit_detail_scroll += 10;
+                self.commit_detail_scroll =
+                    (self.commit_detail_scroll + 10).min(self.commit_detail_max_scroll);
             }
             Action::GoToTop => {
                 self.commit_detail_scroll = 0;
@@ -2959,6 +2963,7 @@ mod tests {
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             commit_detail_scroll: 0,
+            commit_detail_max_scroll: 0,
             files_filter_active: false,
             branch_positions,
             selected_branch_position,
@@ -3039,6 +3044,7 @@ mod tests {
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             commit_detail_scroll: 0,
+            commit_detail_max_scroll: 0,
             files_filter_active: false,
             branch_positions: Vec::new(),
             selected_branch_position: None,

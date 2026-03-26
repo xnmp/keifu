@@ -29,8 +29,46 @@ pub struct CommitDetailWidget<'a> {
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &App, detail_width: u16) -> Self {
+    pub fn new(app: &mut App, detail_area: Rect) -> Self {
+        let detail_width = detail_area.width;
         let commit_lines = Self::build_commit_lines(app);
+
+        // Compute the commit pane inner dimensions for scroll calculation.
+        // The commit pane is the right half (or bottom half on narrow terminals).
+        let direction = if detail_width <= VERTICAL_LAYOUT_THRESHOLD {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        };
+        let commit_chunk_height = if direction == Direction::Vertical {
+            detail_area.height / 2
+        } else {
+            detail_area.height
+        };
+        let commit_inner_width = if direction == Direction::Vertical {
+            detail_width.saturating_sub(2) as usize
+        } else {
+            (detail_width / 2).saturating_sub(2) as usize
+        };
+        let commit_visible = commit_chunk_height.saturating_sub(2) as usize;
+        let commit_wrapped_total: usize = if commit_inner_width > 0 {
+            commit_lines
+                .iter()
+                .map(|line| {
+                    let w = line.width();
+                    if w == 0 { 1 } else { w.div_ceil(commit_inner_width) }
+                })
+                .sum()
+        } else {
+            commit_lines.len()
+        };
+        app.commit_detail_max_scroll =
+            commit_wrapped_total.saturating_sub(commit_visible) as u16;
+        // Clamp current scroll to the newly computed max
+        app.commit_detail_scroll = app
+            .commit_detail_scroll
+            .min(app.commit_detail_max_scroll);
+
         // Files pane gets ~half the detail width minus borders
         let files_inner_width = if detail_width <= VERTICAL_LAYOUT_THRESHOLD {
             detail_width.saturating_sub(2) as usize
@@ -307,11 +345,6 @@ impl<'a> CommitDetailWidget<'a> {
 
         // Build commit detail lines
         let mut lines = vec![
-            // Commit hash
-            Line::from(vec![
-                Span::styled("Commit: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(commit.oid.to_string(), Style::default().fg(Color::Yellow)),
-            ]),
             // Author
             Line::from(vec![
                 Span::styled("Author: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -329,19 +362,6 @@ impl<'a> CommitDetailWidget<'a> {
                 ),
             ]),
         ];
-
-        // Parent commits
-        if !commit.parent_oids.is_empty() {
-            let parents: Vec<String> = commit
-                .parent_oids
-                .iter()
-                .map(|oid| oid.to_string()[..7].to_string())
-                .collect();
-            lines.push(Line::from(vec![
-                Span::styled("Parent: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(parents.join(", "), Style::default().fg(Color::DarkGray)),
-            ]));
-        }
 
         lines.push(Line::from(""));
 
@@ -522,32 +542,10 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(commit_border));
 
-        // Calculate wrapped line count for accurate scroll bounds.
-        // Each logical line wraps to ceil(width / inner_width) visual lines.
-        let commit_inner_width = chunks[1].width.saturating_sub(2) as usize;
-        let commit_visible = chunks[1].height.saturating_sub(2) as usize;
-        let commit_wrapped_total: usize = if commit_inner_width > 0 {
-            self.commit_lines
-                .iter()
-                .map(|line| {
-                    let w = line.width();
-                    if w == 0 {
-                        1
-                    } else {
-                        w.div_ceil(commit_inner_width)
-                    }
-                })
-                .sum()
-        } else {
-            self.commit_lines.len()
-        };
-        let commit_max_scroll =
-            (commit_wrapped_total).saturating_sub(commit_visible) as u16;
-        let commit_scroll = self.commit_scroll.min(commit_max_scroll);
-
+        // Scroll is already clamped in new()
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)
-            .scroll((commit_scroll, 0))
+            .scroll((self.commit_scroll, 0))
             .wrap(Wrap { trim: false });
 
         Widget::render(commit_paragraph, chunks[1], buf);

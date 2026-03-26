@@ -126,7 +126,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         graph_area,
         &mut app.graph_list_state,
     );
-    frame.render_widget(CommitDetailWidget::new(app, detail_area.width), detail_area);
+    frame.render_widget(CommitDetailWidget::new(app, detail_area), detail_area);
     frame.render_widget(StatusBar::new(app), status_area);
 
     // Show cursor when editing commit message
