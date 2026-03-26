@@ -18,8 +18,8 @@ use crate::{
         operations::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
-            push_to_origin, rebase_branch, reset_to_commit, revert_commit, stage_file,
-            unstage_file, ResetMode,
+            add_to_gitignore, push_to_origin, rebase_branch, reset_to_commit,
+            revert_commit, stage_file, unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
         StageStatus, WorkingTreeStatus,
@@ -1480,6 +1480,9 @@ impl App {
             Action::ToggleStage => {
                 self.toggle_stage_selected_file()?;
             }
+            Action::AddToGitignore => {
+                self.add_selected_to_gitignore()?;
+            }
             Action::ToggleFolderView => {
                 self.files_group_by_folder = !self.files_group_by_folder;
             }
@@ -1915,6 +1918,48 @@ impl App {
             self.refresh(true)?;
             self.sync_file_list_cache();
         }
+        Ok(())
+    }
+
+    fn add_selected_to_gitignore(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+
+        let file = self.file_list_cache.get(self.file_selected_index).cloned();
+        let Some(file) = file else {
+            return Ok(());
+        };
+
+        // In folder mode, ignore the folder; otherwise ignore the file
+        let pattern = if self.files_group_by_folder {
+            let folder = file
+                .path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if folder.is_empty() || folder == "." {
+                // File is at repo root — ignore the file itself
+                file.path.to_string_lossy().to_string()
+            } else {
+                format!("{}/", folder)
+            }
+        } else {
+            file.path.to_string_lossy().to_string()
+        };
+
+        match add_to_gitignore(&self.repo_path, &pattern)? {
+            true => {
+                self.set_message(format!("Added '{}' to .gitignore", pattern));
+                self.clear_uncommitted_diff_cache();
+                self.refresh(true)?;
+                self.sync_file_list_cache();
+            }
+            false => {
+                self.set_message(format!("'{}' already in .gitignore", pattern));
+            }
+        }
+
         Ok(())
     }
 

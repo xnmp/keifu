@@ -143,6 +143,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Stage/unstage
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
 
+        // Add to .gitignore
+        (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::AddToGitignore),
+
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
 

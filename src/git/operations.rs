@@ -1,5 +1,8 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -335,6 +338,40 @@ pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Add a pattern to .gitignore at the repository root.
+/// Returns Ok(false) if the pattern already exists, Ok(true) if it was added.
+pub fn add_to_gitignore(repo_path: &str, pattern: &str) -> Result<bool> {
+    let gitignore_path = Path::new(repo_path).join(".gitignore");
+
+    // Check if pattern already exists
+    if gitignore_path.exists() {
+        let contents = std::fs::read_to_string(&gitignore_path)
+            .context("Failed to read .gitignore")?;
+        if contents.lines().any(|line| line.trim() == pattern.trim()) {
+            return Ok(false);
+        }
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&gitignore_path)
+        .context("Failed to open .gitignore")?;
+
+    // Ensure we start on a new line if file doesn't end with one
+    if gitignore_path.exists() {
+        let contents = std::fs::read_to_string(&gitignore_path)
+            .context("Failed to read .gitignore")?;
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            writeln!(file)?;
+        }
+    }
+
+    writeln!(file, "{}", pattern).context("Failed to write to .gitignore")?;
+
+    Ok(true)
+}
+
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     let output = Command::new("git")
@@ -349,4 +386,68 @@ pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup_temp_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn add_to_gitignore_creates_file_if_missing() {
+        let dir = setup_temp_dir();
+        let result = add_to_gitignore(dir.path().to_str().unwrap(), "target/").unwrap();
+        assert!(result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "target/\n");
+    }
+
+    #[test]
+    fn add_to_gitignore_appends_to_existing() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join(".gitignore"), "node_modules/\n").unwrap();
+
+        let result = add_to_gitignore(dir.path().to_str().unwrap(), "target/").unwrap();
+        assert!(result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "node_modules/\ntarget/\n");
+    }
+
+    #[test]
+    fn add_to_gitignore_appends_newline_if_missing() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join(".gitignore"), "node_modules/").unwrap();
+
+        let result = add_to_gitignore(dir.path().to_str().unwrap(), "target/").unwrap();
+        assert!(result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "node_modules/\ntarget/\n");
+    }
+
+    #[test]
+    fn add_to_gitignore_skips_duplicate() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+
+        let result = add_to_gitignore(dir.path().to_str().unwrap(), "target/").unwrap();
+        assert!(!result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "target/\n");
+    }
+
+    #[test]
+    fn add_to_gitignore_handles_empty_file() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join(".gitignore"), "").unwrap();
+
+        let result = add_to_gitignore(dir.path().to_str().unwrap(), "*.log").unwrap();
+        assert!(result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "*.log\n");
+    }
 }

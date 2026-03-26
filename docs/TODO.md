@@ -30,6 +30,9 @@ Pressing `f` in the files panel arranges files by folder hierarchy with director
 
 **Note:** Staging a folder header (to stage all files in folder) is not yet implemented — only individual file staging works currently.
 
+### [DONE] Add to .gitignore with `i` Key
+When the uncommitted files panel is selected, pressing `i` adds the selected file to `.gitignore`. In folder mode, adds the containing folder instead. Shows a status message confirming the action, and skips duplicates.
+
 ### [DONE] Fuzzy Filter Typing in Files Panel
 Typing in the files panel filters the file list by character matching. Filter shown in panel title. Backspace removes characters, Esc clears filter.
 
