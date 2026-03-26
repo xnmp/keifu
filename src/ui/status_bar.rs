@@ -176,8 +176,10 @@ impl<'a> Widget for StatusBar<'a> {
                         FocusedPanel::CommitDetail => {
                             spans.push(Span::styled(" ↑↓ ", key_style));
                             spans.push(Span::styled("scroll ", desc_style));
-                            spans.push(Span::styled(" Enter ", key_style));
-                            spans.push(Span::styled("edit msg ", desc_style));
+                            if self.is_uncommitted {
+                                spans.push(Span::styled(" Enter ", key_style));
+                                spans.push(Span::styled("edit msg ", desc_style));
+                            }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                             spans.push(Span::styled(" Esc ", key_style));
