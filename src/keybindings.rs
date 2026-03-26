@@ -146,6 +146,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Add to .gitignore
         (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::AddToGitignore),
 
+        // Archive file
+        (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::ArchiveFile),
+
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
 

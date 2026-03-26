@@ -30,6 +30,9 @@ Pressing `f` in the files panel arranges files by folder hierarchy with director
 
 **Note:** Staging a folder header (to stage all files in folder) is not yet implemented — only individual file staging works currently.
 
+### [DONE] Archive File with `a` Key
+When the uncommitted files panel is selected, pressing `a` moves the selected file to `.archive/` at the repo root, preserving directory structure. In folder mode, moves the containing folder instead.
+
 ### [DONE] Add to .gitignore with `i` Key
 When the uncommitted files panel is selected, pressing `i` adds the selected file to `.gitignore`. In folder mode, adds the containing folder instead. Shows a status message confirming the action, and skips duplicates.
 

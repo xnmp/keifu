@@ -144,6 +144,8 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("stage ", desc_style));
                             spans.push(Span::styled(" i ", key_style));
                             spans.push(Span::styled("ignore ", desc_style));
+                            spans.push(Span::styled(" a ", key_style));
+                            spans.push(Span::styled("archive ", desc_style));
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                         }

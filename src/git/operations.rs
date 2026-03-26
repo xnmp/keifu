@@ -1,6 +1,6 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
@@ -372,6 +372,31 @@ pub fn add_to_gitignore(repo_path: &str, pattern: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Move a file or folder to `.archive/` at the repository root.
+/// Creates the `.archive/` directory if it doesn't exist.
+/// Preserves the relative path structure inside `.archive/`.
+pub fn archive_path(repo_path: &str, relative_path: &str) -> Result<()> {
+    let repo = Path::new(repo_path);
+    let source = repo.join(relative_path);
+
+    if !source.exists() {
+        bail!("Path does not exist: {}", relative_path);
+    }
+
+    let dest = repo.join(".archive").join(relative_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .context("Failed to create .archive directory structure")?;
+    }
+
+    fs::rename(&source, &dest).context(format!(
+        "Failed to move '{}' to '.archive/{}'",
+        relative_path, relative_path
+    ))?;
+
+    Ok(())
+}
+
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     let output = Command::new("git")
@@ -449,5 +474,61 @@ mod tests {
         assert!(result);
         let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert_eq!(contents, "*.log\n");
+    }
+
+    #[test]
+    fn archive_path_moves_file() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join("old.txt"), "content").unwrap();
+
+        archive_path(dir.path().to_str().unwrap(), "old.txt").unwrap();
+
+        assert!(!dir.path().join("old.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".archive/old.txt")).unwrap(),
+            "content"
+        );
+    }
+
+    #[test]
+    fn archive_path_preserves_directory_structure() {
+        let dir = setup_temp_dir();
+        fs::create_dir_all(dir.path().join("src/utils")).unwrap();
+        fs::write(dir.path().join("src/utils/helper.rs"), "fn help() {}").unwrap();
+
+        archive_path(dir.path().to_str().unwrap(), "src/utils/helper.rs").unwrap();
+
+        assert!(!dir.path().join("src/utils/helper.rs").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".archive/src/utils/helper.rs")).unwrap(),
+            "fn help() {}"
+        );
+    }
+
+    #[test]
+    fn archive_path_moves_folder() {
+        let dir = setup_temp_dir();
+        fs::create_dir_all(dir.path().join("src/old")).unwrap();
+        fs::write(dir.path().join("src/old/a.rs"), "a").unwrap();
+        fs::write(dir.path().join("src/old/b.rs"), "b").unwrap();
+
+        archive_path(dir.path().to_str().unwrap(), "src/old").unwrap();
+
+        assert!(!dir.path().join("src/old").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".archive/src/old/a.rs")).unwrap(),
+            "a"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".archive/src/old/b.rs")).unwrap(),
+            "b"
+        );
+    }
+
+    #[test]
+    fn archive_path_errors_on_missing_source() {
+        let dir = setup_temp_dir();
+        let result = archive_path(dir.path().to_str().unwrap(), "nonexistent.txt");
+        assert!(result.is_err());
     }
 }

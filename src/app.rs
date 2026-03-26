@@ -18,8 +18,8 @@ use crate::{
         operations::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
-            add_to_gitignore, push_to_origin, rebase_branch, reset_to_commit,
-            revert_commit, stage_file, unstage_file, ResetMode,
+            add_to_gitignore, archive_path, push_to_origin, rebase_branch,
+            reset_to_commit, revert_commit, stage_file, unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
         StageStatus, WorkingTreeStatus,
@@ -1483,6 +1483,9 @@ impl App {
             Action::AddToGitignore => {
                 self.add_selected_to_gitignore()?;
             }
+            Action::ArchiveFile => {
+                self.archive_selected_file()?;
+            }
             Action::ToggleFolderView => {
                 self.files_group_by_folder = !self.files_group_by_folder;
             }
@@ -1959,6 +1962,41 @@ impl App {
                 self.set_message(format!("'{}' already in .gitignore", pattern));
             }
         }
+
+        Ok(())
+    }
+
+    fn archive_selected_file(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+
+        let file = self.file_list_cache.get(self.file_selected_index).cloned();
+        let Some(file) = file else {
+            return Ok(());
+        };
+
+        // In folder mode, archive the folder; otherwise archive the file
+        let target = if self.files_group_by_folder {
+            let folder = file
+                .path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if folder.is_empty() || folder == "." {
+                file.path.to_string_lossy().to_string()
+            } else {
+                folder
+            }
+        } else {
+            file.path.to_string_lossy().to_string()
+        };
+
+        archive_path(&self.repo_path, &target)?;
+        self.set_message(format!("Archived '{}'", target));
+        self.clear_uncommitted_diff_cache();
+        self.refresh(true)?;
+        self.sync_file_list_cache();
 
         Ok(())
     }
