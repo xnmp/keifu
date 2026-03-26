@@ -300,6 +300,9 @@ pub struct App {
     pub focused_panel: FocusedPanel,
     pub file_selected_index: usize,
     pub file_list_cache: Vec<FileDiffInfo>,
+    /// Cached display items (headers + files) for the files pane.
+    /// `file_selected_index` indexes into this list.
+    display_items_cache: Vec<FilesPaneItem>,
     pub files_group_by_folder: bool,
     pub files_filter: String,
     pub hidden_branches: std::collections::HashSet<String>,
@@ -427,6 +430,7 @@ impl App {
             focused_panel: FocusedPanel::Graph,
             file_selected_index: 0,
             file_list_cache: Vec::new(),
+            display_items_cache: Vec::new(),
             files_group_by_folder: false,
             files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -1168,21 +1172,93 @@ impl App {
             .is_some_and(|node| node.is_uncommitted)
     }
 
-    /// Sync the file list cache from the current diff. Call after selection changes or refresh.
+    /// Sync the file list cache and display items from the current diff.
     pub fn sync_file_list_cache(&mut self) {
         if let Some(diff) = self.cached_diff_or_quick() {
             if self.file_list_cache.len() != diff.files.len()
-                || self.file_list_cache.first().map(|f| &f.path) != diff.files.first().map(|f| &f.path)
+                || self.file_list_cache.first().map(|f| &f.path)
+                    != diff.files.first().map(|f| &f.path)
             {
                 self.file_list_cache = diff.files.clone();
-                self.file_selected_index = self.file_selected_index.min(
-                    self.file_list_cache.len().saturating_sub(1),
-                );
             }
         } else {
             self.file_list_cache.clear();
-            self.file_selected_index = 0;
         }
+        self.display_items_cache = self.files_pane_items();
+        if self.display_items_cache.is_empty() {
+            self.file_selected_index = 0;
+        } else {
+            self.file_selected_index = self
+                .file_selected_index
+                .min(self.display_items_cache.len() - 1);
+        }
+    }
+
+    /// Get the selected display item.
+    fn selected_display_item(&self) -> Option<&FilesPaneItem> {
+        self.display_items_cache.get(self.file_selected_index)
+    }
+
+    /// Resolve the selected display item to a single file.
+    /// Header → first file under it. File → that file.
+    fn selected_file(&self) -> Option<&FileDiffInfo> {
+        match self.selected_display_item()? {
+            FilesPaneItem::File(f) => Some(f),
+            FilesPaneItem::Header(_) => {
+                self.display_items_cache[self.file_selected_index + 1..]
+                    .iter()
+                    .find_map(|item| match item {
+                        FilesPaneItem::File(f) => Some(f),
+                        _ => None,
+                    })
+            }
+        }
+    }
+
+    /// Resolve the selected display item to all affected files.
+    /// Header → all files under it. File → vec of one.
+    fn selected_files(&self) -> Vec<&FileDiffInfo> {
+        match self.selected_display_item() {
+            Some(FilesPaneItem::File(f)) => vec![f],
+            Some(FilesPaneItem::Header(_)) => self.display_items_cache
+                [self.file_selected_index + 1..]
+                .iter()
+                .take_while(|item| matches!(item, FilesPaneItem::File(_)))
+                .filter_map(|item| match item {
+                    FilesPaneItem::File(f) => Some(f),
+                    _ => None,
+                })
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    /// Convert a display index to a flat file index (for enter_file_diff).
+    fn display_index_to_flat_index(&self, display_index: usize) -> usize {
+        let mut flat_idx = 0;
+        for (i, item) in self.display_items_cache.iter().enumerate() {
+            if i == display_index {
+                return flat_idx;
+            }
+            if matches!(item, FilesPaneItem::File(_)) {
+                flat_idx += 1;
+            }
+        }
+        flat_idx.saturating_sub(1)
+    }
+
+    /// Convert a flat file index back to a display index.
+    fn flat_index_to_display_index(&self, flat_index: usize) -> usize {
+        let mut file_count = 0;
+        for (i, item) in self.display_items_cache.iter().enumerate() {
+            if matches!(item, FilesPaneItem::File(_)) {
+                if file_count == flat_index {
+                    return i;
+                }
+                file_count += 1;
+            }
+        }
+        self.display_items_cache.len().saturating_sub(1)
     }
 
     /// Get the file list for the files pane (staged then unstaged for uncommitted,
@@ -1442,10 +1518,10 @@ impl App {
             }
             Action::OpenFileDiff => {
                 self.sync_file_list_cache();
-                if !self.file_list_cache.is_empty() {
+                if let Some(file) = self.selected_file().cloned() {
                     let file_list = self.file_list_cache.clone();
-                    let path = file_list[self.file_selected_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(self.file_selected_index, file_list, &path) {
+                    let flat_idx = self.display_index_to_flat_index(self.file_selected_index);
+                    if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 } else if self.is_diff_loading() {
@@ -1461,7 +1537,7 @@ impl App {
 
     fn handle_files_action(&mut self, action: Action) -> Result<()> {
         self.sync_file_list_cache();
-        let file_count = self.file_list_cache.len();
+        let item_count = self.display_items_cache.len();
 
         match action {
             Action::Quit => {
@@ -1473,7 +1549,7 @@ impl App {
                 }
             }
             Action::MoveDown => {
-                if file_count > 0 && self.file_selected_index + 1 < file_count {
+                if item_count > 0 && self.file_selected_index + 1 < item_count {
                     self.file_selected_index += 1;
                 }
             }
@@ -1481,35 +1557,32 @@ impl App {
                 self.file_selected_index = self.file_selected_index.saturating_sub(10);
             }
             Action::PageDown => {
-                if file_count > 0 {
+                if item_count > 0 {
                     self.file_selected_index =
-                        (self.file_selected_index + 10).min(file_count - 1);
+                        (self.file_selected_index + 10).min(item_count - 1);
                 }
             }
             Action::GoToTop => {
                 self.file_selected_index = 0;
             }
             Action::GoToBottom => {
-                if file_count > 0 {
-                    self.file_selected_index = file_count - 1;
+                if item_count > 0 {
+                    self.file_selected_index = item_count - 1;
                 }
             }
             Action::OpenFileDiff => {
-                // Open diff for the selected file
-                if self.file_selected_index < file_count {
+                if let Some(file) = self.selected_file().cloned() {
                     let file_list = self.file_list_cache.clone();
-                    let path = file_list[self.file_selected_index].path.clone();
-                    if let Err(e) =
-                        self.enter_file_diff(self.file_selected_index, file_list, &path)
-                    {
+                    let flat_idx = self.display_index_to_flat_index(self.file_selected_index);
+                    if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
             }
             Action::OpenWithDefault => {
-                if self.file_selected_index < file_count {
+                if let Some(file) = self.selected_file() {
                     use std::process::{Command, Stdio};
-                    let path = self.file_list_cache[self.file_selected_index].path.clone();
+                    let path = file.path.clone();
                     let full_path = std::path::Path::new(&self.repo_path).join(&path);
                     let result = if cfg!(target_os = "macos") {
                         Command::new("open")
@@ -1975,32 +2048,50 @@ impl App {
             return Ok(());
         }
 
-        let file_to_toggle = self.file_list_cache.get(self.file_selected_index).cloned();
+        let files = self
+            .selected_files()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if files.is_empty() {
+            return Ok(());
+        }
 
-        if let Some(file) = file_to_toggle {
-            let was_staged = matches!(file.stage_status, Some(StageStatus::Staged));
-            let was_staging = !was_staged;
+        // Determine direction: if any file is unstaged, we stage; otherwise unstage all
+        let any_unstaged = files
+            .iter()
+            .any(|f| !matches!(f.stage_status, Some(StageStatus::Staged)));
+        let staging = any_unstaged;
+
+        for file in &files {
             let path_str = file.path.to_string_lossy().to_string();
-            match file.stage_status {
-                Some(StageStatus::Staged) => unstage_file(&self.repo_path, &path_str)?,
-                _ => stage_file(&self.repo_path, &path_str)?,
-            }
-            self.last_undoable_op = Some(UndoableOperation::Stage {
-                path: path_str,
-                was_staged,
-            });
-            self.clear_uncommitted_diff_cache();
-            self.refresh(true)?;
-            self.sync_file_list_cache();
-
-            // After staging, advance to the next item so selection doesn't
-            // follow the file into the staged section.
-            if was_staging && !self.file_list_cache.is_empty() {
-                let max_idx = self.file_list_cache.len() - 1;
-                self.file_selected_index =
-                    (self.file_selected_index + 1).min(max_idx);
+            if staging {
+                stage_file(&self.repo_path, &path_str)?;
+            } else {
+                unstage_file(&self.repo_path, &path_str)?;
             }
         }
+
+        // Record undo for single file; for multiple, record the first
+        if files.len() == 1 {
+            self.last_undoable_op = Some(UndoableOperation::Stage {
+                path: files[0].path.to_string_lossy().to_string(),
+                was_staged: !staging,
+            });
+        }
+
+        self.clear_uncommitted_diff_cache();
+        self.refresh(true)?;
+        self.sync_file_list_cache();
+
+        // After staging, advance to the next item so selection doesn't
+        // follow the file into the staged section.
+        if staging && !self.display_items_cache.is_empty() {
+            let max_idx = self.display_items_cache.len() - 1;
+            self.file_selected_index =
+                (self.file_selected_index + 1).min(max_idx);
+        }
+
         Ok(())
     }
 
@@ -2009,26 +2100,16 @@ impl App {
             return Ok(());
         }
 
-        let file = self.file_list_cache.get(self.file_selected_index).cloned();
-        let Some(file) = file else {
-            return Ok(());
-        };
-
-        // In folder mode, ignore the folder; otherwise ignore the file
-        let pattern = if self.files_group_by_folder {
-            let folder = file
-                .path
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if folder.is_empty() || folder == "." {
-                // File is at repo root — ignore the file itself
-                file.path.to_string_lossy().to_string()
-            } else {
-                format!("{}/", folder)
+        // Resolve the pattern: header → folder path, file → file path
+        let pattern = match self.selected_display_item() {
+            Some(FilesPaneItem::Header(text)) => {
+                // Header text is like "src/utils/" — use as-is
+                text.clone()
             }
-        } else {
-            file.path.to_string_lossy().to_string()
+            Some(FilesPaneItem::File(file)) => {
+                file.path.to_string_lossy().to_string()
+            }
+            None => return Ok(()),
         };
 
         match add_to_gitignore(&self.repo_path, &pattern)? {
@@ -2054,25 +2135,15 @@ impl App {
             return Ok(());
         }
 
-        let file = self.file_list_cache.get(self.file_selected_index).cloned();
-        let Some(file) = file else {
-            return Ok(());
-        };
-
-        // In folder mode, archive the folder; otherwise archive the file
-        let target = if self.files_group_by_folder {
-            let folder = file
-                .path
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if folder.is_empty() || folder == "." {
-                file.path.to_string_lossy().to_string()
-            } else {
-                folder
+        // Resolve target: header → folder path (without trailing /), file → file path
+        let target = match self.selected_display_item() {
+            Some(FilesPaneItem::Header(text)) => {
+                text.trim_end_matches('/').to_string()
             }
-        } else {
-            file.path.to_string_lossy().to_string()
+            Some(FilesPaneItem::File(file)) => {
+                file.path.to_string_lossy().to_string()
+            }
+            None => return Ok(()),
         };
 
         archive_path(&self.repo_path, &target)?;
@@ -2289,8 +2360,14 @@ impl App {
             }
             Action::Cancel | Action::Quit => {
                 // Return to normal with files panel focused, preserving file index
-                if let AppMode::FileDiff { file_index, .. } = &self.mode {
-                    self.file_selected_index = *file_index;
+                let flat_index = if let AppMode::FileDiff { file_index, .. } = &self.mode {
+                    Some(*file_index)
+                } else {
+                    None
+                };
+                if let Some(fi) = flat_index {
+                    self.sync_file_list_cache();
+                    self.file_selected_index = self.flat_index_to_display_index(fi);
                 }
                 self.focused_panel = FocusedPanel::Files;
                 self.return_to_normal();
@@ -2834,6 +2911,7 @@ mod tests {
             focused_panel: FocusedPanel::Graph,
             file_selected_index: 0,
             file_list_cache: Vec::new(),
+            display_items_cache: Vec::new(),
             files_group_by_folder: false,
             files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -2911,6 +2989,7 @@ mod tests {
             focused_panel: FocusedPanel::Graph,
             file_selected_index: 0,
             file_list_cache: Vec::new(),
+            display_items_cache: Vec::new(),
             files_group_by_folder: false,
             files_filter: String::new(),
             hidden_branches: std::collections::HashSet::new(),

@@ -25,6 +25,9 @@ When the uncommitted files node is selected and user is in FileSelect mode, pres
 ### [DONE] Instant File Display
 Files and their M/A/D status show instantly via a synchronous quick scan. Line numbers (+X/-Y) show "..." while the full diff loads asynchronously.
 
+### [DONE] Selectable Folder Headers
+In folder mode, folder headers are now selectable. Pressing `s` on a folder header stages/unstages all files in that folder. Pressing `i` gitignores the folder, `v` archives it. Selection index now maps to display items (headers + files) instead of just files.
+
 ### [DONE] Folder View with `f` Key
 Pressing `f` in the files panel arranges files by folder hierarchy with directory headers. Panel title shows "[folders]" when enabled.
 

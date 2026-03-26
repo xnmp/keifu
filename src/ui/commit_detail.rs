@@ -114,17 +114,30 @@ impl<'a> CommitDetailWidget<'a> {
         let indent = "  ";
         let prefix_len = 2; // "M " is 2 chars
 
-        let mut file_idx = 0;
-        for item in &items {
+        for (item_idx, item) in items.iter().enumerate() {
             match item {
                 FilesPaneItem::Header(text) => {
+                    let is_selected = selected_file_index == Some(item_idx);
+                    if is_selected {
+                        selected_line_idx = lines.len() as u16;
+                    }
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    };
                     lines.push(Line::from(Span::styled(
                         format!("  {}", text),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        style,
                     )));
                 }
                 FilesPaneItem::File(file) => {
-                    let is_selected = selected_file_index == Some(file_idx);
+                    let is_selected = selected_file_index == Some(item_idx);
                     if is_selected {
                         selected_line_idx = lines.len() as u16;
                     }
@@ -199,7 +212,6 @@ impl<'a> CommitDetailWidget<'a> {
                             ]).style(select_style));
                         }
                     }
-                    file_idx += 1;
                 }
             }
         }

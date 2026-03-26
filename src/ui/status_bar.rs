@@ -152,6 +152,8 @@ impl<'a> Widget for StatusBar<'a> {
                                 spans.push(Span::styled(" ^z ", key_style));
                                 spans.push(Span::styled("undo ", desc_style));
                             }
+                            spans.push(Span::styled(" f ", key_style));
+                            spans.push(Span::styled("folders ", desc_style));
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                         }
