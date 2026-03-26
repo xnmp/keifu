@@ -23,7 +23,8 @@ pub struct CommitDetailWidget<'a> {
     selected_line_index: u16,
     is_focused: bool,
     is_files_focused: bool,
-    files_title: String,
+    files_title: Line<'a>,
+    files_filter_active: bool,
     commit_scroll: u16,
 }
 
@@ -44,19 +45,32 @@ impl<'a> CommitDetailWidget<'a> {
             selected_line_index,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             is_files_focused: app.focused_panel == FocusedPanel::Files,
+            files_filter_active: app.files_filter_active,
             commit_scroll: app.commit_detail_scroll,
             files_title: {
-                let mut title = String::from(" Changed Files");
+                let mut spans = vec![Span::raw(" Changed Files")];
                 if app.files_group_by_folder {
-                    title.push_str(" [folders]");
+                    spans.push(Span::styled(
+                        " [folders]",
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 }
                 if app.files_filter_active {
-                    title.push_str(&format!(" filter: {}_", app.files_filter));
+                    spans.push(Span::styled(
+                        format!(" filter: {}\u{2588}", app.files_filter),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
                 } else if !app.files_filter.is_empty() {
-                    title.push_str(&format!(" [{}]", app.files_filter));
+                    spans.push(Span::styled(
+                        format!(" [{}]", app.files_filter),
+                        Style::default().fg(Color::Cyan),
+                    ));
                 }
-                title.push(' ');
-                title
+                spans.push(Span::raw(" "));
+                Line::from(spans)
             },
         }
     }
@@ -469,13 +483,15 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .split(area);
 
         // Left: file list (files pane)
-        let files_border = if self.is_files_focused {
+        let files_border = if self.files_filter_active {
+            Color::Yellow
+        } else if self.is_files_focused {
             Color::Green
         } else {
             Color::DarkGray
         };
         let files_block = Block::default()
-            .title(self.files_title.as_str())
+            .title(self.files_title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(files_border));
 
@@ -506,10 +522,27 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(commit_border));
 
-        // Clamp scroll to content height
-        let commit_visible = chunks[1].height.saturating_sub(2);
-        let commit_total = self.commit_lines.len() as u16;
-        let commit_max_scroll = commit_total.saturating_sub(commit_visible);
+        // Calculate wrapped line count for accurate scroll bounds.
+        // Each logical line wraps to ceil(width / inner_width) visual lines.
+        let commit_inner_width = chunks[1].width.saturating_sub(2) as usize;
+        let commit_visible = chunks[1].height.saturating_sub(2) as usize;
+        let commit_wrapped_total: usize = if commit_inner_width > 0 {
+            self.commit_lines
+                .iter()
+                .map(|line| {
+                    let w = line.width();
+                    if w == 0 {
+                        1
+                    } else {
+                        w.div_ceil(commit_inner_width)
+                    }
+                })
+                .sum()
+        } else {
+            self.commit_lines.len()
+        };
+        let commit_max_scroll =
+            (commit_wrapped_total).saturating_sub(commit_visible) as u16;
         let commit_scroll = self.commit_scroll.min(commit_max_scroll);
 
         let commit_paragraph = Paragraph::new(self.commit_lines)

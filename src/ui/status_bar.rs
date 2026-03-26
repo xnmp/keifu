@@ -19,6 +19,7 @@ pub struct StatusBar<'a> {
     message: Option<&'a str>,
     is_busy: bool,
     is_uncommitted: bool,
+    is_filtering: bool,
     search_info: Option<String>,
 }
 
@@ -54,6 +55,7 @@ impl<'a> StatusBar<'a> {
             message: app.get_message(),
             is_busy: app.is_network_busy(),
             is_uncommitted: app.is_uncommitted_selected(),
+            is_filtering: app.files_filter_active,
             search_info,
         }
     }
@@ -134,6 +136,18 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("branches ", desc_style));
                             spans.push(Span::styled(" ? ", key_style));
                             spans.push(Span::styled("help", desc_style));
+                        }
+                        FocusedPanel::Files if self.is_filtering => {
+                            let filter_style = Style::default()
+                                .fg(Color::Black)
+                                .bg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD);
+                            spans.push(Span::styled(" FILTER ", filter_style));
+                            spans.push(Span::raw("  "));
+                            spans.push(Span::styled(" Enter ", key_style));
+                            spans.push(Span::styled("confirm ", desc_style));
+                            spans.push(Span::styled(" Esc ", key_style));
+                            spans.push(Span::styled("cancel ", desc_style));
                         }
                         FocusedPanel::Files => {
                             spans.push(Span::styled(" ↑↓ ", key_style));
