@@ -45,9 +45,9 @@ pub enum Action {
     ArchiveFile,
     UndoLastFileOp,
     ToggleFolderView,
+    StartFilesFilter,
     FilesFilterChar(char),
     FilesFilterBackspace,
-    FilesFilterClear,
 
     // Commit editor
     StartEditing,

@@ -24,6 +24,7 @@ pub struct CommitDetailWidget<'a> {
     is_focused: bool,
     is_files_focused: bool,
     files_title: String,
+    commit_scroll: u16,
 }
 
 impl<'a> CommitDetailWidget<'a> {
@@ -43,12 +44,15 @@ impl<'a> CommitDetailWidget<'a> {
             selected_line_index,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             is_files_focused: app.focused_panel == FocusedPanel::Files,
+            commit_scroll: app.commit_detail_scroll,
             files_title: {
                 let mut title = String::from(" Changed Files");
                 if app.files_group_by_folder {
                     title.push_str(" [folders]");
                 }
-                if !app.files_filter.is_empty() {
+                if app.files_filter_active {
+                    title.push_str(&format!(" filter: {}_", app.files_filter));
+                } else if !app.files_filter.is_empty() {
                     title.push_str(&format!(" [{}]", app.files_filter));
                 }
                 title.push(' ');
@@ -502,8 +506,15 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(commit_border));
 
+        // Clamp scroll to content height
+        let commit_visible = chunks[1].height.saturating_sub(2);
+        let commit_total = self.commit_lines.len() as u16;
+        let commit_max_scroll = commit_total.saturating_sub(commit_visible);
+        let commit_scroll = self.commit_scroll.min(commit_max_scroll);
+
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)
+            .scroll((commit_scroll, 0))
             .wrap(Wrap { trim: false });
 
         Widget::render(commit_paragraph, chunks[1], buf);

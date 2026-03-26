@@ -63,6 +63,7 @@ fn main() -> Result<()> {
                     &app.mode,
                     app.focused_panel,
                     app.editing_commit_message,
+                    app.files_filter_active,
                 ) {
                     if let Err(e) = app.handle_action(action) {
                         // Show errors in the UI

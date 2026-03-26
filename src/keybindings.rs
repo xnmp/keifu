@@ -12,6 +12,7 @@ pub fn map_key_to_action(
     mode: &AppMode,
     focused_panel: FocusedPanel,
     editing_commit: bool,
+    files_filter_active: bool,
 ) -> Option<Action> {
     #[cfg(windows)]
     if key.kind != KeyEventKind::Press {
@@ -24,7 +25,7 @@ pub fn map_key_to_action(
     }
 
     match mode {
-        AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit),
+        AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit, files_filter_active),
         AppMode::Help => map_help_mode(key),
         AppMode::Input { action, .. } => {
             if *action == crate::app::InputAction::Search {
@@ -45,6 +46,7 @@ fn map_normal_mode(
     key: KeyEvent,
     panel: FocusedPanel,
     editing_commit: bool,
+    files_filter_active: bool,
 ) -> Option<Action> {
     // If editing commit message, route to editor keybindings
     if editing_commit && panel == FocusedPanel::CommitDetail {
@@ -60,7 +62,13 @@ fn map_normal_mode(
 
     match panel {
         FocusedPanel::Graph => map_graph_mode(key),
-        FocusedPanel::Files => map_files_mode(key),
+        FocusedPanel::Files => {
+            if files_filter_active {
+                map_files_filter_mode(key)
+            } else {
+                map_files_mode(key)
+            }
+        }
         FocusedPanel::CommitDetail => map_commit_detail_mode(key),
     }
 }
@@ -163,26 +171,49 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::OpenFileDiff)
         }
 
-        // Esc returns to graph (or clears filter)
-        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
+        // Start filter mode
+        (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartFilesFilter),
 
-        // Backspace for filter
-        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilesFilterBackspace),
+        // Esc returns to graph
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
 
         // Help / quit
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
         (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
 
-        // Other characters become filter input
+        _ => None,
+    }
+}
+
+/// Key bindings when files filter is active (typing goes to filter)
+fn map_files_filter_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        // Enter confirms filter (keep filter text, exit filter mode)
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
+        // Esc cancels filter (clear filter text, exit filter mode)
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
+        // Backspace
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilesFilterBackspace),
+        // Characters go to filter
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::FilesFilterChar(c)),
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::FilesFilterChar(c)),
-
         _ => None,
     }
 }
 
 fn map_commit_detail_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
+        // Scroll
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Home) => Some(Action::GoToTop),
+
         // Enter starts editing (for uncommitted changes)
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::StartEditing),
 

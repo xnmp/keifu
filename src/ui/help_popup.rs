@@ -119,11 +119,19 @@ impl Widget for HelpPopup {
 
         lines.extend([
             Line::from(vec![
+                Span::styled("  Ctrl+f     ", key_style),
+                Span::styled("Filter files", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Commit Panel", header_style)),
+            Line::from(vec![
+                Span::styled("  ↑ / ↓      ", key_style),
+                Span::styled("Scroll", desc_style),
+            ]),
             Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Start editing commit message", desc_style),

@@ -154,10 +154,14 @@ impl<'a> Widget for StatusBar<'a> {
                             }
                             spans.push(Span::styled(" f ", key_style));
                             spans.push(Span::styled("folders ", desc_style));
+                            spans.push(Span::styled(" ^f ", key_style));
+                            spans.push(Span::styled("filter ", desc_style));
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                         }
                         FocusedPanel::CommitDetail => {
+                            spans.push(Span::styled(" ↑↓ ", key_style));
+                            spans.push(Span::styled("scroll ", desc_style));
                             spans.push(Span::styled(" Enter ", key_style));
                             spans.push(Span::styled("edit msg ", desc_style));
                             spans.push(Span::styled(" ←→ ", key_style));

@@ -308,6 +308,8 @@ pub struct App {
     pub hidden_branches: std::collections::HashSet<String>,
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
+    pub commit_detail_scroll: u16,
+    pub files_filter_active: bool,
 
     // Branch selection state
     /// List of (node_index, branch_name) for all branches
@@ -436,6 +438,8 @@ impl App {
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
+            commit_detail_scroll: 0,
+            files_filter_active: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -1413,14 +1417,10 @@ impl App {
             Action::FocusGraph => {
                 if self.editing_commit_message {
                     self.editing_commit_message = false;
-                } else if !self.files_filter.is_empty()
-                    && self.focused_panel == FocusedPanel::Files
-                {
-                    // First Esc clears filter, second Esc goes to graph
-                    self.files_filter.clear();
                 } else {
                     self.focused_panel = FocusedPanel::Graph;
                     self.files_filter.clear();
+                    self.files_filter_active = false;
                 }
                 return Ok(());
             }
@@ -1436,6 +1436,21 @@ impl App {
     }
 
     fn handle_graph_action(&mut self, action: Action) -> Result<()> {
+        // Reset commit detail scroll on any graph navigation
+        if matches!(
+            action,
+            Action::MoveUp
+                | Action::MoveDown
+                | Action::PageUp
+                | Action::PageDown
+                | Action::GoToTop
+                | Action::GoToBottom
+                | Action::JumpToHead
+                | Action::NextBranch
+                | Action::PrevBranch
+        ) {
+            self.commit_detail_scroll = 0;
+        }
         match action {
             Action::Quit => {
                 self.should_quit = true;
@@ -1628,6 +1643,10 @@ impl App {
             Action::ToggleFolderView => {
                 self.files_group_by_folder = !self.files_group_by_folder;
             }
+            Action::StartFilesFilter => {
+                self.files_filter_active = true;
+                self.files_filter.clear();
+            }
             Action::FilesFilterChar(c) => {
                 self.files_filter.push(c);
             }
@@ -1635,11 +1654,18 @@ impl App {
                 if !self.files_filter.is_empty() {
                     self.files_filter.pop();
                 } else {
-                    self.focused_panel = FocusedPanel::Graph;
+                    // Empty filter + backspace exits filter mode
+                    self.files_filter_active = false;
                 }
             }
-            Action::FilesFilterClear => {
+            Action::Confirm => {
+                // Enter: keep filter, exit filter mode
+                self.files_filter_active = false;
+            }
+            Action::Cancel => {
+                // Esc: clear filter, exit filter mode
                 self.files_filter.clear();
+                self.files_filter_active = false;
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
@@ -1666,6 +1692,21 @@ impl App {
                 if self.is_uncommitted_selected() {
                     self.editing_commit_message = true;
                 }
+            }
+            Action::MoveUp => {
+                self.commit_detail_scroll = self.commit_detail_scroll.saturating_sub(1);
+            }
+            Action::MoveDown => {
+                self.commit_detail_scroll += 1;
+            }
+            Action::PageUp => {
+                self.commit_detail_scroll = self.commit_detail_scroll.saturating_sub(10);
+            }
+            Action::PageDown => {
+                self.commit_detail_scroll += 10;
+            }
+            Action::GoToTop => {
+                self.commit_detail_scroll = 0;
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
@@ -2917,6 +2958,8 @@ mod tests {
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
+            commit_detail_scroll: 0,
+            files_filter_active: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -2995,6 +3038,8 @@ mod tests {
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
+            commit_detail_scroll: 0,
+            files_filter_active: false,
             branch_positions: Vec::new(),
             selected_branch_position: None,
             search_state: SearchState::default(),
