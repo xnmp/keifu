@@ -101,7 +101,7 @@ impl Widget for HelpPopup {
                 Span::styled("Add to .gitignore (folder in folder mode)", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  a          ", key_style),
+                Span::styled("  v          ", key_style),
                 Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
             ]),
             Line::from(vec![
