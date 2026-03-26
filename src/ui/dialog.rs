@@ -90,14 +90,14 @@ impl<'a> Widget for ConfirmDialog<'a> {
             Line::from(""),
             Line::from(vec![
                 Span::styled(
-                    "  y",
+                    "  y/Enter",
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(": Yes  "),
                 Span::styled(
-                    "n",
+                    "n/Esc",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(": No"),
