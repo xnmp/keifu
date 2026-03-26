@@ -346,6 +346,9 @@ pub struct App {
     /// Whether to suppress error dialogs for fetch failures (for auto-fetch)
     fetch_silent: bool,
 
+    // Async push
+    push_receiver: Option<Receiver<Result<(), String>>>,
+
     // Auto-refresh state
     config: Config,
     last_refresh_time: Instant,
@@ -442,6 +445,7 @@ impl App {
             message_time: initial_message_time,
             fetch_receiver: None,
             fetch_silent: false,
+            push_receiver: None,
             config,
             last_refresh_time: now,
             last_fetch_time: now,
@@ -833,6 +837,16 @@ impl App {
         self.fetch_receiver.is_some()
     }
 
+    /// Check if push is currently in progress
+    pub fn is_pushing(&self) -> bool {
+        self.push_receiver.is_some()
+    }
+
+    /// Check if any async network operation is in progress
+    pub fn is_network_busy(&self) -> bool {
+        self.is_fetching() || self.is_pushing()
+    }
+
     /// Check and perform auto-refresh if interval has elapsed
     pub fn check_auto_refresh(&mut self) {
         if self.is_fetching() {
@@ -887,6 +901,42 @@ impl App {
         }
     }
 
+    /// Start push in background
+    fn start_push(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        let repo_path = self.repo_path.clone();
+
+        thread::spawn(move || {
+            let result = push_to_origin(&repo_path).map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+
+        self.push_receiver = Some(rx);
+        self.set_message("Pushing to origin...");
+    }
+
+    /// Check if async push has completed and process the result
+    pub fn update_push_status(&mut self) {
+        let Some(rx) = &self.push_receiver else {
+            return;
+        };
+        let Ok(push_result) = rx.try_recv() else {
+            return;
+        };
+
+        self.push_receiver = None;
+
+        match push_result {
+            Ok(()) => {
+                self.set_message("Pushed to origin");
+                if let Err(e) = self.refresh(true) {
+                    self.show_error(format!("Refresh failed: {e}"));
+                }
+            }
+            Err(e) => self.show_error(e),
+        }
+    }
+
     /// Reset both timers (call after manual refresh/fetch)
     fn reset_timers(&mut self) {
         let now = Instant::now();
@@ -904,8 +954,8 @@ impl App {
     pub fn get_message(&self) -> Option<&str> {
         const MESSAGE_TIMEOUT_SECS: u64 = 5;
 
-        // Don't timeout while fetching
-        if self.is_fetching() {
+        // Don't timeout while a network operation is in progress
+        if self.is_network_busy() {
             return self.message.as_deref();
         }
 
@@ -1912,6 +1962,7 @@ impl App {
         let file_to_toggle = self.file_list_cache.get(self.file_selected_index).cloned();
 
         if let Some(file) = file_to_toggle {
+            let was_staging = !matches!(file.stage_status, Some(StageStatus::Staged));
             let path_str = file.path.to_string_lossy().to_string();
             match file.stage_status {
                 Some(StageStatus::Staged) => unstage_file(&self.repo_path, &path_str)?,
@@ -1920,6 +1971,14 @@ impl App {
             self.clear_uncommitted_diff_cache();
             self.refresh(true)?;
             self.sync_file_list_cache();
+
+            // After staging, advance to the next item so selection doesn't
+            // follow the file into the staged section.
+            if was_staging && !self.file_list_cache.is_empty() {
+                let max_idx = self.file_list_cache.len() - 1;
+                self.file_selected_index =
+                    (self.file_selected_index + 1).min(max_idx);
+            }
         }
         Ok(())
     }
@@ -2410,8 +2469,7 @@ impl App {
                         reset_to_commit(&self.repo_path, oid, ResetMode::Hard)?;
                     }
                     ConfirmAction::Push => {
-                        push_to_origin(&self.repo_path)?;
-                        self.set_message("Pushed to origin");
+                        self.start_push();
                     }
                 }
                 self.refresh(true)?;
@@ -2735,6 +2793,7 @@ mod tests {
             message_time: initial_message_time,
             fetch_receiver: None,
             fetch_silent: false,
+            push_receiver: None,
             config: Config::default(),
             last_refresh_time: now,
             last_fetch_time: now,
@@ -2810,6 +2869,7 @@ mod tests {
             message_time: None,
             fetch_receiver: None,
             fetch_silent: false,
+            push_receiver: None,
             config: Config::default(),
             last_refresh_time: Instant::now(),
             last_fetch_time: Instant::now(),

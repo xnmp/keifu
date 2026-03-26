@@ -17,7 +17,7 @@ pub struct StatusBar<'a> {
     head_name: Option<&'a str>,
     error_message: Option<&'a str>,
     message: Option<&'a str>,
-    is_fetching: bool,
+    is_busy: bool,
     search_info: Option<String>,
 }
 
@@ -51,7 +51,7 @@ impl<'a> StatusBar<'a> {
             head_name: app.head_name.as_deref(),
             error_message,
             message: app.get_message(),
-            is_fetching: app.is_fetching(),
+            is_busy: app.is_network_busy(),
             search_info,
         }
     }
@@ -97,7 +97,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Normal => match self.message {
                 Some(msg) => {
                     // Yellow for in-progress, Cyan for success
-                    let bg = if self.is_fetching {
+                    let bg = if self.is_busy {
                         Color::Yellow
                     } else {
                         Color::Cyan

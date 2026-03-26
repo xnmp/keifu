@@ -43,8 +43,9 @@ fn main() -> Result<()> {
             ui::draw(frame, &mut app);
         })?;
 
-        // Check if async fetch has completed
+        // Check if async operations have completed
         app.update_fetch_status();
+        app.update_push_status();
 
         // Auto-refresh check
         app.check_auto_refresh();
