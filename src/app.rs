@@ -19,7 +19,8 @@ use crate::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
             add_to_gitignore, archive_path, push_to_origin, rebase_branch,
-            reset_to_commit, revert_commit, stage_file, unstage_file, ResetMode,
+            remove_from_gitignore, reset_to_commit, revert_commit, stage_file,
+            unarchive_path, unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
         StageStatus, WorkingTreeStatus,
@@ -134,6 +135,14 @@ impl CommitMenuItem {
 pub enum FilesPaneItem {
     Header(String),
     File(FileDiffInfo),
+}
+
+/// An operation that can be undone with Ctrl+Z
+#[derive(Debug, Clone)]
+enum UndoableOperation {
+    Stage { path: String, was_staged: bool },
+    Gitignore { pattern: String },
+    Archive { relative_path: String },
 }
 
 /// Application modes
@@ -349,6 +358,9 @@ pub struct App {
     // Async push
     push_receiver: Option<Receiver<Result<(), String>>>,
 
+    // Undo
+    last_undoable_op: Option<UndoableOperation>,
+
     // Auto-refresh state
     config: Config,
     last_refresh_time: Instant,
@@ -446,6 +458,7 @@ impl App {
             fetch_receiver: None,
             fetch_silent: false,
             push_receiver: None,
+            last_undoable_op: None,
             config,
             last_refresh_time: now,
             last_fetch_time: now,
@@ -1536,6 +1549,9 @@ impl App {
             Action::ArchiveFile => {
                 self.archive_selected_file()?;
             }
+            Action::UndoLastFileOp => {
+                self.undo_last_file_op()?;
+            }
             Action::ToggleFolderView => {
                 self.files_group_by_folder = !self.files_group_by_folder;
             }
@@ -1962,12 +1978,17 @@ impl App {
         let file_to_toggle = self.file_list_cache.get(self.file_selected_index).cloned();
 
         if let Some(file) = file_to_toggle {
-            let was_staging = !matches!(file.stage_status, Some(StageStatus::Staged));
+            let was_staged = matches!(file.stage_status, Some(StageStatus::Staged));
+            let was_staging = !was_staged;
             let path_str = file.path.to_string_lossy().to_string();
             match file.stage_status {
                 Some(StageStatus::Staged) => unstage_file(&self.repo_path, &path_str)?,
                 _ => stage_file(&self.repo_path, &path_str)?,
             }
+            self.last_undoable_op = Some(UndoableOperation::Stage {
+                path: path_str,
+                was_staged,
+            });
             self.clear_uncommitted_diff_cache();
             self.refresh(true)?;
             self.sync_file_list_cache();
@@ -2012,6 +2033,9 @@ impl App {
 
         match add_to_gitignore(&self.repo_path, &pattern)? {
             true => {
+                self.last_undoable_op = Some(UndoableOperation::Gitignore {
+                    pattern: pattern.clone(),
+                });
                 self.set_message(format!("Added '{}' to .gitignore", pattern));
                 self.clear_uncommitted_diff_cache();
                 self.refresh(true)?;
@@ -2052,11 +2076,58 @@ impl App {
         };
 
         archive_path(&self.repo_path, &target)?;
+        self.last_undoable_op = Some(UndoableOperation::Archive {
+            relative_path: target.clone(),
+        });
         self.set_message(format!("Archived '{}'", target));
         self.clear_uncommitted_diff_cache();
         self.refresh(true)?;
         self.sync_file_list_cache();
 
+        Ok(())
+    }
+
+    fn undo_last_file_op(&mut self) -> Result<()> {
+        let Some(op) = self.last_undoable_op.take() else {
+            self.set_message("Nothing to undo");
+            return Ok(());
+        };
+
+        match op {
+            UndoableOperation::Stage { path, was_staged } => {
+                // Reverse: if it was_staged before the toggle, we unstaged it, so re-stage.
+                // If it wasn't staged, we staged it, so unstage.
+                if was_staged {
+                    stage_file(&self.repo_path, &path)?;
+                } else {
+                    unstage_file(&self.repo_path, &path)?;
+                }
+                self.set_message(format!("Undid stage/unstage '{}'", path));
+            }
+            UndoableOperation::Gitignore { pattern } => {
+                match remove_from_gitignore(&self.repo_path, &pattern)? {
+                    true => self.set_message(format!(
+                        "Removed '{}' from .gitignore",
+                        pattern
+                    )),
+                    false => {
+                        self.set_message(format!(
+                            "'{}' not found in .gitignore",
+                            pattern
+                        ));
+                        return Ok(());
+                    }
+                }
+            }
+            UndoableOperation::Archive { relative_path } => {
+                unarchive_path(&self.repo_path, &relative_path)?;
+                self.set_message(format!("Restored '{}' from archive", relative_path));
+            }
+        }
+
+        self.clear_uncommitted_diff_cache();
+        self.refresh(true)?;
+        self.sync_file_list_cache();
         Ok(())
     }
 
@@ -2794,6 +2865,7 @@ mod tests {
             fetch_receiver: None,
             fetch_silent: false,
             push_receiver: None,
+            last_undoable_op: None,
             config: Config::default(),
             last_refresh_time: now,
             last_fetch_time: now,
@@ -2870,6 +2942,7 @@ mod tests {
             fetch_receiver: None,
             fetch_silent: false,
             push_receiver: None,
+            last_undoable_op: None,
             config: Config::default(),
             last_refresh_time: Instant::now(),
             last_fetch_time: Instant::now(),

@@ -397,6 +397,63 @@ pub fn archive_path(repo_path: &str, relative_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove a pattern from .gitignore at the repository root.
+/// Returns Ok(false) if the pattern was not found, Ok(true) if removed.
+pub fn remove_from_gitignore(repo_path: &str, pattern: &str) -> Result<bool> {
+    let gitignore_path = Path::new(repo_path).join(".gitignore");
+
+    if !gitignore_path.exists() {
+        return Ok(false);
+    }
+
+    let contents =
+        fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
+
+    let trimmed = pattern.trim();
+    let filtered: Vec<&str> = contents
+        .lines()
+        .filter(|line| line.trim() != trimmed)
+        .collect();
+
+    if filtered.len() == contents.lines().count() {
+        return Ok(false);
+    }
+
+    let mut new_contents = filtered.join("\n");
+    if !new_contents.is_empty() {
+        new_contents.push('\n');
+    }
+
+    fs::write(&gitignore_path, new_contents).context("Failed to write .gitignore")?;
+
+    Ok(true)
+}
+
+/// Move a file or folder from `.archive/` back to its original location.
+pub fn unarchive_path(repo_path: &str, relative_path: &str) -> Result<()> {
+    let repo = Path::new(repo_path);
+    let source = repo.join(".archive").join(relative_path);
+
+    if !source.exists() {
+        bail!(
+            "Archived path does not exist: .archive/{}",
+            relative_path
+        );
+    }
+
+    let dest = repo.join(relative_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).context("Failed to create directory structure")?;
+    }
+
+    fs::rename(&source, &dest).context(format!(
+        "Failed to move '.archive/{}' back to '{}'",
+        relative_path, relative_path
+    ))?;
+
+    Ok(())
+}
+
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     let output = Command::new("git")
@@ -529,6 +586,72 @@ mod tests {
     fn archive_path_errors_on_missing_source() {
         let dir = setup_temp_dir();
         let result = archive_path(dir.path().to_str().unwrap(), "nonexistent.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn remove_from_gitignore_removes_matching_line() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join(".gitignore"), "target/\nnode_modules/\n*.log\n").unwrap();
+
+        let result = remove_from_gitignore(dir.path().to_str().unwrap(), "node_modules/").unwrap();
+        assert!(result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "target/\n*.log\n");
+    }
+
+    #[test]
+    fn remove_from_gitignore_returns_false_if_not_found() {
+        let dir = setup_temp_dir();
+        fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+
+        let result = remove_from_gitignore(dir.path().to_str().unwrap(), "missing").unwrap();
+        assert!(!result);
+        let contents = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(contents, "target/\n");
+    }
+
+    #[test]
+    fn remove_from_gitignore_handles_missing_file() {
+        let dir = setup_temp_dir();
+        let result = remove_from_gitignore(dir.path().to_str().unwrap(), "target/").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn unarchive_path_moves_file_back() {
+        let dir = setup_temp_dir();
+        fs::create_dir_all(dir.path().join(".archive")).unwrap();
+        fs::write(dir.path().join(".archive/old.txt"), "content").unwrap();
+
+        unarchive_path(dir.path().to_str().unwrap(), "old.txt").unwrap();
+
+        assert!(!dir.path().join(".archive/old.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("old.txt")).unwrap(),
+            "content"
+        );
+    }
+
+    #[test]
+    fn unarchive_path_preserves_directory_structure() {
+        let dir = setup_temp_dir();
+        fs::create_dir_all(dir.path().join(".archive/src/utils")).unwrap();
+        fs::write(dir.path().join(".archive/src/utils/helper.rs"), "fn help() {}").unwrap();
+
+        unarchive_path(dir.path().to_str().unwrap(), "src/utils/helper.rs").unwrap();
+
+        assert!(!dir.path().join(".archive/src/utils/helper.rs").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/utils/helper.rs")).unwrap(),
+            "fn help() {}"
+        );
+    }
+
+    #[test]
+    fn unarchive_path_errors_on_missing_source() {
+        let dir = setup_temp_dir();
+        let result = unarchive_path(dir.path().to_str().unwrap(), "nonexistent.txt");
         assert!(result.is_err());
     }
 }

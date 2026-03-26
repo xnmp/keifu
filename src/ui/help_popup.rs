@@ -105,6 +105,10 @@ impl Widget for HelpPopup {
                 Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  Ctrl+z     ", key_style),
+                Span::styled("Undo last file operation", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
             ]),

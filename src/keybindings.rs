@@ -149,6 +149,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Archive file
         (KeyModifiers::NONE, KeyCode::Char('v')) => Some(Action::ArchiveFile),
 
+        // Undo last file operation
+        (KeyModifiers::CONTROL, KeyCode::Char('z')) => Some(Action::UndoLastFileOp),
+
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
 

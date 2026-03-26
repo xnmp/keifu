@@ -30,6 +30,9 @@ Pressing `f` in the files panel arranges files by folder hierarchy with director
 
 **Note:** Staging a folder header (to stage all files in folder) is not yet implemented — only individual file staging works currently.
 
+### [DONE] Undo with Ctrl+Z
+Pressing Ctrl+Z in the files pane undoes the last s/i/v operation. Single-slot undo (last operation only). Undo stage reverses the stage/unstage, undo gitignore removes the pattern from `.gitignore`, undo archive moves the file back from `.archive/`.
+
 ### [DONE] Archive File with `v` Key
 When the uncommitted files panel is selected, pressing `a` moves the selected file to `.archive/` at the repo root, preserving directory structure. In folder mode, moves the containing folder instead.
 
