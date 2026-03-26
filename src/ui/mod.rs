@@ -163,7 +163,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match &app.mode {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
-            frame.render_widget(HelpPopup, popup_area);
+            frame.render_widget(
+                HelpPopup {
+                    is_uncommitted: app.is_uncommitted_selected(),
+                },
+                popup_area,
+            );
         }
         AppMode::Input {
             input,

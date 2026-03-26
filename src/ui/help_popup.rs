@@ -8,7 +8,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-pub struct HelpPopup;
+pub struct HelpPopup {
+    pub is_uncommitted: bool,
+}
 
 impl Widget for HelpPopup {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -22,7 +24,7 @@ impl Widget for HelpPopup {
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD);
 
-        let lines = vec![
+        let mut lines = vec![
             Line::from(Span::styled("Navigation", header_style)),
             Line::from(vec![
                 Span::styled("  ↑ / ↓      ", key_style),
@@ -92,22 +94,30 @@ impl Widget for HelpPopup {
             ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
-            Line::from(vec![
-                Span::styled("  s          ", key_style),
-                Span::styled("Stage/unstage file", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  i          ", key_style),
-                Span::styled("Add to .gitignore (folder in folder mode)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  v          ", key_style),
-                Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+z     ", key_style),
-                Span::styled("Undo last file operation", desc_style),
-            ]),
+        ];
+
+        if self.is_uncommitted {
+            lines.extend([
+                Line::from(vec![
+                    Span::styled("  s          ", key_style),
+                    Span::styled("Stage/unstage file", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  i          ", key_style),
+                    Span::styled("Add to .gitignore (folder in folder mode)", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  v          ", key_style),
+                    Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  Ctrl+z     ", key_style),
+                    Span::styled("Undo last file operation", desc_style),
+                ]),
+            ]);
+        }
+
+        lines.extend([
             Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
@@ -146,7 +156,7 @@ impl Widget for HelpPopup {
                 Span::styled("  q          ", key_style),
                 Span::styled("Quit", desc_style),
             ]),
-        ];
+        ]);
 
         let block = Block::default()
             .title(" Help ")
