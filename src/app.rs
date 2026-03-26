@@ -2342,23 +2342,44 @@ impl App {
         Ok(())
     }
 
+    /// Check if a node is a connector-only row (not a commit, not uncommitted)
+    fn is_connector_node(&self, idx: usize) -> bool {
+        self.graph_layout
+            .nodes
+            .get(idx)
+            .is_some_and(|n| n.commit.is_none() && !n.is_uncommitted)
+    }
+
     fn move_selection(&mut self, delta: i32) {
         let max = self.graph_layout.nodes.len().saturating_sub(1);
         let current = self.graph_list_state.selected().unwrap_or(0);
-        let new = (current as i32 + delta).clamp(0, max as i32) as usize;
+        let mut new = (current as i32 + delta).clamp(0, max as i32) as usize;
+        // Skip connector rows in the direction of movement
+        let step: i32 = if delta > 0 { 1 } else { -1 };
+        while self.is_connector_node(new) && new > 0 && new < max {
+            new = (new as i32 + step).clamp(0, max as i32) as usize;
+        }
         self.graph_list_state.select(Some(new));
         self.sync_branch_selection_to_node(new);
     }
 
     fn select_first(&mut self) {
-        self.graph_list_state.select(Some(0));
-        self.sync_branch_selection_to_node(0);
+        let mut idx = 0;
+        let max = self.graph_layout.nodes.len().saturating_sub(1);
+        while self.is_connector_node(idx) && idx < max {
+            idx += 1;
+        }
+        self.graph_list_state.select(Some(idx));
+        self.sync_branch_selection_to_node(idx);
     }
 
     fn select_last(&mut self) {
-        let max = self.graph_layout.nodes.len().saturating_sub(1);
-        self.graph_list_state.select(Some(max));
-        self.sync_branch_selection_to_node(max);
+        let mut idx = self.graph_layout.nodes.len().saturating_sub(1);
+        while self.is_connector_node(idx) && idx > 0 {
+            idx -= 1;
+        }
+        self.graph_list_state.select(Some(idx));
+        self.sync_branch_selection_to_node(idx);
     }
 
     /// Sync branch selection to the first branch of the given node
