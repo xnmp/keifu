@@ -18,6 +18,7 @@ pub struct StatusBar<'a> {
     error_message: Option<&'a str>,
     message: Option<&'a str>,
     is_busy: bool,
+    is_uncommitted: bool,
     search_info: Option<String>,
 }
 
@@ -52,6 +53,7 @@ impl<'a> StatusBar<'a> {
             error_message,
             message: app.get_message(),
             is_busy: app.is_network_busy(),
+            is_uncommitted: app.is_uncommitted_selected(),
             search_info,
         }
     }
@@ -140,12 +142,14 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("diff ", desc_style));
                             spans.push(Span::styled(" o ", key_style));
                             spans.push(Span::styled("open ", desc_style));
-                            spans.push(Span::styled(" s ", key_style));
-                            spans.push(Span::styled("stage ", desc_style));
-                            spans.push(Span::styled(" i ", key_style));
-                            spans.push(Span::styled("ignore ", desc_style));
-                            spans.push(Span::styled(" v ", key_style));
-                            spans.push(Span::styled("archive ", desc_style));
+                            if self.is_uncommitted {
+                                spans.push(Span::styled(" s ", key_style));
+                                spans.push(Span::styled("stage ", desc_style));
+                                spans.push(Span::styled(" i ", key_style));
+                                spans.push(Span::styled("ignore ", desc_style));
+                                spans.push(Span::styled(" v ", key_style));
+                                spans.push(Span::styled("archive ", desc_style));
+                            }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                         }
