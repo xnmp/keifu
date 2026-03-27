@@ -320,11 +320,40 @@ impl<'a> CommitDetailWidget<'a> {
                 )));
             }
 
-            // Show editor content
+            // Show editor content with selection highlighting
             if app.editing_commit_message || !app.commit_editor.text.is_empty() {
                 lines.push(Line::from(""));
+                let sel = app.commit_editor.selection.map(|s| s.ordered());
+                let sel_style = Style::default().bg(Color::Blue).fg(Color::White);
+                let mut byte_offset = 0usize;
                 for line_text in app.commit_editor.lines() {
-                    lines.push(Line::from(Span::raw(line_text.to_string())));
+                    let line_start = byte_offset;
+                    let line_end = line_start + line_text.len();
+                    if let Some((sel_start, sel_end)) = sel {
+                        if sel_start != sel_end && sel_start < line_end && sel_end > line_start {
+                            // Selection overlaps this line
+                            let hl_start = sel_start.max(line_start) - line_start;
+                            let hl_end = sel_end.min(line_end) - line_start;
+                            let mut spans = Vec::new();
+                            if hl_start > 0 {
+                                spans.push(Span::raw(line_text[..hl_start].to_string()));
+                            }
+                            spans.push(Span::styled(
+                                line_text[hl_start..hl_end].to_string(),
+                                sel_style,
+                            ));
+                            if hl_end < line_text.len() {
+                                spans.push(Span::raw(line_text[hl_end..].to_string()));
+                            }
+                            lines.push(Line::from(spans));
+                        } else {
+                            lines.push(Line::from(Span::raw(line_text.to_string())));
+                        }
+                    } else {
+                        lines.push(Line::from(Span::raw(line_text.to_string())));
+                    }
+                    // +1 for the newline separator between lines
+                    byte_offset = line_end + 1;
                 }
             }
 
