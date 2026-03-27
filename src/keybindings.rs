@@ -261,16 +261,16 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::EditorDeleteWord)
         }
 
-        // Alt+Left / Alt+b: word left
-        (m, KeyCode::Left) if m.contains(KeyModifiers::ALT) => {
+        // Alt+Left / Ctrl+Left / Alt+b: word left
+        (m, KeyCode::Left) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) => {
             Some(Action::EditorWordLeft(shift))
         }
         (m, KeyCode::Char('b')) if m.contains(KeyModifiers::ALT) && !shift => {
             Some(Action::EditorWordLeft(false))
         }
 
-        // Alt+Right / Alt+f: word right
-        (m, KeyCode::Right) if m.contains(KeyModifiers::ALT) => {
+        // Alt+Right / Ctrl+Right / Alt+f: word right
+        (m, KeyCode::Right) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) => {
             Some(Action::EditorWordRight(shift))
         }
         (m, KeyCode::Char('f')) if m.contains(KeyModifiers::ALT) && !shift => {
