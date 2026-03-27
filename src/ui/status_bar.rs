@@ -163,6 +163,8 @@ impl<'a> Widget for StatusBar<'a> {
                                 spans.push(Span::styled("ignore ", desc_style));
                                 spans.push(Span::styled(" v ", key_style));
                                 spans.push(Span::styled("archive ", desc_style));
+                                spans.push(Span::styled(" Del ", key_style));
+                                spans.push(Span::styled("trash ", desc_style));
                                 spans.push(Span::styled(" ^z ", key_style));
                                 spans.push(Span::styled("undo ", desc_style));
                             }

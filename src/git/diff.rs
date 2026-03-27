@@ -90,6 +90,9 @@ impl DiffScan {
 impl CommitDiffInfo {
     /// Get diff info for working tree (staged + unstaged + untracked changes)
     pub fn from_working_tree(repo: &Repository) -> Result<Self> {
+        // Flush cached ignore rules so .gitignore edits take effect immediately
+        let _ = repo.clear_ignore_rules();
+
         let head_tree = match repo.head() {
             Ok(head) => Some(head.peel_to_tree()?),
             Err(err)
@@ -231,6 +234,9 @@ impl CommitDiffInfo {
 
     /// Quick file list for working tree - uses git status for fast results.
     pub fn quick_file_list_for_working_tree(repo: &Repository) -> Result<Self> {
+        // Flush cached ignore rules so .gitignore edits take effect immediately
+        let _ = repo.clear_ignore_rules();
+
         let head_tree = match repo.head() {
             Ok(head) => Some(head.peel_to_tree()?),
             Err(err)

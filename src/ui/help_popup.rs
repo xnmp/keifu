@@ -111,6 +111,10 @@ impl Widget for HelpPopup {
                     Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
                 ]),
                 Line::from(vec![
+                    Span::styled("  Delete     ", key_style),
+                    Span::styled("Move file to recycle bin", desc_style),
+                ]),
+                Line::from(vec![
                     Span::styled("  Ctrl+z     ", key_style),
                     Span::styled("Undo last file operation", desc_style),
                 ]),

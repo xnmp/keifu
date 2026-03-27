@@ -43,6 +43,7 @@ pub enum Action {
     ToggleStage,
     AddToGitignore,
     ArchiveFile,
+    TrashFile,
     UndoLastFileOp,
     ToggleFolderView,
     StartFilesFilter,

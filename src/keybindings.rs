@@ -157,6 +157,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Archive file
         (KeyModifiers::NONE, KeyCode::Char('v')) => Some(Action::ArchiveFile),
 
+        // Move file to recycle bin
+        (KeyModifiers::NONE, KeyCode::Delete) => Some(Action::TrashFile),
+
         // Undo last file operation
         (KeyModifiers::CONTROL, KeyCode::Char('z')) => Some(Action::UndoLastFileOp),
 

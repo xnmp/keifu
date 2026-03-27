@@ -45,6 +45,18 @@ When the uncommitted files panel is selected, pressing `i` adds the selected fil
 ### [DONE] Fuzzy Filter Typing in Files Panel
 Typing in the files panel filters the file list by character matching. Filter shown in panel title. Backspace removes characters, Esc clears filter.
 
+### [DONE] Fix Selection Jump and Flash After File Operations
+After s/i/v in folder view, selection no longer jumps to top. Flash during panel refresh eliminated by keeping stale quick-diff visible and recomputing synchronously before redraw. Cursor advances to next file instead of resetting.
+
+### [DONE] Staged/Unstaged Headers in Folder Mode
+When in folder mode with uncommitted changes selected, files are now divided by staged/unstaged sections with folder grouping within each section.
+
+### [DONE] Gitignore Cache Fix
+Calling `repo.clear_ignore_rules()` before status queries ensures .gitignore edits take effect immediately without restarting keifu.
+
+### [DONE] Delete Key to Recycle Bin
+Pressing Delete in the files pane shows a confirmation modal, then moves the file to the system recycle bin via the `trash` crate. Works with folder headers to trash all files in a folder.
+
 ---
 
 ## Commit Pane

@@ -204,6 +204,7 @@ pub enum ConfirmAction {
     ResetMixed(Oid),
     ResetHard(Oid),
     Push,
+    TrashFile(Vec<String>),
 }
 
 /// Result of async diff computation
@@ -493,6 +494,30 @@ impl App {
         self.uncommitted_diff_loading = false;
         self.uncommitted_diff_receiver = None;
         self.uncommitted_cache_key = None;
+    }
+
+    /// Refresh after a file operation (stage/gitignore/archive/trash).
+    /// Keeps the quick diff visible to avoid UI flicker, then immediately
+    /// recomputes it so the file list reflects the new state.
+    /// Advances cursor to the next item (clamped to list bounds).
+    fn refresh_after_file_op(&mut self) -> Result<()> {
+        // Invalidate (not clear) so stale data stays visible during refresh
+        self.invalidate_uncommitted_diff_cache();
+        self.refresh(false)?;
+        // Force quick diff recomputation so file list updates immediately
+        self.quick_diff_target = None;
+        self.quick_diff_cache =
+            CommitDiffInfo::quick_file_list_for_working_tree(&self.repo.repo).ok();
+        self.quick_diff_target = Some(DiffTarget::Uncommitted);
+
+        let prev_idx = self.file_selected_index;
+        self.sync_file_list_cache();
+        // Advance cursor to next item (or stay if at end)
+        if !self.display_items_cache.is_empty() {
+            let max_idx = self.display_items_cache.len() - 1;
+            self.file_selected_index = prev_idx.min(max_idx);
+        }
+        Ok(())
     }
 
     /// Invalidate the uncommitted diff cache key to trigger a background reload,
@@ -1306,8 +1331,10 @@ impl App {
                 .collect()
         };
 
-        // Build items with optional folder grouping
-        if self.files_group_by_folder {
+        // Build items with optional folder grouping and staged/unstaged separation
+        if self.files_group_by_folder && self.is_uncommitted_selected() {
+            self.build_staged_unstaged_folder_items(&filtered)
+        } else if self.files_group_by_folder {
             self.build_folder_grouped_items(&filtered)
         } else if self.is_uncommitted_selected() {
             self.build_staged_unstaged_items(&filtered)
@@ -1341,9 +1368,38 @@ impl App {
     }
 
     fn build_folder_grouped_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
+        Self::folder_group(files)
+    }
+
+    /// Staged/unstaged sections with folder grouping within each section.
+    fn build_staged_unstaged_folder_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
+        let staged: Vec<_> = files
+            .iter()
+            .filter(|f| matches!(f.stage_status, Some(StageStatus::Staged)))
+            .cloned()
+            .collect();
+        let unstaged: Vec<_> = files
+            .iter()
+            .filter(|f| !matches!(f.stage_status, Some(StageStatus::Staged)))
+            .cloned()
+            .collect();
+
+        let mut items = Vec::new();
+        if !staged.is_empty() {
+            items.push(FilesPaneItem::Header("Staged Changes".to_string()));
+            items.extend(Self::folder_group(&staged));
+        }
+        if !unstaged.is_empty() {
+            items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
+            items.extend(Self::folder_group(&unstaged));
+        }
+        items
+    }
+
+    /// Group files by parent directory into Header + File items.
+    fn folder_group(files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
         use std::collections::BTreeMap;
 
-        // Group files by parent directory
         let mut folders: BTreeMap<String, Vec<FileDiffInfo>> = BTreeMap::new();
         for file in files {
             let folder = file
@@ -1638,6 +1694,9 @@ impl App {
             }
             Action::ArchiveFile => {
                 self.archive_selected_file()?;
+            }
+            Action::TrashFile => {
+                self.trash_selected_file()?;
             }
             Action::UndoLastFileOp => {
                 self.undo_last_file_op()?;
@@ -2125,18 +2184,7 @@ impl App {
             });
         }
 
-        self.clear_uncommitted_diff_cache();
-        self.refresh(true)?;
-        self.sync_file_list_cache();
-
-        // After staging, advance to the next item so selection doesn't
-        // follow the file into the staged section.
-        if staging && !self.display_items_cache.is_empty() {
-            let max_idx = self.display_items_cache.len() - 1;
-            self.file_selected_index =
-                (self.file_selected_index + 1).min(max_idx);
-        }
-
+        self.refresh_after_file_op()?;
         Ok(())
     }
 
@@ -2163,9 +2211,7 @@ impl App {
                     pattern: pattern.clone(),
                 });
                 self.set_message(format!("Added '{}' to .gitignore", pattern));
-                self.clear_uncommitted_diff_cache();
-                self.refresh(true)?;
-                self.sync_file_list_cache();
+                self.refresh_after_file_op()?;
             }
             false => {
                 self.set_message(format!("'{}' already in .gitignore", pattern));
@@ -2196,10 +2242,35 @@ impl App {
             relative_path: target.clone(),
         });
         self.set_message(format!("Archived '{}'", target));
-        self.clear_uncommitted_diff_cache();
-        self.refresh(true)?;
-        self.sync_file_list_cache();
+        self.refresh_after_file_op()?;
 
+        Ok(())
+    }
+
+    fn trash_selected_file(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+
+        // Collect paths to trash: header → all files under it, file → that file
+        let paths: Vec<String> = self
+            .selected_files()
+            .into_iter()
+            .map(|f| f.path.to_string_lossy().to_string())
+            .collect();
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let label = if paths.len() == 1 {
+            format!("'{}'", paths[0])
+        } else {
+            format!("{} files", paths.len())
+        };
+        self.mode = AppMode::Confirm {
+            message: format!("Move {} to recycle bin?", label),
+            action: ConfirmAction::TrashFile(paths),
+        };
         Ok(())
     }
 
@@ -2241,9 +2312,7 @@ impl App {
             }
         }
 
-        self.clear_uncommitted_diff_cache();
-        self.refresh(true)?;
-        self.sync_file_list_cache();
+        self.refresh_after_file_op()?;
         Ok(())
     }
 
@@ -2663,6 +2732,28 @@ impl App {
                     }
                     ConfirmAction::Push => {
                         self.start_push();
+                    }
+                    ConfirmAction::TrashFile(paths) => {
+                        let mut errors = Vec::new();
+                        for path in &paths {
+                            let full = std::path::Path::new(&self.repo_path).join(path);
+                            if let Err(e) = trash::delete(&full) {
+                                errors.push(format!("{}: {}", path, e));
+                            }
+                        }
+                        if errors.is_empty() {
+                            let label = if paths.len() == 1 {
+                                format!("'{}'", paths[0])
+                            } else {
+                                format!("{} files", paths.len())
+                            };
+                            self.set_message(format!("Moved {} to recycle bin", label));
+                        } else {
+                            self.set_message(format!("Trash errors: {}", errors.join("; ")));
+                        }
+                        self.mode = AppMode::Normal;
+                        self.refresh_after_file_op()?;
+                        return Ok(());
                     }
                 }
                 self.refresh(true)?;

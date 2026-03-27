@@ -108,6 +108,10 @@ impl GitRepository {
             return Ok(None);
         }
 
+        // Flush cached ignore rules so .gitignore edits take effect
+        // without restarting the application.
+        let _ = self.repo.clear_ignore_rules();
+
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(true)
