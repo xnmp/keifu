@@ -51,14 +51,10 @@ impl<'a> CommitDetailWidget<'a> {
             (detail_width / 2).saturating_sub(2) as usize
         };
         let commit_visible = commit_chunk_height.saturating_sub(2) as usize;
-        let commit_wrapped_total: usize = if commit_inner_width > 0 {
-            commit_lines
-                .iter()
-                .map(|line| {
-                    let w = line.width();
-                    if w == 0 { 1 } else { w.div_ceil(commit_inner_width) }
-                })
-                .sum()
+        // Use Ratatui's own line_count to match its actual wrapping behaviour.
+        let commit_wrapped_total = if commit_inner_width > 0 {
+            let p = Paragraph::new(commit_lines.clone()).wrap(Wrap { trim: false });
+            p.line_count(commit_inner_width as u16)
         } else {
             commit_lines.len()
         };
