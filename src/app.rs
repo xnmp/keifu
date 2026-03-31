@@ -19,7 +19,7 @@ use crate::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
             add_to_gitignore, archive_path, push_to_origin, rebase_branch,
-            remove_from_gitignore, reset_to_commit, revert_commit, stage_file,
+            remove_from_gitignore, reset_to_commit, restore_files, revert_commit, stage_file,
             unarchive_path, unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
@@ -205,6 +205,7 @@ pub enum ConfirmAction {
     ResetHard(Oid),
     Push,
     TrashFile(Vec<String>),
+    RestoreFile(Vec<String>),
 }
 
 /// Result of async diff computation
@@ -1698,6 +1699,9 @@ impl App {
             Action::TrashFile => {
                 self.trash_selected_file()?;
             }
+            Action::RestoreFile => {
+                self.restore_selected_file()?;
+            }
             Action::UndoLastFileOp => {
                 self.undo_last_file_op()?;
             }
@@ -2252,7 +2256,35 @@ impl App {
             return Ok(());
         }
 
-        // Collect paths to trash: header → all files under it, file → that file
+        // Only allow trashing untracked files; tracked files should use restore (r)
+        let paths: Vec<String> = self
+            .selected_files()
+            .into_iter()
+            .filter(|f| matches!(f.stage_status, Some(StageStatus::Untracked)))
+            .map(|f| f.path.to_string_lossy().to_string())
+            .collect();
+        if paths.is_empty() {
+            self.set_message("Delete is only for untracked files. Use 'r' to restore tracked files.");
+            return Ok(());
+        }
+
+        let label = if paths.len() == 1 {
+            format!("'{}'", paths[0])
+        } else {
+            format!("{} files", paths.len())
+        };
+        self.mode = AppMode::Confirm {
+            message: format!("Move {} to recycle bin?", label),
+            action: ConfirmAction::TrashFile(paths),
+        };
+        Ok(())
+    }
+
+    fn restore_selected_file(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+
         let paths: Vec<String> = self
             .selected_files()
             .into_iter()
@@ -2268,8 +2300,8 @@ impl App {
             format!("{} files", paths.len())
         };
         self.mode = AppMode::Confirm {
-            message: format!("Move {} to recycle bin?", label),
-            action: ConfirmAction::TrashFile(paths),
+            message: format!("Discard changes to {}?", label),
+            action: ConfirmAction::RestoreFile(paths),
         };
         Ok(())
     }
@@ -2732,6 +2764,18 @@ impl App {
                     }
                     ConfirmAction::Push => {
                         self.start_push();
+                    }
+                    ConfirmAction::RestoreFile(paths) => {
+                        restore_files(&self.repo_path, &paths)?;
+                        let label = if paths.len() == 1 {
+                            format!("'{}'", paths[0])
+                        } else {
+                            format!("{} files", paths.len())
+                        };
+                        self.set_message(format!("Restored {}", label));
+                        self.mode = AppMode::Normal;
+                        self.refresh_after_file_op()?;
+                        return Ok(());
                     }
                     ConfirmAction::TrashFile(paths) => {
                         let mut errors = Vec::new();
