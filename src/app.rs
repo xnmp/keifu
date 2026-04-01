@@ -781,6 +781,21 @@ impl App {
             }
         }
 
+        // If no branch is selected but the selected node has branches, pick the first one.
+        // This happens after committing from the uncommitted node — the selection lands
+        // on the new HEAD commit but selected_branch_position was never set.
+        if self.selected_branch_position.is_none() {
+            if let Some(selected_idx) = self.graph_list_state.selected() {
+                if let Some(pos) = self
+                    .branch_positions
+                    .iter()
+                    .position(|(node_idx, _)| *node_idx == selected_idx)
+                {
+                    self.selected_branch_position = Some(pos);
+                }
+            }
+        }
+
         // Handle diff cache based on force flag
         if force {
             self.clear_all_diff_caches();
