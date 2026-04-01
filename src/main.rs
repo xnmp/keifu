@@ -58,6 +58,12 @@ fn main() -> Result<()> {
         // Event handling
         if let Some(event) = poll_event()? {
             if let Some(key) = get_key_event(&event) {
+                if app.debug_keys {
+                    app.set_message(format!(
+                        "KEY: code={:?} mod={:?}",
+                        key.code, key.modifiers
+                    ));
+                }
                 if let Some(action) = map_key_to_action(
                     key,
                     &app.mode,

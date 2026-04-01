@@ -24,6 +24,11 @@ pub fn map_key_to_action(
         return Some(Action::ForceQuit);
     }
 
+    // F12 toggles debug key display
+    if key.code == KeyCode::F(12) {
+        return Some(Action::ToggleDebugKeys);
+    }
+
     match mode {
         AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit, files_filter_active),
         AppMode::Help => map_help_mode(key),

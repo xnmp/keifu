@@ -92,6 +92,11 @@ impl GitRepository {
             .and_then(|h| h.shorthand().map(|s| s.to_string()))
     }
 
+    /// Check if HEAD is detached
+    pub fn is_head_detached(&self) -> bool {
+        self.repo.head_detached().unwrap_or(false)
+    }
+
     /// Get the current HEAD commit OID
     pub fn head_oid(&self) -> Option<Oid> {
         self.repo

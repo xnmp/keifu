@@ -15,6 +15,7 @@ pub struct StatusBar<'a> {
     focused_panel: FocusedPanel,
     repo_path: &'a str,
     head_name: Option<&'a str>,
+    head_detached: bool,
     error_message: Option<&'a str>,
     message: Option<&'a str>,
     is_busy: bool,
@@ -51,6 +52,7 @@ impl<'a> StatusBar<'a> {
             focused_panel: app.focused_panel,
             repo_path: &app.repo_path,
             head_name: app.head_name.as_deref(),
+            head_detached: app.head_detached,
             error_message,
             message: app.get_message(),
             is_busy: app.is_network_busy(),
@@ -89,10 +91,20 @@ impl<'a> Widget for StatusBar<'a> {
 
         // HEAD branch
         if let Some(head) = self.head_name {
-            spans.push(Span::styled(
-                format!(" {} ", head),
-                Style::default().fg(Color::Black).bg(Color::Green),
-            ));
+            if self.head_detached {
+                spans.push(Span::styled(
+                    format!(" DETACHED: {} ", head),
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!(" {} ", head),
+                    Style::default().fg(Color::Black).bg(Color::Green),
+                ));
+            }
             spans.push(Span::raw(" "));
         }
 

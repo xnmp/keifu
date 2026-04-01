@@ -51,6 +51,7 @@ impl<'a> CommitDetailWidget<'a> {
             (detail_width / 2).saturating_sub(2) as usize
         };
         let commit_visible = commit_chunk_height.saturating_sub(2) as usize;
+        app.commit_detail_visible_rows = commit_visible as u16;
         // Use Ratatui's own line_count to match its actual wrapping behaviour.
         let commit_wrapped_total = if commit_inner_width > 0 {
             let p = Paragraph::new(commit_lines.clone()).wrap(Wrap { trim: false });
@@ -271,7 +272,7 @@ impl<'a> CommitDetailWidget<'a> {
         (lines, selected_line_idx)
     }
 
-    fn build_commit_lines(app: &App) -> Vec<Line<'a>> {
+    fn build_commit_lines(app: &mut App) -> Vec<Line<'a>> {
         let Some(selected) = app.graph_list_state.selected() else {
             return vec![Line::from(Span::styled(
                 "Select a commit",
@@ -323,6 +324,8 @@ impl<'a> CommitDetailWidget<'a> {
             // Show editor content with selection highlighting
             if app.editing_commit_message || !app.commit_editor.text.is_empty() {
                 lines.push(Line::from(""));
+                // Track where editor text starts for auto-scroll
+                app.commit_editor_line_offset = lines.len() as u16;
                 let sel = app.commit_editor.selection.map(|s| s.ordered());
                 let sel_style = Style::default().bg(Color::Blue).fg(Color::White);
                 let mut byte_offset = 0usize;

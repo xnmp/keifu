@@ -22,8 +22,8 @@ use crate::{
             remove_from_gitignore, reset_to_commit, restore_files, revert_commit, stage_file,
             unarchive_path, unstage_file, ResetMode,
         },
-        BranchInfo, CommitDiffInfo, CommitInfo, FileDiffContent, FileDiffInfo, GitRepository,
-        StageStatus, WorkingTreeStatus,
+        BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
+        GitRepository, StageStatus, WorkingTreeStatus,
     },
     search::{fuzzy_search_branches, FuzzySearchResult},
 };
@@ -291,6 +291,7 @@ pub struct App {
     pub repo: GitRepository,
     pub repo_path: String,
     pub head_name: Option<String>,
+    pub head_detached: bool,
 
     // Data
     pub commits: Vec<CommitInfo>,
@@ -312,6 +313,10 @@ pub struct App {
     pub editing_commit_message: bool,
     pub commit_detail_scroll: u16,
     pub commit_detail_max_scroll: u16,
+    /// Number of lines before the editor text in the commit detail pane
+    pub commit_editor_line_offset: u16,
+    /// Visible rows in the commit detail pane (updated during render)
+    pub commit_detail_visible_rows: u16,
     pub files_filter_active: bool,
 
     // Branch selection state
@@ -369,6 +374,9 @@ pub struct App {
     // Undo
     last_undoable_op: Option<UndoableOperation>,
 
+    // Debug mode
+    pub debug_keys: bool,
+
     // Auto-refresh state
     config: Config,
     last_refresh_time: Instant,
@@ -393,6 +401,7 @@ impl App {
         let repo = GitRepository::discover()?;
         let repo_path = repo.path.clone();
         let head_name = repo.head_name();
+        let head_detached = repo.is_head_detached();
 
         let commits = repo.get_commits(500)?;
         let branches = repo.get_branches()?;
@@ -428,6 +437,7 @@ impl App {
             repo,
             repo_path,
             head_name,
+            head_detached,
             commits,
             branches,
             graph_layout,
@@ -443,6 +453,8 @@ impl App {
             editing_commit_message: false,
             commit_detail_scroll: 0,
             commit_detail_max_scroll: 0,
+            commit_editor_line_offset: 0,
+            commit_detail_visible_rows: 20,
             files_filter_active: false,
             branch_positions,
             selected_branch_position,
@@ -471,6 +483,7 @@ impl App {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
+            debug_keys: false,
             config,
             last_refresh_time: now,
             last_fetch_time: now,
@@ -711,6 +724,7 @@ impl App {
             head_commit_oid,
         );
         self.head_name = self.repo.head_name();
+        self.head_detached = self.repo.is_head_detached();
 
         // Rebuild branch positions
         self.branch_positions = Self::build_branch_positions(&self.graph_layout);
@@ -1402,7 +1416,7 @@ impl App {
         };
 
         // Build items with optional folder grouping and staged/unstaged separation
-        if self.files_group_by_folder && self.is_uncommitted_selected() {
+        let mut items = if self.files_group_by_folder && self.is_uncommitted_selected() {
             self.build_staged_unstaged_folder_items(&filtered)
         } else if self.files_group_by_folder {
             self.build_folder_grouped_items(&filtered)
@@ -1410,6 +1424,53 @@ impl App {
             self.build_staged_unstaged_items(&filtered)
         } else {
             filtered.into_iter().map(FilesPaneItem::File).collect()
+        };
+
+        // Append archived files section (only for uncommitted changes view)
+        if self.is_uncommitted_selected() {
+            let archived = self.list_archived_files();
+            if !archived.is_empty() {
+                items.push(FilesPaneItem::Header("Archived Files".to_string()));
+                items.extend(archived.into_iter().map(FilesPaneItem::File));
+            }
+        }
+        items
+    }
+
+    /// List files in `.archive/` directory as FileDiffInfo items.
+    fn list_archived_files(&self) -> Vec<FileDiffInfo> {
+        let archive_dir = std::path::Path::new(&self.repo_path).join(".archive");
+        if !archive_dir.is_dir() {
+            return Vec::new();
+        }
+        let mut files = Vec::new();
+        Self::walk_archive_dir(&archive_dir, &archive_dir, &mut files);
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        files
+    }
+
+    fn walk_archive_dir(
+        base: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut Vec<FileDiffInfo>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                Self::walk_archive_dir(base, &path, out);
+            } else if let Ok(rel) = path.strip_prefix(base) {
+                out.push(FileDiffInfo {
+                    path: rel.to_path_buf(),
+                    kind: FileChangeKind::Added,
+                    is_binary: false,
+                    insertions: 0,
+                    deletions: 0,
+                    stage_status: None,
+                });
+            }
         }
     }
 
@@ -1503,6 +1564,15 @@ impl App {
         // Ctrl+Q always quits
         if matches!(action, Action::ForceQuit) {
             self.should_quit = true;
+            return Ok(());
+        }
+        if matches!(action, Action::ToggleDebugKeys) {
+            self.debug_keys = !self.debug_keys;
+            self.set_message(if self.debug_keys {
+                "Debug keys ON"
+            } else {
+                "Debug keys OFF"
+            });
             return Ok(());
         }
 
@@ -1772,7 +1842,11 @@ impl App {
                 self.add_selected_to_gitignore()?;
             }
             Action::ArchiveFile => {
-                self.archive_selected_file()?;
+                if self.is_in_archived_section() {
+                    self.unarchive_selected_file()?;
+                } else {
+                    self.archive_selected_file()?;
+                }
             }
             Action::TrashFile => {
                 self.trash_selected_file()?;
@@ -1899,7 +1973,28 @@ impl App {
             Action::EditorTextEnd(s) => self.commit_editor.move_text_end(s),
             _ => {}
         }
+        self.scroll_to_editor_cursor();
         Ok(())
+    }
+
+    /// Auto-scroll the commit detail pane to keep the editor cursor visible.
+    fn scroll_to_editor_cursor(&mut self) {
+        let (cursor_row, _) = self.commit_editor.cursor_position();
+        // +2: one blank line after header + one for the header line itself
+        let absolute_row = self.commit_editor_line_offset as usize + cursor_row;
+        let scroll = self.commit_detail_scroll as usize;
+        let visible = self.commit_detail_visible_rows as usize;
+        if visible == 0 {
+            return;
+        }
+        if absolute_row < scroll {
+            self.commit_detail_scroll = absolute_row as u16;
+        } else if absolute_row >= scroll + visible {
+            self.commit_detail_scroll = (absolute_row - visible + 1) as u16;
+        }
+        self.commit_detail_scroll = self
+            .commit_detail_scroll
+            .min(self.commit_detail_max_scroll);
     }
 
     fn open_commit_menu(&mut self) {
@@ -2321,12 +2416,39 @@ impl App {
         };
 
         archive_path(&self.repo_path, &target)?;
+        // Ensure .archive is in .gitignore
+        let _ = add_to_gitignore(&self.repo_path, ".archive");
         self.last_undoable_op = Some(UndoableOperation::Archive {
             relative_path: target.clone(),
         });
         self.set_message(format!("Archived '{}'", target));
         self.refresh_after_file_op(true)?;
 
+        Ok(())
+    }
+
+    /// Check if the current selection is in the "Archived Files" section.
+    fn is_in_archived_section(&self) -> bool {
+        // Walk backwards from current index to find the nearest Header
+        for item in self.display_items_cache[..=self.file_selected_index]
+            .iter()
+            .rev()
+        {
+            if let FilesPaneItem::Header(text) = item {
+                return text == "Archived Files";
+            }
+        }
+        false
+    }
+
+    fn unarchive_selected_file(&mut self) -> Result<()> {
+        let Some(FilesPaneItem::File(file)) = self.selected_display_item().cloned() else {
+            return Ok(());
+        };
+        let target = file.path.to_string_lossy().to_string();
+        unarchive_path(&self.repo_path, &target)?;
+        self.set_message(format!("Unarchived '{}'", target));
+        self.refresh_after_file_op(true)?;
         Ok(())
     }
 
@@ -2364,22 +2486,36 @@ impl App {
             return Ok(());
         }
 
-        let paths: Vec<String> = self
-            .selected_files()
-            .into_iter()
-            .map(|f| f.path.to_string_lossy().to_string())
-            .collect();
-        if paths.is_empty() {
+        let files: Vec<_> = self.selected_files().into_iter().cloned().collect();
+        if files.is_empty() {
             return Ok(());
         }
+
+        let all_new = files.iter().all(|f| {
+            matches!(f.kind, FileChangeKind::Added)
+                || matches!(f.stage_status, Some(StageStatus::Untracked))
+        });
+
+        let paths: Vec<String> = files
+            .iter()
+            .map(|f| f.path.to_string_lossy().to_string())
+            .collect();
 
         let label = if paths.len() == 1 {
             format!("'{}'", paths[0])
         } else {
             format!("{} files", paths.len())
         };
+        let message = if all_new {
+            format!(
+                "Delete {}? This file is untracked and will be permanently removed.",
+                label
+            )
+        } else {
+            format!("Discard changes to {}?", label)
+        };
         self.mode = AppMode::Confirm {
-            message: format!("Discard changes to {}?", label),
+            message,
             action: ConfirmAction::RestoreFile(paths),
         };
         Ok(())
@@ -3163,6 +3299,7 @@ mod tests {
             repo,
             repo_path: String::new(),
             head_name: None,
+            head_detached: false,
             commits,
             branches,
             graph_layout,
@@ -3178,6 +3315,8 @@ mod tests {
             editing_commit_message: false,
             commit_detail_scroll: 0,
             commit_detail_max_scroll: 0,
+            commit_editor_line_offset: 0,
+            commit_detail_visible_rows: 20,
             files_filter_active: false,
             branch_positions,
             selected_branch_position,
@@ -3206,6 +3345,7 @@ mod tests {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
+            debug_keys: false,
             config: Config::default(),
             last_refresh_time: now,
             last_fetch_time: now,
@@ -3241,6 +3381,7 @@ mod tests {
             repo_path: repo.path.clone(),
             repo,
             head_name: None,
+            head_detached: false,
             commits,
             branches: Vec::new(),
             graph_layout: GraphLayout {
@@ -3259,6 +3400,8 @@ mod tests {
             editing_commit_message: false,
             commit_detail_scroll: 0,
             commit_detail_max_scroll: 0,
+            commit_editor_line_offset: 0,
+            commit_detail_visible_rows: 20,
             files_filter_active: false,
             branch_positions: Vec::new(),
             selected_branch_position: None,
@@ -3287,6 +3430,7 @@ mod tests {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
+            debug_keys: false,
             config: Config::default(),
             last_refresh_time: Instant::now(),
             last_fetch_time: Instant::now(),
