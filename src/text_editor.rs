@@ -36,6 +36,17 @@ impl TextEditor {
         Self::default()
     }
 
+    /// Create an editor pre-filled with text, cursor at end.
+    pub fn from_text(text: &str) -> Self {
+        let text = text.to_string();
+        let cursor = text.len();
+        Self {
+            text,
+            cursor,
+            selection: None,
+        }
+    }
+
     /// Returns (row, col) where row is 0-indexed line number and col is character offset.
     pub fn cursor_position(&self) -> (usize, usize) {
         let before = &self.text[..self.cursor];

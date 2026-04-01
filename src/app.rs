@@ -18,9 +18,10 @@ use crate::{
         operations::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
-            add_to_gitignore, archive_path, push_to_origin, rebase_branch,
-            remove_from_gitignore, reset_to_commit, restore_files, revert_commit, stage_file,
-            unarchive_path, unstage_file, ResetMode,
+            add_to_gitignore, archive_path, commit_amend, commit_amend_no_edit,
+            get_last_commit_message, push_to_origin, rebase_branch, remove_from_gitignore,
+            reset_to_commit, restore_files, revert_commit, stage_file, unarchive_path,
+            unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
         GitRepository, StageStatus, WorkingTreeStatus,
@@ -311,6 +312,8 @@ pub struct App {
     pub hidden_branches: std::collections::HashSet<String>,
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
+    /// When true, the editor is amending the HEAD commit (not creating a new one)
+    pub amending_commit: bool,
     pub commit_detail_scroll: u16,
     pub commit_detail_max_scroll: u16,
     /// Number of lines before the editor text in the commit detail pane
@@ -451,6 +454,7 @@ impl App {
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
+            amending_commit: false,
             commit_detail_scroll: 0,
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
@@ -1257,6 +1261,14 @@ impl App {
             .is_some_and(|node| node.is_uncommitted)
     }
 
+    /// Check if the currently selected node is the HEAD commit (not uncommitted).
+    pub fn is_head_commit_selected(&self) -> bool {
+        self.graph_list_state
+            .selected()
+            .and_then(|idx| self.graph_layout.nodes.get(idx))
+            .is_some_and(|node| node.is_head && !node.is_uncommitted)
+    }
+
     /// Sync the file list cache and display items from the current diff.
     pub fn sync_file_list_cache(&mut self) {
         if let Some(diff) = self.cached_diff_or_quick() {
@@ -1908,6 +1920,14 @@ impl App {
             Action::StartEditing => {
                 if self.is_uncommitted_selected() {
                     self.editing_commit_message = true;
+                    self.amending_commit = false;
+                } else if self.is_head_commit_selected() {
+                    // Edit HEAD commit message for amending
+                    if let Ok(msg) = get_last_commit_message(&self.repo_path) {
+                        self.commit_editor = crate::text_editor::TextEditor::from_text(&msg);
+                        self.editing_commit_message = true;
+                        self.amending_commit = true;
+                    }
                 }
             }
             Action::MoveUp => {
@@ -1943,10 +1963,22 @@ impl App {
         match action {
             Action::StopEditing => {
                 self.editing_commit_message = false;
+                self.amending_commit = false;
             }
             Action::CommitChanges => {
                 let msg = self.commit_editor.text.trim().to_string();
-                if !msg.is_empty() {
+                if self.amending_commit {
+                    // Amending: use the edited message
+                    if !msg.is_empty() {
+                        commit_amend(&self.repo_path, &msg)?;
+                        self.commit_editor = crate::text_editor::TextEditor::new();
+                        self.editing_commit_message = false;
+                        self.amending_commit = false;
+                        self.refresh(true)?;
+                        self.set_message("Commit amended");
+                        self.focused_panel = FocusedPanel::Graph;
+                    }
+                } else if !msg.is_empty() {
                     commit_with_message(&self.repo_path, &msg)?;
                     self.commit_editor = crate::text_editor::TextEditor::new();
                     self.editing_commit_message = false;
@@ -1954,6 +1986,21 @@ impl App {
                     self.set_message("Changes committed");
                     self.focused_panel = FocusedPanel::Graph;
                 }
+            }
+            Action::AmendCommit => {
+                let msg = self.commit_editor.text.trim().to_string();
+                if msg.is_empty() {
+                    // No message: amend --no-edit (keep existing message, add staged changes)
+                    commit_amend_no_edit(&self.repo_path)?;
+                } else {
+                    commit_amend(&self.repo_path, &msg)?;
+                }
+                self.commit_editor = crate::text_editor::TextEditor::new();
+                self.editing_commit_message = false;
+                self.amending_commit = false;
+                self.refresh(true)?;
+                self.set_message("Commit amended");
+                self.focused_panel = FocusedPanel::Graph;
             }
             Action::EditorChar(c) => self.commit_editor.insert_char(c),
             Action::EditorNewline => self.commit_editor.insert_newline(),
@@ -3312,6 +3359,7 @@ mod tests {
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
+            amending_commit: false,
             commit_detail_scroll: 0,
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
@@ -3397,6 +3445,7 @@ mod tests {
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
+            amending_commit: false,
             commit_detail_scroll: 0,
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,

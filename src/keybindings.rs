@@ -248,15 +248,17 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
         // Enter commits
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::CommitChanges),
 
+        // Ctrl+Enter amends last commit
+        (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => {
+            Some(Action::AmendCommit)
+        }
+
         // Esc exits edit mode
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::StopEditing),
 
-        // Shift+Enter / Ctrl+Enter / Alt+Enter inserts newline
-        // Note: some terminals send Ctrl+Enter (\x1b[27;5;13~) for Shift+Enter
+        // Shift+Enter / Alt+Enter inserts newline
         (m, KeyCode::Enter)
-            if m.contains(KeyModifiers::SHIFT)
-                || m.contains(KeyModifiers::CONTROL)
-                || m.contains(KeyModifiers::ALT) =>
+            if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::ALT) =>
         {
             Some(Action::EditorNewline)
         }

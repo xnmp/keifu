@@ -150,7 +150,11 @@ impl Widget for HelpPopup {
             ]),
             Line::from(vec![
                 Span::styled("  Enter        ", key_style),
-                Span::styled("Commit changes", desc_style),
+                Span::styled("Commit changes (or save amend)", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+Enter   ", key_style),
+                Span::styled("Amend last commit", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Search", header_style)),

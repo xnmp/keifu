@@ -297,8 +297,13 @@ impl<'a> CommitDetailWidget<'a> {
             ];
 
             if app.editing_commit_message {
+                let hint = if app.amending_commit {
+                    "Amend Message (Enter to save, Ctrl+Enter to amend --no-edit, Esc to cancel):"
+                } else {
+                    "Commit Message (Enter to commit, Ctrl+Enter to amend, Esc to cancel):"
+                };
                 lines.push(Line::from(Span::styled(
-                    "Commit Message (Enter to commit, Ctrl+Enter for newline, Esc to cancel):",
+                    hint,
                     Style::default().fg(Color::Cyan),
                 )));
             } else if !app.commit_editor.text.is_empty() {
@@ -393,9 +398,58 @@ impl<'a> CommitDetailWidget<'a> {
 
         lines.push(Line::from(""));
 
-        // Message
-        for line in commit.full_message.lines() {
-            lines.push(Line::from(Span::raw(line.to_string())));
+        // Message — show editor if amending this commit
+        if app.amending_commit && app.editing_commit_message && node.is_head {
+            let hint = "Amend Message (Enter to save, Ctrl+Enter to amend --no-edit, Esc to cancel):";
+            lines.push(Line::from(Span::styled(
+                hint,
+                Style::default().fg(Color::Cyan),
+            )));
+            lines.push(Line::from(""));
+            app.commit_editor_line_offset = lines.len() as u16;
+            let sel = app.commit_editor.selection.map(|s| s.ordered());
+            let sel_style = Style::default().bg(Color::Blue).fg(Color::White);
+            let mut byte_offset = 0usize;
+            for line_text in app.commit_editor.lines() {
+                let line_start = byte_offset;
+                let line_end = line_start + line_text.len();
+                if let Some((sel_start, sel_end)) = sel {
+                    if sel_start != sel_end && sel_start < line_end && sel_end > line_start {
+                        let hl_start = sel_start.max(line_start) - line_start;
+                        let hl_end = sel_end.min(line_end) - line_start;
+                        let mut spans = Vec::new();
+                        if hl_start > 0 {
+                            spans.push(Span::raw(line_text[..hl_start].to_string()));
+                        }
+                        spans.push(Span::styled(
+                            line_text[hl_start..hl_end].to_string(),
+                            sel_style,
+                        ));
+                        if hl_end < line_text.len() {
+                            spans.push(Span::raw(line_text[hl_end..].to_string()));
+                        }
+                        lines.push(Line::from(spans));
+                    } else {
+                        lines.push(Line::from(Span::raw(line_text.to_string())));
+                    }
+                } else {
+                    lines.push(Line::from(Span::raw(line_text.to_string())));
+                }
+                byte_offset = line_end + 1;
+            }
+        } else if node.is_head && app.focused_panel == FocusedPanel::CommitDetail && !app.editing_commit_message {
+            lines.push(Line::from(Span::styled(
+                "Press Enter to edit commit message (amend)",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(""));
+            for line in commit.full_message.lines() {
+                lines.push(Line::from(Span::raw(line.to_string())));
+            }
+        } else {
+            for line in commit.full_message.lines() {
+                lines.push(Line::from(Span::raw(line.to_string())));
+            }
         }
 
         lines

@@ -523,6 +523,54 @@ pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Amend the last commit with a new message.
+pub fn commit_amend(repo_path: &str, message: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["commit", "--amend", "-m", message])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git commit --amend")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git commit --amend failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Amend the last commit without changing the message.
+pub fn commit_amend_no_edit(repo_path: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["commit", "--amend", "--no-edit"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to execute git commit --amend --no-edit")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git commit --amend --no-edit failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Get the message of the last commit.
+pub fn get_last_commit_message(repo_path: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to get last commit message")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git log failed: {}", stderr.trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -55,6 +55,7 @@ pub enum Action {
     StartEditing,
     StopEditing,
     CommitChanges,
+    AmendCommit,
     EditorChar(char),
     EditorNewline,
     EditorBackspace,
