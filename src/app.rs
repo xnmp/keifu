@@ -377,6 +377,10 @@ pub struct App {
     // Undo
     last_undoable_op: Option<UndoableOperation>,
 
+    // Layout
+    /// When true, detail pane is to the left of the graph instead of below.
+    pub side_panel_layout: bool,
+
     // Debug mode
     pub debug_keys: bool,
 
@@ -487,6 +491,7 @@ impl App {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
+            side_panel_layout: false,
             debug_keys: false,
             config,
             last_refresh_time: now,
@@ -1576,6 +1581,10 @@ impl App {
         // Ctrl+Q always quits
         if matches!(action, Action::ForceQuit) {
             self.should_quit = true;
+            return Ok(());
+        }
+        if matches!(action, Action::ToggleLayout) {
+            self.side_panel_layout = !self.side_panel_layout;
             return Ok(());
         }
         if matches!(action, Action::ToggleDebugKeys) {
@@ -3404,6 +3413,7 @@ mod tests {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
+            side_panel_layout: false,
             debug_keys: false,
             config: Config::default(),
             last_refresh_time: now,
@@ -3490,6 +3500,7 @@ mod tests {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
+            side_panel_layout: false,
             debug_keys: false,
             config: Config::default(),
             last_refresh_time: Instant::now(),

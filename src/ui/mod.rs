@@ -111,14 +111,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = vertical[0];
     let status_area = vertical[1];
 
-    // Split main area vertically: graph (70%) + detail (30%)
-    let content_vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .split(main_area);
-
-    let graph_area = content_vertical[0];
-    let detail_area = content_vertical[1];
+    // Split main area: graph + detail
+    let (graph_area, detail_area) = if app.side_panel_layout {
+        // Side layout: detail (30%) on LEFT, graph (70%) on RIGHT
+        let h = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(main_area);
+        (h[1], h[0])
+    } else {
+        // Default: graph (70%) on TOP, detail (30%) on BOTTOM
+        let v = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(main_area);
+        (v[0], v[1])
+    };
 
     // Render widgets
     frame.render_stateful_widget(

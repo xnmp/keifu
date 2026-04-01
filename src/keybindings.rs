@@ -29,6 +29,11 @@ pub fn map_key_to_action(
         return Some(Action::ToggleDebugKeys);
     }
 
+    // Alt+/ toggles layout
+    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('/') {
+        return Some(Action::ToggleLayout);
+    }
+
     match mode {
         AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit, files_filter_active),
         AppMode::Help => map_help_mode(key),

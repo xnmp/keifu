@@ -91,6 +91,9 @@ pub enum Action {
     SearchSelectUpQuiet,   // Tab navigation (no graph jump)
     SearchSelectDownQuiet, // Tab navigation (no graph jump)
 
+    // Layout
+    ToggleLayout,
+
     // Debug
     ToggleDebugKeys,
 
