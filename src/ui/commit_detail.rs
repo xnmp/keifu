@@ -59,6 +59,18 @@ impl<'a> CommitDetailWidget<'a> {
         } else {
             commit_lines.len()
         };
+
+        // Recompute editor line offset using wrapped line counts so the cursor
+        // accounts for long hint text that wraps across multiple visual lines.
+        if app.editing_commit_message && commit_inner_width > 0 {
+            let raw_offset = app.commit_editor_line_offset as usize;
+            let header_lines = &commit_lines[..raw_offset.min(commit_lines.len())];
+            if !header_lines.is_empty() {
+                let hp = Paragraph::new(header_lines.to_vec()).wrap(Wrap { trim: false });
+                app.commit_editor_line_offset =
+                    hp.line_count(commit_inner_width as u16) as u16;
+            }
+        }
         app.commit_detail_max_scroll =
             commit_wrapped_total.saturating_sub(commit_visible) as u16;
         // Clamp current scroll to the newly computed max
