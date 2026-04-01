@@ -149,7 +149,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::End) => Some(Action::GoToBottom),
 
         // Stage/unstage
-        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStage),
+        (KeyModifiers::NONE, KeyCode::Char('s')) | (KeyModifiers::NONE, KeyCode::Char('a')) => {
+            Some(Action::ToggleStage)
+        }
 
         // Add to .gitignore
         (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::AddToGitignore),
@@ -238,14 +240,19 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     match (key.modifiers, key.code) {
-        // Alt+Enter commits
-        (m, KeyCode::Enter) if m.contains(KeyModifiers::ALT) => Some(Action::CommitChanges),
+        // Enter commits
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::CommitChanges),
 
         // Esc exits edit mode
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::StopEditing),
 
-        // Enter inserts newline
-        (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::SHIFT, KeyCode::Enter) => {
+        // Shift+Enter / Ctrl+Enter / Alt+Enter inserts newline
+        // Note: some terminals send Ctrl+Enter (\x1b[27;5;13~) for Shift+Enter
+        (m, KeyCode::Enter)
+            if m.contains(KeyModifiers::SHIFT)
+                || m.contains(KeyModifiers::CONTROL)
+                || m.contains(KeyModifiers::ALT) =>
+        {
             Some(Action::EditorNewline)
         }
 

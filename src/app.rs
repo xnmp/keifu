@@ -513,10 +513,19 @@ impl App {
 
         let prev_idx = self.file_selected_index;
         self.sync_file_list_cache();
-        // Advance cursor to next item (or stay if at end)
+        // Advance cursor to next file item (skip headers), clamped to list bounds
         if !self.display_items_cache.is_empty() {
             let max_idx = self.display_items_cache.len() - 1;
-            self.file_selected_index = prev_idx.min(max_idx);
+            let next_idx = (prev_idx + 1).min(max_idx);
+            // If we landed on a header, skip to the next item
+            self.file_selected_index = if matches!(
+                self.display_items_cache.get(next_idx),
+                Some(FilesPaneItem::Header(_))
+            ) {
+                (next_idx + 1).min(max_idx)
+            } else {
+                next_idx
+            };
         }
         Ok(())
     }
@@ -1418,7 +1427,10 @@ impl App {
 
         let mut items = Vec::new();
         for (folder, folder_files) in &folders {
-            items.push(FilesPaneItem::Header(format!("{}/", folder)));
+            // Skip header for root-level files ("./")
+            if folder != "." {
+                items.push(FilesPaneItem::Header(format!("{}/", folder)));
+            }
             for f in folder_files {
                 items.push(FilesPaneItem::File(f.clone()));
             }
@@ -1800,6 +1812,7 @@ impl App {
                     self.editing_commit_message = false;
                     self.refresh(true)?;
                     self.set_message("Changes committed");
+                    self.focused_panel = FocusedPanel::Graph;
                 }
             }
             Action::EditorChar(c) => self.commit_editor.insert_char(c),
