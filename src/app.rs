@@ -2027,7 +2027,6 @@ impl App {
     /// Auto-scroll the commit detail pane to keep the editor cursor visible.
     fn scroll_to_editor_cursor(&mut self) {
         let (cursor_row, _) = self.commit_editor.cursor_position();
-        // +2: one blank line after header + one for the header line itself
         let absolute_row = self.commit_editor_line_offset as usize + cursor_row;
         let scroll = self.commit_detail_scroll as usize;
         let visible = self.commit_detail_visible_rows as usize;
@@ -2039,9 +2038,9 @@ impl App {
         } else if absolute_row >= scroll + visible {
             self.commit_detail_scroll = (absolute_row - visible + 1) as u16;
         }
-        self.commit_detail_scroll = self
-            .commit_detail_scroll
-            .min(self.commit_detail_max_scroll);
+        // Don't clamp to max_scroll here — the editor may have added lines
+        // that haven't been rendered yet, so max_scroll is stale. The next
+        // render will recompute the correct max.
     }
 
     fn open_commit_menu(&mut self) {
