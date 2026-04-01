@@ -450,7 +450,11 @@ impl App {
             branches,
             graph_layout,
             graph_list_state,
-            focused_panel: FocusedPanel::Graph,
+            focused_panel: if ui_state.side_panel_layout {
+                FocusedPanel::Files
+            } else {
+                FocusedPanel::Graph
+            },
             file_selected_index: 0,
             file_list_cache: Vec::new(),
             display_items_cache: Vec::new(),
