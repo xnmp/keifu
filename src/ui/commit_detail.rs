@@ -298,7 +298,7 @@ impl<'a> CommitDetailWidget<'a> {
 
             if app.editing_commit_message {
                 lines.push(Line::from(Span::styled(
-                    "Commit Message (Enter to commit, Shift+Enter for newline, Esc to cancel):",
+                    "Commit Message (Enter to commit, Ctrl+Enter for newline, Esc to cancel):",
                     Style::default().fg(Color::Cyan),
                 )));
             } else if !app.commit_editor.text.is_empty() {

@@ -145,11 +145,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .split(detail_area);
         let commit_inner_x = chunks[1].x + 1; // +1 for border
         let commit_inner_y = chunks[1].y + 1; // +1 for border
-        // Editor content starts after: "Uncommitted Changes", blank, prompt, blank = 4 lines
-        let editor_start_line = 4;
+        // Use the tracked editor line offset and account for scroll
+        let editor_start_line = app.commit_editor_line_offset;
+        let absolute_row = editor_start_line + cursor_row as u16;
         let cursor_x = commit_inner_x + cursor_col as u16;
-        let cursor_y = commit_inner_y + (editor_start_line + cursor_row) as u16;
+        let cursor_y =
+            commit_inner_y + absolute_row.saturating_sub(app.commit_detail_scroll);
         if cursor_y < chunks[1].y + chunks[1].height - 1
+            && cursor_y >= commit_inner_y
             && cursor_x < chunks[1].x + chunks[1].width - 1
         {
             frame.set_cursor_position((cursor_x, cursor_y));

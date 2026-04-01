@@ -2465,7 +2465,6 @@ impl App {
             .map(|f| f.path.to_string_lossy().to_string())
             .collect();
         if paths.is_empty() {
-            self.set_message("Delete is only for untracked files. Use 'r' to restore tracked files.");
             return Ok(());
         }
 

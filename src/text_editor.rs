@@ -99,8 +99,13 @@ impl TextEditor {
             return;
         }
         let target = word_boundary_left(&self.text, self.cursor);
-        self.text.drain(target..self.cursor);
-        self.cursor = target;
+        if target == self.cursor {
+            // At a line boundary — fall back to regular backspace (join lines)
+            self.backspace();
+        } else {
+            self.text.drain(target..self.cursor);
+            self.cursor = target;
+        }
     }
 
     pub fn delete_word(&mut self) {
