@@ -500,10 +500,31 @@ impl App {
     /// Refresh after a file operation (stage/gitignore/archive/trash).
     /// Keeps the quick diff visible to avoid UI flicker, then immediately
     /// recomputes it so the file list reflects the new state.
-    /// Advances cursor to the next item (clamped to list bounds).
-    fn refresh_after_file_op(&mut self) -> Result<()> {
-        // Invalidate (not clear) so stale data stays visible during refresh
+    ///
+    /// If `advance` is true, moves the cursor to the next file after the
+    /// operated-on file (for stage/delete where the file leaves the section).
+    /// If false, stays on the same file by path (for unstage where the file
+    /// moves but should remain selected).
+    fn refresh_after_file_op(&mut self, advance: bool) -> Result<()> {
+        // Remember the current file path and the next file path (for advance)
+        let current_path = self.selected_file().map(|f| f.path.clone());
+        let next_file_path = if advance {
+            // Find the next File item after current selection
+            self.display_items_cache[self.file_selected_index + 1..]
+                .iter()
+                .find_map(|item| match item {
+                    FilesPaneItem::File(f) => Some(f.path.clone()),
+                    _ => None,
+                })
+        } else {
+            None
+        };
+
+        // Invalidate and clear the stale full diff so the fresh quick diff
+        // takes precedence via cached_diff_or_quick().  The stale full diff
+        // doesn't reflect the staging change and would shadow the quick diff.
         self.invalidate_uncommitted_diff_cache();
+        self.uncommitted_diff_cache = None;
         self.refresh(false)?;
         // Force quick diff recomputation so file list updates immediately
         self.quick_diff_target = None;
@@ -511,21 +532,24 @@ impl App {
             CommitDiffInfo::quick_file_list_for_working_tree(&self.repo.repo).ok();
         self.quick_diff_target = Some(DiffTarget::Uncommitted);
 
-        let prev_idx = self.file_selected_index;
         self.sync_file_list_cache();
-        // Advance cursor to next file item (skip headers), clamped to list bounds
-        if !self.display_items_cache.is_empty() {
-            let max_idx = self.display_items_cache.len() - 1;
-            let next_idx = (prev_idx + 1).min(max_idx);
-            // If we landed on a header, skip to the next item
-            self.file_selected_index = if matches!(
-                self.display_items_cache.get(next_idx),
-                Some(FilesPaneItem::Header(_))
-            ) {
-                (next_idx + 1).min(max_idx)
-            } else {
-                next_idx
-            };
+
+        if advance {
+            // Find the next file after the operated-on file by path
+            let target_path = next_file_path.or(current_path);
+            if let Some(path) = target_path {
+                if let Some(idx) = self
+                    .display_items_cache
+                    .iter()
+                    .position(|item| matches!(item, FilesPaneItem::File(f) if f.path == path))
+                {
+                    self.file_selected_index = idx;
+                }
+            }
+            self.snap_selection_to_file(1);
+        } else {
+            // Stay at the same visual position (index already clamped by sync_file_list_cache)
+            self.snap_selection_to_file(-1);
         }
         Ok(())
     }
@@ -1232,6 +1256,7 @@ impl App {
             self.file_selected_index = self
                 .file_selected_index
                 .min(self.display_items_cache.len() - 1);
+            self.snap_selection_to_file(1);
         }
     }
 
@@ -1300,6 +1325,35 @@ impl App {
             }
         }
         self.display_items_cache.len().saturating_sub(1)
+    }
+
+    /// Snap `file_selected_index` to the nearest `File` item, skipping headers.
+    /// `direction`: 1 to prefer forward, -1 to prefer backward.
+    fn snap_selection_to_file(&mut self, direction: i32) {
+        let items = &self.display_items_cache;
+        if items.is_empty() {
+            self.file_selected_index = 0;
+            return;
+        }
+        let idx = self.file_selected_index.min(items.len() - 1);
+        if matches!(items[idx], FilesPaneItem::File(_)) {
+            self.file_selected_index = idx;
+            return;
+        }
+        // Search in preferred direction first, then opposite
+        let searches: [i32; 2] = [direction, -direction];
+        for dir in searches {
+            let mut i = idx as i32 + dir;
+            while i >= 0 && (i as usize) < items.len() {
+                if matches!(items[i as usize], FilesPaneItem::File(_)) {
+                    self.file_selected_index = i as usize;
+                    return;
+                }
+                i += dir;
+            }
+        }
+        // All headers (shouldn't happen), stay put
+        self.file_selected_index = idx;
     }
 
     /// Get the file list for the files pane (staged then unstaged for uncommitted,
@@ -1632,28 +1686,34 @@ impl App {
             Action::MoveUp => {
                 if self.file_selected_index > 0 {
                     self.file_selected_index -= 1;
+                    self.snap_selection_to_file(-1);
                 }
             }
             Action::MoveDown => {
                 if item_count > 0 && self.file_selected_index + 1 < item_count {
                     self.file_selected_index += 1;
+                    self.snap_selection_to_file(1);
                 }
             }
             Action::PageUp => {
                 self.file_selected_index = self.file_selected_index.saturating_sub(10);
+                self.snap_selection_to_file(-1);
             }
             Action::PageDown => {
                 if item_count > 0 {
                     self.file_selected_index =
                         (self.file_selected_index + 10).min(item_count - 1);
+                    self.snap_selection_to_file(1);
                 }
             }
             Action::GoToTop => {
                 self.file_selected_index = 0;
+                self.snap_selection_to_file(1);
             }
             Action::GoToBottom => {
                 if item_count > 0 {
                     self.file_selected_index = item_count - 1;
+                    self.snap_selection_to_file(-1);
                 }
             }
             Action::OpenFileDiff => {
@@ -2201,7 +2261,7 @@ impl App {
             });
         }
 
-        self.refresh_after_file_op()?;
+        self.refresh_after_file_op(staging)?;
         Ok(())
     }
 
@@ -2228,7 +2288,7 @@ impl App {
                     pattern: pattern.clone(),
                 });
                 self.set_message(format!("Added '{}' to .gitignore", pattern));
-                self.refresh_after_file_op()?;
+                self.refresh_after_file_op(true)?;
             }
             false => {
                 self.set_message(format!("'{}' already in .gitignore", pattern));
@@ -2259,7 +2319,7 @@ impl App {
             relative_path: target.clone(),
         });
         self.set_message(format!("Archived '{}'", target));
-        self.refresh_after_file_op()?;
+        self.refresh_after_file_op(true)?;
 
         Ok(())
     }
@@ -2357,7 +2417,7 @@ impl App {
             }
         }
 
-        self.refresh_after_file_op()?;
+        self.refresh_after_file_op(true)?;
         Ok(())
     }
 
@@ -2787,7 +2847,7 @@ impl App {
                         };
                         self.set_message(format!("Restored {}", label));
                         self.mode = AppMode::Normal;
-                        self.refresh_after_file_op()?;
+                        self.refresh_after_file_op(true)?;
                         return Ok(());
                     }
                     ConfirmAction::TrashFile(paths) => {
@@ -2809,7 +2869,7 @@ impl App {
                             self.set_message(format!("Trash errors: {}", errors.join("; ")));
                         }
                         self.mode = AppMode::Normal;
-                        self.refresh_after_file_op()?;
+                        self.refresh_after_file_op(true)?;
                         return Ok(());
                     }
                 }

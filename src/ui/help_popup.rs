@@ -149,7 +149,7 @@ impl Widget for HelpPopup {
                 Span::styled("Start editing commit message", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  Alt+Enter  ", key_style),
+                Span::styled("  Enter        ", key_style),
                 Span::styled("Commit changes", desc_style),
             ]),
             Line::from(""),
