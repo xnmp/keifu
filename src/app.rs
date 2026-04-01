@@ -2408,10 +2408,7 @@ impl App {
                 }
             }
             CommitMenuItem::Push => {
-                self.mode = AppMode::Confirm {
-                    message: "Push current branch to origin?".to_string(),
-                    action: ConfirmAction::Push,
-                };
+                self.start_push();
             }
         }
         Ok(())
