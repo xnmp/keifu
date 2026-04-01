@@ -2023,6 +2023,17 @@ impl App {
             return Ok(());
         }
 
+        if matches!(action, Action::AmendCommit) {
+            if self.is_uncommitted_selected() {
+                // Ctrl+Enter with no message: amend --no-edit
+                commit_amend_no_edit(&self.repo_path)?;
+                self.refresh(true)?;
+                self.set_message("Commit amended (--no-edit)");
+                self.focused_panel = FocusedPanel::Graph;
+            }
+            return Ok(());
+        }
+
         match action {
             Action::StartEditing => {
                 if self.is_uncommitted_selected() {

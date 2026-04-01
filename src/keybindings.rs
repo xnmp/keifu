@@ -232,6 +232,9 @@ fn map_commit_detail_mode(key: KeyEvent) -> Option<Action> {
         // Enter starts editing (for uncommitted changes)
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::StartEditing),
 
+        // Ctrl+Enter: amend --no-edit (on uncommitted node with staged files)
+        (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => Some(Action::AmendCommit),
+
         // Esc returns to graph
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
 

@@ -212,6 +212,8 @@ impl<'a> Widget for StatusBar<'a> {
                             if self.is_uncommitted {
                                 spans.push(Span::styled(" Enter ", key_style));
                                 spans.push(Span::styled("edit msg ", desc_style));
+                                spans.push(Span::styled(" Ctrl+Enter ", key_style));
+                                spans.push(Span::styled("amend ", desc_style));
                             }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
