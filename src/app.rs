@@ -506,12 +506,18 @@ impl App {
     /// If false, stays on the same file by path (for unstage where the file
     /// moves but should remain selected).
     fn refresh_after_file_op(&mut self, advance: bool) -> Result<()> {
-        // Remember the current file path and the next file path (for advance)
-        let current_path = self.selected_file().map(|f| f.path.clone());
-        let next_file_path = if advance {
-            // Find the next File item after current selection
-            self.display_items_cache[self.file_selected_index + 1..]
+        // Before the refresh, remember neighboring files so we can restore
+        // cursor position robustly after the list reshuffles.
+        let next_file_path = self.display_items_cache[self.file_selected_index + 1..]
+            .iter()
+            .find_map(|item| match item {
+                FilesPaneItem::File(f) => Some(f.path.clone()),
+                _ => None,
+            });
+        let prev_file_path = if self.file_selected_index > 0 {
+            self.display_items_cache[..self.file_selected_index]
                 .iter()
+                .rev()
                 .find_map(|item| match item {
                     FilesPaneItem::File(f) => Some(f.path.clone()),
                     _ => None,
@@ -535,9 +541,9 @@ impl App {
         self.sync_file_list_cache();
 
         if advance {
-            // Find the next file after the operated-on file by path
-            let target_path = next_file_path.or(current_path);
-            if let Some(path) = target_path {
+            // Select the next file neighbor; fall back to previous if at end
+            let target = next_file_path.or(prev_file_path);
+            if let Some(path) = target {
                 if let Some(idx) = self
                     .display_items_cache
                     .iter()
