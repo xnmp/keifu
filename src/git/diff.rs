@@ -250,6 +250,8 @@ impl CommitDiffInfo {
         let mut opts = DiffOptions::new();
         opts.ignore_submodules(true);
         opts.context_lines(0);
+        opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
 
         let staged_diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
         let unstaged_diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
@@ -271,8 +273,14 @@ impl CommitDiffInfo {
 
         let mut unstaged_files = Vec::new();
         for delta in unstaged_diff.deltas() {
+            let is_untracked = delta.status() == git2::Delta::Untracked;
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
+            };
+            let status = if is_untracked {
+                StageStatus::Untracked
+            } else {
+                StageStatus::Unstaged
             };
             unstaged_files.push(FileDiffInfo {
                 path: path.to_path_buf(),
@@ -280,7 +288,7 @@ impl CommitDiffInfo {
                 is_binary,
                 insertions: 0,
                 deletions: 0,
-                stage_status: Some(StageStatus::Unstaged),
+                stage_status: Some(status),
             });
         }
 

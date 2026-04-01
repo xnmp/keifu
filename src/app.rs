@@ -138,6 +138,73 @@ pub enum FilesPaneItem {
     File(FileDiffInfo),
 }
 
+/// Tracks which file is selected in the files pane by (section, path).
+/// Resolved to an index from the current display items at point of use,
+/// so it never goes stale when items reshuffle.
+#[derive(Debug, Clone, Default)]
+struct FileSelection {
+    section: Option<String>,
+    path: Option<std::path::PathBuf>,
+}
+
+impl FileSelection {
+    /// Resolve this selection to an index within the given items.
+    /// Returns the index of the matching file, or the first file if not found.
+    fn resolve(&self, items: &[FilesPaneItem]) -> usize {
+        // Try to find exact match (section + path)
+        if let Some(ref path) = self.path {
+            if let Some(ref section) = self.section {
+                let mut current_section: Option<&str> = None;
+                for (i, item) in items.iter().enumerate() {
+                    match item {
+                        FilesPaneItem::Header(t) => current_section = Some(t),
+                        FilesPaneItem::File(f) if f.path == *path && current_section == Some(section) => {
+                            return i;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Fall back to path match in any section
+            for (i, item) in items.iter().enumerate() {
+                if matches!(item, FilesPaneItem::File(f) if f.path == *path) {
+                    return i;
+                }
+            }
+        }
+        // Fall back to first file
+        items
+            .iter()
+            .position(|item| matches!(item, FilesPaneItem::File(_)))
+            .unwrap_or(0)
+    }
+
+    /// Set selection from an index in the given items.
+    fn set_from_index(&mut self, idx: usize, items: &[FilesPaneItem]) {
+        if let Some(FilesPaneItem::File(f)) = items.get(idx) {
+            self.path = Some(f.path.clone());
+            self.section = items[..=idx]
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    FilesPaneItem::Header(t) => Some(t.clone()),
+                    _ => None,
+                });
+        }
+    }
+}
+
+/// Find which section header an index falls under.
+fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
+    items[..=idx.min(items.len().saturating_sub(1))]
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            FilesPaneItem::Header(text) => Some(text.as_str()),
+            _ => None,
+        })
+}
+
 /// An operation that can be undone with Ctrl+Z
 #[derive(Debug, Clone)]
 enum UndoableOperation {
@@ -302,10 +369,11 @@ pub struct App {
     // UI state
     pub graph_list_state: ListState,
     pub focused_panel: FocusedPanel,
-    pub file_selected_index: usize,
+    /// Selection in the files pane, tracked as (section, path).
+    /// Resolved to an index from display_items_cache at point of use.
+    file_selection: FileSelection,
     pub file_list_cache: Vec<FileDiffInfo>,
     /// Cached display items (headers + files) for the files pane.
-    /// `file_selected_index` indexes into this list.
     display_items_cache: Vec<FilesPaneItem>,
     pub files_group_by_folder: bool,
     pub files_filter: String,
@@ -455,7 +523,7 @@ impl App {
             } else {
                 FocusedPanel::Graph
             },
-            file_selected_index: 0,
+            file_selection: FileSelection::default(),
             file_list_cache: Vec::new(),
             display_items_cache: Vec::new(),
             files_group_by_folder: false,
@@ -532,30 +600,40 @@ impl App {
     /// operated-on file (for stage/delete where the file leaves the section).
     /// If false, stays on the same file by path (for unstage where the file
     /// moves but should remain selected).
-    fn refresh_after_file_op(&mut self, advance: bool) -> Result<()> {
-        // Before the refresh, remember neighboring files so we can restore
-        // cursor position robustly after the list reshuffles.
-        let next_file_path = self.display_items_cache[self.file_selected_index + 1..]
+    /// Refresh after a file operation (stage/unstage/gitignore/archive/trash).
+    ///
+    /// After the file list reshuffles, selects the next file in the same
+    /// section. Falls back to previous in section, then to any file.
+    fn refresh_after_file_op(&mut self) -> Result<()> {
+        // Snapshot the current items and selection BEFORE the refresh.
+        // Use files_pane_items() directly — the cache might be stale.
+        let old_items = self.files_pane_items();
+        let old_idx = self.file_selection.resolve(&old_items);
+        let old_section = section_of(&old_items, old_idx);
+
+        // Next files in same section (forward until next header)
+        let next_in_section: Vec<std::path::PathBuf> = old_items[old_idx + 1..]
             .iter()
-            .find_map(|item| match item {
+            .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+            .filter_map(|item| match item {
                 FilesPaneItem::File(f) => Some(f.path.clone()),
                 _ => None,
-            });
-        let prev_file_path = if self.file_selected_index > 0 {
-            self.display_items_cache[..self.file_selected_index]
-                .iter()
-                .rev()
-                .find_map(|item| match item {
-                    FilesPaneItem::File(f) => Some(f.path.clone()),
-                    _ => None,
-                })
-        } else {
-            None
-        };
+            })
+            .collect();
+
+        // Previous files in same section (backward until header)
+        let prev_in_section: Vec<std::path::PathBuf> = old_items[..old_idx]
+            .iter()
+            .rev()
+            .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+            .filter_map(|item| match item {
+                FilesPaneItem::File(f) => Some(f.path.clone()),
+                _ => None,
+            })
+            .collect();
 
         // Invalidate and clear the stale full diff so the fresh quick diff
-        // takes precedence via cached_diff_or_quick().  The stale full diff
-        // doesn't reflect the staging change and would shadow the quick diff.
+        // takes precedence via cached_diff_or_quick().
         self.invalidate_uncommitted_diff_cache();
         self.uncommitted_diff_cache = None;
         self.refresh(false)?;
@@ -564,26 +642,33 @@ impl App {
         self.quick_diff_cache =
             CommitDiffInfo::quick_file_list_for_working_tree(&self.repo.repo).ok();
         self.quick_diff_target = Some(DiffTarget::Uncommitted);
-
         self.sync_file_list_cache();
 
-        if advance {
-            // Select the next file neighbor; fall back to previous if at end
-            let target = next_file_path.or(prev_file_path);
-            if let Some(path) = target {
-                if let Some(idx) = self
-                    .display_items_cache
-                    .iter()
-                    .position(|item| matches!(item, FilesPaneItem::File(f) if f.path == path))
-                {
-                    self.file_selected_index = idx;
+        // Find best target: next in same section, then prev, then any file
+        let new_items = &self.display_items_cache;
+        let target = next_in_section
+            .iter()
+            .chain(prev_in_section.iter())
+            .find_map(|path| {
+                let i = new_items.iter().position(
+                    |item| matches!(item, FilesPaneItem::File(f) if f.path == *path),
+                )?;
+                if section_of(new_items, i) == old_section {
+                    Some((path.clone(), old_section.map(|s| s.to_string())))
+                } else {
+                    None
                 }
-            }
-            self.snap_selection_to_file(1);
-        } else {
-            // Stay at the same visual position (index already clamped by sync_file_list_cache)
-            self.snap_selection_to_file(-1);
+            });
+
+        if let Some((path, sec)) = target {
+            self.file_selection = FileSelection {
+                path: Some(path),
+                section: sec,
+            };
         }
+        // Otherwise file_selection keeps its current path; resolve() will
+        // find it in whatever section it landed in, or fall back to first file.
+
         Ok(())
     }
 
@@ -1307,52 +1392,43 @@ impl App {
             self.file_list_cache.clear();
         }
         self.display_items_cache = self.files_pane_items();
-        if self.display_items_cache.is_empty() {
-            self.file_selected_index = 0;
-        } else {
-            self.file_selected_index = self
-                .file_selected_index
-                .min(self.display_items_cache.len() - 1);
-            self.snap_selection_to_file(1);
-        }
+    }
+
+    /// Resolve the current selection to an index in display_items_cache.
+    /// Always points at a File item (never a header).
+    pub fn file_selected_index(&self) -> usize {
+        self.file_selection.resolve(&self.display_items_cache)
+    }
+
+    /// Get the cached display items.
+    pub fn display_items(&self) -> &[FilesPaneItem] {
+        &self.display_items_cache
+    }
+
+    /// Update the selection to point at the given index in display_items_cache.
+    fn select_file_at(&mut self, idx: usize) {
+        self.file_selection.set_from_index(idx, &self.display_items_cache);
     }
 
     /// Get the selected display item.
     fn selected_display_item(&self) -> Option<&FilesPaneItem> {
-        self.display_items_cache.get(self.file_selected_index)
+        self.display_items_cache.get(self.file_selected_index())
     }
 
     /// Resolve the selected display item to a single file.
-    /// Header → first file under it. File → that file.
     fn selected_file(&self) -> Option<&FileDiffInfo> {
         match self.selected_display_item()? {
             FilesPaneItem::File(f) => Some(f),
-            FilesPaneItem::Header(_) => {
-                self.display_items_cache[self.file_selected_index + 1..]
-                    .iter()
-                    .find_map(|item| match item {
-                        FilesPaneItem::File(f) => Some(f),
-                        _ => None,
-                    })
-            }
+            _ => None,
         }
     }
 
     /// Resolve the selected display item to all affected files.
-    /// Header → all files under it. File → vec of one.
     fn selected_files(&self) -> Vec<&FileDiffInfo> {
         match self.selected_display_item() {
             Some(FilesPaneItem::File(f)) => vec![f],
-            Some(FilesPaneItem::Header(_)) => self.display_items_cache
-                [self.file_selected_index + 1..]
-                .iter()
-                .take_while(|item| matches!(item, FilesPaneItem::File(_)))
-                .filter_map(|item| match item {
-                    FilesPaneItem::File(f) => Some(f),
-                    _ => None,
-                })
-                .collect(),
             None => vec![],
+            _ => vec![],
         }
     }
 
@@ -1384,33 +1460,25 @@ impl App {
         self.display_items_cache.len().saturating_sub(1)
     }
 
-    /// Snap `file_selected_index` to the nearest `File` item, skipping headers.
-    /// `direction`: 1 to prefer forward, -1 to prefer backward.
-    fn snap_selection_to_file(&mut self, direction: i32) {
+    /// Move file selection by delta, skipping headers. Positive = down, negative = up.
+    fn move_file_selection(&mut self, delta: i32) {
         let items = &self.display_items_cache;
         if items.is_empty() {
-            self.file_selected_index = 0;
             return;
         }
-        let idx = self.file_selected_index.min(items.len() - 1);
-        if matches!(items[idx], FilesPaneItem::File(_)) {
-            self.file_selected_index = idx;
-            return;
-        }
-        // Search in preferred direction first, then opposite
-        let searches: [i32; 2] = [direction, -direction];
-        for dir in searches {
-            let mut i = idx as i32 + dir;
-            while i >= 0 && (i as usize) < items.len() {
-                if matches!(items[i as usize], FilesPaneItem::File(_)) {
-                    self.file_selected_index = i as usize;
-                    return;
-                }
-                i += dir;
+        let current = self.file_selection.resolve(items);
+        let max = items.len() as i32 - 1;
+        let mut target = (current as i32 + delta).clamp(0, max) as usize;
+        // Skip headers in the direction of movement
+        let dir = if delta >= 0 { 1i32 } else { -1 };
+        while target < items.len() && matches!(items[target], FilesPaneItem::Header(_)) {
+            let next = target as i32 + dir;
+            if next < 0 || next > max {
+                break;
             }
+            target = next as usize;
         }
-        // All headers (shouldn't happen), stay put
-        self.file_selected_index = idx;
+        self.select_file_at(target);
     }
 
     /// Get the file list for the files pane (staged then unstaged for uncommitted,
@@ -1781,7 +1849,7 @@ impl App {
                 self.sync_file_list_cache();
                 if let Some(file) = self.selected_file().cloned() {
                     let file_list = self.file_list_cache.clone();
-                    let flat_idx = self.display_index_to_flat_index(self.file_selected_index);
+                    let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
@@ -1805,42 +1873,27 @@ impl App {
                 self.should_quit = true;
             }
             Action::MoveUp => {
-                if self.file_selected_index > 0 {
-                    self.file_selected_index -= 1;
-                    self.snap_selection_to_file(-1);
-                }
+                self.move_file_selection(-1);
             }
             Action::MoveDown => {
-                if item_count > 0 && self.file_selected_index + 1 < item_count {
-                    self.file_selected_index += 1;
-                    self.snap_selection_to_file(1);
-                }
+                self.move_file_selection(1);
             }
             Action::PageUp => {
-                self.file_selected_index = self.file_selected_index.saturating_sub(10);
-                self.snap_selection_to_file(-1);
+                self.move_file_selection(-10);
             }
             Action::PageDown => {
-                if item_count > 0 {
-                    self.file_selected_index =
-                        (self.file_selected_index + 10).min(item_count - 1);
-                    self.snap_selection_to_file(1);
-                }
+                self.move_file_selection(10);
             }
             Action::GoToTop => {
-                self.file_selected_index = 0;
-                self.snap_selection_to_file(1);
+                self.move_file_selection(-(item_count as i32));
             }
             Action::GoToBottom => {
-                if item_count > 0 {
-                    self.file_selected_index = item_count - 1;
-                    self.snap_selection_to_file(-1);
-                }
+                self.move_file_selection(item_count as i32);
             }
             Action::OpenFileDiff => {
                 if let Some(file) = self.selected_file().cloned() {
                     let file_list = self.file_list_cache.clone();
-                    let flat_idx = self.display_index_to_flat_index(self.file_selected_index);
+                    let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
@@ -2469,7 +2522,7 @@ impl App {
             });
         }
 
-        self.refresh_after_file_op(staging)?;
+        self.refresh_after_file_op()?;
         Ok(())
     }
 
@@ -2496,7 +2549,7 @@ impl App {
                     pattern: pattern.clone(),
                 });
                 self.set_message(format!("Added '{}' to .gitignore", pattern));
-                self.refresh_after_file_op(true)?;
+                self.refresh_after_file_op()?;
             }
             false => {
                 self.set_message(format!("'{}' already in .gitignore", pattern));
@@ -2529,23 +2582,15 @@ impl App {
             relative_path: target.clone(),
         });
         self.set_message(format!("Archived '{}'", target));
-        self.refresh_after_file_op(true)?;
+        self.refresh_after_file_op()?;
 
         Ok(())
     }
 
     /// Check if the current selection is in the "Archived Files" section.
     fn is_in_archived_section(&self) -> bool {
-        // Walk backwards from current index to find the nearest Header
-        for item in self.display_items_cache[..=self.file_selected_index]
-            .iter()
-            .rev()
-        {
-            if let FilesPaneItem::Header(text) = item {
-                return text == "Archived Files";
-            }
-        }
-        false
+        section_of(&self.display_items_cache, self.file_selected_index())
+            == Some("Archived Files")
     }
 
     fn unarchive_selected_file(&mut self) -> Result<()> {
@@ -2555,7 +2600,7 @@ impl App {
         let target = file.path.to_string_lossy().to_string();
         unarchive_path(&self.repo_path, &target)?;
         self.set_message(format!("Unarchived '{}'", target));
-        self.refresh_after_file_op(true)?;
+        self.refresh_after_file_op()?;
         Ok(())
     }
 
@@ -2665,7 +2710,7 @@ impl App {
             }
         }
 
-        self.refresh_after_file_op(true)?;
+        self.refresh_after_file_op()?;
         Ok(())
     }
 
@@ -2834,7 +2879,7 @@ impl App {
                 };
                 if let Some(fi) = flat_index {
                     self.sync_file_list_cache();
-                    self.file_selected_index = self.flat_index_to_display_index(fi);
+                    self.select_file_at(self.flat_index_to_display_index(fi));
                 }
                 self.focused_panel = FocusedPanel::Files;
                 self.return_to_normal();
@@ -3095,7 +3140,7 @@ impl App {
                         };
                         self.set_message(format!("Restored {}", label));
                         self.mode = AppMode::Normal;
-                        self.refresh_after_file_op(true)?;
+                        self.refresh_after_file_op()?;
                         return Ok(());
                     }
                     ConfirmAction::TrashFile(paths) => {
@@ -3117,7 +3162,7 @@ impl App {
                             self.set_message(format!("Trash errors: {}", errors.join("; ")));
                         }
                         self.mode = AppMode::Normal;
-                        self.refresh_after_file_op(true)?;
+                        self.refresh_after_file_op()?;
                         return Ok(());
                     }
                 }
@@ -3411,7 +3456,7 @@ mod tests {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
-            file_selected_index: 0,
+            file_selection: FileSelection::default(),
             file_list_cache: Vec::new(),
             display_items_cache: Vec::new(),
             files_group_by_folder: false,
@@ -3498,7 +3543,7 @@ mod tests {
             },
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
-            file_selected_index: 0,
+            file_selection: FileSelection::default(),
             file_list_cache: Vec::new(),
             display_items_cache: Vec::new(),
             files_group_by_folder: false,
@@ -3707,5 +3752,464 @@ mod tests {
             .nodes
             .first()
             .is_some_and(|node| node.is_uncommitted));
+    }
+
+    // ── Helpers for selection tests ────────────────────────────────
+
+    fn h(name: &str) -> FilesPaneItem {
+        FilesPaneItem::Header(name.to_string())
+    }
+
+    fn f(name: &str) -> FilesPaneItem {
+        FilesPaneItem::File(FileDiffInfo {
+            path: std::path::PathBuf::from(name),
+            kind: FileChangeKind::Modified,
+            is_binary: false,
+            insertions: 0,
+            deletions: 0,
+            stage_status: None,
+        })
+    }
+
+    fn path_at(items: &[FilesPaneItem], idx: usize) -> &str {
+        match &items[idx] {
+            FilesPaneItem::File(f) => f.path.to_str().unwrap(),
+            FilesPaneItem::Header(t) => panic!("index {} is header: {}", idx, t),
+        }
+    }
+
+    // ── FileSelection::resolve tests ──────────────────────────────
+
+    #[test]
+    fn resolve_finds_exact_section_and_path() {
+        let items = vec![
+            h("Staged Changes"), f("a.txt"),
+            h("Unstaged Changes"), f("b.txt"), f("c.txt"),
+        ];
+        let sel = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        assert_eq!(sel.resolve(&items), 3);
+    }
+
+    #[test]
+    fn resolve_prefers_matching_section_over_other() {
+        // Same path in two sections (e.g. archived copy)
+        let items = vec![
+            h("Unstaged Changes"), f("x.txt"),
+            h("Archived Files"), f("x.txt"),
+        ];
+        let sel = FileSelection {
+            section: Some("Archived Files".to_string()),
+            path: Some("x.txt".into()),
+        };
+        assert_eq!(sel.resolve(&items), 3);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_path_in_any_section() {
+        let items = vec![
+            h("Staged Changes"), f("a.txt"),
+            h("Unstaged Changes"), f("b.txt"),
+        ];
+        let sel = FileSelection {
+            section: Some("Gone Section".to_string()),
+            path: Some("b.txt".into()),
+        };
+        assert_eq!(sel.resolve(&items), 3);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_first_file_when_path_gone() {
+        let items = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt")];
+        let sel = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("gone.txt".into()),
+        };
+        assert_eq!(sel.resolve(&items), 1);
+    }
+
+    #[test]
+    fn resolve_never_returns_header_index() {
+        let items = vec![h("Unstaged Changes"), f("a.txt")];
+        let sel = FileSelection::default();
+        let idx = sel.resolve(&items);
+        assert_eq!(path_at(&items, idx), "a.txt");
+    }
+
+    #[test]
+    fn resolve_empty_items_returns_zero() {
+        let sel = FileSelection {
+            section: Some("X".to_string()),
+            path: Some("y.txt".into()),
+        };
+        assert_eq!(sel.resolve(&[]), 0);
+    }
+
+    // ── section_of tests ──────────────────────────────────────────
+
+    #[test]
+    fn section_of_file_under_header() {
+        let items = vec![h("Staged Changes"), f("a.txt"), f("b.txt")];
+        assert_eq!(section_of(&items, 1), Some("Staged Changes"));
+        assert_eq!(section_of(&items, 2), Some("Staged Changes"));
+    }
+
+    #[test]
+    fn section_of_file_with_no_header() {
+        let items = vec![f("a.txt"), f("b.txt")];
+        assert_eq!(section_of(&items, 0), None);
+    }
+
+    #[test]
+    fn section_of_header_itself() {
+        let items = vec![h("Staged Changes"), f("a.txt")];
+        assert_eq!(section_of(&items, 0), Some("Staged Changes"));
+    }
+
+    // ── Selection after staging/unstaging ──────────────────────────
+
+    // These test the section-aware neighbor logic used by refresh_after_file_op.
+    // We simulate by setting up items, selecting a file, computing neighbors,
+    // then checking which path gets selected in a reshuffled list.
+
+    fn compute_next_selection(
+        old_items: &[FilesPaneItem],
+        old_idx: usize,
+        new_items: &[FilesPaneItem],
+    ) -> FileSelection {
+        let old_section = section_of(old_items, old_idx);
+
+        let next_in_section: Vec<std::path::PathBuf> = old_items[old_idx + 1..]
+            .iter()
+            .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+            .filter_map(|item| match item {
+                FilesPaneItem::File(f) => Some(f.path.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let prev_in_section: Vec<std::path::PathBuf> = old_items[..old_idx]
+            .iter()
+            .rev()
+            .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+            .filter_map(|item| match item {
+                FilesPaneItem::File(f) => Some(f.path.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let target = next_in_section
+            .iter()
+            .chain(prev_in_section.iter())
+            .find_map(|path| {
+                let i = new_items.iter().position(
+                    |item| matches!(item, FilesPaneItem::File(fi) if fi.path == *path),
+                )?;
+                if section_of(new_items, i) == old_section {
+                    Some((path.clone(), old_section.map(|s| s.to_string())))
+                } else {
+                    None
+                }
+            });
+
+        if let Some((path, sec)) = target {
+            FileSelection { path: Some(path), section: sec }
+        } else {
+            // Keep original selection — resolve() will find best match
+            let mut sel = FileSelection::default();
+            if let Some(FilesPaneItem::File(f)) = old_items.get(old_idx) {
+                sel.path = Some(f.path.clone());
+                sel.section = old_section.map(|s| s.to_string());
+            }
+            sel
+        }
+    }
+
+    fn selected_path_after(
+        old_items: &[FilesPaneItem],
+        old_idx: usize,
+        new_items: &[FilesPaneItem],
+    ) -> String {
+        let sel = compute_next_selection(old_items, old_idx, new_items);
+        let idx = sel.resolve(new_items);
+        path_at(new_items, idx).to_string()
+    }
+
+    #[test]
+    fn stage_first_unstaged_selects_next_unstaged() {
+        let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
+        let new = vec![
+            h("Staged Changes"), f("a.txt"),
+            h("Unstaged Changes"), f("b.txt"), f("c.txt"),
+        ];
+        assert_eq!(selected_path_after(&old, 1, &new), "b.txt");
+    }
+
+    #[test]
+    fn stage_last_unstaged_selects_prev_unstaged() {
+        let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
+        let new = vec![
+            h("Staged Changes"), f("c.txt"),
+            h("Unstaged Changes"), f("a.txt"), f("b.txt"),
+        ];
+        assert_eq!(selected_path_after(&old, 3, &new), "b.txt");
+    }
+
+    #[test]
+    fn stage_middle_unstaged_selects_next_unstaged() {
+        let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
+        let new = vec![
+            h("Staged Changes"), f("b.txt"),
+            h("Unstaged Changes"), f("a.txt"), f("c.txt"),
+        ];
+        assert_eq!(selected_path_after(&old, 2, &new), "c.txt");
+    }
+
+    #[test]
+    fn stage_only_unstaged_falls_back() {
+        let old = vec![h("Unstaged Changes"), f("a.txt")];
+        let new = vec![h("Staged Changes"), f("a.txt")];
+        // Section gone, falls back to a.txt in staged
+        assert_eq!(selected_path_after(&old, 1, &new), "a.txt");
+    }
+
+    #[test]
+    fn stage_with_existing_staged_selects_next_unstaged() {
+        let old = vec![
+            h("Staged Changes"), f("x.txt"),
+            h("Unstaged Changes"), f("app.rs"), f("fdsklt"), f("gshifdg"),
+        ];
+        let new = vec![
+            h("Staged Changes"), f("app.rs"), f("x.txt"),
+            h("Unstaged Changes"), f("fdsklt"), f("gshifdg"),
+        ];
+        assert_eq!(selected_path_after(&old, 3, &new), "fdsklt");
+    }
+
+    #[test]
+    fn unstage_first_staged_selects_next_staged() {
+        let old = vec![
+            h("Staged Changes"), f("a.txt"), f("b.txt"),
+            h("Unstaged Changes"), f("c.txt"),
+        ];
+        let new = vec![
+            h("Staged Changes"), f("b.txt"),
+            h("Unstaged Changes"), f("a.txt"), f("c.txt"),
+        ];
+        assert_eq!(selected_path_after(&old, 1, &new), "b.txt");
+    }
+
+    #[test]
+    fn unstage_only_staged_falls_back() {
+        let old = vec![
+            h("Staged Changes"), f("a.txt"),
+            h("Unstaged Changes"), f("b.txt"),
+        ];
+        let new = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt")];
+        // Staged section gone, a.txt now in unstaged
+        assert_eq!(selected_path_after(&old, 1, &new), "a.txt");
+    }
+
+    #[test]
+    fn file_removed_selects_next_in_section() {
+        let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
+        let new = vec![h("Unstaged Changes"), f("a.txt"), f("c.txt")];
+        assert_eq!(selected_path_after(&old, 2, &new), "c.txt");
+    }
+
+    #[test]
+    fn last_file_removed_selects_prev_in_section() {
+        let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt")];
+        let new = vec![h("Unstaged Changes"), f("a.txt")];
+        assert_eq!(selected_path_after(&old, 2, &new), "a.txt");
+    }
+
+    #[test]
+    fn archived_section_stays_in_archived() {
+        let old = vec![
+            h("Unstaged Changes"), f("a.txt"),
+            h("Archived Files"), f("old.txt"), f("stale.txt"),
+        ];
+        let new = vec![
+            h("Unstaged Changes"), f("a.txt"), f("old.txt"),
+            h("Archived Files"), f("stale.txt"),
+        ];
+        assert_eq!(selected_path_after(&old, 3, &new), "stale.txt");
+    }
+
+    // ── Integration tests: staging with real git repos ─────────────
+
+    fn make_test_app(tempdir: &std::path::Path) -> App {
+        let git_repo = GitRepository::open(tempdir).unwrap();
+        let repo_path = tempdir.to_string_lossy().to_string();
+        let mut app = make_app_from_repo(git_repo);
+        app.repo_path = repo_path;
+        // Select the uncommitted node (index 0)
+        app.graph_list_state.select(Some(0));
+        app.sync_file_list_cache();
+        app
+    }
+
+    fn selected_file_path(app: &App) -> String {
+        let idx = app.file_selected_index();
+        let items = app.display_items();
+        match &items[idx] {
+            FilesPaneItem::File(f) => f.path.to_string_lossy().to_string(),
+            FilesPaneItem::Header(t) => panic!("selected a header: {}", t),
+        }
+    }
+
+    fn selected_section(app: &App) -> Option<String> {
+        let idx = app.file_selected_index();
+        section_of(app.display_items(), idx).map(|s| s.to_string())
+    }
+
+    #[test]
+    fn integration_stage_modified_with_untracked_selects_untracked() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "tracked.txt", "v1\n", "initial");
+
+        // Create one modified file and one untracked file
+        fs::write(tempdir.path().join("tracked.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("untracked.txt"), "new\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+
+        // Select tracked.txt (the modified file in Unstaged Changes)
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("tracked.txt".into()),
+        };
+        app.sync_file_list_cache();
+        assert_eq!(selected_file_path(&app), "tracked.txt");
+
+        // Stage it
+        stage_file(&app.repo_path, "tracked.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        // Should select the untracked file (next in Unstaged), not the staged file
+        assert_eq!(
+            selected_section(&app).as_deref(),
+            Some("Unstaged Changes"),
+            "selection should stay in Unstaged Changes section"
+        );
+        assert_eq!(
+            selected_file_path(&app),
+            "untracked.txt",
+            "should select next unstaged file (the untracked one)"
+        );
+    }
+
+    #[test]
+    fn integration_stage_only_unstaged_selects_staged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        // Only one modified file, no untracked
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("a.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        stage_file(&app.repo_path, "a.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        // No more unstaged files, should fall back to the staged file
+        assert_eq!(selected_file_path(&app), "a.txt");
+        assert_eq!(
+            selected_section(&app).as_deref(),
+            Some("Staged Changes"),
+        );
+    }
+
+    #[test]
+    fn integration_unstage_selects_next_staged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        // Stage two files
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+        stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+        stage_file(tempdir.path().to_str().unwrap(), "b.txt").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Staged Changes".to_string()),
+            path: Some("a.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        // Unstage a.txt
+        unstage_file(&app.repo_path, "a.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        // Should stay in Staged Changes on b.txt
+        assert_eq!(selected_file_path(&app), "b.txt");
+        assert_eq!(
+            selected_section(&app).as_deref(),
+            Some("Staged Changes"),
+        );
+    }
+
+    #[test]
+    fn integration_stage_with_existing_staged_selects_next_unstaged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        commit_file(&repo, "b.txt", "v1\n", "second");
+
+        // Modify both, stage a.txt first
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("untracked.txt"), "new\n").unwrap();
+        stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+
+        // Select b.txt in Unstaged
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        // Stage b.txt
+        stage_file(&app.repo_path, "b.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        // Should select untracked.txt (next in Unstaged), not b.txt in Staged
+        assert_eq!(
+            selected_section(&app).as_deref(),
+            Some("Unstaged Changes"),
+        );
+        assert_eq!(selected_file_path(&app), "untracked.txt");
+    }
+
+    #[test]
+    fn integration_quick_diff_includes_untracked_files() {
+        // Verify the quick diff actually sees untracked files
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "tracked.txt", "v1\n", "initial");
+
+        fs::write(tempdir.path().join("new_file.txt"), "hello\n").unwrap();
+
+        let quick = CommitDiffInfo::quick_file_list_for_working_tree(&repo).unwrap();
+        let paths: Vec<_> = quick.unstaged_files.iter().map(|f| f.path.to_string_lossy().to_string()).collect();
+        assert!(
+            paths.contains(&"new_file.txt".to_string()),
+            "quick diff should include untracked files, got: {:?}",
+            paths
+        );
     }
 }

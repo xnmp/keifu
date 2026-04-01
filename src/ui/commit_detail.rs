@@ -127,14 +127,15 @@ impl<'a> CommitDetailWidget<'a> {
         use crate::app::FilesPaneItem;
 
         let selected_file_index = if app.focused_panel == FocusedPanel::Files {
-            Some(app.file_selected_index)
+            Some(app.file_selected_index())
         } else {
             None
         };
 
         let line_stats_loading = app.is_line_stats_loading();
 
-        let items = app.files_pane_items();
+        // Use the same items that file_selected_index() resolves against
+        let items = app.display_items().to_vec();
         if items.is_empty() {
             if app.is_diff_loading() {
                 return (vec![Line::from(Span::styled(
