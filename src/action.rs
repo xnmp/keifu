@@ -40,6 +40,7 @@ pub enum Action {
     OpenWithDefault,
 
     // File operations
+    RestoreFile,
     ToggleStage,
     AddToGitignore,
     ArchiveFile,

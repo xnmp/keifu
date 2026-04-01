@@ -454,6 +454,59 @@ pub fn unarchive_path(repo_path: &str, relative_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Restore (discard changes to) the given files.
+/// Tracked files are restored via `git checkout -- <path>`.
+/// Untracked files are moved to the system recycle bin.
+pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
+    let repo = Repository::open(repo_path).context("Failed to open repository")?;
+    let statuses = repo.statuses(None).context("Failed to get git status")?;
+
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+
+    for path in paths {
+        let is_untracked = statuses.iter().any(|entry| {
+            entry.path() == Some(path)
+                && entry
+                    .status()
+                    .intersects(git2::Status::WT_NEW | git2::Status::INDEX_NEW)
+                && !entry
+                    .status()
+                    .intersects(git2::Status::WT_MODIFIED | git2::Status::INDEX_MODIFIED)
+        });
+
+        if is_untracked {
+            untracked.push(path.clone());
+        } else {
+            tracked.push(path.clone());
+        }
+    }
+
+    // Restore tracked files
+    if !tracked.is_empty() {
+        let mut args = vec!["checkout".to_string(), "--".to_string()];
+        args.extend(tracked);
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(repo_path)
+            .output()
+            .context("Failed to execute git checkout")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git checkout failed: {}", stderr.trim());
+        }
+    }
+
+    // Trash untracked files
+    for path in &untracked {
+        let full = Path::new(repo_path).join(path);
+        trash::delete(&full).context(format!("Failed to trash '{}'", path))?;
+    }
+
+    Ok(())
+}
+
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     let output = Command::new("git")

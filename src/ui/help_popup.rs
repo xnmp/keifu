@@ -111,8 +111,12 @@ impl Widget for HelpPopup {
                     Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
                 ]),
                 Line::from(vec![
+                    Span::styled("  r          ", key_style),
+                    Span::styled("Restore file (discard changes)", desc_style),
+                ]),
+                Line::from(vec![
                     Span::styled("  Delete     ", key_style),
-                    Span::styled("Move file to recycle bin", desc_style),
+                    Span::styled("Delete untracked file (recycle bin)", desc_style),
                 ]),
                 Line::from(vec![
                     Span::styled("  Ctrl+z     ", key_style),
@@ -125,6 +129,10 @@ impl Widget for HelpPopup {
             Line::from(vec![
                 Span::styled("  Ctrl+f     ", key_style),
                 Span::styled("Filter files", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Space      ", key_style),
+                Span::styled("Open file with default app", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  Enter      ", key_style),

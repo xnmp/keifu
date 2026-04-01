@@ -154,11 +154,13 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("select ", desc_style));
                             spans.push(Span::styled(" Enter ", key_style));
                             spans.push(Span::styled("diff ", desc_style));
-                            spans.push(Span::styled(" o ", key_style));
+                            spans.push(Span::styled(" Space ", key_style));
                             spans.push(Span::styled("open ", desc_style));
                             if self.is_uncommitted {
                                 spans.push(Span::styled(" s ", key_style));
                                 spans.push(Span::styled("stage ", desc_style));
+                                spans.push(Span::styled(" r ", key_style));
+                                spans.push(Span::styled("restore ", desc_style));
                                 spans.push(Span::styled(" i ", key_style));
                                 spans.push(Span::styled("ignore ", desc_style));
                                 spans.push(Span::styled(" v ", key_style));

@@ -166,13 +166,14 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Folder view toggle
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ToggleFolderView),
 
+        // Restore all changes (discard)
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RestoreFile),
+
         // Open file with default app
-        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenWithDefault),
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenWithDefault),
 
         // Enter file diff for viewing
-        (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
-            Some(Action::OpenFileDiff)
-        }
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),
 
         // Start filter mode
         (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartFilesFilter),

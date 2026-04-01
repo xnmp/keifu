@@ -62,6 +62,7 @@ Event loop in `main.rs`: render frame → poll input → `map_key_to_action()` �
 
 ### File operations on uncommitted changes
 
-`s` stage/unstage | `i` gitignore | `v` archive to `.archive/` | `Delete` trash (recycle bin) | `Ctrl+Z` undo last op | `f` toggle folder grouping | `Ctrl+F` filter
+`s` stage/unstage | `r` restore (discard changes) | `i` gitignore | `v` archive to `.archive/` | `Delete` trash untracked (recycle bin) | `Ctrl+Z` undo last op | `Space` open file | `f` toggle folder grouping | `Ctrl+F` filter
 
 Fix root causes, not symptoms. Avoid band-aids like stopPropagation, setTimeout, or flags to mask bugs.
+
