@@ -1988,19 +1988,32 @@ impl App {
                 }
             }
             Action::AmendCommit => {
-                let msg = self.commit_editor.text.trim().to_string();
-                if msg.is_empty() {
-                    // No message: amend --no-edit (keep existing message, add staged changes)
-                    commit_amend_no_edit(&self.repo_path)?;
+                if self.amending_commit {
+                    // Already editing HEAD commit — Ctrl+Enter acts same as Enter (save amend)
+                    let msg = self.commit_editor.text.trim().to_string();
+                    if !msg.is_empty() {
+                        commit_amend(&self.repo_path, &msg)?;
+                        self.commit_editor = crate::text_editor::TextEditor::new();
+                        self.editing_commit_message = false;
+                        self.amending_commit = false;
+                        self.refresh(true)?;
+                        self.set_message("Commit amended");
+                        self.focused_panel = FocusedPanel::Graph;
+                    }
                 } else {
-                    commit_amend(&self.repo_path, &msg)?;
+                    // On uncommitted node — amend last commit
+                    let msg = self.commit_editor.text.trim().to_string();
+                    if msg.is_empty() {
+                        commit_amend_no_edit(&self.repo_path)?;
+                    } else {
+                        commit_amend(&self.repo_path, &msg)?;
+                    }
+                    self.commit_editor = crate::text_editor::TextEditor::new();
+                    self.editing_commit_message = false;
+                    self.refresh(true)?;
+                    self.set_message("Commit amended");
+                    self.focused_panel = FocusedPanel::Graph;
                 }
-                self.commit_editor = crate::text_editor::TextEditor::new();
-                self.editing_commit_message = false;
-                self.amending_commit = false;
-                self.refresh(true)?;
-                self.set_message("Commit amended");
-                self.focused_panel = FocusedPanel::Graph;
             }
             Action::EditorChar(c) => self.commit_editor.insert_char(c),
             Action::EditorNewline => self.commit_editor.insert_newline(),

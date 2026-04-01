@@ -297,11 +297,8 @@ impl<'a> CommitDetailWidget<'a> {
             ];
 
             if app.editing_commit_message {
-                let hint = if app.amending_commit {
-                    "Amend Message (Enter to save, Ctrl+Enter to amend --no-edit, Esc to cancel):"
-                } else {
-                    "Commit Message (Enter to commit, Ctrl+Enter to amend, Esc to cancel):"
-                };
+                let hint =
+                    "Commit Message (Enter to commit, Ctrl+Enter to amend, Esc to cancel):";
                 lines.push(Line::from(Span::styled(
                     hint,
                     Style::default().fg(Color::Cyan),
@@ -400,7 +397,7 @@ impl<'a> CommitDetailWidget<'a> {
 
         // Message — show editor if amending this commit
         if app.amending_commit && app.editing_commit_message && node.is_head {
-            let hint = "Amend Message (Enter to save, Ctrl+Enter to amend --no-edit, Esc to cancel):";
+            let hint = "Amend Message (Enter to save, Esc to cancel):";
             lines.push(Line::from(Span::styled(
                 hint,
                 Style::default().fg(Color::Cyan),
