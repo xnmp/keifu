@@ -196,7 +196,10 @@ impl FileSelection {
 
 /// Find which section header an index falls under.
 fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
-    items[..=idx.min(items.len().saturating_sub(1))]
+    if items.is_empty() {
+        return None;
+    }
+    items[..=idx.min(items.len() - 1)]
         .iter()
         .rev()
         .find_map(|item| match item {
@@ -4048,6 +4051,10 @@ mod tests {
         app.repo_path = repo_path;
         // Select the uncommitted node (index 0)
         app.graph_list_state.select(Some(0));
+        // Load quick diff so display items are populated
+        app.quick_diff_cache =
+            CommitDiffInfo::quick_file_list_for_working_tree(&app.repo.repo).ok();
+        app.quick_diff_target = Some(DiffTarget::Uncommitted);
         app.sync_file_list_cache();
         app
     }
@@ -4193,6 +4200,182 @@ mod tests {
             Some("Unstaged Changes"),
         );
         assert_eq!(selected_file_path(&app), "untracked.txt");
+    }
+
+    #[test]
+    fn integration_stage_middle_unstaged_selects_next_unstaged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        commit_file(&repo, "b.txt", "v1\n", "second");
+        commit_file(&repo, "c.txt", "v1\n", "third");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("c.txt"), "v2\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        stage_file(&app.repo_path, "b.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+        assert_eq!(selected_file_path(&app), "c.txt");
+    }
+
+    #[test]
+    fn integration_stage_last_unstaged_selects_prev_unstaged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        commit_file(&repo, "b.txt", "v1\n", "second");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        stage_file(&app.repo_path, "b.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+        assert_eq!(selected_file_path(&app), "a.txt");
+    }
+
+    #[test]
+    fn integration_unstage_only_staged_falls_back_to_unstaged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+        stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Staged Changes".to_string()),
+            path: Some("a.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        unstage_file(&app.repo_path, "a.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        // Staged section gone — should fall back; a.txt is now unstaged
+        assert_eq!(selected_file_path(&app), "a.txt");
+    }
+
+    #[test]
+    fn integration_unstage_last_staged_selects_prev_staged() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+        commit_file(&repo, "b.txt", "v1\n", "second");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+        stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+        stage_file(tempdir.path().to_str().unwrap(), "b.txt").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Staged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        unstage_file(&app.repo_path, "b.txt").unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        assert_eq!(selected_section(&app).as_deref(), Some("Staged Changes"));
+        assert_eq!(selected_file_path(&app), "a.txt");
+    }
+
+    #[test]
+    fn integration_file_deleted_selects_next_in_section() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+        fs::write(tempdir.path().join("c.txt"), "new\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        // Delete b.txt (simulating trash/gitignore)
+        fs::remove_file(tempdir.path().join("b.txt")).unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+        assert_eq!(selected_file_path(&app), "c.txt");
+    }
+
+    #[test]
+    fn integration_last_file_deleted_selects_prev_in_section() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+        app.file_selection = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some("b.txt".into()),
+        };
+        app.sync_file_list_cache();
+
+        fs::remove_file(tempdir.path().join("b.txt")).unwrap();
+        app.refresh_after_file_op().unwrap();
+
+        assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+        assert_eq!(selected_file_path(&app), "a.txt");
+    }
+
+    #[test]
+    fn integration_selection_never_lands_on_header() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tempdir.path()).unwrap();
+        commit_file(&repo, "a.txt", "v1\n", "initial");
+
+        fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+        fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+
+        let mut app = make_test_app(tempdir.path());
+
+        // Force selection to default (no path set)
+        app.file_selection = FileSelection::default();
+        app.sync_file_list_cache();
+
+        let idx = app.file_selected_index();
+        let items = app.display_items();
+        assert!(
+            matches!(items.get(idx), Some(FilesPaneItem::File(_))),
+            "selection should never land on a header, got index {} in {:?}",
+            idx,
+            items.iter().map(|i| match i {
+                FilesPaneItem::Header(t) => format!("H:{}", t),
+                FilesPaneItem::File(f) => format!("F:{}", f.path.display()),
+            }).collect::<Vec<_>>()
+        );
     }
 
     #[test]
