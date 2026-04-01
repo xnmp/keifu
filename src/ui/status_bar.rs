@@ -21,6 +21,8 @@ pub struct StatusBar<'a> {
     is_busy: bool,
     is_uncommitted: bool,
     is_filtering: bool,
+    editing_commit: bool,
+    amending_commit: bool,
     search_info: Option<String>,
 }
 
@@ -58,6 +60,8 @@ impl<'a> StatusBar<'a> {
             is_busy: app.is_network_busy(),
             is_uncommitted: app.is_uncommitted_selected(),
             is_filtering: app.files_filter_active,
+            editing_commit: app.editing_commit_message,
+            amending_commit: app.amending_commit,
             search_info,
         }
     }
@@ -136,6 +140,19 @@ impl<'a> Widget for StatusBar<'a> {
                         spans.push(Span::raw("  "));
                     }
 
+                    if self.editing_commit {
+                        if self.amending_commit {
+                            spans.push(Span::styled(" Enter ", key_style));
+                            spans.push(Span::styled("save amend ", desc_style));
+                        } else {
+                            spans.push(Span::styled(" Enter ", key_style));
+                            spans.push(Span::styled("commit ", desc_style));
+                            spans.push(Span::styled(" Ctrl+Enter ", key_style));
+                            spans.push(Span::styled("amend ", desc_style));
+                        }
+                        spans.push(Span::styled(" Esc ", key_style));
+                        spans.push(Span::styled("cancel", desc_style));
+                    } else {
                     match self.focused_panel {
                         FocusedPanel::Graph => {
                             spans.push(Span::styled(" ↑↓ ", key_style));
@@ -201,6 +218,7 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled(" Esc ", key_style));
                             spans.push(Span::styled("graph", desc_style));
                         }
+                    }
                     }
                 }
             },
