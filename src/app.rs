@@ -1946,10 +1946,28 @@ impl App {
             return self.handle_editor_action(action);
         }
 
-        match action {
-            Action::Quit => {
-                self.should_quit = true;
+        // Auto-start editing on character input
+        if let Action::EditorChar(c) = action {
+            if self.is_uncommitted_selected() {
+                self.editing_commit_message = true;
+                self.amending_commit = false;
+                self.commit_editor.insert_char(c);
+                self.scroll_to_editor_cursor();
+                return Ok(());
+            } else if self.is_head_commit_selected() {
+                if let Ok(msg) = get_last_commit_message(&self.repo_path) {
+                    self.commit_editor = crate::text_editor::TextEditor::from_text(&msg);
+                    self.editing_commit_message = true;
+                    self.amending_commit = true;
+                    self.commit_editor.insert_char(c);
+                    self.scroll_to_editor_cursor();
+                    return Ok(());
+                }
             }
+            return Ok(());
+        }
+
+        match action {
             Action::StartEditing => {
                 if self.is_uncommitted_selected() {
                     self.editing_commit_message = true;

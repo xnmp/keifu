@@ -63,10 +63,14 @@ fn map_normal_mode(
         return map_editor_mode(key);
     }
 
-    // Panel navigation with left/right arrows (from any panel)
+    // Panel navigation with left/right arrows and Tab (from any panel)
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Left) => return Some(Action::PanelLeft),
-        (KeyModifiers::NONE, KeyCode::Right) => return Some(Action::PanelRight),
+        (KeyModifiers::NONE, KeyCode::Left) | (KeyModifiers::NONE, KeyCode::Tab) => {
+            return Some(Action::PanelLeft)
+        }
+        (KeyModifiers::NONE, KeyCode::Right) | (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+            return Some(Action::PanelRight)
+        }
         _ => {}
     }
 
@@ -109,10 +113,8 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('@')) => Some(Action::JumpToHead),
 
         // Branch jump
-        (_, KeyCode::Char(']')) | (KeyModifiers::NONE, KeyCode::Tab) => Some(Action::NextBranch),
-        (_, KeyCode::Char('[')) | (KeyModifiers::SHIFT, KeyCode::BackTab) => {
-            Some(Action::PrevBranch)
-        }
+        (_, KeyCode::Char(']')) => Some(Action::NextBranch),
+        (_, KeyCode::Char('[')) => Some(Action::PrevBranch),
 
         // Branch selection within same commit (h/l only, left/right now switch panels)
         (KeyModifiers::NONE, KeyCode::Char('h')) => Some(Action::BranchLeft),
@@ -136,9 +138,7 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
-        (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {
-            Some(Action::Quit)
-        }
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Quit),
 
         _ => None,
     }
@@ -193,9 +193,8 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Esc returns to graph
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
 
-        // Help / quit
+        // Help
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
-        (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
 
         _ => None,
     }
@@ -236,9 +235,13 @@ fn map_commit_detail_mode(key: KeyEvent) -> Option<Action> {
         // Esc returns to graph
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
 
-        // Help / quit
+        // Help
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
-        (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
+
+        // Any printable character starts editing
+        (KeyModifiers::NONE, KeyCode::Char(c)) | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+            Some(Action::EditorChar(c))
+        }
 
         _ => None,
     }
