@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Application configuration
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -70,5 +70,43 @@ impl Config {
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
+    }
+}
+
+/// Persistent UI state saved between sessions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiState {
+    pub side_panel_layout: bool,
+}
+
+impl UiState {
+    fn state_path() -> Option<std::path::PathBuf> {
+        dirs::config_dir().map(|p| p.join("keifu/state.toml"))
+    }
+
+    pub fn load() -> Self {
+        let Some(path) = Self::state_path() else {
+            return Self::default();
+        };
+        if !path.exists() {
+            return Self::default();
+        }
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let Some(path) = Self::state_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(content) = toml::to_string(self) {
+            let _ = fs::write(&path, content);
+        }
     }
 }

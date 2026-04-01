@@ -11,7 +11,7 @@ use git2::Oid;
 
 use crate::{
     action::Action,
-    config::Config,
+    config::{Config, UiState},
     git::{
         build_graph,
         graph::GraphLayout,
@@ -403,6 +403,7 @@ impl App {
     /// Create a new application
     pub fn new() -> Result<Self> {
         let config = Config::load();
+        let ui_state = UiState::load();
         let now = Instant::now();
 
         let repo = GitRepository::discover()?;
@@ -491,7 +492,7 @@ impl App {
             fetch_silent: false,
             push_receiver: None,
             last_undoable_op: None,
-            side_panel_layout: false,
+            side_panel_layout: ui_state.side_panel_layout,
             debug_keys: false,
             config,
             last_refresh_time: now,
@@ -1585,6 +1586,10 @@ impl App {
         }
         if matches!(action, Action::ToggleLayout) {
             self.side_panel_layout = !self.side_panel_layout;
+            UiState {
+                side_panel_layout: self.side_panel_layout,
+            }
+            .save();
             return Ok(());
         }
         if matches!(action, Action::ToggleDebugKeys) {
