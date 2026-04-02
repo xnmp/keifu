@@ -471,6 +471,98 @@ impl App {
         }
     }
 
+    /// Create an App from a given repository (for testing and embedding)
+    pub fn from_repo(repo: GitRepository) -> Result<Self> {
+        let config = Config::default();
+        let now = Instant::now();
+        let repo_path = repo.path.clone();
+        let head_name = repo.head_name();
+        let head_detached = repo.is_head_detached();
+
+        let commits = repo.get_commits(500)?;
+        let branches = repo.get_branches()?;
+        let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
+        let initial_message_time = initial_message.as_ref().map(|_| now);
+        let uncommitted_count = working_tree_status
+            .as_ref()
+            .map(|s| s.accurate_file_count());
+        let head_commit_oid = repo.head_oid();
+        let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
+
+        let mut graph_list_state = ListState::default();
+        graph_list_state.select(Some(0));
+
+        let branch_positions = Self::build_branch_positions(&graph_layout);
+        let has_uncommitted_node = graph_layout
+            .nodes
+            .first()
+            .is_some_and(|node| node.is_uncommitted);
+        let selected_branch_position = if has_uncommitted_node || branch_positions.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+
+        Ok(Self {
+            mode: AppMode::Normal,
+            repo,
+            repo_path,
+            head_name,
+            head_detached,
+            commits,
+            branches,
+            graph_layout,
+            graph_list_state,
+            focused_panel: FocusedPanel::Graph,
+            file_selection: FileSelection::default(),
+            file_list_cache: Vec::new(),
+            display_items_cache: Vec::new(),
+            files_group_by_folder: false,
+            files_filter: String::new(),
+            hidden_branches: std::collections::HashSet::new(),
+            commit_editor: crate::text_editor::TextEditor::new(),
+            editing_commit_message: false,
+            amending_commit: false,
+            commit_detail_scroll: 0,
+            commit_detail_max_scroll: 0,
+            commit_editor_line_offset: 0,
+            commit_detail_visible_rows: 20,
+            files_filter_active: false,
+            branch_positions,
+            selected_branch_position,
+            search_state: SearchState::default(),
+            working_tree_status,
+            quick_diff_cache: None,
+            quick_diff_target: None,
+            diff_cache: None,
+            diff_cache_oid: None,
+            diff_loading_oid: None,
+            diff_receiver: None,
+            uncommitted_diff_cache: None,
+            uncommitted_diff_failed: false,
+            uncommitted_diff_loading: false,
+            uncommitted_diff_receiver: None,
+            uncommitted_cache_key: None,
+            selected_diff_target: None,
+            selected_diff_target_changed_at: now,
+            should_quit: false,
+            pending_refresh: false,
+            diff_viewport_height: 40,
+            diff_viewport_width: 80,
+            message: initial_message,
+            message_time: initial_message_time,
+            fetch_receiver: None,
+            fetch_silent: false,
+            push_receiver: None,
+            last_undoable_op: None,
+            side_panel_layout: false,
+            debug_keys: false,
+            config,
+            last_refresh_time: now,
+            last_fetch_time: now,
+        })
+    }
+
     /// Create a new application
     pub fn new() -> Result<Self> {
         let config = Config::load();
