@@ -3,7 +3,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
@@ -17,15 +17,18 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     }
 }
 
+use super::theme::Theme;
+
 /// Input dialog
 pub struct InputDialog<'a> {
     title: &'a str,
     input: &'a str,
+    theme: &'a Theme,
 }
 
 impl<'a> InputDialog<'a> {
-    pub fn new(title: &'a str, input: &'a str) -> Self {
-        Self { title, input }
+    pub fn new(title: &'a str, input: &'a str, theme: &'a Theme) -> Self {
+        Self { title, input, theme }
     }
 }
 
@@ -36,20 +39,20 @@ impl<'a> Widget for InputDialog<'a> {
         let block = Block::default()
             .title(format!(" {} ", self.title))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.input_border))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let input_style = Style::default()
-            .fg(Color::White)
+            .fg(self.theme.text_primary)
             .add_modifier(Modifier::UNDERLINED);
 
-        let hint_style = Style::default().fg(Color::DarkGray);
+        let hint_style = Style::default().fg(self.theme.text_muted);
         let lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled(self.input, input_style),
-                Span::styled("_", Style::default().fg(Color::Cyan)),
+                Span::styled("_", Style::default().fg(self.theme.search_cursor)),
             ]),
             Line::from(""),
             Line::from(Span::styled("  Enter: confirm  Esc: cancel", hint_style)),
@@ -63,11 +66,12 @@ impl<'a> Widget for InputDialog<'a> {
 /// Confirmation dialog
 pub struct ConfirmDialog<'a> {
     message: &'a str,
+    theme: &'a Theme,
 }
 
 impl<'a> ConfirmDialog<'a> {
-    pub fn new(message: &'a str) -> Self {
-        Self { message }
+    pub fn new(message: &'a str, theme: &'a Theme) -> Self {
+        Self { message, theme }
     }
 }
 
@@ -78,27 +82,27 @@ impl<'a> Widget for ConfirmDialog<'a> {
         let block = Block::default()
             .title(" Confirm ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.confirm_border))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let lines = vec![
             Line::from(""),
             Line::from(Span::styled(
                 format!("  {}", self.message),
-                Style::default().fg(Color::White),
+                Style::default().fg(self.theme.text_primary),
             )),
             Line::from(""),
             Line::from(vec![
                 Span::styled(
                     "  y/Enter",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(self.theme.button_yes)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(": Yes  "),
                 Span::styled(
                     "n/Esc",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default().fg(self.theme.button_no).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(": No"),
             ]),
@@ -113,13 +117,15 @@ impl<'a> Widget for ConfirmDialog<'a> {
 pub struct BranchInfoPopup<'a> {
     branches: &'a [&'a str],
     selected_branch: Option<&'a str>,
+    theme: &'a Theme,
 }
 
 impl<'a> BranchInfoPopup<'a> {
-    pub fn new(branches: &'a [&'a str], selected_branch: Option<&'a str>) -> Self {
+    pub fn new(branches: &'a [&'a str], selected_branch: Option<&'a str>, theme: &'a Theme) -> Self {
         Self {
             branches,
             selected_branch,
+            theme,
         }
     }
 }
@@ -131,8 +137,8 @@ impl<'a> Widget for BranchInfoPopup<'a> {
         let block = Block::default()
             .title(" Branches ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Blue))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.author_color))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -147,11 +153,11 @@ impl<'a> Widget for BranchInfoPopup<'a> {
             let is_selected = self.selected_branch == Some(*branch);
             let style = if is_selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Blue)
+                    .fg(self.theme.list_selection_fg)
+                    .bg(self.theme.author_color)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(self.theme.text_primary)
             };
 
             let prefix = if is_selected { "▶ " } else { "  " };

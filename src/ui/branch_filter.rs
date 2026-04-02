@@ -5,16 +5,19 @@ use std::collections::HashSet;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Widget},
 };
+
+use super::theme::Theme;
 
 pub struct BranchFilterWidget<'a> {
     all_branches: &'a [String],
     hidden_branches: &'a HashSet<String>,
     filter: &'a str,
     selected: usize,
+    theme: &'a Theme,
 }
 
 impl<'a> BranchFilterWidget<'a> {
@@ -23,12 +26,14 @@ impl<'a> BranchFilterWidget<'a> {
         hidden_branches: &'a HashSet<String>,
         filter: &'a str,
         selected: usize,
+        theme: &'a Theme,
     ) -> Self {
         Self {
             all_branches,
             hidden_branches,
             filter,
             selected,
+            theme,
         }
     }
 
@@ -53,8 +58,8 @@ impl<'a> Widget for BranchFilterWidget<'a> {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.popup_border))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -89,14 +94,11 @@ impl<'a> Widget for BranchFilterWidget<'a> {
             let label = format!("{}{}", checkbox, branch);
 
             let style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                self.theme.list_selection_style()
             } else if is_visible {
-                Style::default().fg(Color::White)
+                Style::default().fg(self.theme.text_primary)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(self.theme.text_muted)
             };
 
             let line = Line::from(Span::styled(label, style));
@@ -109,7 +111,7 @@ impl<'a> Widget for BranchFilterWidget<'a> {
 
         // Footer
         let footer_y = inner.y + inner.height.saturating_sub(1);
-        let footer_style = Style::default().fg(Color::DarkGray);
+        let footer_style = Style::default().fg(self.theme.text_muted);
         let footer = Line::from(Span::styled(
             "Space: toggle  C-a: all  C-o: none  Esc: close",
             footer_style,

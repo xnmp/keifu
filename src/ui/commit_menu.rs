@@ -3,21 +3,23 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Widget},
 };
 
+use super::theme::Theme;
 use crate::app::CommitMenuItem;
 
 pub struct CommitMenuWidget<'a> {
     items: &'a [CommitMenuItem],
     selected: usize,
+    theme: &'a Theme,
 }
 
 impl<'a> CommitMenuWidget<'a> {
-    pub fn new(items: &'a [CommitMenuItem], selected: usize) -> Self {
-        Self { items, selected }
+    pub fn new(items: &'a [CommitMenuItem], selected: usize, theme: &'a Theme) -> Self {
+        Self { items, selected, theme }
     }
 }
 
@@ -28,8 +30,8 @@ impl<'a> Widget for CommitMenuWidget<'a> {
         let block = Block::default()
             .title(" Actions ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.popup_border))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -43,12 +45,9 @@ impl<'a> Widget for CommitMenuWidget<'a> {
             let is_selected = i == self.selected;
 
             let style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                self.theme.list_selection_style()
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(self.theme.text_primary)
             };
 
             let prefix = if is_selected { " > " } else { "   " };

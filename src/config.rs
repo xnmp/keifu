@@ -9,6 +9,23 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub refresh: RefreshConfig,
+    pub ui: UiConfig,
+}
+
+/// UI configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// Theme name: "dark" or "light"
+    pub theme: String,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: "dark".to_string(),
+        }
+    }
 }
 
 /// Auto-refresh configuration

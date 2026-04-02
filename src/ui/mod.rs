@@ -9,11 +9,12 @@ pub mod graph_view;
 pub mod help_popup;
 pub mod search_dropdown;
 pub mod status_bar;
+pub mod theme;
 
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders, Paragraph, Widget},
     Frame,
 };
@@ -30,6 +31,7 @@ use self::{
     help_popup::HelpPopup,
     search_dropdown::{calculate_dropdown_height, SearchDropdown},
     status_bar::StatusBar,
+    theme::Theme,
 };
 
 /// Minimum terminal width required for rendering
@@ -42,10 +44,10 @@ pub const MIN_WIDGET_WIDTH: u16 = 12;
 pub const MIN_WIDGET_HEIGHT: u16 = 3;
 
 /// Render a placeholder block when widget area is too small
-pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
+pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(theme.unfocused_border_style());
     block.render(area, buf);
 }
 
@@ -57,6 +59,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Selection is path-based so this doesn't reset it.
     app.sync_file_list_cache();
 
+    let theme = app.theme();
     let area = frame.area();
 
     // Check minimum terminal size to prevent buffer overflow panics
@@ -65,7 +68,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             "Terminal too small ({}x{}). Need at least {}x{}.",
             area.width, area.height, MIN_WIDTH, MIN_HEIGHT
         );
-        let paragraph = Paragraph::new(msg).style(Style::default().fg(Color::Red));
+        let paragraph = Paragraph::new(msg).style(Style::default().fg(theme.file_deleted));
         frame.render_widget(paragraph, area);
         return;
     }
@@ -98,10 +101,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 *horizontal_offset,
                 *file_index,
                 file_list.len(),
+                &theme,
             ),
             vertical[0],
         );
-        frame.render_widget(StatusBar::new(app), vertical[1]);
+        frame.render_widget(StatusBar::new(app, &theme), vertical[1]);
         return;
     }
 
@@ -133,12 +137,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Render widgets
     frame.render_stateful_widget(
-        GraphViewWidget::new(app, graph_area.width),
+        GraphViewWidget::new(app, graph_area.width, &theme),
         graph_area,
         &mut app.graph_list_state,
     );
-    frame.render_widget(CommitDetailWidget::new(app, detail_area), detail_area);
-    frame.render_widget(StatusBar::new(app), status_area);
+    frame.render_widget(CommitDetailWidget::new(app, detail_area, &theme), detail_area);
+    frame.render_widget(StatusBar::new(app, &theme), status_area);
 
     // Show cursor when editing commit message
     if app.editing_commit_message && app.focused_panel == crate::app::FocusedPanel::CommitDetail {
@@ -171,16 +175,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Branch info popup (when multiple branches exist on selected node)
-    render_branch_info_popup(frame, app, graph_area);
+    render_branch_info_popup(frame, app, graph_area, &theme);
 
     // Popups
     match &app.mode {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(
-                HelpPopup {
-                    is_uncommitted: app.is_uncommitted_selected(),
-                },
+                HelpPopup::new(app.is_uncommitted_selected(), &theme),
                 popup_area,
             );
         }
@@ -199,23 +201,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     results,
                     &app.branch_positions,
                     app.search_selection(),
+                    &theme,
                 ),
                 popup_area,
             );
         }
         AppMode::Input { title, input, .. } => {
             let popup_area = centered_rect(50, 20, area);
-            frame.render_widget(InputDialog::new(title, input), popup_area);
+            frame.render_widget(InputDialog::new(title, input, &theme), popup_area);
         }
         AppMode::Confirm { message, .. } => {
             let popup_area = centered_rect(50, 20, area);
-            frame.render_widget(ConfirmDialog::new(message), popup_area);
+            frame.render_widget(ConfirmDialog::new(message, &theme), popup_area);
         }
         AppMode::CommitMenu { items, selected } => {
             let menu_height = (items.len() + 2).min(20) as u16;
             let menu_width = 42;
             let popup_area = centered_rect_fixed(menu_width, menu_height, area);
-            frame.render_widget(CommitMenuWidget::new(items, *selected), popup_area);
+            frame.render_widget(CommitMenuWidget::new(items, *selected, &theme), popup_area);
         }
         AppMode::BranchFilter {
             filter,
@@ -232,7 +235,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_width = (max_name_len + 10).clamp(46, 60) as u16;
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
-                BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected),
+                BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected, &theme),
                 popup_area,
             );
         }
@@ -241,7 +244,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 /// Render branch info popup when multiple branches exist on selected node
-fn render_branch_info_popup(frame: &mut Frame, app: &App, graph_area: Rect) {
+fn render_branch_info_popup(frame: &mut Frame, app: &App, graph_area: Rect, theme: &Theme) {
     let selected_branches = app.selected_node_branches();
 
     // Only show popup in Normal mode with multiple branches
@@ -277,7 +280,7 @@ fn render_branch_info_popup(frame: &mut Frame, app: &App, graph_area: Rect) {
 
     let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
     frame.render_widget(
-        BranchInfoPopup::new(&selected_branches, app.selected_branch_name()),
+        BranchInfoPopup::new(&selected_branches, app.selected_branch_name(), theme),
         popup_area,
     );
 }

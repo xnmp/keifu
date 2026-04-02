@@ -15,7 +15,7 @@ use crate::{
     graph::colors::get_color_by_index,
 };
 
-use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
+use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
 /// VS16 (U+FE0F) variation selector for emoji presentation
 const VS16: char = '\u{FE0F}';
@@ -56,10 +56,11 @@ fn display_width(s: &str) -> usize {
 pub struct GraphViewWidget<'a> {
     items: Vec<ListItem<'a>>,
     is_focused: bool,
+    theme: &'a Theme,
 }
 
 impl<'a> GraphViewWidget<'a> {
-    pub fn new(app: &App, width: u16) -> Self {
+    pub fn new(app: &App, width: u16, theme: &'a Theme) -> Self {
         let max_lane = app.graph_layout.max_lane;
         // Actual width minus borders
         let inner_width = width.saturating_sub(2) as usize;
@@ -80,6 +81,7 @@ impl<'a> GraphViewWidget<'a> {
                     is_selected,
                     inner_width,
                     selected_branch_name,
+                    theme,
                 );
                 ListItem::new(line)
             })
@@ -88,6 +90,7 @@ impl<'a> GraphViewWidget<'a> {
         Self {
             items,
             is_focused: app.focused_panel == crate::app::FocusedPanel::Graph,
+            theme,
         }
     }
 }
@@ -102,6 +105,7 @@ fn optimize_branch_display(
     is_head: bool,
     color_index: usize,
     selected_branch_name: Option<&str>,
+    theme: &Theme,
 ) -> Vec<(String, Style)> {
     use std::collections::HashSet;
 
@@ -127,7 +131,7 @@ fn optimize_branch_display(
     // Determine base color: main branch stays blue; other HEADs are green
     let is_main_branch = color_index == crate::graph::colors::MAIN_BRANCH_COLOR;
     let base_color = if is_head && !is_main_branch {
-        Color::Green
+        theme.branch_head
     } else {
         get_color_by_index(color_index)
     };
@@ -136,7 +140,7 @@ fn optimize_branch_display(
     let make_style = |branch_name: &str| -> Style {
         let style = Style::default().fg(base_color).add_modifier(Modifier::BOLD);
         if selected_branch_name == Some(branch_name) {
-            style.fg(Color::Black).bg(base_color)
+            style.fg(theme.list_selection_fg).bg(base_color)
         } else {
             style
         }
@@ -320,6 +324,7 @@ fn render_graph_line<'a>(
     is_selected: bool,
     total_width: usize,
     selected_branch_name: Option<&str>,
+    theme: &Theme,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -338,7 +343,7 @@ fn render_graph_line<'a>(
                 // Main branch (blue) stays blue; other HEADs are green
                 let is_main = *color_idx == crate::graph::colors::MAIN_BRANCH_COLOR;
                 let color = if node.is_head && !is_main {
-                    Color::Green
+                    theme.branch_head
                 } else {
                     get_color_by_index(*color_idx)
                 };
@@ -386,7 +391,7 @@ fn render_graph_line<'a>(
             Some(count) => format!("uncommitted changes ({})", count),
             None => "uncommitted changes".to_string(),
         };
-        let style = Style::default().fg(Color::White);
+        let style = Style::default().fg(theme.text_primary);
         spans.push(Span::styled(text, style));
         return Line::from(spans);
     }
@@ -398,9 +403,9 @@ fn render_graph_line<'a>(
     };
 
     // Style definitions
-    let hash_style = Style::default().fg(Color::Yellow);
-    let author_style = Style::default().fg(Color::Cyan);
-    let date_style = Style::default().fg(Color::DarkGray);
+    let hash_style = Style::default().fg(theme.hash_color);
+    let author_style = Style::default().fg(theme.author_color);
+    let date_style = Style::default().fg(theme.date_color);
     let msg_style = if is_selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
@@ -415,6 +420,7 @@ fn render_graph_line<'a>(
         node.is_head,
         node.color_index,
         selected_branch_name,
+        theme,
     );
 
     // === Right-aligned: date author hash (fixed width) ===
@@ -496,28 +502,18 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
-            render_placeholder_block(area, buf);
+            render_placeholder_block(area, buf, self.theme);
             return;
         }
-
-        let border_color = if self.is_focused {
-            Color::Green
-        } else {
-            Color::DarkGray
-        };
 
         let block = Block::default()
             .title(" Commits ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        let highlight_style = Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD);
+            .border_style(self.theme.border_style(self.is_focused));
 
         let list = List::new(self.items)
             .block(block)
-            .highlight_style(highlight_style);
+            .highlight_style(self.theme.selection_style());
 
         StatefulWidget::render(list, area, buf, state);
     }

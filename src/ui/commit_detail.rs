@@ -3,15 +3,15 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
 use crate::app::{App, FocusedPanel};
-use crate::git::{CommitDiffInfo, FileChangeKind};
+use crate::git::CommitDiffInfo;
 
-use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
+use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
 /// Width threshold for switching to vertical layout
 /// When panel width would be <= 28 chars, use vertical layout
@@ -26,12 +26,13 @@ pub struct CommitDetailWidget<'a> {
     files_title: Line<'a>,
     files_filter_active: bool,
     commit_scroll: u16,
+    theme: &'a Theme,
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &mut App, detail_area: Rect) -> Self {
+    pub fn new(app: &mut App, detail_area: Rect, theme: &'a Theme) -> Self {
         let detail_width = detail_area.width;
-        let commit_lines = Self::build_commit_lines(app);
+        let commit_lines = Self::build_commit_lines(app, theme);
 
         // Compute the commit pane inner dimensions for scroll calculation.
         // The commit pane is the right half (or bottom half on narrow terminals).
@@ -84,7 +85,7 @@ impl<'a> CommitDetailWidget<'a> {
         } else {
             (detail_width / 2).saturating_sub(2) as usize
         };
-        let (file_lines, selected_line_index) = Self::build_file_lines(app, files_inner_width);
+        let (file_lines, selected_line_index) = Self::build_file_lines(app, files_inner_width, theme);
 
         Self {
             commit_lines,
@@ -94,26 +95,27 @@ impl<'a> CommitDetailWidget<'a> {
             is_files_focused: app.focused_panel == FocusedPanel::Files,
             files_filter_active: app.files_pane.files_filter_active,
             commit_scroll: app.commit_detail_scroll,
+            theme,
             files_title: {
                 let mut spans = vec![Span::raw(" Changed Files")];
                 if app.files_pane.files_group_by_folder {
                     spans.push(Span::styled(
                         " [folders]",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_muted),
                     ));
                 }
                 if app.files_pane.files_filter_active {
                     spans.push(Span::styled(
                         format!(" filter: {}\u{2588}", app.files_pane.files_filter),
                         Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Yellow)
+                            .fg(theme.status_mode_fg)
+                            .bg(theme.border_filter_active)
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else if !app.files_pane.files_filter.is_empty() {
                     spans.push(Span::styled(
                         format!(" [{}]", app.files_pane.files_filter),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(theme.search_cursor),
                     ));
                 }
                 spans.push(Span::raw(" "));
@@ -123,7 +125,7 @@ impl<'a> CommitDetailWidget<'a> {
     }
 
     /// Returns (lines, selected_line_index)
-    fn build_file_lines(app: &App, max_width: usize) -> (Vec<Line<'a>>, u16) {
+    fn build_file_lines(app: &App, max_width: usize, theme: &Theme) -> (Vec<Line<'a>>, u16) {
         use crate::app::FilesPaneItem;
 
         let selected_file_index = if app.focused_panel == FocusedPanel::Files {
@@ -140,11 +142,11 @@ impl<'a> CommitDetailWidget<'a> {
             if app.is_diff_loading() {
                 return (vec![Line::from(Span::styled(
                     "Loading...",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 ))], 0);
             }
             if let Some(diff) = app.cached_diff_or_quick() {
-                return (Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading), 0);
+                return (Self::build_file_list_lines_from(Some(diff), selected_file_index, line_stats_loading, theme), 0);
             }
             return (Vec::new(), 0);
         }
@@ -160,7 +162,7 @@ impl<'a> CommitDetailWidget<'a> {
                         format!("{} files changed", diff.total_files),
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled("  ...", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  ...", Style::default().fg(theme.text_muted)),
                 ]));
             } else {
                 lines.push(Line::from(vec![
@@ -169,9 +171,9 @@ impl<'a> CommitDetailWidget<'a> {
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
                     Span::raw("  "),
-                    Span::styled(format!("+{}", diff.total_insertions), Style::default().fg(Color::Green)),
+                    Span::styled(format!("+{}", diff.total_insertions), Style::default().fg(theme.file_added)),
                     Span::raw(" "),
-                    Span::styled(format!("-{}", diff.total_deletions), Style::default().fg(Color::Red)),
+                    Span::styled(format!("-{}", diff.total_deletions), Style::default().fg(theme.file_deleted)),
                 ]));
             }
             lines.push(Line::from(""));
@@ -189,12 +191,12 @@ impl<'a> CommitDetailWidget<'a> {
                     }
                     let style = if is_selected {
                         Style::default()
-                            .fg(Color::Yellow)
-                            .bg(Color::DarkGray)
+                            .fg(theme.help_header)
+                            .bg(theme.selection_bg)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.help_header)
                             .add_modifier(Modifier::BOLD)
                     };
                     lines.push(Line::from(Span::styled(
@@ -207,13 +209,7 @@ impl<'a> CommitDetailWidget<'a> {
                     if is_selected {
                         selected_line_idx = lines.len() as u16;
                     }
-                    let (indicator, color) = match file.kind {
-                        FileChangeKind::Added => ("A", Color::Green),
-                        FileChangeKind::Modified => ("M", Color::Yellow),
-                        FileChangeKind::Deleted => ("D", Color::Red),
-                        FileChangeKind::Renamed => ("R", Color::Cyan),
-                        FileChangeKind::Copied => ("C", Color::Cyan),
-                    };
+                    let (indicator, color) = theme.file_change_style(&file.kind);
 
                     let path_str = file.path.to_string_lossy().to_string();
 
@@ -232,7 +228,7 @@ impl<'a> CommitDetailWidget<'a> {
                     let avail = max_width.saturating_sub(prefix_len);
 
                     let select_style = if is_selected {
-                        Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        theme.selection_style()
                     } else {
                         Style::default()
                     };
@@ -244,14 +240,14 @@ impl<'a> CommitDetailWidget<'a> {
                         ];
                         spans.push(Span::raw(path_str));
                         if file.is_binary {
-                            spans.push(Span::styled(" (binary)", Style::default().fg(Color::DarkGray)));
+                            spans.push(Span::styled(" (binary)", Style::default().fg(theme.text_muted)));
                         } else if line_stats_loading {
-                            spans.push(Span::styled(" ...", Style::default().fg(Color::DarkGray)));
+                            spans.push(Span::styled(" ...", Style::default().fg(theme.text_muted)));
                         } else if file.insertions > 0 || file.deletions > 0 {
                             spans.push(Span::raw(" "));
-                            spans.push(Span::styled(format!("+{}", file.insertions), Style::default().fg(Color::Green)));
+                            spans.push(Span::styled(format!("+{}", file.insertions), Style::default().fg(theme.file_added)));
                             spans.push(Span::raw(" "));
-                            spans.push(Span::styled(format!("-{}", file.deletions), Style::default().fg(Color::Red)));
+                            spans.push(Span::styled(format!("-{}", file.deletions), Style::default().fg(theme.file_deleted)));
                         }
                         lines.push(Line::from(spans).style(select_style));
                     } else {
@@ -285,11 +281,11 @@ impl<'a> CommitDetailWidget<'a> {
         (lines, selected_line_idx)
     }
 
-    fn build_commit_lines(app: &mut App) -> Vec<Line<'a>> {
+    fn build_commit_lines(app: &mut App, theme: &Theme) -> Vec<Line<'a>> {
         let Some(selected) = app.graph_list_state.selected() else {
             return vec![Line::from(Span::styled(
                 "Select a commit",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             ))];
         };
 
@@ -303,7 +299,7 @@ impl<'a> CommitDetailWidget<'a> {
                 Line::from(Span::styled(
                     "Uncommitted Changes",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme.text_muted)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
@@ -312,17 +308,17 @@ impl<'a> CommitDetailWidget<'a> {
             if app.editing_commit_message {
                 lines.push(Line::from(Span::styled(
                     "Commit Message:",
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.search_cursor),
                 )));
             } else if !app.commit_editor.text.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "Commit Message (Enter to edit):",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 )));
             } else if app.focused_panel == FocusedPanel::CommitDetail {
                 lines.push(Line::from(Span::styled(
                     "Press Enter to type a commit message",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 )));
             } else {
                 lines.push(Line::from(Span::styled(
@@ -330,7 +326,7 @@ impl<'a> CommitDetailWidget<'a> {
                         Some(count) => format!("{} files with changes", count),
                         None => "files with changes".to_string(),
                     },
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 )));
             }
 
@@ -340,7 +336,7 @@ impl<'a> CommitDetailWidget<'a> {
                 // Track where editor text starts for auto-scroll
                 app.commit_editor_line_offset = lines.len() as u16;
                 let sel = app.commit_editor.selection.map(|s| s.ordered());
-                let sel_style = Style::default().bg(Color::Blue).fg(Color::White);
+                let sel_style = Style::default().bg(theme.editor_selection_bg).fg(theme.editor_selection_fg);
                 let mut byte_offset = 0usize;
                 for line_text in app.commit_editor.lines() {
                     let line_start = byte_offset;
@@ -380,7 +376,7 @@ impl<'a> CommitDetailWidget<'a> {
         let Some(commit) = &node.commit else {
             return vec![Line::from(Span::styled(
                 "(connector line)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             ))];
         };
 
@@ -391,7 +387,7 @@ impl<'a> CommitDetailWidget<'a> {
                 Span::styled("Author: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     format!("{} <{}>", commit.author_name, commit.author_email),
-                    Style::default().fg(Color::Blue),
+                    Style::default().fg(theme.author_color),
                 ),
             ]),
             // Date
@@ -399,7 +395,7 @@ impl<'a> CommitDetailWidget<'a> {
                 Span::styled("Date:   ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     commit.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.date_color),
                 ),
             ]),
         ];
@@ -410,12 +406,12 @@ impl<'a> CommitDetailWidget<'a> {
         if app.amending_commit && app.editing_commit_message && node.is_head {
             lines.push(Line::from(Span::styled(
                 "Amend Message:",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.search_cursor),
             )));
             lines.push(Line::from(""));
             app.commit_editor_line_offset = lines.len() as u16;
             let sel = app.commit_editor.selection.map(|s| s.ordered());
-            let sel_style = Style::default().bg(Color::Blue).fg(Color::White);
+            let sel_style = Style::default().bg(theme.editor_selection_bg).fg(theme.editor_selection_fg);
             let mut byte_offset = 0usize;
             for line_text in app.commit_editor.lines() {
                 let line_start = byte_offset;
@@ -447,7 +443,7 @@ impl<'a> CommitDetailWidget<'a> {
         } else if node.is_head && app.focused_panel == FocusedPanel::CommitDetail && !app.editing_commit_message {
             lines.push(Line::from(Span::styled(
                 "Press Enter to edit commit message (amend)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )));
             lines.push(Line::from(""));
             for line in commit.full_message.lines() {
@@ -466,6 +462,7 @@ impl<'a> CommitDetailWidget<'a> {
         diff: Option<&CommitDiffInfo>,
         selected_file_index: Option<usize>,
         line_stats_loading: bool,
+        theme: &Theme,
     ) -> Vec<Line<'a>> {
         let mut lines = Vec::new();
 
@@ -480,7 +477,7 @@ impl<'a> CommitDetailWidget<'a> {
                     format!("{} files changed", diff.total_files),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("  ...", Style::default().fg(Color::DarkGray)),
+                Span::styled("  ...", Style::default().fg(theme.text_muted)),
             ]));
         } else {
             lines.push(Line::from(vec![
@@ -491,12 +488,12 @@ impl<'a> CommitDetailWidget<'a> {
                 Span::raw("  "),
                 Span::styled(
                     format!("+{}", diff.total_insertions),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.file_added),
                 ),
                 Span::raw(" "),
                 Span::styled(
                     format!("-{}", diff.total_deletions),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.file_deleted),
                 ),
             ]));
         }
@@ -506,13 +503,7 @@ impl<'a> CommitDetailWidget<'a> {
         for (idx, file) in diff.files.iter().enumerate() {
             let is_selected = selected_file_index == Some(idx);
 
-            let (indicator, color) = match file.kind {
-                FileChangeKind::Added => ("A", Color::Green),
-                FileChangeKind::Modified => ("M", Color::Yellow),
-                FileChangeKind::Deleted => ("D", Color::Red),
-                FileChangeKind::Renamed => ("R", Color::Cyan),
-                FileChangeKind::Copied => ("C", Color::Cyan),
-            };
+            let (indicator, color) = theme.file_change_style(&file.kind);
 
             let path_str = file.path.to_string_lossy().to_string();
 
@@ -525,33 +516,29 @@ impl<'a> CommitDetailWidget<'a> {
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(
                     "(binary)",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 ));
             } else if line_stats_loading {
                 spans.push(Span::styled(
                     " ...",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 ));
             } else if file.insertions > 0 || file.deletions > 0 {
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(
                     format!("+{}", file.insertions),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.file_added),
                 ));
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(
                     format!("-{}", file.deletions),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.file_deleted),
                 ));
             }
 
             let mut line = Line::from(spans);
             if is_selected {
-                line = line.style(
-                    Style::default()
-                        .bg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                );
+                line = line.style(theme.selection_style());
             }
             lines.push(line);
         }
@@ -564,7 +551,7 @@ impl<'a> CommitDetailWidget<'a> {
                     "  ...and {} more files",
                     diff.total_files - diff.files.len()
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )));
         }
 
@@ -575,7 +562,7 @@ impl<'a> CommitDetailWidget<'a> {
 impl<'a> Widget for CommitDetailWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
-            render_placeholder_block(area, buf);
+            render_placeholder_block(area, buf, self.theme);
             return;
         }
 
@@ -593,11 +580,11 @@ impl<'a> Widget for CommitDetailWidget<'a> {
 
         // Left: file list (files pane)
         let files_border = if self.files_filter_active {
-            Color::Yellow
+            self.theme.border_filter_active
         } else if self.is_files_focused {
-            Color::Green
+            self.theme.border_focused
         } else {
-            Color::DarkGray
+            self.theme.border_unfocused
         };
         let files_block = Block::default()
             .title(self.files_title)
@@ -621,15 +608,10 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         Widget::render(files_paragraph, chunks[0], buf);
 
         // Right: commit detail
-        let commit_border = if self.is_focused {
-            Color::Green
-        } else {
-            Color::DarkGray
-        };
         let commit_block = Block::default()
             .title(" Commit Detail ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(commit_border));
+            .border_style(self.theme.border_style(self.is_focused));
 
         // Scroll is already clamped in new()
         let commit_paragraph = Paragraph::new(self.commit_lines)

@@ -3,11 +3,12 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Widget,
 };
 
+use super::theme::Theme;
 use crate::app::{App, AppMode, FocusedPanel, InputAction};
 
 pub struct StatusBar<'a> {
@@ -24,10 +25,11 @@ pub struct StatusBar<'a> {
     editing_commit: bool,
     amending_commit: bool,
     search_info: Option<String>,
+    theme: &'a Theme,
 }
 
 impl<'a> StatusBar<'a> {
-    pub fn new(app: &'a App) -> Self {
+    pub fn new(app: &'a App, theme: &'a Theme) -> Self {
         let error_message = match &app.mode {
             AppMode::Error { message } => Some(message.as_str()),
             _ => None,
@@ -63,6 +65,7 @@ impl<'a> StatusBar<'a> {
             editing_commit: app.editing_commit_message,
             amending_commit: app.amending_commit,
             search_info,
+            theme,
         }
     }
 }
@@ -70,17 +73,17 @@ impl<'a> StatusBar<'a> {
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let key_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
+            .fg(self.theme.status_key_fg)
+            .bg(self.theme.status_key_bg)
             .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(Color::White);
+        let desc_style = Style::default().fg(self.theme.text_primary);
         let mode_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Yellow)
+            .fg(self.theme.status_mode_fg)
+            .bg(self.theme.status_mode_bg)
             .add_modifier(Modifier::BOLD);
         let repo_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Magenta)
+            .fg(self.theme.status_repo_fg)
+            .bg(self.theme.status_repo_bg)
             .add_modifier(Modifier::BOLD);
 
         let mut spans: Vec<Span> = Vec::new();
@@ -99,14 +102,14 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(
                     format!(" DETACHED: {} ", head),
                     Style::default()
-                        .fg(Color::White)
-                        .bg(Color::Red)
+                        .fg(self.theme.status_detached_fg)
+                        .bg(self.theme.status_detached_bg)
                         .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 spans.push(Span::styled(
                     format!(" {} ", head),
-                    Style::default().fg(Color::Black).bg(Color::Green),
+                    Style::default().fg(self.theme.status_branch_fg).bg(self.theme.status_branch_bg),
                 ));
             }
             spans.push(Span::raw(" "));
@@ -116,14 +119,13 @@ impl<'a> Widget for StatusBar<'a> {
         match self.mode {
             AppMode::Normal => match self.message {
                 Some(msg) => {
-                    // Yellow for in-progress, Cyan for success
                     let bg = if self.is_busy {
-                        Color::Yellow
+                        self.theme.status_busy_bg
                     } else {
-                        Color::Cyan
+                        self.theme.status_success_bg
                     };
                     let msg_style = Style::default()
-                        .fg(Color::Black)
+                        .fg(self.theme.status_key_fg)
                         .bg(bg)
                         .add_modifier(Modifier::BOLD);
                     spans.push(Span::styled(format!(" {} ", msg), msg_style));
@@ -133,8 +135,8 @@ impl<'a> Widget for StatusBar<'a> {
                     // Show search info if available
                     if let Some(info) = &self.search_info {
                         let search_style = Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Green)
+                            .fg(self.theme.status_branch_fg)
+                            .bg(self.theme.status_branch_bg)
                             .add_modifier(Modifier::BOLD);
                         spans.push(Span::styled(format!(" {} ", info), search_style));
                         spans.push(Span::raw("  "));
@@ -168,8 +170,8 @@ impl<'a> Widget for StatusBar<'a> {
                         }
                         FocusedPanel::Files if self.is_filtering => {
                             let filter_style = Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Yellow)
+                                .fg(self.theme.status_mode_fg)
+                                .bg(self.theme.status_mode_bg)
                                 .add_modifier(Modifier::BOLD);
                             spans.push(Span::styled(" FILTER ", filter_style));
                             spans.push(Span::raw("  "));
@@ -243,8 +245,8 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Error { .. } => {
                 // In error mode, show the message and hide key hints
                 let error_style = Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Red)
+                    .fg(self.theme.status_error_fg)
+                    .bg(self.theme.status_error_bg)
                     .add_modifier(Modifier::BOLD);
                 if let Some(msg) = self.error_message {
                     spans.push(Span::styled(format!(" {} ", msg), error_style));

@@ -1047,6 +1047,14 @@ impl App {
     }
 
     /// Check if the currently selected node is the uncommitted changes node
+    /// Return the active theme based on config.
+    pub fn theme(&self) -> crate::ui::theme::Theme {
+        match self.config.ui.theme.as_str() {
+            "light" => crate::ui::theme::Theme::light(),
+            _ => crate::ui::theme::Theme::dark(),
+        }
+    }
+
     pub fn is_uncommitted_selected(&self) -> bool {
         self.graph_list_state
             .selected()
@@ -2362,7 +2370,8 @@ impl App {
         // files, large refactors) this may briefly block input. If this becomes a problem,
         // consider moving to a background task with a loading state, similar to commit diff summaries.
         let content = self.load_file_diff_content(file_path)?;
-        let (rendered_lines, hunk_positions) = build_highlighted_lines(&content);
+        let ui_theme = self.theme();
+        let (rendered_lines, hunk_positions) = build_highlighted_lines(&content, &ui_theme);
         let total_lines = rendered_lines.len();
         let max_line_width = rendered_lines.iter().map(|l| l.width()).max().unwrap_or(0);
 

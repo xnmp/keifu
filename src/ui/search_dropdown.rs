@@ -4,12 +4,14 @@ use crate::search::FuzzySearchResult;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Widget},
 };
 
 const MAX_VISIBLE_RESULTS: usize = 7;
+
+use super::theme::Theme;
 
 /// Search dropdown widget showing input field and fuzzy search results
 pub struct SearchDropdown<'a> {
@@ -17,6 +19,7 @@ pub struct SearchDropdown<'a> {
     results: &'a [FuzzySearchResult],
     branch_names: &'a [(usize, String)],
     selected_index: Option<usize>,
+    theme: &'a Theme,
 }
 
 impl<'a> SearchDropdown<'a> {
@@ -25,12 +28,14 @@ impl<'a> SearchDropdown<'a> {
         results: &'a [FuzzySearchResult],
         branch_names: &'a [(usize, String)],
         selected_index: Option<usize>,
+        theme: &'a Theme,
     ) -> Self {
         Self {
             input,
             results,
             branch_names,
             selected_index,
+            theme,
         }
     }
 
@@ -52,6 +57,16 @@ impl<'a> SearchDropdown<'a> {
         let matched_set: std::collections::HashSet<usize> =
             result.matched_indices.iter().copied().collect();
 
+        let highlight = |is_matched: bool| -> Style {
+            if is_matched {
+                Style::default()
+                    .fg(self.theme.search_match)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.theme.text_primary)
+            }
+        };
+
         let mut spans = Vec::new();
         let mut current_segment = String::new();
         let mut current_is_matched = false;
@@ -67,7 +82,7 @@ impl<'a> SearchDropdown<'a> {
             if is_matched != current_is_matched && !current_segment.is_empty() {
                 spans.push(Span::styled(
                     std::mem::take(&mut current_segment),
-                    highlight_style(current_is_matched),
+                    highlight(current_is_matched),
                 ));
             }
 
@@ -78,22 +93,11 @@ impl<'a> SearchDropdown<'a> {
         if !current_segment.is_empty() {
             spans.push(Span::styled(
                 current_segment,
-                highlight_style(current_is_matched),
+                highlight(current_is_matched),
             ));
         }
 
         spans
-    }
-}
-
-/// Get style for highlighted/non-highlighted text
-fn highlight_style(is_matched: bool) -> Style {
-    if is_matched {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::White)
     }
 }
 
@@ -105,12 +109,12 @@ impl<'a> Widget for SearchDropdown<'a> {
         let has_results = !self.results.is_empty();
         let visible_count = self.results.len().min(MAX_VISIBLE_RESULTS);
 
-        // Build block with cyan border (matching InputDialog style)
+        // Build block
         let block = Block::default()
             .title(" Search branches ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.popup_border))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -123,9 +127,9 @@ impl<'a> Widget for SearchDropdown<'a> {
 
         // Render input line
         let input_style = Style::default()
-            .fg(Color::White)
+            .fg(self.theme.text_primary)
             .add_modifier(Modifier::UNDERLINED);
-        let cursor_style = Style::default().fg(Color::Cyan);
+        let cursor_style = Style::default().fg(self.theme.search_cursor);
 
         let input_line = Line::from(vec![
             Span::raw("  "),
@@ -139,7 +143,7 @@ impl<'a> Widget for SearchDropdown<'a> {
         if has_results && y < inner.y + inner.height {
             // Draw separator line
             let separator = "─".repeat(inner.width as usize);
-            buf.set_string(inner.x, y, &separator, Style::default().fg(Color::DarkGray));
+            buf.set_string(inner.x, y, &separator, Style::default().fg(self.theme.text_muted));
             y += 1;
 
             // Calculate scroll offset to keep selected item visible
@@ -193,9 +197,9 @@ impl<'a> Widget for SearchDropdown<'a> {
                 let mut spans = vec![Span::styled(
                     prefix,
                     if is_selected {
-                        Style::default().fg(Color::Cyan)
+                        Style::default().fg(self.theme.search_cursor)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(self.theme.text_muted)
                     },
                 )];
 
@@ -205,10 +209,7 @@ impl<'a> Widget for SearchDropdown<'a> {
                     let display_name: String = name.chars().take(max_name_width).collect();
                     spans.push(Span::styled(
                         display_name,
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
+                        self.theme.list_selection_style(),
                     ));
                 } else {
                     // For non-selected items, show match highlighting
@@ -226,7 +227,7 @@ impl<'a> Widget for SearchDropdown<'a> {
             let hint = select_hint_text(inner.width as usize, has_results, self.input.is_empty());
             if !hint.is_empty() {
                 let hint_y = inner.y + inner.height - 1;
-                buf.set_string(inner.x, hint_y, hint, Style::default().fg(Color::DarkGray));
+                buf.set_string(inner.x, hint_y, hint, Style::default().fg(self.theme.text_muted));
             }
         }
     }

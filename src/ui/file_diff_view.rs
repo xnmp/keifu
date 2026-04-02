@@ -14,21 +14,18 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::git::{DiffLineContent, DiffLineOrigin, FileChangeKind, FileDiffContent};
+use crate::git::{DiffLineContent, DiffLineOrigin, FileDiffContent};
 
-use super::{render_placeholder_block, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
+use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
 // Syntax highlighting resources (initialized once)
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
-const THEME_NAME: &str = "base16-eighties.dark";
-
-// Diff background colors
-const BG_ADD: Color = Color::Rgb(0, 50, 0);
-const BG_DEL: Color = Color::Rgb(65, 0, 0);
-const BG_ADD_EMPH: Color = Color::Rgb(0, 90, 0);
-const BG_DEL_EMPH: Color = Color::Rgb(110, 0, 0);
+// NOTE: The diff background colors and syntect theme name are now in Theme.
+// These module-level constants are kept only as defaults for the standalone
+// `make_diff_line` helper which doesn't take a Theme (called from
+// `build_highlighted_lines` which does).
 
 // --- Line grouping for word-level emphasis ---
 
@@ -320,8 +317,8 @@ fn merge_syntax_and_emphasis(
 
 // --- Line rendering helpers ---
 
-fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>) -> Line<'static> {
-    let lineno_style = Style::default().fg(Color::DarkGray);
+fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme: &Theme) -> Line<'static> {
+    let lineno_style = Style::default().fg(theme.text_muted);
 
     let old_no = dl
         .old_lineno
@@ -338,8 +335,8 @@ fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>) -> Li
         _ => " ",
     };
     let prefix_style = match dl.origin {
-        DiffLineOrigin::Addition => Style::default().fg(Color::Green).bg(BG_ADD),
-        DiffLineOrigin::Deletion => Style::default().fg(Color::Red).bg(BG_DEL),
+        DiffLineOrigin::Addition => Style::default().fg(theme.file_added).bg(theme.diff_add_bg),
+        DiffLineOrigin::Deletion => Style::default().fg(theme.file_deleted).bg(theme.diff_del_bg),
         _ => Style::default(),
     };
 
@@ -381,12 +378,12 @@ fn determine_syntax(path: &std::path::Path) -> &'static SyntaxReference {
 /// Build pre-computed highlighted lines and hunk header positions.
 /// Returns `(rendered_lines, hunk_positions)` so that hunk navigation
 /// positions are always in sync with the actual rendered output.
-pub fn build_highlighted_lines(content: &FileDiffContent) -> (Vec<Line<'static>>, Vec<usize>) {
+pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (Vec<Line<'static>>, Vec<usize>) {
     if content.is_binary {
         return (
             vec![Line::from(Span::styled(
                 "(Binary file - no diff available)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(ui_theme.text_muted),
             ))],
             Vec::new(),
         );
@@ -396,16 +393,16 @@ pub fn build_highlighted_lines(content: &FileDiffContent) -> (Vec<Line<'static>>
         return (
             vec![Line::from(Span::styled(
                 "(No textual changes)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(ui_theme.text_muted),
             ))],
             Vec::new(),
         );
     }
 
     let syntax = determine_syntax(&content.path);
-    let theme = THEME_SET
+    let syntect_theme = THEME_SET
         .themes
-        .get(THEME_NAME)
+        .get(ui_theme.syntect_theme)
         .or_else(|| THEME_SET.themes.values().next())
         .expect("syntect must have at least one built-in theme");
     let mut lines = Vec::new();
@@ -414,8 +411,8 @@ pub fn build_highlighted_lines(content: &FileDiffContent) -> (Vec<Line<'static>>
     // Maintain highlight state across hunks so multi-line constructs
     // (block comments, strings, etc.) that span hunk boundaries are
     // colored correctly.
-    let mut old_hl = HighlightLines::new(syntax, theme);
-    let mut new_hl = HighlightLines::new(syntax, theme);
+    let mut old_hl = HighlightLines::new(syntax, syntect_theme);
+    let mut new_hl = HighlightLines::new(syntax, syntect_theme);
 
     for hunk in &content.hunks {
         // Blank line before each hunk header for readability
@@ -425,8 +422,8 @@ pub fn build_highlighted_lines(content: &FileDiffContent) -> (Vec<Line<'static>>
         lines.push(Line::from(Span::styled(
             hunk.header.clone(),
             Style::default()
-                .fg(Color::LightCyan)
-                .bg(Color::Rgb(30, 40, 55))
+                .fg(ui_theme.diff_hunk_fg)
+                .bg(ui_theme.diff_hunk_bg)
                 .add_modifier(Modifier::BOLD),
         )));
 
@@ -438,7 +435,7 @@ pub fn build_highlighted_lines(content: &FileDiffContent) -> (Vec<Line<'static>>
                     let syn = highlight_line_owned(&mut old_hl, &dl.content);
                     let _ = highlight_line_owned(&mut new_hl, &dl.content);
                     let spans = syntax_to_ratatui(&syn, None);
-                    lines.push(make_diff_line(dl, spans));
+                    lines.push(make_diff_line(dl, spans, ui_theme));
                 }
                 LineGroup::Change {
                     deletions,
@@ -449,27 +446,27 @@ pub fn build_highlighted_lines(content: &FileDiffContent) -> (Vec<Line<'static>>
                     for (i, dl) in deletions.iter().enumerate() {
                         let syn = highlight_line_owned(&mut old_hl, &dl.content);
                         let spans = if let Some(emp_spans) = emp.old_spans.get(i) {
-                            merge_syntax_and_emphasis(&syn, emp_spans, BG_DEL, BG_DEL_EMPH)
+                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_del_bg, ui_theme.diff_del_emph_bg)
                         } else {
-                            syntax_to_ratatui(&syn, Some(BG_DEL))
+                            syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg))
                         };
-                        lines.push(make_diff_line(dl, spans));
+                        lines.push(make_diff_line(dl, spans, ui_theme));
                     }
 
                     for (i, dl) in additions.iter().enumerate() {
                         let syn = highlight_line_owned(&mut new_hl, &dl.content);
                         let spans = if let Some(emp_spans) = emp.new_spans.get(i) {
-                            merge_syntax_and_emphasis(&syn, emp_spans, BG_ADD, BG_ADD_EMPH)
+                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_add_bg, ui_theme.diff_add_emph_bg)
                         } else {
-                            syntax_to_ratatui(&syn, Some(BG_ADD))
+                            syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg))
                         };
-                        lines.push(make_diff_line(dl, spans));
+                        lines.push(make_diff_line(dl, spans, ui_theme));
                     }
                 }
                 LineGroup::NoNewline => {
                     lines.push(Line::from(Span::styled(
                         "\\ No newline at end of file",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(ui_theme.text_muted),
                     )));
                 }
             }
@@ -487,6 +484,7 @@ pub struct FileDiffViewWidget<'a> {
     scroll_offset: usize,
     horizontal_offset: usize,
     file_position: String,
+    theme: &'a Theme,
 }
 
 impl<'a> FileDiffViewWidget<'a> {
@@ -497,6 +495,7 @@ impl<'a> FileDiffViewWidget<'a> {
         horizontal_offset: usize,
         file_index: usize,
         file_count: usize,
+        theme: &'a Theme,
     ) -> Self {
         Self {
             content,
@@ -504,6 +503,7 @@ impl<'a> FileDiffViewWidget<'a> {
             scroll_offset,
             horizontal_offset,
             file_position: format!("[{}/{}]", file_index + 1, file_count),
+            theme,
         }
     }
 }
@@ -511,17 +511,11 @@ impl<'a> FileDiffViewWidget<'a> {
 impl<'a> Widget for FileDiffViewWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
-            render_placeholder_block(area, buf);
+            render_placeholder_block(area, buf, self.theme);
             return;
         }
 
-        let indicator = match self.content.kind {
-            FileChangeKind::Added => "A",
-            FileChangeKind::Modified => "M",
-            FileChangeKind::Deleted => "D",
-            FileChangeKind::Renamed => "R",
-            FileChangeKind::Copied => "C",
-        };
+        let (indicator, _) = self.theme.file_change_style(&self.content.kind);
 
         let path_str = self.content.path.to_string_lossy();
         let stats = if self.content.is_binary {
@@ -541,10 +535,10 @@ impl<'a> Widget for FileDiffViewWidget<'a> {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(self.theme.popup_border))
             .title_style(
                 Style::default()
-                    .fg(Color::White)
+                    .fg(self.theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             );
 

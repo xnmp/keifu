@@ -3,25 +3,37 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-pub struct HelpPopup {
+use super::theme::Theme;
+
+pub struct HelpPopup<'a> {
     pub is_uncommitted: bool,
+    pub theme: &'a Theme,
 }
 
-impl Widget for HelpPopup {
+impl<'a> HelpPopup<'a> {
+    pub fn new(is_uncommitted: bool, theme: &'a Theme) -> Self {
+        Self {
+            is_uncommitted,
+            theme,
+        }
+    }
+}
+
+impl<'a> Widget for HelpPopup<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
         let key_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(self.theme.help_key)
             .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(Color::White);
+        let desc_style = Style::default().fg(self.theme.text_primary);
         let header_style = Style::default()
-            .fg(Color::Yellow)
+            .fg(self.theme.help_header)
             .add_modifier(Modifier::BOLD);
 
         let mut lines = vec![
@@ -185,8 +197,8 @@ impl Widget for HelpPopup {
         let block = Block::default()
             .title(" Help ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(self.theme.popup_border))
+            .style(Style::default().bg(self.theme.popup_bg));
 
         let paragraph = Paragraph::new(lines).block(block);
 
