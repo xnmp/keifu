@@ -19,16 +19,16 @@ use crate::{
         graph::GraphLayout,
         operations::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
-            commit_with_message, create_branch, delete_branch, fetch_origin, merge_branch,
-            add_to_gitignore, archive_path, commit_amend, commit_amend_no_edit,
-            get_last_commit_message, push_to_origin, rebase_branch, remove_from_gitignore,
-            reset_to_commit, restore_files, revert_commit, stage_file, unarchive_path,
+            commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
+            delete_branch, fetch_origin, get_last_commit_message, merge_branch, push_to_origin,
+            rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
             unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
         GitRepository, StageStatus, WorkingTreeStatus,
     },
     search::{fuzzy_search_branches, FuzzySearchResult},
+    workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
 };
 
 /// Copy text to system clipboard using platform-specific commands

@@ -13,3 +13,4 @@ pub mod search;
 pub mod text_editor;
 pub mod tui;
 pub mod ui;
+pub mod workspace;
