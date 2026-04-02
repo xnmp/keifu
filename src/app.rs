@@ -13,6 +13,7 @@ use crate::{
     action::Action,
     config::{Config, UiState},
     diff_cache::{DiffCache, DiffTarget},
+    files_pane_state::{FilesPaneState, section_of},
     git::{
         build_graph,
         graph::GraphLayout,
@@ -132,82 +133,8 @@ impl CommitMenuItem {
     }
 }
 
-/// Item in the files pane (header or file entry)
-#[derive(Debug, Clone)]
-pub enum FilesPaneItem {
-    Header(String),
-    File(FileDiffInfo),
-}
-
-/// Tracks which file is selected in the files pane by (section, path).
-/// Resolved to an index from the current display items at point of use,
-/// so it never goes stale when items reshuffle.
-#[derive(Debug, Clone, Default)]
-struct FileSelection {
-    section: Option<String>,
-    path: Option<std::path::PathBuf>,
-}
-
-impl FileSelection {
-    /// Resolve this selection to an index within the given items.
-    /// Returns the index of the matching file, or the first file if not found.
-    fn resolve(&self, items: &[FilesPaneItem]) -> usize {
-        // Try to find exact match (section + path)
-        if let Some(ref path) = self.path {
-            if let Some(ref section) = self.section {
-                let mut current_section: Option<&str> = None;
-                for (i, item) in items.iter().enumerate() {
-                    match item {
-                        FilesPaneItem::Header(t) => current_section = Some(t),
-                        FilesPaneItem::File(f) if f.path == *path && current_section == Some(section) => {
-                            return i;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            // Fall back to path match in any section
-            for (i, item) in items.iter().enumerate() {
-                if matches!(item, FilesPaneItem::File(f) if f.path == *path) {
-                    return i;
-                }
-            }
-        }
-        // Fall back to first file
-        items
-            .iter()
-            .position(|item| matches!(item, FilesPaneItem::File(_)))
-            .unwrap_or(0)
-    }
-
-    /// Set selection from an index in the given items.
-    fn set_from_index(&mut self, idx: usize, items: &[FilesPaneItem]) {
-        if let Some(FilesPaneItem::File(f)) = items.get(idx) {
-            self.path = Some(f.path.clone());
-            self.section = items[..=idx]
-                .iter()
-                .rev()
-                .find_map(|item| match item {
-                    FilesPaneItem::Header(t) => Some(t.clone()),
-                    _ => None,
-                });
-        }
-    }
-}
-
-/// Find which section header an index falls under.
-fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
-    if items.is_empty() {
-        return None;
-    }
-    items[..=idx.min(items.len() - 1)]
-        .iter()
-        .rev()
-        .find_map(|item| match item {
-            FilesPaneItem::Header(text) => Some(text.as_str()),
-            _ => None,
-        })
-}
+// Re-export FilesPaneItem so external code can use `crate::app::FilesPaneItem`
+pub use crate::files_pane_state::FilesPaneItem;
 
 /// An operation that can be undone with Ctrl+Z
 #[derive(Debug, Clone)]
@@ -355,14 +282,8 @@ pub struct App {
     // UI state
     pub graph_list_state: ListState,
     pub focused_panel: FocusedPanel,
-    /// Selection in the files pane, tracked as (section, path).
-    /// Resolved to an index from display_items_cache at point of use.
-    file_selection: FileSelection,
-    pub file_list_cache: Vec<FileDiffInfo>,
-    /// Cached display items (headers + files) for the files pane.
-    display_items_cache: Vec<FilesPaneItem>,
-    pub files_group_by_folder: bool,
-    pub files_filter: String,
+    /// Files pane subsystem state
+    pub files_pane: FilesPaneState,
     pub hidden_branches: std::collections::HashSet<String>,
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
@@ -374,7 +295,6 @@ pub struct App {
     pub commit_editor_line_offset: u16,
     /// Visible rows in the commit detail pane (updated during render)
     pub commit_detail_visible_rows: u16,
-    pub files_filter_active: bool,
 
     // Branch selection state
     /// List of (node_index, branch_name) for all branches
@@ -480,11 +400,7 @@ impl App {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
-            file_selection: FileSelection::default(),
-            file_list_cache: Vec::new(),
-            display_items_cache: Vec::new(),
-            files_group_by_folder: false,
-            files_filter: String::new(),
+            files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
@@ -493,7 +409,6 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            files_filter_active: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -572,11 +487,7 @@ impl App {
             } else {
                 FocusedPanel::Graph
             },
-            file_selection: FileSelection::default(),
-            file_list_cache: Vec::new(),
-            display_items_cache: Vec::new(),
-            files_group_by_folder: false,
-            files_filter: String::new(),
+            files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
@@ -585,7 +496,6 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            files_filter_active: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -617,7 +527,7 @@ impl App {
         // Snapshot the current items and selection BEFORE the refresh.
         // Use files_pane_items() directly — the cache might be stale.
         let old_items = self.files_pane_items();
-        let old_idx = self.file_selection.resolve(&old_items);
+        let old_idx = self.files_pane.file_selected_index_in(&old_items);
         let old_section = section_of(&old_items, old_idx);
 
         // Next files in same section (forward until next header)
@@ -651,7 +561,7 @@ impl App {
         self.sync_file_list_cache();
 
         // Find best target: next in same section, then prev, then any file
-        let new_items = &self.display_items_cache;
+        let new_items = self.files_pane.display_items();
         let target = next_in_section
             .iter()
             .chain(prev_in_section.iter())
@@ -667,10 +577,7 @@ impl App {
             });
 
         if let Some((path, sec)) = target {
-            self.file_selection = FileSelection {
-                path: Some(path),
-                section: sec,
-            };
+            self.files_pane.set_selection(Some(path), sec);
         }
         // Otherwise file_selection keeps its current path; resolve() will
         // find it in whatever section it landed in, or fall back to first file.
@@ -1155,289 +1062,62 @@ impl App {
             .is_some_and(|node| node.is_head && !node.is_uncommitted)
     }
 
+    // ── Files pane delegation ──────────────────────────────────────
+
     /// Sync the file list cache and display items from the current diff.
     pub fn sync_file_list_cache(&mut self) {
-        if let Some(diff) = self.cached_diff_or_quick() {
-            if self.file_list_cache.len() != diff.files.len()
-                || self.file_list_cache.first().map(|f| &f.path)
-                    != diff.files.first().map(|f| &f.path)
-            {
-                self.file_list_cache = diff.files.clone();
-            }
-        } else {
-            self.file_list_cache.clear();
-        }
-        self.display_items_cache = self.files_pane_items();
+        let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
+        let is_uncommitted = self.is_uncommitted_selected();
+        self.files_pane.sync_file_list_cache(diff, is_uncommitted, &self.repo_path);
     }
 
     /// Resolve the current selection to an index in display_items_cache.
-    /// Always points at a File item (never a header).
     pub fn file_selected_index(&self) -> usize {
-        self.file_selection.resolve(&self.display_items_cache)
+        self.files_pane.file_selected_index()
     }
 
     /// Get the cached display items.
     pub fn display_items(&self) -> &[FilesPaneItem] {
-        &self.display_items_cache
+        self.files_pane.display_items()
     }
 
-    /// Update the selection to point at the given index in display_items_cache.
-    fn select_file_at(&mut self, idx: usize) {
-        self.file_selection.set_from_index(idx, &self.display_items_cache);
-    }
-
-    /// Get the selected display item.
-    fn selected_display_item(&self) -> Option<&FilesPaneItem> {
-        self.display_items_cache.get(self.file_selected_index())
-    }
-
-    /// Resolve the selected display item to a single file.
-    fn selected_file(&self) -> Option<&FileDiffInfo> {
-        match self.selected_display_item()? {
-            FilesPaneItem::File(f) => Some(f),
-            _ => None,
-        }
-    }
-
-    /// Resolve the selected display item to all affected files.
-    fn selected_files(&self) -> Vec<&FileDiffInfo> {
-        match self.selected_display_item() {
-            Some(FilesPaneItem::File(f)) => vec![f],
-            None => vec![],
-            _ => vec![],
-        }
-    }
-
-    /// Convert a display index to a flat file index (for enter_file_diff).
-    fn display_index_to_flat_index(&self, display_index: usize) -> usize {
-        let mut flat_idx = 0;
-        for (i, item) in self.display_items_cache.iter().enumerate() {
-            if i == display_index {
-                return flat_idx;
-            }
-            if matches!(item, FilesPaneItem::File(_)) {
-                flat_idx += 1;
-            }
-        }
-        flat_idx.saturating_sub(1)
-    }
-
-    /// Convert a flat file index back to a display index.
-    fn flat_index_to_display_index(&self, flat_index: usize) -> usize {
-        let mut file_count = 0;
-        for (i, item) in self.display_items_cache.iter().enumerate() {
-            if matches!(item, FilesPaneItem::File(_)) {
-                if file_count == flat_index {
-                    return i;
-                }
-                file_count += 1;
-            }
-        }
-        self.display_items_cache.len().saturating_sub(1)
-    }
-
-    /// Move file selection by delta, skipping headers. Positive = down, negative = up.
-    fn move_file_selection(&mut self, delta: i32) {
-        let items = &self.display_items_cache;
-        if items.is_empty() {
-            return;
-        }
-        let current = self.file_selection.resolve(items);
-        let max = items.len() as i32 - 1;
-        let mut target = (current as i32 + delta).clamp(0, max) as usize;
-        // Skip headers in the direction of movement
-        let dir = if delta >= 0 { 1i32 } else { -1 };
-        while target < items.len() && matches!(items[target], FilesPaneItem::Header(_)) {
-            let next = target as i32 + dir;
-            if next < 0 || next > max {
-                break;
-            }
-            target = next as usize;
-        }
-        self.select_file_at(target);
-    }
-
-    /// Get the file list for the files pane (staged then unstaged for uncommitted,
-    /// or flat list for committed)
+    /// Build a fresh set of files pane items (not cached).
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
-        let diff = self.cached_diff_or_quick();
-
-        let raw_files: Vec<FileDiffInfo> = if self.is_uncommitted_selected() {
-            if let Some(diff) = diff {
-                if !diff.staged_files.is_empty() || !diff.unstaged_files.is_empty() {
-                    // Return staged + unstaged separately (handled below)
-                    let mut all = diff.staged_files.clone();
-                    all.extend(diff.unstaged_files.clone());
-                    all
-                } else {
-                    diff.files.clone()
-                }
-            } else {
-                return Vec::new();
-            }
-        } else if let Some(diff) = diff {
-            diff.files.clone()
-        } else {
-            return Vec::new();
-        };
-
-        // Apply fuzzy filter
-        let filtered: Vec<FileDiffInfo> = if self.files_filter.is_empty() {
-            raw_files
-        } else {
-            let query = self.files_filter.to_lowercase();
-            raw_files
-                .into_iter()
-                .filter(|f| {
-                    let path = f.path.to_string_lossy().to_lowercase();
-                    // Simple substring matching (fuzzy-ish)
-                    query.chars().all(|c| path.contains(c))
-                })
-                .collect()
-        };
-
-        // Build items with optional folder grouping and staged/unstaged separation
-        let mut items = if self.files_group_by_folder && self.is_uncommitted_selected() {
-            self.build_staged_unstaged_folder_items(&filtered)
-        } else if self.files_group_by_folder {
-            self.build_folder_grouped_items(&filtered)
-        } else if self.is_uncommitted_selected() {
-            self.build_staged_unstaged_items(&filtered)
-        } else {
-            filtered.into_iter().map(FilesPaneItem::File).collect()
-        };
-
-        // Append archived files section (only for uncommitted changes view)
-        if self.is_uncommitted_selected() {
-            let archived = self.list_archived_files();
-            if !archived.is_empty() {
-                items.push(FilesPaneItem::Header("Archived Files".to_string()));
-                items.extend(archived.into_iter().map(FilesPaneItem::File));
-            }
-        }
-        items
+        let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
+        let is_uncommitted = self.is_uncommitted_selected();
+        self.files_pane.build_files_pane_items(diff, is_uncommitted, &self.repo_path)
     }
 
-    /// List files in `.archive/` directory as FileDiffInfo items.
-    fn list_archived_files(&self) -> Vec<FileDiffInfo> {
-        let archive_dir = std::path::Path::new(&self.repo_path).join(".archive");
-        if !archive_dir.is_dir() {
-            return Vec::new();
-        }
-        let mut files = Vec::new();
-        Self::walk_archive_dir(&archive_dir, &archive_dir, &mut files);
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        files
+    fn select_file_at(&mut self, idx: usize) {
+        self.files_pane.select_file_at(idx);
     }
 
-    fn walk_archive_dir(
-        base: &std::path::Path,
-        dir: &std::path::Path,
-        out: &mut Vec<FileDiffInfo>,
-    ) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                Self::walk_archive_dir(base, &path, out);
-            } else if let Ok(rel) = path.strip_prefix(base) {
-                out.push(FileDiffInfo {
-                    path: rel.to_path_buf(),
-                    kind: FileChangeKind::Added,
-                    is_binary: false,
-                    insertions: 0,
-                    deletions: 0,
-                    stage_status: None,
-                });
-            }
-        }
+    fn selected_display_item(&self) -> Option<&FilesPaneItem> {
+        self.files_pane.selected_display_item()
     }
 
-    fn build_staged_unstaged_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
-        let staged: Vec<_> = files
-            .iter()
-            .filter(|f| matches!(f.stage_status, Some(StageStatus::Staged)))
-            .cloned()
-            .collect();
-        let unstaged: Vec<_> = files
-            .iter()
-            .filter(|f| !matches!(f.stage_status, Some(StageStatus::Staged)))
-            .cloned()
-            .collect();
-
-        let mut items = Vec::new();
-        if !staged.is_empty() {
-            items.push(FilesPaneItem::Header("Staged Changes".to_string()));
-            items.extend(staged.into_iter().map(FilesPaneItem::File));
-        }
-        if !unstaged.is_empty() {
-            items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
-            items.extend(unstaged.into_iter().map(FilesPaneItem::File));
-        }
-        items
+    fn selected_file(&self) -> Option<&FileDiffInfo> {
+        self.files_pane.selected_file()
     }
 
-    fn build_folder_grouped_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
-        Self::folder_group(files)
+    fn selected_files(&self) -> Vec<&FileDiffInfo> {
+        self.files_pane.selected_files()
     }
 
-    /// Staged/unstaged sections with folder grouping within each section.
-    fn build_staged_unstaged_folder_items(&self, files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
-        let staged: Vec<_> = files
-            .iter()
-            .filter(|f| matches!(f.stage_status, Some(StageStatus::Staged)))
-            .cloned()
-            .collect();
-        let unstaged: Vec<_> = files
-            .iter()
-            .filter(|f| !matches!(f.stage_status, Some(StageStatus::Staged)))
-            .cloned()
-            .collect();
-
-        let mut items = Vec::new();
-        if !staged.is_empty() {
-            items.push(FilesPaneItem::Header("Staged Changes".to_string()));
-            items.extend(Self::folder_group(&staged));
-        }
-        if !unstaged.is_empty() {
-            items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
-            items.extend(Self::folder_group(&unstaged));
-        }
-        items
+    fn display_index_to_flat_index(&self, display_index: usize) -> usize {
+        self.files_pane.display_index_to_flat_index(display_index)
     }
 
-    /// Group files by parent directory into Header + File items.
-    fn folder_group(files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
-        use std::collections::BTreeMap;
+    fn flat_index_to_display_index(&self, flat_index: usize) -> usize {
+        self.files_pane.flat_index_to_display_index(flat_index)
+    }
 
-        let mut folders: BTreeMap<String, Vec<FileDiffInfo>> = BTreeMap::new();
-        for file in files {
-            let folder = file
-                .path
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let key = if folder.is_empty() {
-                ".".to_string()
-            } else {
-                folder
-            };
-            folders.entry(key).or_default().push(file.clone());
-        }
+    fn move_file_selection(&mut self, delta: i32) {
+        self.files_pane.move_file_selection(delta);
+    }
 
-        let mut items = Vec::new();
-        for (folder, folder_files) in &folders {
-            // Skip header for root-level files ("./")
-            if folder != "." {
-                items.push(FilesPaneItem::Header(format!("{}/", folder)));
-            }
-            for f in folder_files {
-                items.push(FilesPaneItem::File(f.clone()));
-            }
-        }
-        items
+    fn is_in_archived_section(&self) -> bool {
+        self.files_pane.is_in_archived_section()
     }
 
     /// Handle an action
@@ -1509,8 +1189,8 @@ impl App {
                     self.editing_commit_message = false;
                 } else {
                     self.focused_panel = FocusedPanel::Graph;
-                    self.files_filter.clear();
-                    self.files_filter_active = false;
+                    self.files_pane.files_filter.clear();
+                    self.files_pane.files_filter_active = false;
                 }
                 return Ok(());
             }
@@ -1624,7 +1304,7 @@ impl App {
             Action::OpenFileDiff => {
                 self.sync_file_list_cache();
                 if let Some(file) = self.selected_file().cloned() {
-                    let file_list = self.file_list_cache.clone();
+                    let file_list = self.files_pane.file_list_cache.clone();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
@@ -1642,7 +1322,7 @@ impl App {
 
     fn handle_files_action(&mut self, action: Action) -> Result<()> {
         self.sync_file_list_cache();
-        let item_count = self.display_items_cache.len();
+        let item_count = self.files_pane.display_items().len();
 
         match action {
             Action::Quit => {
@@ -1668,7 +1348,7 @@ impl App {
             }
             Action::OpenFileDiff => {
                 if let Some(file) = self.selected_file().cloned() {
-                    let file_list = self.file_list_cache.clone();
+                    let file_list = self.files_pane.file_list_cache.clone();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
@@ -1732,31 +1412,31 @@ impl App {
                 self.undo_last_file_op()?;
             }
             Action::ToggleFolderView => {
-                self.files_group_by_folder = !self.files_group_by_folder;
+                self.files_pane.files_group_by_folder = !self.files_pane.files_group_by_folder;
             }
             Action::StartFilesFilter => {
-                self.files_filter_active = true;
-                self.files_filter.clear();
+                self.files_pane.files_filter_active = true;
+                self.files_pane.files_filter.clear();
             }
             Action::FilesFilterChar(c) => {
-                self.files_filter.push(c);
+                self.files_pane.files_filter.push(c);
             }
             Action::FilesFilterBackspace => {
-                if !self.files_filter.is_empty() {
-                    self.files_filter.pop();
+                if !self.files_pane.files_filter.is_empty() {
+                    self.files_pane.files_filter.pop();
                 } else {
                     // Empty filter + backspace exits filter mode
-                    self.files_filter_active = false;
+                    self.files_pane.files_filter_active = false;
                 }
             }
             Action::Confirm => {
                 // Enter: keep filter, exit filter mode
-                self.files_filter_active = false;
+                self.files_pane.files_filter_active = false;
             }
             Action::Cancel => {
                 // Esc: clear filter, exit filter mode
-                self.files_filter.clear();
-                self.files_filter_active = false;
+                self.files_pane.files_filter.clear();
+                self.files_pane.files_filter_active = false;
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
@@ -2372,12 +2052,6 @@ impl App {
         self.refresh_after_file_op()?;
 
         Ok(())
-    }
-
-    /// Check if the current selection is in the "Archived Files" section.
-    fn is_in_archived_section(&self) -> bool {
-        section_of(&self.display_items_cache, self.file_selected_index())
-            == Some("Archived Files")
     }
 
     fn unarchive_selected_file(&mut self) -> Result<()> {
@@ -3172,6 +2846,7 @@ mod tests {
 
     use super::*;
     use crate::diff_cache::{DiffCache, DiffResult, DIFF_LOAD_DEBOUNCE};
+    use crate::files_pane_state::FileSelection;
     use crate::git::graph::{CellType, GraphNode};
 
     fn init_repo() -> (TempDir, GitRepository) {
@@ -3244,11 +2919,7 @@ mod tests {
             graph_layout,
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
-            file_selection: FileSelection::default(),
-            file_list_cache: Vec::new(),
-            display_items_cache: Vec::new(),
-            files_group_by_folder: false,
-            files_filter: String::new(),
+            files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
@@ -3257,7 +2928,6 @@ mod tests {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            files_filter_active: false,
             branch_positions,
             selected_branch_position,
             search_state: SearchState::default(),
@@ -3319,11 +2989,7 @@ mod tests {
             },
             graph_list_state,
             focused_panel: FocusedPanel::Graph,
-            file_selection: FileSelection::default(),
-            file_list_cache: Vec::new(),
-            display_items_cache: Vec::new(),
-            files_group_by_folder: false,
-            files_filter: String::new(),
+            files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
@@ -3332,7 +2998,6 @@ mod tests {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            files_filter_active: false,
             branch_positions: Vec::new(),
             selected_branch_position: None,
             search_state: SearchState::default(),
@@ -3849,7 +3514,7 @@ mod tests {
         let mut app = make_test_app(tempdir.path());
 
         // Select tracked.txt (the modified file in Unstaged Changes)
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("tracked.txt".into()),
         };
@@ -3883,7 +3548,7 @@ mod tests {
         fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("a.txt".into()),
         };
@@ -3913,7 +3578,7 @@ mod tests {
         stage_file(tempdir.path().to_str().unwrap(), "b.txt").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Staged Changes".to_string()),
             path: Some("a.txt".into()),
         };
@@ -3947,7 +3612,7 @@ mod tests {
         let mut app = make_test_app(tempdir.path());
 
         // Select b.txt in Unstaged
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("b.txt".into()),
         };
@@ -3978,7 +3643,7 @@ mod tests {
         fs::write(tempdir.path().join("c.txt"), "v2\n").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("b.txt".into()),
         };
@@ -4002,7 +3667,7 @@ mod tests {
         fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("b.txt".into()),
         };
@@ -4026,7 +3691,7 @@ mod tests {
         stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Staged Changes".to_string()),
             path: Some("a.txt".into()),
         };
@@ -4052,7 +3717,7 @@ mod tests {
         stage_file(tempdir.path().to_str().unwrap(), "b.txt").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Staged Changes".to_string()),
             path: Some("b.txt".into()),
         };
@@ -4076,7 +3741,7 @@ mod tests {
         fs::write(tempdir.path().join("c.txt"), "new\n").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("b.txt".into()),
         };
@@ -4100,7 +3765,7 @@ mod tests {
         fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
 
         let mut app = make_test_app(tempdir.path());
-        app.file_selection = FileSelection {
+        app.files_pane.file_selection = FileSelection {
             section: Some("Unstaged Changes".to_string()),
             path: Some("b.txt".into()),
         };
@@ -4125,7 +3790,7 @@ mod tests {
         let mut app = make_test_app(tempdir.path());
 
         // Force selection to default (no path set)
-        app.file_selection = FileSelection::default();
+        app.files_pane.file_selection = FileSelection::default();
         app.sync_file_list_cache();
 
         let idx = app.file_selected_index();

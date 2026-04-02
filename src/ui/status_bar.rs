@@ -59,7 +59,7 @@ impl<'a> StatusBar<'a> {
             message: app.get_message(),
             is_busy: app.is_network_busy(),
             is_uncommitted: app.is_uncommitted_selected(),
-            is_filtering: app.files_filter_active,
+            is_filtering: app.files_pane.files_filter_active,
             editing_commit: app.editing_commit_message,
             amending_commit: app.amending_commit,
             search_info,

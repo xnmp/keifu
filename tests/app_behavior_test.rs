@@ -352,22 +352,22 @@ fn files_filter_mode_lifecycle() {
 
     // Start filter
     app.handle_action(Action::StartFilesFilter).unwrap();
-    assert!(app.files_filter_active);
-    assert!(app.files_filter.is_empty());
+    assert!(app.files_pane.files_filter_active);
+    assert!(app.files_pane.files_filter.is_empty());
 
     // Type chars
     app.handle_action(Action::FilesFilterChar('a')).unwrap();
     app.handle_action(Action::FilesFilterChar('b')).unwrap();
-    assert_eq!(app.files_filter, "ab");
+    assert_eq!(app.files_pane.files_filter, "ab");
 
     // Backspace
     app.handle_action(Action::FilesFilterBackspace).unwrap();
-    assert_eq!(app.files_filter, "a");
+    assert_eq!(app.files_pane.files_filter, "a");
 
     // Confirm keeps filter text
     app.handle_action(Action::Confirm).unwrap();
-    assert!(!app.files_filter_active);
-    assert_eq!(app.files_filter, "a");
+    assert!(!app.files_pane.files_filter_active);
+    assert_eq!(app.files_pane.files_filter, "a");
 }
 
 #[test]
@@ -376,12 +376,12 @@ fn files_filter_cancel_clears_filter() {
     commit_file(&repo.repo, "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
-    app.files_filter_active = true;
-    app.files_filter = "test".to_string();
+    app.files_pane.files_filter_active = true;
+    app.files_pane.files_filter = "test".to_string();
 
     app.handle_action(Action::Cancel).unwrap();
-    assert!(!app.files_filter_active);
-    assert!(app.files_filter.is_empty());
+    assert!(!app.files_pane.files_filter_active);
+    assert!(app.files_pane.files_filter.is_empty());
 }
 
 #[test]
@@ -390,11 +390,11 @@ fn files_filter_backspace_on_empty_exits_filter() {
     commit_file(&repo.repo, "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
-    app.files_filter_active = true;
-    app.files_filter = String::new();
+    app.files_pane.files_filter_active = true;
+    app.files_pane.files_filter = String::new();
 
     app.handle_action(Action::FilesFilterBackspace).unwrap();
-    assert!(!app.files_filter_active);
+    assert!(!app.files_pane.files_filter_active);
 }
 
 #[test]
@@ -404,11 +404,11 @@ fn toggle_folder_view_flips_flag() {
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
 
-    assert!(!app.files_group_by_folder);
+    assert!(!app.files_pane.files_group_by_folder);
     app.handle_action(Action::ToggleFolderView).unwrap();
-    assert!(app.files_group_by_folder);
+    assert!(app.files_pane.files_group_by_folder);
     app.handle_action(Action::ToggleFolderView).unwrap();
-    assert!(!app.files_group_by_folder);
+    assert!(!app.files_pane.files_group_by_folder);
 }
 
 // ── Commit Detail ───────────────────────────────────────────────────

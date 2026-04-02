@@ -92,27 +92,27 @@ impl<'a> CommitDetailWidget<'a> {
             selected_line_index,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             is_files_focused: app.focused_panel == FocusedPanel::Files,
-            files_filter_active: app.files_filter_active,
+            files_filter_active: app.files_pane.files_filter_active,
             commit_scroll: app.commit_detail_scroll,
             files_title: {
                 let mut spans = vec![Span::raw(" Changed Files")];
-                if app.files_group_by_folder {
+                if app.files_pane.files_group_by_folder {
                     spans.push(Span::styled(
                         " [folders]",
                         Style::default().fg(Color::DarkGray),
                     ));
                 }
-                if app.files_filter_active {
+                if app.files_pane.files_filter_active {
                     spans.push(Span::styled(
-                        format!(" filter: {}\u{2588}", app.files_filter),
+                        format!(" filter: {}\u{2588}", app.files_pane.files_filter),
                         Style::default()
                             .fg(Color::Black)
                             .bg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
                     ));
-                } else if !app.files_filter.is_empty() {
+                } else if !app.files_pane.files_filter.is_empty() {
                     spans.push(Span::styled(
-                        format!(" [{}]", app.files_filter),
+                        format!(" [{}]", app.files_pane.files_filter),
                         Style::default().fg(Color::Cyan),
                     ));
                 }
