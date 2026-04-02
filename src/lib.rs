@@ -3,6 +3,7 @@
 pub mod action;
 pub mod app;
 pub mod config;
+pub(crate) mod diff_cache;
 pub mod event;
 pub mod git;
 pub mod graph;

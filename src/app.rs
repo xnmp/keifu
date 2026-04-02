@@ -2,7 +2,7 @@
 
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::Result;
 use ratatui::widgets::ListState;
@@ -12,6 +12,7 @@ use git2::Oid;
 use crate::{
     action::Action,
     config::{Config, UiState},
+    diff_cache::{DiffCache, DiffTarget},
     git::{
         build_graph,
         graph::GraphLayout,
@@ -279,24 +280,6 @@ pub enum ConfirmAction {
     RestoreFile(Vec<String>),
 }
 
-/// Result of async diff computation
-struct DiffResult {
-    oid: Oid,
-    diff: Result<CommitDiffInfo, String>,
-}
-
-/// Identifies the currently selected node for diff loading and caching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiffTarget {
-    Commit(Oid),
-    Uncommitted,
-}
-
-type UncommittedDiffResult = (Result<CommitDiffInfo, String>, Option<WorkingTreeStatus>);
-
-/// Delay before starting a diff load after selection changes.
-/// Prevents unnecessary computation during fast scrolling.
-const DIFF_LOAD_DEBOUNCE: Duration = Duration::from_millis(120);
 
 /// Search state for branch search feature
 #[derive(Debug, Clone, Default)]
@@ -405,25 +388,8 @@ pub struct App {
     // Latest working tree status snapshot
     working_tree_status: Option<WorkingTreeStatus>,
 
-    // Quick diff cache (synchronous, file names only, no line stats)
-    quick_diff_cache: Option<CommitDiffInfo>,
-    quick_diff_target: Option<DiffTarget>,
-
-    // Diff cache (async load)
-    diff_cache: Option<CommitDiffInfo>,
-    diff_cache_oid: Option<Oid>,
-    diff_loading_oid: Option<Oid>,
-    diff_receiver: Option<Receiver<DiffResult>>,
-
-    // Uncommitted diff cache
-    uncommitted_diff_cache: Option<CommitDiffInfo>,
-    uncommitted_diff_failed: bool,
-    uncommitted_diff_loading: bool,
-    uncommitted_diff_receiver: Option<Receiver<UncommittedDiffResult>>,
-    /// Cache key: working tree status at the time of caching (for invalidation)
-    uncommitted_cache_key: Option<WorkingTreeStatus>,
-    selected_diff_target: Option<DiffTarget>,
-    selected_diff_target_changed_at: Instant,
+    // Diff caching subsystem
+    diff_cache: DiffCache,
 
     // Flags
     pub should_quit: bool,
@@ -532,19 +498,7 @@ impl App {
             selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
-            quick_diff_cache: None,
-            quick_diff_target: None,
-            diff_cache: None,
-            diff_cache_oid: None,
-            diff_loading_oid: None,
-            diff_receiver: None,
-            uncommitted_diff_cache: None,
-            uncommitted_diff_failed: false,
-            uncommitted_diff_loading: false,
-            uncommitted_diff_receiver: None,
-            uncommitted_cache_key: None,
-            selected_diff_target: None,
-            selected_diff_target_changed_at: now,
+            diff_cache: DiffCache::new(),
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -636,19 +590,7 @@ impl App {
             selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
-            quick_diff_cache: None,
-            quick_diff_target: None,
-            diff_cache: None,
-            diff_cache_oid: None,
-            diff_loading_oid: None,
-            diff_receiver: None,
-            uncommitted_diff_cache: None,
-            uncommitted_diff_failed: false,
-            uncommitted_diff_loading: false,
-            uncommitted_diff_receiver: None,
-            uncommitted_cache_key: None,
-            selected_diff_target: None,
-            selected_diff_target_changed_at: now,
+            diff_cache: DiffCache::new(),
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -667,34 +609,6 @@ impl App {
         })
     }
 
-    /// Clear all diff caches
-    fn clear_all_diff_caches(&mut self) {
-        self.quick_diff_cache = None;
-        self.quick_diff_target = None;
-        self.diff_cache = None;
-        self.diff_cache_oid = None;
-        self.diff_loading_oid = None;
-        self.diff_receiver = None;
-        self.clear_uncommitted_diff_cache();
-    }
-
-    /// Clear uncommitted diff cache only
-    fn clear_uncommitted_diff_cache(&mut self) {
-        self.uncommitted_diff_cache = None;
-        self.uncommitted_diff_failed = false;
-        self.uncommitted_diff_loading = false;
-        self.uncommitted_diff_receiver = None;
-        self.uncommitted_cache_key = None;
-    }
-
-    /// Refresh after a file operation (stage/gitignore/archive/trash).
-    /// Keeps the quick diff visible to avoid UI flicker, then immediately
-    /// recomputes it so the file list reflects the new state.
-    ///
-    /// If `advance` is true, moves the cursor to the next file after the
-    /// operated-on file (for stage/delete where the file leaves the section).
-    /// If false, stays on the same file by path (for unstage where the file
-    /// moves but should remain selected).
     /// Refresh after a file operation (stage/unstage/gitignore/archive/trash).
     ///
     /// After the file list reshuffles, selects the next file in the same
@@ -729,14 +643,11 @@ impl App {
 
         // Invalidate and clear the stale full diff so the fresh quick diff
         // takes precedence via cached_diff_or_quick().
-        self.invalidate_uncommitted_diff_cache();
-        self.uncommitted_diff_cache = None;
+        self.diff_cache.invalidate_uncommitted();
+        self.diff_cache.clear_uncommitted_data();
         self.refresh(false)?;
         // Force quick diff recomputation so file list updates immediately
-        self.quick_diff_target = None;
-        self.quick_diff_cache =
-            CommitDiffInfo::quick_file_list_for_working_tree(&self.repo.repo).ok();
-        self.quick_diff_target = Some(DiffTarget::Uncommitted);
+        self.diff_cache.set_quick_uncommitted(&self.repo.repo);
         self.sync_file_list_cache();
 
         // Find best target: next in same section, then prev, then any file
@@ -767,40 +678,6 @@ impl App {
         Ok(())
     }
 
-    /// Invalidate the uncommitted diff cache key to trigger a background reload,
-    /// while keeping the cached data visible to avoid UI flicker.
-    ///
-    /// When a background computation is already in flight, keep the receiver
-    /// alive so the result can still be received.  Only the cache key is
-    /// cleared — once the thread completes the key will be set from the
-    /// thread's own status snapshot (see `update_diff_cache`).
-    fn invalidate_uncommitted_diff_cache(&mut self) {
-        self.uncommitted_diff_failed = false;
-        if !self.uncommitted_diff_loading {
-            self.uncommitted_diff_receiver = None;
-        }
-        self.uncommitted_cache_key = None;
-    }
-
-    fn can_reuse_uncommitted_cache(
-        &self,
-        was_uncommitted_selected: bool,
-        has_uncommitted_node: bool,
-    ) -> bool {
-        let Some(cache_key) = self.uncommitted_cache_key.as_ref() else {
-            return false;
-        };
-        let Some(current_status) = self.working_tree_status.as_ref() else {
-            return false;
-        };
-
-        was_uncommitted_selected
-            && has_uncommitted_node
-            && cache_key.is_precise_cache_key()
-            && current_status.is_precise_cache_key()
-            && cache_key == current_status
-    }
-
     fn current_diff_target(&self) -> Option<DiffTarget> {
         let node = self
             .graph_list_state
@@ -818,56 +695,7 @@ impl App {
 
     fn sync_selected_diff_target(&mut self) -> Option<DiffTarget> {
         let target = self.current_diff_target();
-        if self.selected_diff_target != target {
-            self.selected_diff_target = target;
-            self.selected_diff_target_changed_at = Instant::now();
-
-            // Compute quick file list synchronously for instant display
-            if let Some(t) = target {
-                if self.quick_diff_target != Some(t) {
-                    self.quick_diff_target = Some(t);
-                    self.quick_diff_cache = match t {
-                        DiffTarget::Commit(oid) => {
-                            CommitDiffInfo::quick_file_list_for_commit(&self.repo.repo, oid).ok()
-                        }
-                        DiffTarget::Uncommitted => {
-                            CommitDiffInfo::quick_file_list_for_working_tree(&self.repo.repo).ok()
-                        }
-                    };
-                }
-            }
-        }
-        target
-    }
-
-    fn has_cached_diff_for_target(&self, target: DiffTarget) -> bool {
-        match target {
-            DiffTarget::Commit(oid) => self.diff_cache_oid == Some(oid),
-            DiffTarget::Uncommitted => {
-                // A present cache key means the diff was computed and has not
-                // been invalidated by refresh().  Staleness detection is handled
-                // by can_reuse_uncommitted_cache() inside refresh(), which
-                // clears the key when the working tree changes.
-                let has_key = self.uncommitted_cache_key.is_some();
-                has_key && (self.uncommitted_diff_cache.is_some() || self.uncommitted_diff_failed)
-            }
-        }
-    }
-
-    fn is_diff_loading_for_target(&self, target: DiffTarget) -> bool {
-        match target {
-            DiffTarget::Commit(oid) => self.diff_loading_oid == Some(oid),
-            DiffTarget::Uncommitted => self.uncommitted_diff_loading,
-        }
-    }
-
-    fn is_diff_debouncing_for_target(&self, target: DiffTarget) -> bool {
-        self.selected_diff_target == Some(target)
-            && self.selected_diff_target_changed_at.elapsed() < DIFF_LOAD_DEBOUNCE
-    }
-
-    fn has_in_flight_diff(&self) -> bool {
-        self.diff_loading_oid.is_some() || self.uncommitted_diff_loading
+        self.diff_cache.sync_selected_target(target, &self.repo.repo)
     }
 
     /// Refresh repository data
@@ -978,7 +806,7 @@ impl App {
 
         // Handle diff cache based on force flag
         if force {
-            self.clear_all_diff_caches();
+            self.diff_cache.clear_all();
         } else {
             // Auto-refresh: smart cache - only clear if selection changed
             let selected_oid = self
@@ -988,22 +816,12 @@ impl App {
                 .and_then(|n| n.commit.as_ref())
                 .map(|c| c.oid);
 
-            // Keep commit diff cache if the same commit is still selected
-            if self.diff_cache_oid != selected_oid {
-                self.diff_cache = None;
-                self.diff_cache_oid = None;
-                self.diff_loading_oid = None;
-                self.diff_receiver = None;
-            }
-
-            // Keep uncommitted diff cache only if:
-            // 1. Uncommitted node is still selected (was_uncommitted_selected && has_uncommitted_node)
-            // 2. The working tree status hasn't changed (same files and mtimes)
-            if !self.can_reuse_uncommitted_cache(was_uncommitted_selected, has_uncommitted_node) {
-                // Invalidate cache key to trigger a background reload, but keep
-                // the cached data so the UI can keep showing it (no flicker).
-                self.invalidate_uncommitted_diff_cache();
-            }
+            self.diff_cache.invalidate_for_auto_refresh(
+                selected_oid,
+                was_uncommitted_selected,
+                has_uncommitted_node,
+                self.working_tree_status.as_ref(),
+            );
         }
 
         // Clear search state on refresh to avoid stale indices
@@ -1287,175 +1105,38 @@ impl App {
 
     /// Update diff info for the selected node (commit or uncommitted changes, async)
     pub fn update_diff_cache(&mut self) {
-        // Pull in completed results for commit diff
-        if let Some(ref receiver) = self.diff_receiver {
-            match receiver.try_recv() {
-                Ok(result) => {
-                    match result.diff {
-                        Ok(diff) => {
-                            self.diff_cache = Some(diff);
-                            self.diff_cache_oid = Some(result.oid);
-                        }
-                        Err(e) => {
-                            self.diff_cache = None;
-                            self.diff_cache_oid = Some(result.oid);
-                            self.set_message(format!("Failed to load diff: {e}"));
-                        }
-                    }
-                    self.diff_loading_oid = None;
-                    self.diff_receiver = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // Thread panicked or dropped sender — clear loading state
-                    self.diff_loading_oid = None;
-                    self.diff_receiver = None;
-                    self.set_message("Diff computation failed unexpectedly");
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
+        let target = self.sync_selected_diff_target();
+        let events = self.diff_cache.poll(
+            target,
+            &self.repo_path,
+            self.working_tree_status.as_ref(),
+        );
+        if let Some(msg) = events.message {
+            self.set_message(msg);
         }
-
-        // Pull in completed results for uncommitted diff
-        if let Some(ref receiver) = self.uncommitted_diff_receiver {
-            match receiver.try_recv() {
-                Ok((result, status)) => {
-                    match result {
-                        Ok(diff) => {
-                            self.uncommitted_diff_cache = Some(diff);
-                            self.uncommitted_diff_failed = false;
-                            self.sync_file_list_with_uncommitted_diff();
-                        }
-                        Err(e) => {
-                            self.uncommitted_diff_cache = None;
-                            self.uncommitted_diff_failed = true;
-                            self.set_message(format!("Failed to load diff: {e}"));
-                        }
-                    }
-                    // Set the cache key only when the thread's status snapshot
-                    // still matches the current working tree status.  If
-                    // refresh() has already observed a newer state, leave the
-                    // key as None so the next update_diff_cache() tick starts a
-                    // fresh computation.  The stale diff data is kept in
-                    // uncommitted_diff_cache for display to avoid flicker until
-                    // the new result arrives.
-                    let effective_status = status.or_else(|| self.working_tree_status.clone());
-                    if effective_status.as_ref() == self.working_tree_status.as_ref() {
-                        self.uncommitted_cache_key = effective_status;
-                    }
-                    self.uncommitted_diff_loading = false;
-                    self.uncommitted_diff_receiver = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // Thread panicked or dropped sender — clear loading state
-                    self.uncommitted_diff_loading = false;
-                    self.uncommitted_diff_receiver = None;
-                    self.uncommitted_diff_failed = true;
-                    self.uncommitted_cache_key = self.working_tree_status.clone();
-                    self.set_message("Diff computation failed unexpectedly");
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-        }
-
-        let Some(target) = self.sync_selected_diff_target() else {
-            return;
-        };
-
-        if self.has_cached_diff_for_target(target)
-            || self.is_diff_loading_for_target(target)
-            || self.is_diff_debouncing_for_target(target)
-        {
-            return;
-        }
-
-        // Keep only one heavy diff computation in flight to avoid CPU contention
-        // during fast scrolling. Once it completes, the latest selection will load.
-        if self.has_in_flight_diff() {
-            return;
-        }
-
-        match target {
-            DiffTarget::Uncommitted => {
-                // Compute uncommitted diff in the background
-                let (tx, rx) = mpsc::channel();
-                let repo_path = self.repo_path.clone();
-
-                self.uncommitted_diff_failed = false;
-                self.uncommitted_diff_loading = true;
-                self.uncommitted_diff_receiver = Some(rx);
-
-                thread::spawn(move || {
-                    let repo = GitRepository {
-                        path: repo_path.clone(),
-                        repo: match git2::Repository::open(&repo_path) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                let _ = tx.send((Err(e.to_string()), None));
-                                return;
-                            }
-                        },
-                    };
-                    // Snapshot status BEFORE computing the diff so the cache
-                    // key represents the state the diff was computed against.
-                    // If the working tree changes during computation, the key
-                    // will no longer match the refresh-time status, correctly
-                    // triggering a reload instead of caching a stale diff.
-                    let status = repo.get_working_tree_status().unwrap_or_default();
-                    let diff =
-                        CommitDiffInfo::from_working_tree(&repo.repo).map_err(|e| e.to_string());
-                    let _ = tx.send((diff, status));
-                });
-            }
-            DiffTarget::Commit(oid) => {
-                // Compute diff in the background
-                let (tx, rx) = mpsc::channel();
-                let repo_path = self.repo_path.clone();
-
-                self.diff_loading_oid = Some(oid);
-                self.diff_receiver = Some(rx);
-
-                thread::spawn(move || {
-                    let diff = git2::Repository::open(&repo_path)
-                        .map_err(|e| e.to_string())
-                        .and_then(|repo| {
-                            CommitDiffInfo::from_commit(&repo, oid).map_err(|e| e.to_string())
-                        });
-
-                    let _ = tx.send(DiffResult { oid, diff });
-                });
-            }
+        if events.uncommitted_diff_loaded {
+            self.sync_file_list_with_uncommitted_diff();
         }
     }
 
     /// Get cached diff info for the currently selected node
     pub fn cached_diff(&self) -> Option<&CommitDiffInfo> {
-        match self.current_diff_target()? {
-            DiffTarget::Commit(oid) if self.diff_cache_oid == Some(oid) => self.diff_cache.as_ref(),
-            DiffTarget::Commit(_) => None,
-            DiffTarget::Uncommitted => self.uncommitted_diff_cache.as_ref(),
-        }
+        self.diff_cache.cached_diff(self.current_diff_target())
     }
 
     /// Get the best available diff: full if cached, otherwise quick file list
     pub fn cached_diff_or_quick(&self) -> Option<&CommitDiffInfo> {
-        self.cached_diff().or(self.quick_diff_cache.as_ref())
+        self.diff_cache.cached_diff_or_quick(self.current_diff_target())
     }
 
     /// Whether line stats are still loading (full diff not yet available but quick is)
     pub fn is_line_stats_loading(&self) -> bool {
-        self.cached_diff().is_none() && self.quick_diff_cache.is_some()
+        self.diff_cache.is_line_stats_loading(self.current_diff_target())
     }
 
     /// Whether diff is loading or pending (debouncing) for the selected node
     pub fn is_diff_loading(&self) -> bool {
-        let Some(target) = self.current_diff_target() else {
-            return false;
-        };
-
-        !self.has_cached_diff_for_target(target)
-            && (self.is_diff_loading_for_target(target)
-                || self.is_diff_debouncing_for_target(target)
-                || self.has_in_flight_diff())
+        self.diff_cache.is_diff_loading(self.current_diff_target())
     }
 
     /// Check if the currently selected node is the uncommitted changes node
@@ -3044,7 +2725,7 @@ impl App {
             return;
         }
 
-        let new_files = match &self.uncommitted_diff_cache {
+        let new_files = match self.diff_cache.cached_diff(Some(DiffTarget::Uncommitted)) {
             Some(diff) => diff.files.clone(),
             None => return,
         };
@@ -3490,6 +3171,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::diff_cache::{DiffCache, DiffResult, DIFF_LOAD_DEBOUNCE};
     use crate::git::graph::{CellType, GraphNode};
 
     fn init_repo() -> (TempDir, GitRepository) {
@@ -3580,19 +3262,7 @@ mod tests {
             selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
-            quick_diff_cache: None,
-            quick_diff_target: None,
-            diff_cache: None,
-            diff_cache_oid: None,
-            diff_loading_oid: None,
-            diff_receiver: None,
-            uncommitted_diff_cache: None,
-            uncommitted_diff_failed: false,
-            uncommitted_diff_loading: false,
-            uncommitted_diff_receiver: None,
-            uncommitted_cache_key: None,
-            selected_diff_target: None,
-            selected_diff_target_changed_at: now,
+            diff_cache: DiffCache::new(),
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -3667,19 +3337,12 @@ mod tests {
             selected_branch_position: None,
             search_state: SearchState::default(),
             working_tree_status,
-            quick_diff_cache: None,
-            quick_diff_target: None,
-            diff_cache: None,
-            diff_cache_oid: None,
-            diff_loading_oid: None,
-            diff_receiver: None,
-            uncommitted_diff_cache: None,
-            uncommitted_diff_failed: false,
-            uncommitted_diff_loading: false,
-            uncommitted_diff_receiver: None,
-            uncommitted_cache_key: None,
-            selected_diff_target: Some(diff_target),
-            selected_diff_target_changed_at: Instant::now() - DIFF_LOAD_DEBOUNCE,
+            diff_cache: {
+                let mut dc = DiffCache::new();
+                dc.set_selected_target(Some(diff_target));
+                dc.set_selected_target_changed_at(Instant::now() - DIFF_LOAD_DEBOUNCE);
+                dc
+            },
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -3710,7 +3373,7 @@ mod tests {
             cells: vec![CellType::Commit(0)],
         };
         let mut app = make_base_app(node, DiffTarget::Commit(selected_oid), None);
-        app.diff_loading_oid = in_flight_oid;
+        app.diff_cache.set_diff_loading_oid(in_flight_oid);
         app
     }
 
@@ -3747,8 +3410,7 @@ mod tests {
         let selected_oid = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
         let in_flight_oid = Oid::from_str("2222222222222222222222222222222222222222").unwrap();
         let mut app = make_app(selected_oid, Some(in_flight_oid));
-        app.diff_cache = Some(CommitDiffInfo::default());
-        app.diff_cache_oid = Some(selected_oid);
+        app.diff_cache.set_diff_cache(Some(selected_oid), Some(CommitDiffInfo::default()));
 
         assert!(!app.is_diff_loading());
     }
@@ -3763,17 +3425,17 @@ mod tests {
             diff: Err("boom".to_string()),
         })
         .unwrap();
-        app.diff_receiver = Some(rx);
+        app.diff_cache.set_diff_receiver(Some(rx));
 
         app.update_diff_cache();
         app.update_diff_cache();
 
-        assert!(app.diff_cache.is_none());
-        assert_eq!(app.diff_cache_oid, Some(selected_oid));
+        assert!(app.diff_cache.get_diff_cache().is_none());
+        assert_eq!(app.diff_cache.diff_cache_oid(), Some(selected_oid));
         assert!(app.cached_diff().is_none());
         assert!(!app.is_diff_loading());
-        assert!(app.diff_loading_oid.is_none());
-        assert!(app.diff_receiver.is_none());
+        assert!(app.diff_cache.diff_loading_oid().is_none());
+        assert!(app.diff_cache.diff_receiver().is_none());
         assert_eq!(app.message.as_deref(), Some("Failed to load diff: boom"));
     }
 
@@ -3783,18 +3445,18 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let cache_key = app.working_tree_status.clone();
         tx.send((Err("boom".to_string()), cache_key)).unwrap();
-        app.uncommitted_diff_loading = true;
-        app.uncommitted_diff_receiver = Some(rx);
+        app.diff_cache.set_uncommitted_loading(true);
+        app.diff_cache.set_uncommitted_diff_receiver(Some(rx));
 
         app.update_diff_cache();
         app.update_diff_cache();
 
-        assert!(app.uncommitted_diff_cache.is_none());
-        assert!(app.uncommitted_diff_failed);
+        assert!(app.diff_cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
+        assert!(app.diff_cache.uncommitted_diff_failed());
         assert!(app.cached_diff().is_none());
         assert!(!app.is_diff_loading());
-        assert!(!app.uncommitted_diff_loading);
-        assert!(app.uncommitted_diff_receiver.is_none());
+        assert!(!app.diff_cache.uncommitted_diff_loading());
+        assert!(app.diff_cache.uncommitted_diff_receiver().is_none());
         assert_eq!(app.message.as_deref(), Some("Failed to load diff: boom"));
     }
 
@@ -3808,15 +3470,15 @@ mod tests {
 
         let git_repo = GitRepository::open(tempdir.path()).unwrap();
         let mut app = make_app_from_repo(git_repo);
-        app.uncommitted_diff_cache = Some(CommitDiffInfo::default());
-        app.uncommitted_cache_key = app.working_tree_status.clone();
+        app.diff_cache.set_uncommitted_cache(Some(CommitDiffInfo::default()));
+        app.diff_cache.set_uncommitted_cache_key(app.working_tree_status.clone());
 
         app.refresh(false).unwrap();
 
         // recurse_untracked_dirs lists individual files instead of collapsed
         // directory entries, so the cache key is precise and can be reused.
-        assert!(app.uncommitted_diff_cache.is_some());
-        assert!(app.uncommitted_cache_key.is_some());
+        assert!(app.diff_cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
+        assert!(app.diff_cache.uncommitted_cache_key().is_some());
     }
 
     #[test]
@@ -4155,9 +3817,7 @@ mod tests {
         // Select the uncommitted node (index 0)
         app.graph_list_state.select(Some(0));
         // Load quick diff so display items are populated
-        app.quick_diff_cache =
-            CommitDiffInfo::quick_file_list_for_working_tree(&app.repo.repo).ok();
-        app.quick_diff_target = Some(DiffTarget::Uncommitted);
+        app.diff_cache.set_quick_uncommitted(&app.repo.repo);
         app.sync_file_list_cache();
         app
     }
