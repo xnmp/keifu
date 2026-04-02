@@ -29,55 +29,68 @@ pub struct CommitDetailWidget<'a> {
     theme: &'a Theme,
 }
 
+/// Pre-render layout metrics for the commit detail panel.
+/// Call this before constructing `CommitDetailWidget` to update App scroll state.
+pub fn compute_commit_detail_layout(app: &mut App, detail_area: Rect) {
+    let detail_width = detail_area.width;
+    let theme = app.theme();
+    let (commit_lines, raw_editor_offset) =
+        CommitDetailWidget::build_commit_lines_with_offset(app, &theme);
+
+    // Set the raw editor line offset from the line builder before wrapping adjustment.
+    if let Some(offset) = raw_editor_offset {
+        app.commit_editor_line_offset = offset;
+    }
+
+    let direction = if detail_width <= VERTICAL_LAYOUT_THRESHOLD {
+        Direction::Vertical
+    } else {
+        Direction::Horizontal
+    };
+    let commit_chunk_height = if direction == Direction::Vertical {
+        detail_area.height / 2
+    } else {
+        detail_area.height
+    };
+    let commit_inner_width = if direction == Direction::Vertical {
+        detail_width.saturating_sub(2) as usize
+    } else {
+        (detail_width / 2).saturating_sub(2) as usize
+    };
+    let commit_visible = commit_chunk_height.saturating_sub(2) as usize;
+    app.commit_detail_visible_rows = commit_visible as u16;
+
+    // Use Ratatui's own line_count to match its actual wrapping behaviour.
+    let commit_wrapped_total = if commit_inner_width > 0 {
+        let p = Paragraph::new(commit_lines.clone()).wrap(Wrap { trim: false });
+        p.line_count(commit_inner_width as u16)
+    } else {
+        commit_lines.len()
+    };
+
+    // Recompute editor line offset using wrapped line counts so the cursor
+    // accounts for long hint text that wraps across multiple visual lines.
+    if app.editing_commit_message && commit_inner_width > 0 {
+        let raw_offset = app.commit_editor_line_offset as usize;
+        let header_lines = &commit_lines[..raw_offset.min(commit_lines.len())];
+        if !header_lines.is_empty() {
+            let hp = Paragraph::new(header_lines.to_vec()).wrap(Wrap { trim: false });
+            app.commit_editor_line_offset =
+                hp.line_count(commit_inner_width as u16) as u16;
+        }
+    }
+    app.commit_detail_max_scroll =
+        commit_wrapped_total.saturating_sub(commit_visible) as u16;
+    // Clamp current scroll to the newly computed max
+    app.commit_detail_scroll = app
+        .commit_detail_scroll
+        .min(app.commit_detail_max_scroll);
+}
+
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &mut App, detail_area: Rect, theme: &'a Theme) -> Self {
+    pub fn new(app: &App, detail_area: Rect, theme: &'a Theme) -> Self {
         let detail_width = detail_area.width;
         let commit_lines = Self::build_commit_lines(app, theme);
-
-        // Compute the commit pane inner dimensions for scroll calculation.
-        // The commit pane is the right half (or bottom half on narrow terminals).
-        let direction = if detail_width <= VERTICAL_LAYOUT_THRESHOLD {
-            Direction::Vertical
-        } else {
-            Direction::Horizontal
-        };
-        let commit_chunk_height = if direction == Direction::Vertical {
-            detail_area.height / 2
-        } else {
-            detail_area.height
-        };
-        let commit_inner_width = if direction == Direction::Vertical {
-            detail_width.saturating_sub(2) as usize
-        } else {
-            (detail_width / 2).saturating_sub(2) as usize
-        };
-        let commit_visible = commit_chunk_height.saturating_sub(2) as usize;
-        app.commit_detail_visible_rows = commit_visible as u16;
-        // Use Ratatui's own line_count to match its actual wrapping behaviour.
-        let commit_wrapped_total = if commit_inner_width > 0 {
-            let p = Paragraph::new(commit_lines.clone()).wrap(Wrap { trim: false });
-            p.line_count(commit_inner_width as u16)
-        } else {
-            commit_lines.len()
-        };
-
-        // Recompute editor line offset using wrapped line counts so the cursor
-        // accounts for long hint text that wraps across multiple visual lines.
-        if app.editing_commit_message && commit_inner_width > 0 {
-            let raw_offset = app.commit_editor_line_offset as usize;
-            let header_lines = &commit_lines[..raw_offset.min(commit_lines.len())];
-            if !header_lines.is_empty() {
-                let hp = Paragraph::new(header_lines.to_vec()).wrap(Wrap { trim: false });
-                app.commit_editor_line_offset =
-                    hp.line_count(commit_inner_width as u16) as u16;
-            }
-        }
-        app.commit_detail_max_scroll =
-            commit_wrapped_total.saturating_sub(commit_visible) as u16;
-        // Clamp current scroll to the newly computed max
-        app.commit_detail_scroll = app
-            .commit_detail_scroll
-            .min(app.commit_detail_max_scroll);
 
         // Files pane gets ~half the detail width minus borders
         let files_inner_width = if detail_width <= VERTICAL_LAYOUT_THRESHOLD {
@@ -281,16 +294,22 @@ impl<'a> CommitDetailWidget<'a> {
         (lines, selected_line_idx)
     }
 
-    fn build_commit_lines(app: &mut App, theme: &Theme) -> Vec<Line<'a>> {
+    fn build_commit_lines(app: &App, theme: &Theme) -> Vec<Line<'a>> {
+        Self::build_commit_lines_with_offset(app, theme).0
+    }
+
+    /// Build the commit detail lines. Returns `(lines, raw_editor_line_offset)`.
+    /// The offset is `Some` when an editor section is present (uncommitted or amend).
+    fn build_commit_lines_with_offset(app: &App, theme: &Theme) -> (Vec<Line<'a>>, Option<u16>) {
         let Some(selected) = app.graph_list_state.selected() else {
-            return vec![Line::from(Span::styled(
+            return (vec![Line::from(Span::styled(
                 "Select a commit",
                 Style::default().fg(theme.text_muted),
-            ))];
+            ))], None);
         };
 
         let Some(node) = app.graph_layout.nodes.get(selected) else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
 
         // Handle uncommitted changes node
@@ -331,10 +350,11 @@ impl<'a> CommitDetailWidget<'a> {
             }
 
             // Show editor content with selection highlighting
+            let mut editor_line_offset = None;
             if app.editing_commit_message || !app.commit_editor.text.is_empty() {
                 lines.push(Line::from(""));
                 // Track where editor text starts for auto-scroll
-                app.commit_editor_line_offset = lines.len() as u16;
+                editor_line_offset = Some(lines.len() as u16);
                 let sel = app.commit_editor.selection.map(|s| s.ordered());
                 let sel_style = Style::default().bg(theme.editor_selection_bg).fg(theme.editor_selection_fg);
                 let mut byte_offset = 0usize;
@@ -369,15 +389,15 @@ impl<'a> CommitDetailWidget<'a> {
                 }
             }
 
-            return lines;
+            return (lines, editor_line_offset);
         }
 
         // Handle connector rows (no commit)
         let Some(commit) = &node.commit else {
-            return vec![Line::from(Span::styled(
+            return (vec![Line::from(Span::styled(
                 "(connector line)",
                 Style::default().fg(theme.text_muted),
-            ))];
+            ))], None);
         };
 
         // Build commit detail lines
@@ -403,13 +423,14 @@ impl<'a> CommitDetailWidget<'a> {
         lines.push(Line::from(""));
 
         // Message — show editor if amending this commit
+        let mut editor_line_offset = None;
         if app.amending_commit && app.editing_commit_message && node.is_head {
             lines.push(Line::from(Span::styled(
                 "Amend Message:",
                 Style::default().fg(theme.search_cursor),
             )));
             lines.push(Line::from(""));
-            app.commit_editor_line_offset = lines.len() as u16;
+            editor_line_offset = Some(lines.len() as u16);
             let sel = app.commit_editor.selection.map(|s| s.ordered());
             let sel_style = Style::default().bg(theme.editor_selection_bg).fg(theme.editor_selection_fg);
             let mut byte_offset = 0usize;
@@ -455,7 +476,7 @@ impl<'a> CommitDetailWidget<'a> {
             }
         }
 
-        lines
+        (lines, editor_line_offset)
     }
 
     fn build_file_list_lines_from(

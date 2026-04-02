@@ -23,7 +23,7 @@ use crate::app::{App, AppMode, InputAction};
 
 use self::{
     branch_filter::BranchFilterWidget,
-    commit_detail::CommitDetailWidget,
+    commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
     commit_menu::CommitMenuWidget,
     dialog::{BranchInfoPopup, ConfirmDialog, InputDialog},
     file_diff_view::FileDiffViewWidget,
@@ -134,6 +134,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .split(main_area);
         (v[0], v[1])
     };
+
+    // Pre-render pass: compute layout metrics that update App scroll state
+    compute_commit_detail_layout(app, detail_area);
 
     // Render widgets
     frame.render_stateful_widget(
