@@ -17,3 +17,18 @@ pub use diff::{
 pub use extensions::configure_git_extensions;
 pub use graph::build_graph;
 pub use repository::{GitRepository, WorkingTreeStatus};
+
+use std::path::PathBuf;
+
+/// Convert raw bytes from git2 into a PathBuf.
+#[cfg(unix)]
+pub(crate) fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+}
+
+/// Convert raw bytes from git2 into a PathBuf.
+#[cfg(not(unix))]
+pub(crate) fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}

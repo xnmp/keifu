@@ -361,7 +361,7 @@ impl CommitDiffInfo {
                 continue;
             }
 
-            let path_buf = Self::path_from_bytes(entry.path_bytes());
+            let path_buf = super::path_from_bytes(entry.path_bytes());
             let full_path = workdir.join(&path_buf);
             if Self::is_plain_directory(&full_path) {
                 continue;
@@ -756,17 +756,6 @@ impl CommitDiffInfo {
             line_count += 1;
         }
         line_count
-    }
-
-    #[cfg(unix)]
-    fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-        use std::os::unix::ffi::OsStrExt;
-        PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-    }
-
-    #[cfg(not(unix))]
-    fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
     }
 
     pub(crate) fn is_plain_directory(path: &Path) -> bool {

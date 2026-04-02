@@ -354,19 +354,16 @@ impl DiffCache {
                 self.uncommitted_diff_receiver = Some(rx);
 
                 thread::spawn(move || {
-                    let repo = GitRepository {
-                        path: repo_path.clone(),
-                        repo: match git2::Repository::open(&repo_path) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                let _ = tx.send((Err(e.to_string()), None));
-                                return;
-                            }
-                        },
+                    let repo = match GitRepository::open(&repo_path) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let _ = tx.send((Err(e.to_string()), None));
+                            return;
+                        }
                     };
                     let status = repo.get_working_tree_status().unwrap_or_default();
                     let diff =
-                        CommitDiffInfo::from_working_tree(&repo.repo).map_err(|e| e.to_string());
+                        CommitDiffInfo::from_working_tree(repo.repo()).map_err(|e| e.to_string());
                     let _ = tx.send((diff, status));
                 });
             }

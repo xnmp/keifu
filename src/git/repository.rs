@@ -11,22 +11,14 @@ use git2::Oid;
 use super::{BranchInfo, CommitDiffInfo, CommitInfo};
 
 pub struct GitRepository {
-    pub repo: Repository,
+    repo: Repository,
     pub path: String,
 }
 
 impl GitRepository {
-    /// Convert raw bytes from git2 into a PathBuf.
-    #[cfg(unix)]
-    fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-        use std::os::unix::ffi::OsStrExt;
-        PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-    }
-
-    /// Convert raw bytes from git2 into a PathBuf.
-    #[cfg(not(unix))]
-    fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+    /// Access the underlying git2 Repository.
+    pub fn repo(&self) -> &Repository {
+        &self.repo
     }
 
     /// Discover a repository from the current directory
@@ -149,7 +141,7 @@ impl GitRepository {
             );
 
             if is_staged || has_worktree_changes {
-                let path = Self::path_from_bytes(entry.path_bytes());
+                let path = super::path_from_bytes(entry.path_bytes());
                 if status.intersects(Status::WT_NEW) {
                     let full_path = workdir.join(&path);
                     if CommitDiffInfo::is_plain_directory(&full_path) {

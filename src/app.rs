@@ -557,7 +557,7 @@ impl App {
         self.diff_cache.clear_uncommitted_data();
         self.refresh(false)?;
         // Force quick diff recomputation so file list updates immediately
-        self.diff_cache.set_quick_uncommitted(&self.repo.repo);
+        self.diff_cache.set_quick_uncommitted(self.repo.repo());
         self.sync_file_list_cache();
 
         // Find best target: next in same section, then prev, then any file
@@ -602,7 +602,7 @@ impl App {
 
     fn sync_selected_diff_target(&mut self) -> Option<DiffTarget> {
         let target = self.current_diff_target();
-        self.diff_cache.sync_selected_target(target, &self.repo.repo)
+        self.diff_cache.sync_selected_target(target, self.repo.repo())
     }
 
     /// Refresh repository data
@@ -2392,10 +2392,10 @@ impl App {
     fn load_file_diff_content(&self, file_path: &std::path::Path) -> Result<FileDiffContent> {
         match self.current_diff_target() {
             Some(DiffTarget::Commit(oid)) => {
-                FileDiffContent::from_commit(&self.repo.repo, oid, file_path)
+                FileDiffContent::from_commit(self.repo.repo(), oid, file_path)
             }
             Some(DiffTarget::Uncommitted) | None => {
-                FileDiffContent::from_working_tree(&self.repo.repo, file_path)
+                FileDiffContent::from_working_tree(self.repo.repo(), file_path)
             }
         }
     }
@@ -2467,7 +2467,7 @@ impl App {
                         if !input.is_empty() {
                             if let Some(node) = self.selected_commit_node() {
                                 if let Some(commit) = &node.commit {
-                                    create_branch(&self.repo.repo, &input, commit.oid)?;
+                                    create_branch(self.repo.repo(), &input, commit.oid)?;
                                     self.refresh(true)?;
                                 }
                             }
@@ -2477,7 +2477,7 @@ impl App {
                         if !input.is_empty() {
                             if let Some(node) = self.selected_commit_node() {
                                 if let Some(commit) = &node.commit {
-                                    add_tag(&self.repo.repo, &input, commit.oid)?;
+                                    add_tag(self.repo.repo(), &input, commit.oid)?;
                                     self.refresh(true)?;
                                     self.set_message(format!("Tag '{}' created", input));
                                 }
@@ -2575,13 +2575,13 @@ impl App {
             Action::Confirm => {
                 match confirm_action {
                     ConfirmAction::DeleteBranch(name) => {
-                        delete_branch(&self.repo.repo, &name)?;
+                        delete_branch(self.repo.repo(), &name)?;
                     }
                     ConfirmAction::Merge(name) => {
-                        merge_branch(&self.repo.repo, &name)?;
+                        merge_branch(self.repo.repo(), &name)?;
                     }
                     ConfirmAction::Rebase(name) => {
-                        rebase_branch(&self.repo.repo, &name)?;
+                        rebase_branch(self.repo.repo(), &name)?;
                     }
                     ConfirmAction::CherryPick(oid) => {
                         cherry_pick(&self.repo_path, oid)?;
@@ -2813,14 +2813,14 @@ impl App {
             let branch_name = branch.name.clone();
             if branch_name.starts_with("origin/") {
                 // For remote branches, create a local branch and check it out
-                checkout_remote_branch(&self.repo.repo, &branch_name)?;
+                checkout_remote_branch(self.repo.repo(), &branch_name)?;
             } else {
-                checkout_branch(&self.repo.repo, &branch_name)?;
+                checkout_branch(self.repo.repo(), &branch_name)?;
             }
             self.refresh(true)?;
         } else if let Some(node) = self.selected_commit_node() {
             if let Some(commit) = &node.commit {
-                checkout_commit(&self.repo.repo, commit.oid)?;
+                checkout_commit(self.repo.repo(), commit.oid)?;
                 self.refresh(true)?;
             }
         }
@@ -3491,7 +3491,7 @@ mod tests {
         // Select the uncommitted node (index 0)
         app.graph_list_state.select(Some(0));
         // Load quick diff so display items are populated
-        app.diff_cache.set_quick_uncommitted(&app.repo.repo);
+        app.diff_cache.set_quick_uncommitted(app.repo.repo());
         app.sync_file_list_cache();
         app
     }

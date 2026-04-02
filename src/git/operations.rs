@@ -8,6 +8,20 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository};
 
+/// Run a git CLI command and return its output, or bail with stderr on failure.
+fn run_git(repo_path: &str, args: &[&str]) -> Result<std::process::Output> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
+    }
+    Ok(output)
+}
+
 /// Checkout a branch
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let branch = repo
@@ -202,33 +216,13 @@ pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<()> {
 
 /// Fetch from origin remote using git command
 pub fn fetch_origin(repo_path: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["fetch", "origin"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git fetch")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git fetch failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["fetch", "origin"])?;
     Ok(())
 }
 
 /// Cherry-pick a commit
 pub fn cherry_pick(repo_path: &str, commit_oid: Oid) -> Result<()> {
-    let output = Command::new("git")
-        .args(["cherry-pick", &commit_oid.to_string()])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git cherry-pick")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git cherry-pick failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["cherry-pick", &commit_oid.to_string()])?;
     Ok(())
 }
 
@@ -247,17 +241,7 @@ pub fn reset_to_commit(repo_path: &str, commit_oid: Oid, mode: ResetMode) -> Res
         ResetMode::Hard => "--hard",
     };
 
-    let output = Command::new("git")
-        .args(["reset", mode_flag, &commit_oid.to_string()])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git reset")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git reset failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["reset", mode_flag, &commit_oid.to_string()])?;
     Ok(())
 }
 
@@ -276,65 +260,25 @@ pub fn add_tag(repo: &Repository, tag_name: &str, commit_oid: Oid) -> Result<()>
 
 /// Revert a commit without opening an editor
 pub fn revert_commit(repo_path: &str, commit_oid: Oid) -> Result<()> {
-    let output = Command::new("git")
-        .args(["revert", "--no-edit", &commit_oid.to_string()])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git revert")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git revert failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["revert", "--no-edit", &commit_oid.to_string()])?;
     Ok(())
 }
 
 /// Push current branch to origin
 pub fn push_to_origin(repo_path: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["push", "origin", "HEAD"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git push")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git push failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["push", "origin", "HEAD"])?;
     Ok(())
 }
 
 /// Stage a file
 pub fn stage_file(repo_path: &str, file_path: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["add", "--", file_path])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git add")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git add failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["add", "--", file_path])?;
     Ok(())
 }
 
 /// Unstage a file
 pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["reset", "HEAD", "--", file_path])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git reset")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git reset failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["reset", "HEAD", "--", file_path])?;
     Ok(())
 }
 
@@ -484,18 +428,10 @@ pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
 
     // Restore tracked files
     if !tracked.is_empty() {
-        let mut args = vec!["checkout".to_string(), "--".to_string()];
+        let mut args: Vec<String> = vec!["checkout".into(), "--".into()];
         args.extend(tracked);
-        let output = Command::new("git")
-            .args(&args)
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git checkout")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("git checkout failed: {}", stderr.trim());
-        }
+        let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        run_git(repo_path, &args_ref)?;
     }
 
     // Trash untracked files
@@ -509,65 +445,25 @@ pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
 
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["commit", "-m", message])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git commit")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git commit failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["commit", "-m", message])?;
     Ok(())
 }
 
 /// Amend the last commit with a new message.
 pub fn commit_amend(repo_path: &str, message: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["commit", "--amend", "-m", message])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git commit --amend")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git commit --amend failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["commit", "--amend", "-m", message])?;
     Ok(())
 }
 
 /// Amend the last commit without changing the message.
 pub fn commit_amend_no_edit(repo_path: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["commit", "--amend", "--no-edit"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to execute git commit --amend --no-edit")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git commit --amend --no-edit failed: {}", stderr.trim());
-    }
-
+    run_git(repo_path, &["commit", "--amend", "--no-edit"])?;
     Ok(())
 }
 
 /// Get the message of the last commit.
 pub fn get_last_commit_message(repo_path: &str) -> Result<String> {
-    let output = Command::new("git")
-        .args(["log", "-1", "--format=%B"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to get last commit message")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git log failed: {}", stderr.trim());
-    }
-
+    let output = run_git(repo_path, &["log", "-1", "--format=%B"])?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 

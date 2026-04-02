@@ -56,9 +56,9 @@ fn make_app(repo: GitRepository) -> keifu::app::App {
 #[test]
 fn move_selection_down_then_up() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
-    commit_file(&repo.repo, "b.txt", "b", "second");
-    commit_file(&repo.repo, "c.txt", "c", "third");
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    commit_file(repo.repo(), "c.txt", "c", "third");
     let mut app = make_app(repo);
 
     // Starts at top (index 0)
@@ -77,8 +77,8 @@ fn move_selection_down_then_up() {
 #[test]
 fn move_selection_clamps_at_boundaries() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
-    commit_file(&repo.repo, "b.txt", "b", "second");
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
 
     // Move up past top
@@ -96,7 +96,7 @@ fn move_selection_clamps_at_boundaries() {
 fn page_up_down_moves_by_10() {
     let (_td, repo) = init_repo();
     for i in 0..20 {
-        commit_file(&repo.repo, "a.txt", &format!("{i}"), &format!("commit {i}"));
+        commit_file(repo.repo(), "a.txt", &format!("{i}"), &format!("commit {i}"));
     }
     let mut app = make_app(repo);
 
@@ -111,7 +111,7 @@ fn page_up_down_moves_by_10() {
 fn go_to_top_and_bottom() {
     let (_td, repo) = init_repo();
     for i in 0..5 {
-        commit_file(&repo.repo, "a.txt", &format!("{i}"), &format!("commit {i}"));
+        commit_file(repo.repo(), "a.txt", &format!("{i}"), &format!("commit {i}"));
     }
     let mut app = make_app(repo);
     let max_idx = app.graph_layout.nodes.len() - 1;
@@ -126,8 +126,8 @@ fn go_to_top_and_bottom() {
 #[test]
 fn graph_navigation_resets_commit_detail_scroll() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
-    commit_file(&repo.repo, "b.txt", "b", "second");
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
     app.commit_detail_scroll = 5;
 
@@ -140,11 +140,11 @@ fn graph_navigation_resets_commit_detail_scroll() {
 #[test]
 fn next_prev_branch_traverses_branches() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "initial");
+    commit_file(repo.repo(), "a.txt", "a", "initial");
     // Create a second branch
     {
-        let head = repo.repo.head().unwrap().peel_to_commit().unwrap();
-        repo.repo.branch("feature", &head, false).unwrap();
+        let head = repo.repo().head().unwrap().peel_to_commit().unwrap();
+        repo.repo().branch("feature", &head, false).unwrap();
     }
     let mut app = make_app(repo);
 
@@ -162,8 +162,8 @@ fn next_prev_branch_traverses_branches() {
 #[test]
 fn jump_to_head_selects_head_branch() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
-    commit_file(&repo.repo, "b.txt", "b", "second");
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
     app.head_name = Some("main".to_string());
 
@@ -185,7 +185,7 @@ fn jump_to_head_selects_head_branch() {
 #[test]
 fn panel_right_cycles_graph_files_detail() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     assert_eq!(app.focused_panel, FocusedPanel::Graph);
@@ -203,7 +203,7 @@ fn panel_right_cycles_graph_files_detail() {
 #[test]
 fn panel_left_cycles_reverse() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     assert_eq!(app.focused_panel, FocusedPanel::Graph);
@@ -221,7 +221,7 @@ fn panel_left_cycles_reverse() {
 #[test]
 fn focus_graph_returns_from_files() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
 
@@ -232,7 +232,7 @@ fn focus_graph_returns_from_files() {
 #[test]
 fn panel_switch_clears_editing() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.editing_commit_message = true;
     app.focused_panel = FocusedPanel::CommitDetail;
@@ -246,7 +246,7 @@ fn panel_switch_clears_editing() {
 #[test]
 fn force_quit_sets_should_quit() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     app.handle_action(Action::ForceQuit).unwrap();
@@ -256,7 +256,7 @@ fn force_quit_sets_should_quit() {
 #[test]
 fn toggle_layout_flips_side_panel() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     let original = app.side_panel_layout;
 
@@ -270,7 +270,7 @@ fn toggle_layout_flips_side_panel() {
 #[test]
 fn toggle_debug_keys() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     assert!(!app.debug_keys);
@@ -281,7 +281,7 @@ fn toggle_debug_keys() {
 #[test]
 fn toggle_help_enters_help_mode() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     app.handle_action(Action::ToggleHelp).unwrap();
@@ -291,7 +291,7 @@ fn toggle_help_enters_help_mode() {
 #[test]
 fn esc_in_help_returns_to_normal() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.mode = AppMode::Help;
 
@@ -302,7 +302,7 @@ fn esc_in_help_returns_to_normal() {
 #[test]
 fn quit_from_graph_sets_should_quit() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     app.handle_action(Action::Quit).unwrap();
@@ -312,7 +312,7 @@ fn quit_from_graph_sets_should_quit() {
 #[test]
 fn search_opens_input_mode() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     app.handle_action(Action::Search).unwrap();
@@ -328,7 +328,7 @@ fn search_opens_input_mode() {
 #[test]
 fn create_branch_opens_input_mode() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     app.handle_action(Action::CreateBranch).unwrap();
@@ -346,7 +346,7 @@ fn create_branch_opens_input_mode() {
 #[test]
 fn files_filter_mode_lifecycle() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
 
@@ -373,7 +373,7 @@ fn files_filter_mode_lifecycle() {
 #[test]
 fn files_filter_cancel_clears_filter() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
     app.files_pane.files_filter_active = true;
@@ -387,7 +387,7 @@ fn files_filter_cancel_clears_filter() {
 #[test]
 fn files_filter_backspace_on_empty_exits_filter() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
     app.files_pane.files_filter_active = true;
@@ -400,7 +400,7 @@ fn files_filter_backspace_on_empty_exits_filter() {
 #[test]
 fn toggle_folder_view_flips_flag() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::Files;
 
@@ -416,7 +416,7 @@ fn toggle_folder_view_flips_flag() {
 #[test]
 fn commit_detail_scroll_up_down() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::CommitDetail;
     app.commit_detail_max_scroll = 20;
@@ -434,7 +434,7 @@ fn commit_detail_scroll_up_down() {
 #[test]
 fn commit_detail_scroll_clamped_to_max() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::CommitDetail;
     app.commit_detail_max_scroll = 5;
@@ -447,7 +447,7 @@ fn commit_detail_scroll_clamped_to_max() {
 #[test]
 fn commit_detail_go_to_top_resets_scroll() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.focused_panel = FocusedPanel::CommitDetail;
     app.commit_detail_scroll = 10;
@@ -461,7 +461,7 @@ fn commit_detail_go_to_top_resets_scroll() {
 #[test]
 fn cancel_in_error_mode_returns_to_normal() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
     app.mode = AppMode::Error {
         message: "test error".to_string(),
@@ -476,7 +476,7 @@ fn cancel_in_error_mode_returns_to_normal() {
 #[test]
 fn commit_menu_navigation_wraps() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     use keifu::app::CommitMenuItem;
@@ -517,7 +517,7 @@ fn commit_menu_navigation_wraps() {
 #[test]
 fn commit_menu_cancel_returns_to_normal() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     use keifu::app::CommitMenuItem;
@@ -535,7 +535,7 @@ fn commit_menu_cancel_returns_to_normal() {
 #[test]
 fn set_message_and_get_message() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     app.set_message("hello");
@@ -547,8 +547,8 @@ fn set_message_and_get_message() {
 #[test]
 fn refresh_preserves_selection_by_oid() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
-    commit_file(&repo.repo, "b.txt", "b", "second");
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
 
     // Select the second commit (index 1, since newest is 0)
@@ -564,7 +564,7 @@ fn refresh_preserves_selection_by_oid() {
 #[test]
 fn force_refresh_clears_diff_cache() {
     let (_td, repo) = init_repo();
-    commit_file(&repo.repo, "a.txt", "a", "first");
+    commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
     // After force refresh, cached_diff_or_quick should be None
