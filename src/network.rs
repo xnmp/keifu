@@ -33,6 +33,12 @@ pub struct NetworkEvents {
     pub message: Option<String>,
 }
 
+impl Default for NetworkManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkManager {
     pub fn new() -> Self {
         let now = Instant::now();

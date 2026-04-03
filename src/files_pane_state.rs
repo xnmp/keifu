@@ -15,7 +15,7 @@ pub enum FilesPaneItem {
 /// Resolved to an index from the current display items at point of use,
 /// so it never goes stale when items reshuffle.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FileSelection {
+pub struct FileSelection {
     pub section: Option<String>,
     pub path: Option<std::path::PathBuf>,
 }
@@ -23,7 +23,7 @@ pub(crate) struct FileSelection {
 impl FileSelection {
     /// Resolve this selection to an index within the given items.
     /// Returns the index of the matching file, or the first file if not found.
-    pub(crate) fn resolve(&self, items: &[FilesPaneItem]) -> usize {
+    pub fn resolve(&self, items: &[FilesPaneItem]) -> usize {
         // Try to find exact match (section + path)
         if let Some(ref path) = self.path {
             if let Some(ref section) = self.section {
@@ -84,7 +84,7 @@ pub fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
 /// State for the files pane subsystem.
 #[derive(Default)]
 pub struct FilesPaneState {
-    pub(crate) file_selection: FileSelection,
+    pub file_selection: FileSelection,
     pub file_list_cache: Vec<FileDiffInfo>,
     display_items_cache: Vec<FilesPaneItem>,
     pub files_group_by_folder: bool,

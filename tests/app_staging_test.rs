@@ -1,0 +1,614 @@
+//! Integration tests for file staging selection behavior and diff cache
+//! interaction through App. Uses real git repos.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Instant;
+
+use chrono::Local;
+use git2::{Oid, Repository, Signature};
+use tempfile::TempDir;
+
+use keifu::app::{App, AppMode, FocusedPanel, SearchState};
+use keifu::config::Config;
+use keifu::diff_cache::{DiffCache, DiffResult, DiffTarget, DIFF_LOAD_DEBOUNCE};
+use keifu::files_pane_state::{FileSelection, FilesPaneItem, FilesPaneState, section_of};
+use keifu::git::graph::{CellType, GraphLayout, GraphNode};
+use keifu::git::operations::{stage_file, unstage_file};
+use keifu::git::{
+    build_graph, BranchInfo, CommitDiffInfo, CommitInfo, FileDiffInfo, GitRepository,
+    WorkingTreeStatus,
+};
+use keifu::graph_nav::GraphNav;
+use keifu::network::NetworkManager;
+use keifu::text_editor::TextEditor;
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+fn init_repo() -> (TempDir, GitRepository) {
+    let tempdir = tempfile::tempdir().unwrap();
+    Repository::init(tempdir.path()).unwrap();
+    let repo = GitRepository::open(tempdir.path()).unwrap();
+    (tempdir, repo)
+}
+
+fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> Oid {
+    let workdir = repo.workdir().unwrap();
+    fs::write(workdir.join(path), contents).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(path)).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = Signature::now("Test User", "test@example.com").unwrap();
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+    let parents = parent.iter().collect::<Vec<_>>();
+    let oid = repo
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parents,
+        )
+        .unwrap();
+    drop(tree);
+    oid
+}
+
+fn make_commit(oid: Oid) -> CommitInfo {
+    CommitInfo {
+        oid,
+        short_id: oid.to_string()[..7].to_string(),
+        author_name: "Test User".to_string(),
+        author_email: "test@example.com".to_string(),
+        timestamp: Local::now(),
+        message: "test".to_string(),
+        full_message: "test".to_string(),
+        parent_oids: Vec::new(),
+    }
+}
+
+fn make_base_app(
+    node: GraphNode,
+    diff_target: DiffTarget,
+    working_tree_status: Option<WorkingTreeStatus>,
+) -> App {
+    let (_tempdir, repo) = init_repo();
+    let commits = node.commit.iter().cloned().collect();
+
+    App {
+        mode: AppMode::Normal,
+        repo_path: repo.path.clone(),
+        repo,
+        head_name: None,
+        head_detached: false,
+        commits,
+        branches: Vec::new(),
+        graph_layout: GraphLayout {
+            nodes: vec![node],
+            max_lane: 0,
+        },
+        graph_nav: GraphNav::new(),
+        focused_panel: FocusedPanel::Graph,
+        files_pane: FilesPaneState::new(),
+        hidden_branches: HashSet::new(),
+        commit_editor: TextEditor::new(),
+        editing_commit_message: false,
+        amending_commit: false,
+        commit_detail_scroll: 0,
+        commit_detail_max_scroll: 0,
+        commit_editor_line_offset: 0,
+        commit_detail_visible_rows: 20,
+        search_state: SearchState::default(),
+        working_tree_status,
+        diff_cache: {
+            let mut dc = DiffCache::new();
+            dc.selected_diff_target = Some(diff_target);
+            dc.selected_diff_target_changed_at = Instant::now() - DIFF_LOAD_DEBOUNCE;
+            dc
+        },
+        should_quit: false,
+        pending_refresh: false,
+        diff_viewport_height: 40,
+        diff_viewport_width: 80,
+        message: None,
+        message_time: None,
+        network: NetworkManager::new(),
+        last_undoable_op: None,
+        side_panel_layout: false,
+        debug_keys: false,
+        config: Config::default(),
+    }
+}
+
+fn make_diff_app(selected_oid: Oid, in_flight_oid: Option<Oid>) -> App {
+    let node = GraphNode {
+        commit: Some(make_commit(selected_oid)),
+        lane: 0,
+        color_index: 0,
+        branch_names: Vec::new(),
+        is_head: false,
+        is_uncommitted: false,
+        uncommitted_count: None,
+        cells: vec![CellType::Commit(0)],
+    };
+    let mut app = make_base_app(node, DiffTarget::Commit(selected_oid), None);
+    app.diff_cache.diff_loading_oid = in_flight_oid;
+    app
+}
+
+fn make_uncommitted_app() -> App {
+    let node = GraphNode {
+        commit: None,
+        lane: 0,
+        color_index: 0,
+        branch_names: Vec::new(),
+        is_head: false,
+        is_uncommitted: true,
+        uncommitted_count: Some(1),
+        cells: vec![CellType::Commit(0)],
+    };
+    let wts = WorkingTreeStatus {
+        file_paths: vec![PathBuf::from("tracked.txt")],
+        mtime_hash: 1,
+        has_collapsed_untracked_dirs: false,
+    };
+    make_base_app(node, DiffTarget::Uncommitted, Some(wts))
+}
+
+fn make_test_app(tempdir: &Path) -> App {
+    let git_repo = GitRepository::open(tempdir).unwrap();
+    let mut app = App::from_repo(git_repo).unwrap();
+    app.repo_path = tempdir.to_string_lossy().to_string();
+    app.graph_nav.graph_list_state.select(Some(0));
+    app.diff_cache.set_quick_uncommitted(app.repo.repo());
+    app.sync_file_list_cache();
+    app
+}
+
+fn selected_file_path(app: &App) -> String {
+    let idx = app.file_selected_index();
+    let items = app.display_items();
+    match &items[idx] {
+        FilesPaneItem::File(f) => f.path.to_string_lossy().to_string(),
+        FilesPaneItem::Header(t) => panic!("selected a header: {}", t),
+    }
+}
+
+fn selected_section(app: &App) -> Option<String> {
+    let idx = app.file_selected_index();
+    section_of(app.display_items(), idx).map(|s| s.to_string())
+}
+
+// ── Diff cache through App ──────────────────────────────────────────
+
+#[test]
+fn selected_diff_stays_loading_while_another_diff_is_in_flight() {
+    let selected_oid = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let in_flight_oid = Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+    let app = make_diff_app(selected_oid, Some(in_flight_oid));
+    assert!(app.is_diff_loading());
+}
+
+#[test]
+fn cached_selected_diff_is_not_marked_loading_by_other_requests() {
+    let selected_oid = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let in_flight_oid = Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+    let mut app = make_diff_app(selected_oid, Some(in_flight_oid));
+    app.diff_cache.diff_cache = Some(CommitDiffInfo::default());
+    app.diff_cache.diff_cache_oid = Some(selected_oid);
+    assert!(!app.is_diff_loading());
+}
+
+#[test]
+fn failed_commit_diff_load_is_cached_to_avoid_immediate_retry() {
+    let selected_oid = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let mut app = make_diff_app(selected_oid, Some(selected_oid));
+    let (tx, rx) = mpsc::channel();
+    tx.send(DiffResult {
+        oid: selected_oid,
+        diff: Err("boom".to_string()),
+    })
+    .unwrap();
+    app.diff_cache.diff_receiver = Some(rx);
+
+    app.update_diff_cache();
+    app.update_diff_cache();
+
+    assert!(app.diff_cache.diff_cache.as_ref().is_none());
+    assert_eq!(app.diff_cache.diff_cache_oid, Some(selected_oid));
+    assert!(app.cached_diff().is_none());
+    assert!(!app.is_diff_loading());
+    assert!(app.diff_cache.diff_loading_oid.is_none());
+    assert!(app.diff_cache.diff_receiver.is_none());
+    assert_eq!(app.message.as_deref(), Some("Failed to load diff: boom"));
+}
+
+#[test]
+fn failed_uncommitted_diff_load_is_cached_to_avoid_immediate_retry() {
+    let mut app = make_uncommitted_app();
+    let (tx, rx) = mpsc::channel();
+    let cache_key = app.working_tree_status.clone();
+    tx.send((Err("boom".to_string()), cache_key)).unwrap();
+    app.diff_cache.uncommitted_diff_loading = true;
+    app.diff_cache.uncommitted_diff_receiver = Some(rx);
+
+    app.update_diff_cache();
+    app.update_diff_cache();
+
+    assert!(app
+        .diff_cache
+        .cached_diff(Some(DiffTarget::Uncommitted))
+        .is_none());
+    assert!(app.diff_cache.uncommitted_diff_failed);
+    assert!(app.cached_diff().is_none());
+    assert!(!app.is_diff_loading());
+    assert!(!app.diff_cache.uncommitted_diff_loading);
+    assert!(app.diff_cache.uncommitted_diff_receiver.is_none());
+    assert_eq!(app.message.as_deref(), Some("Failed to load diff: boom"));
+}
+
+// ── Refresh behavior ────────────────────────────────────────────────
+
+#[test]
+fn refresh_reuses_uncommitted_cache_for_nested_untracked_directories() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    let _oid = commit_file(&repo, "tracked.txt", "tracked\n", "initial");
+    fs::create_dir_all(tempdir.path().join("dir/sub")).unwrap();
+    fs::write(tempdir.path().join("dir/sub/file.txt"), "hello\n").unwrap();
+
+    let git_repo = GitRepository::open(tempdir.path()).unwrap();
+    let mut app = App::from_repo(git_repo).unwrap();
+    app.diff_cache
+        .uncommitted_diff_cache = Some(CommitDiffInfo::default());
+    app.diff_cache
+        .uncommitted_cache_key = app.working_tree_status.clone();
+
+    app.refresh(false).unwrap();
+
+    assert!(app
+        .diff_cache
+        .cached_diff(Some(DiffTarget::Uncommitted))
+        .is_some());
+    assert!(app.diff_cache.uncommitted_cache_key.as_ref().is_some());
+}
+
+#[test]
+fn refresh_restores_non_branch_selection_by_commit_oid_when_uncommitted_row_is_added() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    let first_oid = commit_file(&repo, "tracked.txt", "first\n", "first");
+    let _second_oid = commit_file(&repo, "tracked.txt", "second\n", "second");
+
+    let git_repo = GitRepository::open(tempdir.path()).unwrap();
+    let mut app = App::from_repo(git_repo).unwrap();
+
+    let first_node_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| {
+            node.commit
+                .as_ref()
+                .is_some_and(|commit| commit.oid == first_oid)
+        })
+        .unwrap();
+    app.graph_nav.graph_list_state.select(Some(first_node_idx));
+    app.graph_nav.sync_branch_selection_to_node(first_node_idx);
+
+    fs::write(tempdir.path().join("untracked.txt"), "hello\n").unwrap();
+    app.refresh(false).unwrap();
+
+    let selected_oid = app
+        .graph_nav
+        .graph_list_state
+        .selected()
+        .and_then(|idx| app.graph_layout.nodes.get(idx))
+        .and_then(|node| node.commit.as_ref())
+        .map(|commit| commit.oid);
+
+    assert_eq!(selected_oid, Some(first_oid));
+    assert!(app
+        .graph_layout
+        .nodes
+        .first()
+        .is_some_and(|node| node.is_uncommitted));
+}
+
+// ── Integration tests: staging with real git repos ──────────────────
+
+#[test]
+fn integration_stage_modified_with_untracked_selects_untracked() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "tracked.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("tracked.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("untracked.txt"), "new\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("tracked.txt".into()),
+    };
+    app.sync_file_list_cache();
+    assert_eq!(selected_file_path(&app), "tracked.txt");
+
+    stage_file(&app.repo_path, "tracked.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(
+        selected_section(&app).as_deref(),
+        Some("Unstaged Changes"),
+    );
+    assert_eq!(selected_file_path(&app), "untracked.txt");
+}
+
+#[test]
+fn integration_stage_only_unstaged_selects_staged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("a.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    stage_file(&app.repo_path, "a.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_file_path(&app), "a.txt");
+    assert_eq!(selected_section(&app).as_deref(), Some("Staged Changes"));
+}
+
+#[test]
+fn integration_unstage_selects_next_staged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "b.txt").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Staged Changes".to_string()),
+        path: Some("a.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    unstage_file(&app.repo_path, "a.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_file_path(&app), "b.txt");
+    assert_eq!(selected_section(&app).as_deref(), Some("Staged Changes"));
+}
+
+#[test]
+fn integration_stage_with_existing_staged_selects_next_unstaged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+    commit_file(&repo, "b.txt", "v1\n", "second");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("untracked.txt"), "new\n").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("b.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    stage_file(&app.repo_path, "b.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(
+        selected_section(&app).as_deref(),
+        Some("Unstaged Changes"),
+    );
+    assert_eq!(selected_file_path(&app), "untracked.txt");
+}
+
+#[test]
+fn integration_stage_middle_unstaged_selects_next_unstaged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+    commit_file(&repo, "b.txt", "v1\n", "second");
+    commit_file(&repo, "c.txt", "v1\n", "third");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("c.txt"), "v2\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("b.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    stage_file(&app.repo_path, "b.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+    assert_eq!(selected_file_path(&app), "c.txt");
+}
+
+#[test]
+fn integration_stage_last_unstaged_selects_prev_unstaged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+    commit_file(&repo, "b.txt", "v1\n", "second");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("b.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    stage_file(&app.repo_path, "b.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+    assert_eq!(selected_file_path(&app), "a.txt");
+}
+
+#[test]
+fn integration_unstage_only_staged_falls_back_to_unstaged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Staged Changes".to_string()),
+        path: Some("a.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    unstage_file(&app.repo_path, "a.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_file_path(&app), "a.txt");
+}
+
+#[test]
+fn integration_unstage_last_staged_selects_prev_staged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+    commit_file(&repo, "b.txt", "v1\n", "second");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "v2\n").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "b.txt").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Staged Changes".to_string()),
+        path: Some("b.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    unstage_file(&app.repo_path, "b.txt").unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_section(&app).as_deref(), Some("Staged Changes"));
+    assert_eq!(selected_file_path(&app), "a.txt");
+}
+
+#[test]
+fn integration_file_deleted_selects_next_in_section() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+    fs::write(tempdir.path().join("c.txt"), "new\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("b.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    fs::remove_file(tempdir.path().join("b.txt")).unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+    assert_eq!(selected_file_path(&app), "c.txt");
+}
+
+#[test]
+fn integration_last_file_deleted_selects_prev_in_section() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("b.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    fs::remove_file(tempdir.path().join("b.txt")).unwrap();
+    app.refresh_after_file_op().unwrap();
+
+    assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"));
+    assert_eq!(selected_file_path(&app), "a.txt");
+}
+
+#[test]
+fn integration_selection_never_lands_on_header() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("b.txt"), "new\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.files_pane.file_selection = FileSelection::default();
+    app.sync_file_list_cache();
+
+    let idx = app.file_selected_index();
+    let items = app.display_items();
+    assert!(
+        matches!(items.get(idx), Some(FilesPaneItem::File(_))),
+        "selection should never land on a header, got index {}",
+        idx,
+    );
+}
+
+#[test]
+fn integration_quick_diff_includes_untracked_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "tracked.txt", "v1\n", "initial");
+    fs::write(tempdir.path().join("new_file.txt"), "hello\n").unwrap();
+
+    let quick = CommitDiffInfo::quick_file_list_for_working_tree(&repo).unwrap();
+    let paths: Vec<_> = quick
+        .unstaged_files
+        .iter()
+        .map(|f| f.path.to_string_lossy().to_string())
+        .collect();
+    assert!(
+        paths.contains(&"new_file.txt".to_string()),
+        "quick diff should include untracked files, got: {:?}",
+        paths
+    );
+}

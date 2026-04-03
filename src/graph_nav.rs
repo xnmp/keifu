@@ -38,6 +38,12 @@ pub struct GraphNav {
     pub selected_branch_position: Option<usize>,
 }
 
+impl Default for GraphNav {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GraphNav {
     pub fn new() -> Self {
         let mut state = ListState::default();
