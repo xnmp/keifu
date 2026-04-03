@@ -130,10 +130,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .split(main_area);
         (h[1], h[0])
     } else {
-        // Default: graph (70%) on TOP, detail (30%) on BOTTOM
+        // Default: graph (65%) on TOP, detail (35%) on BOTTOM
         let v = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
             .split(main_area);
         (v[0], v[1])
     };
