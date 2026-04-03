@@ -246,10 +246,13 @@ impl<'a> CommitDetailWidget<'a> {
                         Style::default()
                     };
 
+                    let icon = super::file_icons::file_icon(&file.path);
+
                     if avail == 0 || full_text.len() <= avail {
                         // Fits on one line
                         let mut spans = vec![
                             Span::styled(format!("{} ", indicator), Style::default().fg(color)),
+                            Span::styled(format!("{} ", icon.icon), Style::default().fg(icon.color)),
                         ];
                         spans.push(Span::raw(path_str));
                         if file.is_binary {
@@ -273,6 +276,7 @@ impl<'a> CommitDetailWidget<'a> {
 
                         lines.push(Line::from(vec![
                             Span::styled(format!("{} ", indicator), Style::default().fg(color)),
+                            Span::styled(format!("{} ", icon.icon), Style::default().fg(icon.color)),
                             Span::raw(first_chunk.to_string()),
                         ]).style(select_style));
 
@@ -528,8 +532,10 @@ impl<'a> CommitDetailWidget<'a> {
 
             let path_str = file.path.to_string_lossy().to_string();
 
+            let icon = super::file_icons::file_icon(&file.path);
             let mut spans = vec![
                 Span::styled(format!("{} ", indicator), Style::default().fg(color)),
+                Span::styled(format!("{} ", icon.icon), Style::default().fg(icon.color)),
                 Span::raw(path_str),
             ];
 

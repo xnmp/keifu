@@ -5,6 +5,7 @@ pub mod commit_detail;
 pub mod commit_menu;
 pub mod dialog;
 pub mod file_diff_view;
+pub mod file_icons;
 pub mod graph_view;
 pub mod help_popup;
 pub mod search_dropdown;

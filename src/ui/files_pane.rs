@@ -115,8 +115,10 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                     let (indicator, color) = self.theme.file_change_style(&file.kind);
 
                     let path_str = file.path.to_string_lossy().to_string();
+                    let icon = super::file_icons::file_icon(&file.path);
                     let mut spans = vec![
                         Span::styled(format!(" {} ", indicator), Style::default().fg(color)),
+                        Span::styled(format!("{} ", icon.icon), Style::default().fg(icon.color)),
                         Span::raw(&path_str),
                     ];
 
