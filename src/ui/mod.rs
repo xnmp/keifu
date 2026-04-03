@@ -142,7 +142,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(
         GraphViewWidget::new(app, graph_area.width, &theme),
         graph_area,
-        &mut app.graph_list_state,
+        &mut app.graph_nav.graph_list_state,
     );
     frame.render_widget(CommitDetailWidget::new(app, detail_area, &theme), detail_area);
     frame.render_widget(StatusBar::new(app, &theme), status_area);
@@ -202,7 +202,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 SearchDropdown::new(
                     input,
                     results,
-                    &app.branch_positions,
+                    &app.graph_nav.branch_positions,
                     app.search_selection(),
                     &theme,
                 ),
@@ -264,8 +264,8 @@ fn render_branch_info_popup(frame: &mut Frame, app: &App, graph_area: Rect, them
     let popup_width = (max_branch_len + 6).min(50) as u16;
 
     // Calculate selected row's screen position (add 1 for border)
-    let selected_idx = app.graph_list_state.selected().unwrap_or(0);
-    let offset = app.graph_list_state.offset();
+    let selected_idx = app.graph_nav.graph_list_state.selected().unwrap_or(0);
+    let offset = app.graph_nav.graph_list_state.offset();
     let selected_screen_y = graph_area.y + 1 + selected_idx.saturating_sub(offset) as u16;
 
     // Position popup at right side of graph area

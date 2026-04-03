@@ -7,6 +7,7 @@ pub(crate) mod diff_cache;
 pub mod event;
 pub mod files_pane_state;
 pub mod git;
+pub mod graph_nav;
 pub mod graph;
 pub mod keybindings;
 pub mod search;

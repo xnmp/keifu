@@ -301,7 +301,7 @@ impl<'a> CommitDetailWidget<'a> {
     /// Build the commit detail lines. Returns `(lines, raw_editor_line_offset)`.
     /// The offset is `Some` when an editor section is present (uncommitted or amend).
     fn build_commit_lines_with_offset(app: &App, theme: &Theme) -> (Vec<Line<'a>>, Option<u16>) {
-        let Some(selected) = app.graph_list_state.selected() else {
+        let Some(selected) = app.graph_nav.graph_list_state.selected() else {
             return (vec![Line::from(Span::styled(
                 "Select a commit",
                 Style::default().fg(theme.text_muted),

@@ -62,16 +62,16 @@ fn move_selection_down_then_up() {
     let mut app = make_app(repo);
 
     // Starts at top (index 0)
-    assert_eq!(app.graph_list_state.selected(), Some(0));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
 
     app.handle_action(Action::MoveDown).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(1));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(1));
 
     app.handle_action(Action::MoveDown).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(2));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(2));
 
     app.handle_action(Action::MoveUp).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(1));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(1));
 }
 
 #[test]
@@ -83,13 +83,13 @@ fn move_selection_clamps_at_boundaries() {
 
     // Move up past top
     app.handle_action(Action::MoveUp).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(0));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
 
     // Go to bottom, then try to go past
     app.handle_action(Action::GoToBottom).unwrap();
-    let bottom = app.graph_list_state.selected().unwrap();
+    let bottom = app.graph_nav.graph_list_state.selected().unwrap();
     app.handle_action(Action::MoveDown).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(bottom));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(bottom));
 }
 
 #[test]
@@ -101,10 +101,10 @@ fn page_up_down_moves_by_10() {
     let mut app = make_app(repo);
 
     app.handle_action(Action::PageDown).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(10));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(10));
 
     app.handle_action(Action::PageUp).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(0));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
 }
 
 #[test]
@@ -117,10 +117,10 @@ fn go_to_top_and_bottom() {
     let max_idx = app.graph_layout.nodes.len() - 1;
 
     app.handle_action(Action::GoToBottom).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(max_idx));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(max_idx));
 
     app.handle_action(Action::GoToTop).unwrap();
-    assert_eq!(app.graph_list_state.selected(), Some(0));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
 }
 
 #[test]
@@ -149,13 +149,13 @@ fn next_prev_branch_traverses_branches() {
     let mut app = make_app(repo);
 
     // Should have at least one branch position
-    assert!(!app.branch_positions.is_empty());
+    assert!(!app.graph_nav.branch_positions.is_empty());
 
-    let initial_pos = app.selected_branch_position;
+    let initial_pos = app.graph_nav.selected_branch_position;
     app.handle_action(Action::NextBranch).unwrap();
     // If there's more than one branch, position should change
-    if app.branch_positions.len() > 1 {
-        assert_ne!(app.selected_branch_position, initial_pos);
+    if app.graph_nav.branch_positions.len() > 1 {
+        assert_ne!(app.graph_nav.selected_branch_position, initial_pos);
     }
 }
 
@@ -174,8 +174,8 @@ fn jump_to_head_selects_head_branch() {
     app.handle_action(Action::JumpToHead).unwrap();
 
     // Should be at a node with the HEAD branch
-    if let Some(pos) = app.selected_branch_position {
-        let (_, name) = &app.branch_positions[pos];
+    if let Some(pos) = app.graph_nav.selected_branch_position {
+        let (_, name) = &app.graph_nav.branch_positions[pos];
         assert_eq!(name, "main");
     }
 }
@@ -553,12 +553,12 @@ fn refresh_preserves_selection_by_oid() {
 
     // Select the second commit (index 1, since newest is 0)
     app.handle_action(Action::MoveDown).unwrap();
-    let selected_before = app.graph_list_state.selected();
+    let selected_before = app.graph_nav.graph_list_state.selected();
 
     app.refresh(false).unwrap();
 
     // Selection should be preserved (same commit still at same position)
-    assert_eq!(app.graph_list_state.selected(), selected_before);
+    assert_eq!(app.graph_nav.graph_list_state.selected(), selected_before);
 }
 
 #[test]

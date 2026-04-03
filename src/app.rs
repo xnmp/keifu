@@ -5,7 +5,6 @@ use std::thread;
 use std::time::Instant;
 
 use anyhow::Result;
-use ratatui::widgets::ListState;
 
 use git2::Oid;
 
@@ -14,6 +13,7 @@ use crate::{
     config::{Config, UiState},
     diff_cache::{DiffCache, DiffTarget},
     files_pane_state::{FilesPaneState, section_of},
+    graph_nav::GraphNav,
     git::{
         build_graph,
         graph::GraphLayout,
@@ -63,29 +63,6 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
     anyhow::bail!("No clipboard tool found (install xclip, xsel, or wl-copy)")
 }
 
-/// Filter branch names to exclude remote branches that have matching local branches
-/// Returns branches in order: local branches first, then remote-only branches
-fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
-    use std::collections::HashSet;
-
-    let local_branches: HashSet<&str> = branch_names
-        .iter()
-        .filter(|n| !n.starts_with("origin/"))
-        .map(|s| s.as_str())
-        .collect();
-
-    branch_names
-        .iter()
-        .filter(|name| {
-            if let Some(local_name) = name.strip_prefix("origin/") {
-                !local_branches.contains(local_name)
-            } else {
-                true
-            }
-        })
-        .map(|s| s.as_str())
-        .collect()
-}
 
 /// Which panel is focused
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,7 +257,7 @@ pub struct App {
     pub graph_layout: GraphLayout,
 
     // UI state
-    pub graph_list_state: ListState,
+    pub graph_nav: GraphNav,
     pub focused_panel: FocusedPanel,
     /// Files pane subsystem state
     pub files_pane: FilesPaneState,
@@ -295,12 +272,6 @@ pub struct App {
     pub commit_editor_line_offset: u16,
     /// Visible rows in the commit detail pane (updated during render)
     pub commit_detail_visible_rows: u16,
-
-    // Branch selection state
-    /// List of (node_index, branch_name) for all branches
-    pub branch_positions: Vec<(usize, String)>,
-    /// Currently selected branch position index
-    pub selected_branch_position: Option<usize>,
 
     // Search state
     search_state: SearchState,
@@ -375,19 +346,15 @@ impl App {
         let head_commit_oid = repo.head_oid();
         let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
 
-        let mut graph_list_state = ListState::default();
-        graph_list_state.select(Some(0));
-
-        let branch_positions = Self::build_branch_positions(&graph_layout);
+        let mut graph_nav = GraphNav::new();
+        graph_nav.rebuild_branch_positions(&graph_layout);
         let has_uncommitted_node = graph_layout
             .nodes
             .first()
             .is_some_and(|node| node.is_uncommitted);
-        let selected_branch_position = if has_uncommitted_node || branch_positions.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
+        if !has_uncommitted_node && !graph_nav.branch_positions.is_empty() {
+            graph_nav.selected_branch_position = Some(0);
+        }
 
         Ok(Self {
             mode: AppMode::Normal,
@@ -398,7 +365,7 @@ impl App {
             commits,
             branches,
             graph_layout,
-            graph_list_state,
+            graph_nav,
             focused_panel: FocusedPanel::Graph,
             files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -409,8 +376,6 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            branch_positions,
-            selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
             diff_cache: DiffCache::new(),
@@ -453,24 +418,15 @@ impl App {
         let head_commit_oid = repo.head_oid();
         let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
 
-        let mut graph_list_state = ListState::default();
-        graph_list_state.select(Some(0));
-
-        // Build branch positions
-        let branch_positions = Self::build_branch_positions(&graph_layout);
-
-        // Determine initial branch selection
-        // If uncommitted node exists (at index 0), don't select any branch
-        // Otherwise, select the first branch if exists
+        let mut graph_nav = GraphNav::new();
+        graph_nav.rebuild_branch_positions(&graph_layout);
         let has_uncommitted_node = graph_layout
             .nodes
             .first()
             .is_some_and(|node| node.is_uncommitted);
-        let selected_branch_position = if has_uncommitted_node || branch_positions.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
+        if !has_uncommitted_node && !graph_nav.branch_positions.is_empty() {
+            graph_nav.selected_branch_position = Some(0);
+        }
 
         Ok(Self {
             mode: AppMode::Normal,
@@ -481,7 +437,7 @@ impl App {
             commits,
             branches,
             graph_layout,
-            graph_list_state,
+            graph_nav,
             focused_panel: if ui_state.side_panel_layout {
                 FocusedPanel::Files
             } else {
@@ -496,8 +452,6 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            branch_positions,
-            selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
             diff_cache: DiffCache::new(),
@@ -587,7 +541,7 @@ impl App {
 
     fn current_diff_target(&self) -> Option<DiffTarget> {
         let node = self
-            .graph_list_state
+            .graph_nav.graph_list_state
             .selected()
             .and_then(|idx| self.graph_layout.nodes.get(idx))?;
 
@@ -611,20 +565,20 @@ impl App {
     pub fn refresh(&mut self, force: bool) -> Result<()> {
         // Save the current selection state for restoration
         let was_uncommitted_selected = self
-            .graph_list_state
+            .graph_nav.graph_list_state
             .selected()
             .and_then(|idx| self.graph_layout.nodes.get(idx))
             .is_some_and(|node| node.is_uncommitted);
         let prev_selected_commit_oid = self
-            .graph_list_state
+            .graph_nav.graph_list_state
             .selected()
             .and_then(|idx| self.graph_layout.nodes.get(idx))
             .and_then(|node| node.commit.as_ref())
             .map(|commit| commit.oid);
 
         let prev_branch_name = self
-            .selected_branch_position
-            .and_then(|pos| self.branch_positions.get(pos))
+            .graph_nav.selected_branch_position
+            .and_then(|pos| self.graph_nav.branch_positions.get(pos))
             .map(|(_, name)| name.clone());
 
         // Get working tree status once and reuse
@@ -656,7 +610,7 @@ impl App {
         self.head_detached = self.repo.is_head_detached();
 
         // Rebuild branch positions
-        self.branch_positions = Self::build_branch_positions(&self.graph_layout);
+        self.graph_nav.rebuild_branch_positions(&self.graph_layout);
 
         // Restore selection state
         // Check if uncommitted node still exists in the new graph
@@ -668,17 +622,17 @@ impl App {
 
         if was_uncommitted_selected && has_uncommitted_node {
             // Restore uncommitted node selection
-            self.graph_list_state.select(Some(0));
-            self.selected_branch_position = None;
+            self.graph_nav.graph_list_state.select(Some(0));
+            self.graph_nav.selected_branch_position = None;
         } else {
             // Restore branch selection if the branch still exists
-            self.selected_branch_position = prev_branch_name
-                .and_then(|name| self.branch_positions.iter().position(|(_, n)| n == &name));
+            self.graph_nav.selected_branch_position = prev_branch_name
+                .and_then(|name| self.graph_nav.branch_positions.iter().position(|(_, n)| n == &name));
 
             // Sync node selection with branch selection
-            if let Some(pos) = self.selected_branch_position {
-                if let Some((node_idx, _)) = self.branch_positions.get(pos) {
-                    self.graph_list_state.select(Some(*node_idx));
+            if let Some(pos) = self.graph_nav.selected_branch_position {
+                if let Some((node_idx, _)) = self.graph_nav.branch_positions.get(pos) {
+                    self.graph_nav.graph_list_state.select(Some(*node_idx));
                 }
             } else if let Some(oid) = prev_selected_commit_oid {
                 let node_idx =
@@ -686,12 +640,12 @@ impl App {
                         node.commit.as_ref().is_some_and(|commit| commit.oid == oid)
                     });
                 if let Some(idx) = node_idx {
-                    self.graph_list_state.select(Some(idx));
-                } else if let Some(prev) = self.graph_list_state.selected() {
+                    self.graph_nav.graph_list_state.select(Some(idx));
+                } else if let Some(prev) = self.graph_nav.graph_list_state.selected() {
                     // OID pushed out of range — keep cursor at the nearest
                     // valid row instead of clearing the selection.
                     let max = self.graph_layout.nodes.len().saturating_sub(1);
-                    self.graph_list_state.select(Some(prev.min(max)));
+                    self.graph_nav.graph_list_state.select(Some(prev.min(max)));
                 }
             }
         }
@@ -699,14 +653,14 @@ impl App {
         // If no branch is selected but the selected node has branches, pick the first one.
         // This happens after committing from the uncommitted node — the selection lands
         // on the new HEAD commit but selected_branch_position was never set.
-        if self.selected_branch_position.is_none() {
-            if let Some(selected_idx) = self.graph_list_state.selected() {
+        if self.graph_nav.selected_branch_position.is_none() {
+            if let Some(selected_idx) = self.graph_nav.graph_list_state.selected() {
                 if let Some(pos) = self
-                    .branch_positions
+                    .graph_nav.branch_positions
                     .iter()
                     .position(|(node_idx, _)| *node_idx == selected_idx)
                 {
-                    self.selected_branch_position = Some(pos);
+                    self.graph_nav.selected_branch_position = Some(pos);
                 }
             }
         }
@@ -717,7 +671,7 @@ impl App {
         } else {
             // Auto-refresh: smart cache - only clear if selection changed
             let selected_oid = self
-                .graph_list_state
+                .graph_nav.graph_list_state
                 .selected()
                 .and_then(|idx| self.graph_layout.nodes.get(idx))
                 .and_then(|n| n.commit.as_ref())
@@ -739,9 +693,9 @@ impl App {
 
         // Clamp the selection
         let max_commit = self.graph_layout.nodes.len().saturating_sub(1);
-        if let Some(selected) = self.graph_list_state.selected() {
+        if let Some(selected) = self.graph_nav.graph_list_state.selected() {
             if selected > max_commit {
-                self.graph_list_state.select(Some(max_commit));
+                self.graph_nav.graph_list_state.select(Some(max_commit));
             }
         }
 
@@ -750,7 +704,7 @@ impl App {
 
     /// Update fuzzy search results for the given query
     fn update_fuzzy_search(&mut self, query: &str) {
-        self.search_state.fuzzy_matches = fuzzy_search_branches(query, &self.branch_positions);
+        self.search_state.fuzzy_matches = fuzzy_search_branches(query, &self.graph_nav.branch_positions);
         self.search_state.clamp_selection();
     }
 
@@ -760,25 +714,25 @@ impl App {
             return;
         };
         let branch_idx = result.branch_idx;
-        let Some((node_idx, _)) = self.branch_positions.get(branch_idx) else {
+        let Some((node_idx, _)) = self.graph_nav.branch_positions.get(branch_idx) else {
             return;
         };
 
-        self.selected_branch_position = Some(branch_idx);
-        self.graph_list_state.select(Some(*node_idx));
+        self.graph_nav.selected_branch_position = Some(branch_idx);
+        self.graph_nav.graph_list_state.select(Some(*node_idx));
     }
 
     /// Save current position before starting search
     fn save_search_position(&mut self) {
-        self.search_state.original_position = self.selected_branch_position;
-        self.search_state.original_node = self.graph_list_state.selected();
+        self.search_state.original_position = self.graph_nav.selected_branch_position;
+        self.search_state.original_node = self.graph_nav.graph_list_state.selected();
     }
 
     /// Restore position saved before search (for cancel)
     fn restore_search_position(&mut self) {
-        self.selected_branch_position = self.search_state.original_position;
+        self.graph_nav.selected_branch_position = self.search_state.original_position;
         if let Some(node) = self.search_state.original_node {
-            self.graph_list_state.select(Some(node));
+            self.graph_nav.graph_list_state.select(Some(node));
         }
     }
 
@@ -803,25 +757,8 @@ impl App {
         )
     }
 
-    /// Jump to the currently checked out branch (HEAD)
     fn jump_to_head(&mut self) {
-        // Find the HEAD branch name
-        let Some(head_name) = &self.head_name else {
-            return;
-        };
-
-        // Find the branch position index that matches HEAD
-        let Some((branch_pos_idx, (node_idx, _))) = self
-            .branch_positions
-            .iter()
-            .enumerate()
-            .find(|(_, (_, name))| name == head_name)
-        else {
-            return;
-        };
-
-        self.selected_branch_position = Some(branch_pos_idx);
-        self.graph_list_state.select(Some(*node_idx));
+        self.graph_nav.jump_to_head(self.head_name.as_deref());
     }
 
     /// Check if async fetch has completed and process the result
@@ -1056,18 +993,11 @@ impl App {
     }
 
     pub fn is_uncommitted_selected(&self) -> bool {
-        self.graph_list_state
-            .selected()
-            .and_then(|idx| self.graph_layout.nodes.get(idx))
-            .is_some_and(|node| node.is_uncommitted)
+        self.graph_nav.is_uncommitted_selected(&self.graph_layout)
     }
 
-    /// Check if the currently selected node is the HEAD commit (not uncommitted).
     pub fn is_head_commit_selected(&self) -> bool {
-        self.graph_list_state
-            .selected()
-            .and_then(|idx| self.graph_layout.nodes.get(idx))
-            .is_some_and(|node| node.is_head && !node.is_uncommitted)
+        self.graph_nav.is_head_commit_selected(&self.graph_layout)
     }
 
     // ── Files pane delegation ──────────────────────────────────────
@@ -2647,172 +2577,56 @@ impl App {
         Ok(())
     }
 
-    /// Check if a node is a connector-only row (not a commit, not uncommitted)
-    fn is_connector_node(&self, idx: usize) -> bool {
-        self.graph_layout
-            .nodes
-            .get(idx)
-            .is_some_and(|n| n.commit.is_none() && !n.is_uncommitted)
-    }
+    // ── Graph navigation delegates ────────────────────────────────
 
     fn move_selection(&mut self, delta: i32) {
-        let max = self.graph_layout.nodes.len().saturating_sub(1);
-        let current = self.graph_list_state.selected().unwrap_or(0);
-        let mut new = (current as i32 + delta).clamp(0, max as i32) as usize;
-        // Skip connector rows in the direction of movement
-        let step: i32 = if delta > 0 { 1 } else { -1 };
-        while self.is_connector_node(new) && new > 0 && new < max {
-            new = (new as i32 + step).clamp(0, max as i32) as usize;
-        }
-        self.graph_list_state.select(Some(new));
-        self.sync_branch_selection_to_node(new);
+        self.graph_nav.move_selection(&self.graph_layout, delta);
     }
 
     fn select_first(&mut self) {
-        let mut idx = 0;
-        let max = self.graph_layout.nodes.len().saturating_sub(1);
-        while self.is_connector_node(idx) && idx < max {
-            idx += 1;
-        }
-        self.graph_list_state.select(Some(idx));
-        self.sync_branch_selection_to_node(idx);
+        self.graph_nav.select_first(&self.graph_layout);
     }
 
     fn select_last(&mut self) {
-        let mut idx = self.graph_layout.nodes.len().saturating_sub(1);
-        while self.is_connector_node(idx) && idx > 0 {
-            idx -= 1;
-        }
-        self.graph_list_state.select(Some(idx));
-        self.sync_branch_selection_to_node(idx);
+        self.graph_nav.select_last(&self.graph_layout);
     }
 
-    /// Sync branch selection to the first branch of the given node
-    fn sync_branch_selection_to_node(&mut self, node_idx: usize) {
-        self.selected_branch_position = self
-            .branch_positions
-            .iter()
-            .position(|(idx, _)| *idx == node_idx);
-    }
-
-    /// Move to the next branch (across all commits)
     fn move_to_next_branch(&mut self) {
-        if self.branch_positions.is_empty() {
-            return;
-        }
-
-        let next = match self.selected_branch_position {
-            Some(pos) => {
-                if pos + 1 < self.branch_positions.len() {
-                    pos + 1
-                } else {
-                    return; // Already at the last branch
-                }
-            }
-            None => 0, // No branch selected, select the first one
-        };
-
-        self.selected_branch_position = Some(next);
-        if let Some((node_idx, _)) = self.branch_positions.get(next) {
-            self.graph_list_state.select(Some(*node_idx));
-        }
+        self.graph_nav.move_to_next_branch();
     }
 
-    /// Move to the previous branch (across all commits)
     fn move_to_prev_branch(&mut self) {
-        if self.branch_positions.is_empty() {
-            return;
-        }
-
-        let prev = match self.selected_branch_position {
-            Some(pos) => {
-                if pos > 0 {
-                    pos - 1
-                } else {
-                    return; // Already at the first branch
-                }
-            }
-            None => self.branch_positions.len() - 1, // No branch selected, select the last one
-        };
-
-        self.selected_branch_position = Some(prev);
-        if let Some((node_idx, _)) = self.branch_positions.get(prev) {
-            self.graph_list_state.select(Some(*node_idx));
-        }
+        self.graph_nav.move_to_prev_branch();
     }
 
-    /// Move to an adjacent branch within the same commit
-    fn move_branch_within_node(&mut self, delta: isize) {
-        let Some(pos) = self.selected_branch_position else {
-            return;
-        };
-
-        let new_pos = (pos as isize + delta) as usize;
-        if new_pos >= self.branch_positions.len() {
-            return;
-        }
-
-        let Some((current_node, _)) = self.branch_positions.get(pos) else {
-            return;
-        };
-        let Some((target_node, _)) = self.branch_positions.get(new_pos) else {
-            return;
-        };
-
-        // Only move within the same commit
-        if current_node == target_node {
-            self.selected_branch_position = Some(new_pos);
-        }
-    }
-
-    /// Move to the left branch within the same commit
     fn move_branch_left(&mut self) {
-        self.move_branch_within_node(-1);
+        self.graph_nav.move_branch_left();
     }
 
-    /// Move to the right branch within the same commit
     fn move_branch_right(&mut self) {
-        self.move_branch_within_node(1);
+        self.graph_nav.move_branch_right();
     }
 
-    /// Get the currently selected branch
     fn selected_branch(&self) -> Option<&BranchInfo> {
-        let (_, branch_name) = self
-            .selected_branch_position
-            .and_then(|pos| self.branch_positions.get(pos))?;
-        self.branches.iter().find(|b| &b.name == branch_name)
+        self.graph_nav.selected_branch(&self.branches)
     }
 
-    /// Get the name of the currently selected branch
     pub fn selected_branch_name(&self) -> Option<&str> {
-        self.selected_branch_position
-            .and_then(|pos| self.branch_positions.get(pos))
-            .map(|(_, name)| name.as_str())
+        self.graph_nav.selected_branch_name()
     }
 
-    /// Returns all branch names for the currently selected node
     pub fn selected_node_branches(&self) -> Vec<&str> {
-        let Some(node_idx) = self.graph_list_state.selected() else {
-            return vec![];
-        };
-        self.branch_positions
-            .iter()
-            .filter(|(idx, _)| *idx == node_idx)
-            .map(|(_, name)| name.as_str())
-            .collect()
+        self.graph_nav.selected_node_branches()
     }
 
     fn selected_commit_node(&self) -> Option<&crate::git::graph::GraphNode> {
-        self.graph_list_state
-            .selected()
-            .and_then(|i| self.graph_layout.nodes.get(i))
+        self.graph_nav.selected_node(&self.graph_layout)
     }
 
     fn do_checkout(&mut self) -> Result<()> {
         if let Some(branch) = self.selected_branch() {
             let branch_name = branch.name.clone();
             if branch_name.starts_with("origin/") {
-                // For remote branches, create a local branch and check it out
                 checkout_remote_branch(self.repo.repo(), &branch_name)?;
             } else {
                 checkout_branch(self.repo.repo(), &branch_name)?;
@@ -2825,22 +2639,6 @@ impl App {
             }
         }
         Ok(())
-    }
-
-    /// Build a flat list of (node_index, branch_name) for all branches
-    /// Excludes remote branches that have a matching local branch (e.g., origin/main when main exists)
-    /// Order matches optimize_branch_display: local branches first, then remote-only branches
-    fn build_branch_positions(graph_layout: &GraphLayout) -> Vec<(usize, String)> {
-        graph_layout
-            .nodes
-            .iter()
-            .enumerate()
-            .flat_map(|(node_idx, node)| {
-                filter_remote_duplicates(&node.branch_names)
-                    .into_iter()
-                    .map(move |name| (node_idx, name.to_string()))
-            })
-            .collect()
     }
 }
 
@@ -2903,19 +2701,15 @@ mod tests {
         let head_commit_oid = repo.head_oid();
         let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
 
-        let mut graph_list_state = ListState::default();
-        graph_list_state.select(Some(0));
-
-        let branch_positions = App::build_branch_positions(&graph_layout);
+        let mut graph_nav = GraphNav::new();
+        graph_nav.rebuild_branch_positions(&graph_layout);
         let has_uncommitted_node = graph_layout
             .nodes
             .first()
             .is_some_and(|node| node.is_uncommitted);
-        let selected_branch_position = if has_uncommitted_node || branch_positions.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
+        if !has_uncommitted_node && !graph_nav.branch_positions.is_empty() {
+            graph_nav.selected_branch_position = Some(0);
+        }
 
         App {
             mode: AppMode::Normal,
@@ -2926,7 +2720,7 @@ mod tests {
             commits,
             branches,
             graph_layout,
-            graph_list_state,
+            graph_nav,
             focused_panel: FocusedPanel::Graph,
             files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -2937,8 +2731,6 @@ mod tests {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            branch_positions,
-            selected_branch_position,
             search_state: SearchState::default(),
             working_tree_status,
             diff_cache: DiffCache::new(),
@@ -2979,8 +2771,6 @@ mod tests {
         working_tree_status: Option<WorkingTreeStatus>,
     ) -> App {
         let (_tempdir, repo) = init_repo();
-        let mut graph_list_state = ListState::default();
-        graph_list_state.select(Some(0));
 
         let commits = node.commit.iter().cloned().collect();
 
@@ -2996,7 +2786,7 @@ mod tests {
                 nodes: vec![node],
                 max_lane: 0,
             },
-            graph_list_state,
+            graph_nav: GraphNav::new(),
             focused_panel: FocusedPanel::Graph,
             files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
@@ -3007,8 +2797,6 @@ mod tests {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
-            branch_positions: Vec::new(),
-            selected_branch_position: None,
             search_state: SearchState::default(),
             working_tree_status,
             diff_cache: {
@@ -3175,14 +2963,14 @@ mod tests {
                     .is_some_and(|commit| commit.oid == first_oid)
             })
             .unwrap();
-        app.graph_list_state.select(Some(first_node_idx));
-        app.sync_branch_selection_to_node(first_node_idx);
+        app.graph_nav.graph_list_state.select(Some(first_node_idx));
+        app.graph_nav.sync_branch_selection_to_node(first_node_idx);
 
         fs::write(tempdir.path().join("untracked.txt"), "hello\n").unwrap();
         app.refresh(false).unwrap();
 
         let selected_oid = app
-            .graph_list_state
+            .graph_nav.graph_list_state
             .selected()
             .and_then(|idx| app.graph_layout.nodes.get(idx))
             .and_then(|node| node.commit.as_ref())
@@ -3489,7 +3277,7 @@ mod tests {
         let mut app = make_app_from_repo(git_repo);
         app.repo_path = repo_path;
         // Select the uncommitted node (index 0)
-        app.graph_list_state.select(Some(0));
+        app.graph_nav.graph_list_state.select(Some(0));
         // Load quick diff so display items are populated
         app.diff_cache.set_quick_uncommitted(app.repo.repo());
         app.sync_file_list_cache();

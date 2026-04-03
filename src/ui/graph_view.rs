@@ -74,7 +74,7 @@ impl<'a> GraphViewWidget<'a> {
             .iter()
             .enumerate()
             .map(|(idx, node)| {
-                let is_selected = app.graph_list_state.selected() == Some(idx);
+                let is_selected = app.graph_nav.graph_list_state.selected() == Some(idx);
                 let line = render_graph_line(
                     node,
                     max_lane,
