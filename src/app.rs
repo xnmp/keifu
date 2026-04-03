@@ -1208,36 +1208,27 @@ impl App {
             }
             Action::OpenWithDefault => {
                 if let Some(file) = self.selected_file() {
-                    use std::process::{Command, Stdio};
                     let path = file.path.clone();
-                    let full_path = std::path::Path::new(&self.repo_path).join(&path);
-                    let result = if cfg!(target_os = "macos") {
-                        Command::new("open")
-                            .arg(&full_path)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .stdin(Stdio::null())
-                            .spawn()
-                    } else if cfg!(target_os = "windows") {
-                        Command::new("cmd")
-                            .args(["/C", "start", ""])
-                            .arg(&full_path)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .stdin(Stdio::null())
-                            .spawn()
+                    let full_path = if self.is_uncommitted_selected() {
+                        // Working tree file — open directly
+                        std::path::Path::new(&self.repo_path).join(&path)
+                    } else if let Some(node) = self.selected_commit_node() {
+                        // Committed file — extract blob to temp file
+                        if let Some(commit) = &node.commit {
+                            match self.extract_blob_to_temp(commit.oid, &path) {
+                                Ok(tmp) => tmp,
+                                Err(e) => {
+                                    self.set_message(format!("Cannot extract file: {e}"));
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+                            return Ok(());
+                        }
                     } else {
-                        Command::new("xdg-open")
-                            .arg(&full_path)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .stdin(Stdio::null())
-                            .spawn()
+                        std::path::Path::new(&self.repo_path).join(&path)
                     };
-                    match result {
-                        Ok(_) => self.set_message(format!("Opening {}", path.display())),
-                        Err(e) => self.set_message(format!("Cannot open file: {e}")),
-                    }
+                    self.open_with_default(&full_path, &path);
                 }
             }
             Action::ToggleStage => {
@@ -2252,6 +2243,65 @@ impl App {
                 total_deletions: 0,
             })
         })
+    }
+
+    /// Extract a file blob from a commit to a temp file, preserving the extension.
+    fn extract_blob_to_temp(
+        &self,
+        commit_oid: git2::Oid,
+        file_path: &std::path::Path,
+    ) -> Result<std::path::PathBuf> {
+        let commit = self.repo.repo().find_commit(commit_oid)?;
+        let tree = commit.tree()?;
+        let entry = tree.get_path(file_path)?;
+        let blob = self.repo.repo().find_blob(entry.id())?;
+
+        let ext = file_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let stem = file_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+
+        let tmp_dir = std::env::temp_dir().join("keifu");
+        std::fs::create_dir_all(&tmp_dir)?;
+        let tmp_path = tmp_dir.join(format!("{}{}", stem, ext));
+        std::fs::write(&tmp_path, blob.content())?;
+        Ok(tmp_path)
+    }
+
+    /// Open a file with the default system application.
+    fn open_with_default(&mut self, full_path: &std::path::Path, display_path: &std::path::Path) {
+        use std::process::{Command, Stdio};
+        let result = if cfg!(target_os = "macos") {
+            Command::new("open")
+                .arg(full_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .stdin(Stdio::null())
+                .spawn()
+        } else if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .args(["/C", "start", ""])
+                .arg(full_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .stdin(Stdio::null())
+                .spawn()
+        } else {
+            Command::new("xdg-open")
+                .arg(full_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .stdin(Stdio::null())
+                .spawn()
+        };
+        match result {
+            Ok(_) => self.set_message(format!("Opening {}", display_path.display())),
+            Err(e) => self.set_message(format!("Cannot open file: {e}")),
+        }
     }
 
     /// Sync the file_list held by FileDiff with the latest
