@@ -611,7 +611,7 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .title(self.files_title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(files_border))
-            .border_type(self.theme.border_type(self.is_focused));
+            .border_type(self.theme.border_type(self.is_files_focused));
 
         // Scroll file list so selected file stays visible.
         let visible_height = chunks[0].height.saturating_sub(2);
