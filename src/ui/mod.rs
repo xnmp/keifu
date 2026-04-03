@@ -6,6 +6,7 @@ pub mod commit_menu;
 pub mod dialog;
 pub mod file_diff_view;
 pub mod file_icons;
+pub mod files_pane;
 pub mod graph_view;
 pub mod help_popup;
 pub mod search_dropdown;
@@ -28,6 +29,7 @@ use self::{
     commit_menu::CommitMenuWidget,
     dialog::{BranchInfoPopup, ConfirmDialog, InputDialog},
     file_diff_view::FileDiffViewWidget,
+    files_pane::{FilesPaneState, FilesPaneWidget},
     graph_view::GraphViewWidget,
     help_popup::HelpPopup,
     search_dropdown::{calculate_dropdown_height, SearchDropdown},
@@ -136,8 +138,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (v[0], v[1])
     };
 
+    // Split detail area into files pane + commit detail
+    let detail_direction = if detail_area.width <= 56 {
+        Direction::Vertical
+    } else {
+        Direction::Horizontal
+    };
+    let detail_chunks = Layout::default()
+        .direction(detail_direction)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(detail_area);
+    let files_area = detail_chunks[0];
+    let commit_area = detail_chunks[1];
+
     // Pre-render pass: compute layout metrics that update App scroll state
-    compute_commit_detail_layout(app, detail_area);
+    compute_commit_detail_layout(app, commit_area);
 
     // Render widgets
     frame.render_stateful_widget(
@@ -145,34 +160,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         graph_area,
         &mut app.graph_nav.graph_list_state,
     );
-    frame.render_widget(CommitDetailWidget::new(app, detail_area, &theme), detail_area);
+    frame.render_stateful_widget(
+        FilesPaneWidget::new(app, &theme),
+        files_area,
+        &mut FilesPaneState {
+            selected: Some(app.file_selected_index()),
+            offset: 0,
+        },
+    );
+    frame.render_widget(CommitDetailWidget::new(app, commit_area, &theme), commit_area);
     frame.render_widget(StatusBar::new(app, &theme), status_area);
 
     // Show cursor when editing commit message
     if app.editing_commit_message && app.focused_panel == crate::app::FocusedPanel::CommitDetail {
         let (cursor_row, cursor_col) = app.commit_editor.cursor_position();
-        // Calculate cursor position within the commit detail panel
-        // The detail area is split 50/50; commit detail is on the RIGHT (chunks[1])
-        let direction = if detail_area.width <= 56 {
-            Direction::Vertical
-        } else {
-            Direction::Horizontal
-        };
-        let chunks = Layout::default()
-            .direction(direction)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(detail_area);
-        let commit_inner_x = chunks[1].x + 1; // +1 for border
-        let commit_inner_y = chunks[1].y + 1; // +1 for border
-        // Use the tracked editor line offset and account for scroll
+        let commit_inner_x = commit_area.x + 1;
+        let commit_inner_y = commit_area.y + 1;
         let editor_start_line = app.commit_editor_line_offset;
         let absolute_row = editor_start_line + cursor_row as u16;
         let cursor_x = commit_inner_x + cursor_col as u16;
         let cursor_y =
             commit_inner_y + absolute_row.saturating_sub(app.commit_detail_scroll);
-        if cursor_y < chunks[1].y + chunks[1].height - 1
+        if cursor_y < commit_area.y + commit_area.height - 1
             && cursor_y >= commit_inner_y
-            && cursor_x < chunks[1].x + chunks[1].width - 1
+            && cursor_x < commit_area.x + commit_area.width - 1
         {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
