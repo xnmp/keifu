@@ -1,7 +1,5 @@
 //! Application state management
 
-use std::sync::mpsc::{self, Receiver};
-use std::thread;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -14,13 +12,14 @@ use crate::{
     diff_cache::{DiffCache, DiffTarget},
     files_pane_state::{FilesPaneState, section_of},
     graph_nav::GraphNav,
+    network::NetworkManager,
     git::{
         build_graph,
         graph::GraphLayout,
         operations::{
             add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
-            delete_branch, fetch_origin, get_last_commit_message, merge_branch, push_to_origin,
+            delete_branch, get_last_commit_message, merge_branch,
             rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
             unstage_file, ResetMode,
         },
@@ -294,28 +293,20 @@ pub struct App {
     message: Option<String>,
     message_time: Option<std::time::Instant>,
 
-    // Async fetch
-    fetch_receiver: Option<Receiver<Result<(), String>>>,
-    /// Whether to suppress error dialogs for fetch failures (for auto-fetch)
-    fetch_silent: bool,
-
-    // Async push
-    push_receiver: Option<Receiver<Result<(), String>>>,
+    // Network operations (fetch/push/auto-refresh)
+    network: NetworkManager,
 
     // Undo
     last_undoable_op: Option<UndoableOperation>,
 
     // Layout
-    /// When true, detail pane is to the left of the graph instead of below.
     pub side_panel_layout: bool,
 
     // Debug mode
     pub debug_keys: bool,
 
-    // Auto-refresh state
+    // Config
     config: Config,
-    last_refresh_time: Instant,
-    last_fetch_time: Instant,
 }
 
 impl App {
@@ -385,15 +376,11 @@ impl App {
             diff_viewport_width: 80,
             message: initial_message,
             message_time: initial_message_time,
-            fetch_receiver: None,
-            fetch_silent: false,
-            push_receiver: None,
+            network: NetworkManager::new(),
             last_undoable_op: None,
             side_panel_layout: false,
             debug_keys: false,
             config,
-            last_refresh_time: now,
-            last_fetch_time: now,
         })
     }
 
@@ -461,15 +448,11 @@ impl App {
             diff_viewport_width: 80,
             message: initial_message,
             message_time: initial_message_time,
-            fetch_receiver: None,
-            fetch_silent: false,
-            push_receiver: None,
+            network: NetworkManager::new(),
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             debug_keys: false,
             config,
-            last_refresh_time: now,
-            last_fetch_time: now,
         })
     }
 
@@ -761,38 +744,23 @@ impl App {
         self.graph_nav.jump_to_head(self.head_name.as_deref());
     }
 
-    /// Check if async fetch has completed and process the result
     pub fn update_fetch_status(&mut self) {
-        let Some(rx) = &self.fetch_receiver else {
+        let Some(result) = self.network.poll_fetch() else {
             return;
         };
-        let Ok(fetch_result) = rx.try_recv() else {
-            return;
-        };
-
-        let silent = self.fetch_silent;
-        self.fetch_receiver = None;
-        self.fetch_silent = false;
-
-        match fetch_result {
+        match result {
             Ok(()) => {
-                self.reset_timers();
-                if matches!(
-                    self.mode,
-                    AppMode::FileDiff { .. }
-                ) {
+                self.network.reset_timers();
+                if matches!(self.mode, AppMode::FileDiff { .. }) {
                     self.pending_refresh = true;
                 } else {
-                    // Snapshot state before refresh to detect changes
                     let prev_head = self.repo.head_oid();
                     let prev_branch_count = self.branches.len();
                     match self.refresh(true) {
                         Ok(()) => {
                             let new_head = self.repo.head_oid();
                             let new_branch_count = self.branches.len();
-                            if prev_head != new_head
-                                || prev_branch_count != new_branch_count
-                            {
+                            if prev_head != new_head || prev_branch_count != new_branch_count {
                                 self.set_message("Fetched from origin");
                             }
                         }
@@ -800,106 +768,53 @@ impl App {
                     }
                 }
             }
-            Err(e) if !silent => self.show_error(e),
-            Err(_) => {} // Silent mode: suppress error dialog for auto-fetch
+            Err(e) => self.show_error(e),
         }
     }
 
-    /// Check if fetch is currently in progress
     pub fn is_fetching(&self) -> bool {
-        self.fetch_receiver.is_some()
+        self.network.is_fetching()
     }
 
-    /// Check if push is currently in progress
     pub fn is_pushing(&self) -> bool {
-        self.push_receiver.is_some()
+        self.network.is_pushing()
     }
 
-    /// Check if any async network operation is in progress
     pub fn is_network_busy(&self) -> bool {
-        self.is_fetching() || self.is_pushing()
+        self.network.is_busy()
     }
 
-    /// Check and perform auto-refresh if interval has elapsed
     pub fn check_auto_refresh(&mut self) {
-        if self.is_fetching() {
+        if matches!(self.mode, AppMode::FileDiff { .. }) {
             return;
         }
-        if matches!(
-            self.mode,
-            AppMode::FileDiff { .. }
-        ) {
-            return;
-        }
-
-        let now = Instant::now();
-        let refresh_config = &self.config.refresh;
-
-        // Auto-fetch (check first as it includes refresh)
-        if refresh_config.auto_fetch
-            && now.duration_since(self.last_fetch_time).as_secs() >= refresh_config.fetch_interval
-        {
-            self.start_fetch(false, true); // silent=true for auto-fetch
-            return;
-        }
-
-        // Auto-refresh
-        if refresh_config.auto_refresh
-            && now.duration_since(self.last_refresh_time).as_secs()
-                >= refresh_config.refresh_interval
-        {
+        let events = self.network.check_auto_timers(&self.config.refresh);
+        if events.should_auto_fetch {
+            self.start_fetch(false, true);
+        } else if events.should_auto_refresh {
             if let Err(e) = self.refresh(false) {
                 self.set_message(format!("Auto-refresh failed: {e}"));
             }
-            self.last_refresh_time = now;
+            self.network.mark_refreshed();
         }
     }
 
-    /// Start fetch in background
-    /// If `show_message` is true, displays "Fetching from origin..."
-    /// If `silent` is true, errors will not show a dialog (for auto-fetch)
     fn start_fetch(&mut self, show_message: bool, silent: bool) {
-        let (tx, rx) = mpsc::channel();
-        let repo_path = self.repo_path.clone();
-
-        thread::spawn(move || {
-            let result = fetch_origin(&repo_path).map_err(|e| e.to_string());
-            let _ = tx.send(result);
-        });
-
-        self.fetch_receiver = Some(rx);
-        self.fetch_silent = silent;
-        if show_message {
-            self.set_message("Fetching from origin...");
+        if let Some(msg) = self.network.start_fetch(&self.repo_path, show_message, silent) {
+            self.set_message(msg);
         }
     }
 
-    /// Start push in background
     fn start_push(&mut self) {
-        let (tx, rx) = mpsc::channel();
-        let repo_path = self.repo_path.clone();
-
-        thread::spawn(move || {
-            let result = push_to_origin(&repo_path).map_err(|e| e.to_string());
-            let _ = tx.send(result);
-        });
-
-        self.push_receiver = Some(rx);
-        self.set_message("Pushing to origin...");
+        let msg = self.network.start_push(&self.repo_path);
+        self.set_message(msg);
     }
 
-    /// Check if async push has completed and process the result
     pub fn update_push_status(&mut self) {
-        let Some(rx) = &self.push_receiver else {
+        let Some(result) = self.network.poll_push() else {
             return;
         };
-        let Ok(push_result) = rx.try_recv() else {
-            return;
-        };
-
-        self.push_receiver = None;
-
-        match push_result {
+        match result {
             Ok(()) => {
                 self.set_message("Pushed to origin");
                 if let Err(e) = self.refresh(true) {
@@ -910,11 +825,8 @@ impl App {
         }
     }
 
-    /// Reset both timers (call after manual refresh/fetch)
     fn reset_timers(&mut self) {
-        let now = Instant::now();
-        self.last_refresh_time = now;
-        self.last_fetch_time = now;
+        self.network.reset_timers();
     }
 
     /// Set a status message (will auto-clear after a few seconds)
@@ -2651,6 +2563,8 @@ mod tests {
     use git2::{Oid, Repository, Signature};
     use tempfile::TempDir;
 
+    use std::sync::mpsc;
+
     use super::*;
     use crate::diff_cache::{DiffCache, DiffResult, DIFF_LOAD_DEBOUNCE};
     use crate::files_pane_state::FileSelection;
@@ -2740,15 +2654,11 @@ mod tests {
             diff_viewport_width: 80,
             message: initial_message,
             message_time: initial_message_time,
-            fetch_receiver: None,
-            fetch_silent: false,
-            push_receiver: None,
+            network: NetworkManager::new(),
             last_undoable_op: None,
             side_panel_layout: false,
             debug_keys: false,
             config: Config::default(),
-            last_refresh_time: now,
-            last_fetch_time: now,
         }
     }
 
@@ -2811,15 +2721,11 @@ mod tests {
             diff_viewport_width: 80,
             message: None,
             message_time: None,
-            fetch_receiver: None,
-            fetch_silent: false,
-            push_receiver: None,
+            network: NetworkManager::new(),
             last_undoable_op: None,
             side_panel_layout: false,
             debug_keys: false,
             config: Config::default(),
-            last_refresh_time: Instant::now(),
-            last_fetch_time: Instant::now(),
         }
     }
 

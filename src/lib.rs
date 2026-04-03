@@ -8,6 +8,7 @@ pub mod event;
 pub mod files_pane_state;
 pub mod git;
 pub mod graph_nav;
+pub(crate) mod network;
 pub mod graph;
 pub mod keybindings;
 pub mod search;
