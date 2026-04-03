@@ -894,7 +894,14 @@ impl App {
     pub fn theme(&self) -> crate::ui::theme::Theme {
         match self.config.ui.theme.as_str() {
             "light" => crate::ui::theme::Theme::light(),
-            _ => crate::ui::theme::Theme::dark(),
+            "dark" => crate::ui::theme::Theme::dark(),
+            _ => {
+                // Auto-detect from terminal background
+                match terminal_light::luma() {
+                    Ok(luma) if luma > 0.5 => crate::ui::theme::Theme::light(),
+                    _ => crate::ui::theme::Theme::dark(),
+                }
+            }
         }
     }
 

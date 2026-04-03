@@ -12,7 +12,6 @@ use unicode_width::UnicodeWidthChar;
 use crate::{
     app::App,
     git::graph::{CellType, GraphNode},
-    graph::colors::get_color_by_index,
 };
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
@@ -133,7 +132,7 @@ fn optimize_branch_display(
     let base_color = if is_head && !is_main_branch {
         theme.branch_head
     } else {
-        get_color_by_index(color_index)
+        theme.lane_color(color_index)
     };
 
     // Helper to create style based on selection state
@@ -336,7 +335,7 @@ fn render_graph_line<'a>(
     for cell in &node.cells {
         let (ch, color) = match cell {
             CellType::Empty => (' ', Color::Reset),
-            CellType::Pipe(color_idx) => ('│', get_color_by_index(*color_idx)),
+            CellType::Pipe(color_idx) => ('│', theme.lane_color(*color_idx)),
             CellType::Commit(color_idx) => {
                 // HEAD uses a double circle, others use a filled circle
                 let ch = if node.is_head { '◉' } else { '●' };
@@ -345,22 +344,22 @@ fn render_graph_line<'a>(
                 let color = if node.is_head && !is_main {
                     theme.branch_head
                 } else {
-                    get_color_by_index(*color_idx)
+                    theme.lane_color(*color_idx)
                 };
                 (ch, color)
             }
-            CellType::BranchRight(color_idx) => ('╭', get_color_by_index(*color_idx)),
-            CellType::BranchLeft(color_idx) => ('╮', get_color_by_index(*color_idx)),
-            CellType::MergeRight(color_idx) => ('╰', get_color_by_index(*color_idx)),
-            CellType::MergeLeft(color_idx) => ('╯', get_color_by_index(*color_idx)),
-            CellType::Horizontal(color_idx) => ('─', get_color_by_index(*color_idx)),
+            CellType::BranchRight(color_idx) => ('╭', theme.lane_color(*color_idx)),
+            CellType::BranchLeft(color_idx) => ('╮', theme.lane_color(*color_idx)),
+            CellType::MergeRight(color_idx) => ('╰', theme.lane_color(*color_idx)),
+            CellType::MergeLeft(color_idx) => ('╯', theme.lane_color(*color_idx)),
+            CellType::Horizontal(color_idx) => ('─', theme.lane_color(*color_idx)),
             CellType::HorizontalPipe(_h_color_idx, p_color_idx) => {
                 // Vertical and horizontal lines cross (use pipe color)
-                ('┼', get_color_by_index(*p_color_idx))
+                ('┼', theme.lane_color(*p_color_idx))
             }
-            CellType::TeeRight(color_idx) => ('├', get_color_by_index(*color_idx)),
-            CellType::TeeLeft(color_idx) => ('┤', get_color_by_index(*color_idx)),
-            CellType::TeeUp(color_idx) => ('┴', get_color_by_index(*color_idx)),
+            CellType::TeeRight(color_idx) => ('├', theme.lane_color(*color_idx)),
+            CellType::TeeLeft(color_idx) => ('┤', theme.lane_color(*color_idx)),
+            CellType::TeeUp(color_idx) => ('┴', theme.lane_color(*color_idx)),
         };
 
         // Draw all line glyphs in bold

@@ -23,7 +23,7 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: "auto".to_string(),
         }
     }
 }

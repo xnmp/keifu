@@ -160,7 +160,7 @@ fn highlight_line_owned(hl: &mut HighlightLines, content: &str) -> Vec<(SyntectS
 /// Map syntect RGB to vivid terminal ANSI colors (like delta/bat's ansi theme).
 /// This ensures colors are always vivid regardless of the syntect theme,
 /// because the terminal's own color scheme defines the actual appearance.
-fn syntect_fg(style: &SyntectStyle) -> Color {
+fn syntect_fg(style: &SyntectStyle, use_dark: bool) -> Color {
     let (r, g, b) = (style.foreground.r, style.foreground.g, style.foreground.b);
 
     let max = r.max(g).max(b);
@@ -173,7 +173,9 @@ fn syntect_fg(style: &SyntectStyle) -> Color {
 
     // Achromatic (grays / whites)
     if sat < 0.15 {
-        return if max < 90 {
+        return if use_dark {
+            if max > 160 { Color::DarkGray } else { Color::Black }
+        } else if max < 90 {
             Color::DarkGray
         } else {
             Color::White
@@ -191,13 +193,26 @@ fn syntect_fg(style: &SyntectStyle) -> Color {
         60.0 * ((rf - gf) / range + 4.0)
     };
 
-    match hue as u16 {
-        0..=20 | 346..=360 => Color::LightRed,
-        21..=65 => Color::LightYellow,
-        66..=155 => Color::LightGreen,
-        156..=195 => Color::LightCyan,
-        196..=265 => Color::LightBlue,
-        _ => Color::LightMagenta,
+    if use_dark {
+        // Dark ANSI colors for light terminal backgrounds
+        match hue as u16 {
+            0..=20 | 346..=360 => Color::Red,
+            21..=65 => Color::Rgb(160, 120, 0),  // dark yellow (ANSI yellow is often too bright)
+            66..=155 => Color::Rgb(0, 130, 0),    // dark green
+            156..=195 => Color::Rgb(0, 130, 130),  // dark cyan
+            196..=265 => Color::Blue,
+            _ => Color::Magenta,
+        }
+    } else {
+        // Bright ANSI colors for dark terminal backgrounds
+        match hue as u16 {
+            0..=20 | 346..=360 => Color::LightRed,
+            21..=65 => Color::LightYellow,
+            66..=155 => Color::LightGreen,
+            156..=195 => Color::LightCyan,
+            196..=265 => Color::LightBlue,
+            _ => Color::LightMagenta,
+        }
     }
 }
 
@@ -205,11 +220,12 @@ fn syntect_fg(style: &SyntectStyle) -> Color {
 fn syntax_to_ratatui(
     syn_spans: &[(SyntectStyle, String)],
     bg: Option<Color>,
+    use_dark_fg: bool,
 ) -> Vec<Span<'static>> {
     syn_spans
         .iter()
         .map(|(style, text)| {
-            let mut s = Style::default().fg(syntect_fg(style));
+            let mut s = Style::default().fg(syntect_fg(style, use_dark_fg));
             if let Some(bg) = bg {
                 s = s.bg(bg);
             }
@@ -224,6 +240,7 @@ fn merge_syntax_and_emphasis(
     emp_spans: &[(bool, String)],
     base_bg: Color,
     emph_bg: Color,
+    use_dark_fg: bool,
 ) -> Vec<Span<'static>> {
     let mut result = Vec::new();
 
@@ -278,7 +295,7 @@ fn merge_syntax_and_emphasis(
             continue;
         }
         let text = &syn_text[syn_off..syn_off + chunk_len];
-        let fg = syntect_fg(syn_style);
+        let fg = syntect_fg(syn_style, use_dark_fg);
         let bg = if *emphasized { emph_bg } else { base_bg };
 
         result.push(Span::styled(
@@ -305,7 +322,7 @@ fn merge_syntax_and_emphasis(
         if !text.is_empty() {
             result.push(Span::styled(
                 text.to_string(),
-                Style::default().fg(syntect_fg(syn_style)).bg(base_bg),
+                Style::default().fg(syntect_fg(syn_style, use_dark_fg)).bg(base_bg),
             ));
         }
         syn_idx += 1;
@@ -434,7 +451,8 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                 LineGroup::Context(dl) => {
                     let syn = highlight_line_owned(&mut old_hl, &dl.content);
                     let _ = highlight_line_owned(&mut new_hl, &dl.content);
-                    let spans = syntax_to_ratatui(&syn, None);
+                    let dark_fg = ui_theme.syntax_use_dark_colors;
+                    let spans = syntax_to_ratatui(&syn, None, dark_fg);
                     lines.push(make_diff_line(dl, spans, ui_theme));
                 }
                 LineGroup::Change {
@@ -442,13 +460,14 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                     additions,
                 } => {
                     let emp = compute_word_emphasis(deletions, additions);
+                    let dark_fg = ui_theme.syntax_use_dark_colors;
 
                     for (i, dl) in deletions.iter().enumerate() {
                         let syn = highlight_line_owned(&mut old_hl, &dl.content);
                         let spans = if let Some(emp_spans) = emp.old_spans.get(i) {
-                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_del_bg, ui_theme.diff_del_emph_bg)
+                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_del_bg, ui_theme.diff_del_emph_bg, dark_fg)
                         } else {
-                            syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg))
+                            syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg), dark_fg)
                         };
                         lines.push(make_diff_line(dl, spans, ui_theme));
                     }
@@ -456,9 +475,9 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                     for (i, dl) in additions.iter().enumerate() {
                         let syn = highlight_line_owned(&mut new_hl, &dl.content);
                         let spans = if let Some(emp_spans) = emp.new_spans.get(i) {
-                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_add_bg, ui_theme.diff_add_emph_bg)
+                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_add_bg, ui_theme.diff_add_emph_bg, dark_fg)
                         } else {
-                            syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg))
+                            syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg), dark_fg)
                         };
                         lines.push(make_diff_line(dl, spans, ui_theme));
                     }

@@ -85,6 +85,13 @@ pub struct Theme {
 
     // Syntect theme name for file diff view
     pub syntect_theme: &'static str,
+
+    // Graph lane colors (indexed by color_index from graph layout)
+    pub lane_colors: [Color; 11],
+    pub uncommitted_color: Color,
+
+    // Whether syntax highlighting should use dark ANSI colors (for light backgrounds)
+    pub syntax_use_dark_colors: bool,
 }
 
 impl Theme {
@@ -169,6 +176,23 @@ impl Theme {
 
             // Syntect theme
             syntect_theme: "base16-eighties.dark",
+
+            // Graph lanes: bright colors for dark backgrounds
+            lane_colors: [
+                Color::Cyan,
+                Color::Green,
+                Color::Magenta,
+                Color::Yellow,
+                Color::Red,
+                Color::LightCyan,
+                Color::LightGreen,
+                Color::LightMagenta,
+                Color::LightYellow,
+                Color::LightBlue, // main branch
+                Color::LightRed,
+            ],
+            uncommitted_color: Color::DarkGray,
+            syntax_use_dark_colors: false,
         }
     }
 
@@ -253,6 +277,23 @@ impl Theme {
 
             // Syntect theme
             syntect_theme: "base16-ocean.light",
+
+            // Graph lanes: darker colors for light backgrounds
+            lane_colors: [
+                Color::DarkGray,
+                Color::Rgb(0, 130, 0),    // dark green
+                Color::Rgb(150, 0, 150),  // dark magenta
+                Color::Rgb(160, 120, 0),  // dark yellow/gold
+                Color::Red,
+                Color::Rgb(0, 140, 140),  // dark cyan
+                Color::Rgb(0, 100, 0),    // darker green
+                Color::Rgb(130, 0, 130),  // darker magenta
+                Color::Rgb(140, 100, 0),  // darker gold
+                Color::Blue,              // main branch
+                Color::Rgb(180, 0, 0),    // dark red
+            ],
+            uncommitted_color: Color::Gray,
+            syntax_use_dark_colors: true,
         }
     }
 
@@ -285,6 +326,14 @@ impl Theme {
         } else {
             self.unfocused_border_style()
         }
+    }
+
+    /// Get a lane color by index (replaces graph::colors::get_color_by_index).
+    pub fn lane_color(&self, color_index: usize) -> Color {
+        if color_index == usize::MAX {
+            return self.uncommitted_color;
+        }
+        self.lane_colors[color_index % self.lane_colors.len()]
     }
 
     pub fn file_change_style(&self, kind: &crate::git::FileChangeKind) -> (& 'static str, Color) {
