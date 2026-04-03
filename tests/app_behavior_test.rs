@@ -572,3 +572,279 @@ fn force_refresh_clears_diff_cache() {
     app.refresh(true).unwrap();
     assert!(app.cached_diff_or_quick().is_none());
 }
+
+// ── Workflow: Stage and Commit ──────────────────────────────────────
+
+#[test]
+fn stage_and_commit_workflow() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial commit");
+
+    // Configure git user for shell-based commit
+    repo.repo()
+        .config()
+        .unwrap()
+        .set_str("user.name", "Test User")
+        .unwrap();
+    repo.repo()
+        .config()
+        .unwrap()
+        .set_str("user.email", "test@example.com")
+        .unwrap();
+
+    // Create and stage an uncommitted change via git2 (bypassing diff cache)
+    fs::write(td.path().join("b.txt"), "new file").unwrap();
+    {
+        let mut index = repo.repo().index().unwrap();
+        index.add_path(Path::new("b.txt")).unwrap();
+        index.write().unwrap();
+    }
+
+    let mut app = make_app(repo);
+
+    // Uncommitted node should be at index 0
+    let node = &app.graph_layout.nodes[0];
+    assert!(node.is_uncommitted);
+    assert!(app.is_uncommitted_selected());
+
+    // Switch to CommitDetail to enter editing
+    app.focused_panel = FocusedPanel::CommitDetail;
+    app.handle_action(Action::StartEditing).unwrap();
+    assert!(app.editing_commit_message);
+
+    // Type commit message
+    for c in "test commit".chars() {
+        app.handle_action(Action::EditorChar(c)).unwrap();
+    }
+
+    // Commit
+    app.handle_action(Action::CommitChanges).unwrap();
+    assert!(!app.editing_commit_message);
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+// ── Workflow: Branch Create and Delete ──────────────────────────────
+
+#[test]
+fn branch_create_and_delete_workflow() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    let mut app = make_app(repo);
+
+    // Open CreateBranch input mode
+    app.handle_action(Action::CreateBranch).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: keifu::app::InputAction::CreateBranch,
+            ..
+        }
+    ));
+
+    // Type branch name
+    for c in "test-branch".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+
+    // Confirm creation
+    app.handle_action(Action::Confirm).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+
+    // Verify branch exists after refresh
+    app.refresh(true).unwrap();
+    let branch_names: Vec<&str> = app.branches.iter().map(|b| b.name.as_str()).collect();
+    assert!(
+        branch_names.contains(&"test-branch"),
+        "Expected 'test-branch' in {:?}",
+        branch_names
+    );
+
+    // Delete the branch: set up Confirm mode with DeleteBranch action
+    app.mode = AppMode::Confirm {
+        message: "Delete branch 'test-branch'?".to_string(),
+        action: keifu::app::ConfirmAction::DeleteBranch("test-branch".to_string()),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    // Verify branch gone after refresh
+    app.refresh(true).unwrap();
+    let branch_names: Vec<&str> = app.branches.iter().map(|b| b.name.as_str()).collect();
+    assert!(
+        !branch_names.contains(&"test-branch"),
+        "Expected 'test-branch' to be deleted, but found in {:?}",
+        branch_names
+    );
+}
+
+// ── Workflow: Search ────────────────────────────────────────────────
+
+#[test]
+fn search_workflow() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    // Create a branch so there's something to search for
+    {
+        let head = repo.repo().head().unwrap().peel_to_commit().unwrap();
+        repo.repo().branch("feature-search", &head, false).unwrap();
+    }
+    let mut app = make_app(repo);
+
+    // Open search mode
+    app.handle_action(Action::Search).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: keifu::app::InputAction::Search,
+            ..
+        }
+    ));
+
+    // Type query that matches the branch name
+    for c in "feature".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+
+    // Verify search results exist
+    assert!(
+        app.search_match_count() > 0,
+        "Expected search matches for 'feature', got 0"
+    );
+
+    // Cancel search
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+// ── Workflow: Uncommitted Changes Node Lifecycle ────────────────────
+
+#[test]
+fn uncommitted_changes_node_lifecycle() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+
+    // Clean state: no uncommitted node
+    let mut app = make_app(repo);
+    let first_node = &app.graph_layout.nodes[0];
+    assert!(
+        !first_node.is_uncommitted,
+        "Clean repo should not have uncommitted node"
+    );
+
+    // Write a new file to disk (don't stage)
+    fs::write(td.path().join("new_file.txt"), "hello").unwrap();
+
+    // Refresh the app
+    app.refresh(true).unwrap();
+
+    // Verify uncommitted node now appears
+    let first_node = &app.graph_layout.nodes[0];
+    assert!(
+        first_node.is_uncommitted,
+        "After creating a file, uncommitted node should appear"
+    );
+}
+
+// ── Workflow: Commit Detail Editing ─────────────────────────────────
+
+#[test]
+fn commit_detail_editing_workflow() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    // Create uncommitted change so we have an uncommitted node
+    fs::write(td.path().join("b.txt"), "new").unwrap();
+    let mut app = make_app(repo);
+
+    // Should be on uncommitted node
+    assert!(app.is_uncommitted_selected());
+
+    // Switch to CommitDetail panel
+    app.focused_panel = FocusedPanel::CommitDetail;
+
+    // Start editing
+    app.handle_action(Action::StartEditing).unwrap();
+    assert!(app.editing_commit_message);
+
+    // Type chars
+    for c in "hello world".chars() {
+        app.handle_action(Action::EditorChar(c)).unwrap();
+    }
+
+    // Stop editing
+    app.handle_action(Action::StopEditing).unwrap();
+    assert!(!app.editing_commit_message);
+
+    // Editor should have the text
+    assert_eq!(app.commit_editor.text.trim(), "hello world");
+}
+
+// ── Workflow: Branch Filter ─────────────────────────────────────────
+
+#[test]
+fn branch_filter_workflow() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    {
+        let head = repo.repo().head().unwrap().peel_to_commit().unwrap();
+        repo.repo().branch("feature-x", &head, false).unwrap();
+    }
+    let mut app = make_app(repo);
+
+    // Open branch filter
+    app.handle_action(Action::OpenBranchFilter).unwrap();
+    assert!(matches!(app.mode, AppMode::BranchFilter { .. }));
+
+    // Cancel
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+// ── Workflow: Commit Menu for Non-Uncommitted Node ──────────────────
+
+#[test]
+fn commit_menu_for_regular_commit() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    // Ensure we're on a non-uncommitted node
+    assert!(!app.graph_layout.nodes[0].is_uncommitted);
+
+    // Open commit menu
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    assert!(
+        matches!(app.mode, AppMode::CommitMenu { ref items, .. } if !items.is_empty()),
+        "Expected CommitMenu with items, got {:?}",
+        app.mode
+    );
+
+    // Cancel returns to Normal
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+// ── Workflow: Commit Menu on Uncommitted Node → Files Panel ─────────
+
+#[test]
+fn commit_menu_on_uncommitted_node_switches_to_files() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    // Create uncommitted change
+    fs::write(td.path().join("b.txt"), "new").unwrap();
+    let mut app = make_app(repo);
+
+    // Should be on uncommitted node
+    assert!(app.is_uncommitted_selected());
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+
+    // Open commit menu on uncommitted node
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+
+    // Should switch to Files panel instead of opening CommitMenu
+    assert_eq!(app.focused_panel, FocusedPanel::Files);
+    assert!(
+        matches!(app.mode, AppMode::Normal),
+        "Expected Normal mode (not CommitMenu), got {:?}",
+        app.mode
+    );
+}
