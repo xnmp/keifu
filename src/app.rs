@@ -114,7 +114,7 @@ pub use crate::files_pane_state::FilesPaneItem;
 
 /// An operation that can be undone with Ctrl+Z
 #[derive(Debug, Clone)]
-enum UndoableOperation {
+pub enum UndoableOperation {
     Stage { path: String, was_staged: bool },
     Gitignore { pattern: String },
     Archive { relative_path: String },
@@ -186,15 +186,11 @@ pub enum ConfirmAction {
 
 /// Search state for branch search feature
 #[derive(Debug, Clone, Default)]
-struct SearchState {
-    /// Fuzzy search results (sorted by score)
-    fuzzy_matches: Vec<FuzzySearchResult>,
-    /// Selected index in the dropdown (None if no results)
-    dropdown_selection: Option<usize>,
-    /// Position before search started (for cancel restoration)
-    original_position: Option<usize>,
-    /// Original node selection before search started
-    original_node: Option<usize>,
+pub struct SearchState {
+    pub fuzzy_matches: Vec<FuzzySearchResult>,
+    pub dropdown_selection: Option<usize>,
+    pub original_position: Option<usize>,
+    pub original_node: Option<usize>,
 }
 
 impl SearchState {
@@ -273,31 +269,29 @@ pub struct App {
     pub commit_detail_visible_rows: u16,
 
     // Search state
-    search_state: SearchState,
+    pub search_state: SearchState,
 
     // Latest working tree status snapshot
-    working_tree_status: Option<WorkingTreeStatus>,
+    pub working_tree_status: Option<WorkingTreeStatus>,
 
     // Diff caching subsystem
-    diff_cache: DiffCache,
+    pub diff_cache: DiffCache,
 
     // Flags
     pub should_quit: bool,
-    pending_refresh: bool,
-    /// Viewport height for diff scroll calculations (updated during render)
+    pub pending_refresh: bool,
     pub diff_viewport_height: u16,
-    /// Viewport width for diff horizontal scroll calculations (updated during render)
     pub diff_viewport_width: u16,
 
     // Status message with auto-clear
-    message: Option<String>,
-    message_time: Option<std::time::Instant>,
+    pub message: Option<String>,
+    pub message_time: Option<std::time::Instant>,
 
     // Network operations (fetch/push/auto-refresh)
-    network: NetworkManager,
+    pub network: NetworkManager,
 
     // Undo
-    last_undoable_op: Option<UndoableOperation>,
+    pub last_undoable_op: Option<UndoableOperation>,
 
     // Layout
     pub side_panel_layout: bool,
@@ -306,7 +300,7 @@ pub struct App {
     pub debug_keys: bool,
 
     // Config
-    config: Config,
+    pub config: Config,
 }
 
 impl App {

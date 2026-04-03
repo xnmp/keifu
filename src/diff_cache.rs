@@ -12,27 +12,27 @@ use git2::Oid;
 use crate::git::{CommitDiffInfo, GitRepository, WorkingTreeStatus};
 
 /// Result of async diff computation for a commit.
-pub(crate) struct DiffResult {
+pub struct DiffResult {
     pub oid: Oid,
     pub diff: Result<CommitDiffInfo, String>,
 }
 
 /// Identifies the currently selected node for diff loading and caching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DiffTarget {
+pub enum DiffTarget {
     Commit(Oid),
     Uncommitted,
 }
 
-pub(crate) type UncommittedDiffResult = (Result<CommitDiffInfo, String>, Option<WorkingTreeStatus>);
+pub type UncommittedDiffResult = (Result<CommitDiffInfo, String>, Option<WorkingTreeStatus>);
 
 /// Delay before starting a diff load after selection changes.
 /// Prevents unnecessary computation during fast scrolling.
-pub(crate) const DIFF_LOAD_DEBOUNCE: Duration = Duration::from_millis(120);
+pub const DIFF_LOAD_DEBOUNCE: Duration = Duration::from_millis(120);
 
 /// Signals returned by `poll()` to notify App of state changes.
 #[derive(Debug, Default)]
-pub(crate) struct DiffCacheEvents {
+pub struct DiffCacheEvents {
     /// A new uncommitted diff has been loaded; App should sync file list.
     pub uncommitted_diff_loaded: bool,
     /// A status message to display to the user.
@@ -40,7 +40,7 @@ pub(crate) struct DiffCacheEvents {
 }
 
 /// Two-tier diff cache with async loading and debouncing.
-pub(crate) struct DiffCache {
+pub struct DiffCache {
     // Quick diff cache (synchronous, file names only, no line stats)
     quick_diff_cache: Option<CommitDiffInfo>,
     quick_diff_target: Option<DiffTarget>,

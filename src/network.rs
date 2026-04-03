@@ -8,7 +8,7 @@ use crate::config::RefreshConfig;
 use crate::git::operations::{fetch_origin, push_to_origin};
 
 /// Manages async fetch/push operations and auto-refresh timers.
-pub(crate) struct NetworkManager {
+pub struct NetworkManager {
     fetch_receiver: Option<Receiver<Result<(), String>>>,
     fetch_silent: bool,
     push_receiver: Option<Receiver<Result<(), String>>>,
@@ -18,7 +18,7 @@ pub(crate) struct NetworkManager {
 
 /// Result of polling network operations.
 #[derive(Debug, Default)]
-pub(crate) struct NetworkEvents {
+pub struct NetworkEvents {
     /// Fetch completed successfully — App should refresh.
     pub fetch_completed: bool,
     /// Push completed successfully — App should refresh.
