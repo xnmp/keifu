@@ -508,7 +508,8 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
         let block = Block::default()
             .title(" Commits ")
             .borders(Borders::ALL)
-            .border_style(self.theme.border_style(self.is_focused));
+            .border_style(self.theme.border_style(self.is_focused))
+            .border_type(self.theme.border_type(self.is_focused));
 
         let list = List::new(self.items)
             .block(block)

@@ -610,7 +610,8 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         let files_block = Block::default()
             .title(self.files_title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(files_border));
+            .border_style(Style::default().fg(files_border))
+            .border_type(self.theme.border_type(self.is_focused));
 
         // Scroll file list so selected file stays visible.
         let visible_height = chunks[0].height.saturating_sub(2);
@@ -632,7 +633,8 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         let commit_block = Block::default()
             .title(" Commit Detail ")
             .borders(Borders::ALL)
-            .border_style(self.theme.border_style(self.is_focused));
+            .border_style(self.theme.border_style(self.is_focused))
+            .border_type(self.theme.border_type(self.is_focused));
 
         // Scroll is already clamped in new()
         let commit_paragraph = Paragraph::new(self.commit_lines)

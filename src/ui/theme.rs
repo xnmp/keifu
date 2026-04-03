@@ -1,6 +1,7 @@
 //! Centralized theme definitions for UI rendering
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::BorderType;
 
 /// All color and style definitions used by the TUI.
 ///
@@ -325,6 +326,14 @@ impl Theme {
             self.focused_border_style()
         } else {
             self.unfocused_border_style()
+        }
+    }
+
+    pub fn border_type(&self, focused: bool) -> BorderType {
+        if focused {
+            BorderType::Thick
+        } else {
+            BorderType::Plain
         }
     }
 

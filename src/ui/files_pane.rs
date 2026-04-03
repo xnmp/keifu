@@ -63,7 +63,8 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(Style::default().fg(border_color))
+            .border_type(self.theme.border_type(self.is_focused));
 
         let inner = block.inner(area);
         block.render(area, buf);
