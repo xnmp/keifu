@@ -403,3 +403,580 @@ impl FilesPaneState {
         self.file_selection = FileSelection { section, path };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn file(path: &str, kind: FileChangeKind, stage: Option<StageStatus>) -> FileDiffInfo {
+        FileDiffInfo {
+            path: PathBuf::from(path),
+            kind,
+            is_binary: false,
+            insertions: 1,
+            deletions: 0,
+            stage_status: stage,
+        }
+    }
+
+    fn staged(path: &str) -> FileDiffInfo {
+        file(path, FileChangeKind::Modified, Some(StageStatus::Staged))
+    }
+
+    fn unstaged(path: &str) -> FileDiffInfo {
+        file(path, FileChangeKind::Modified, Some(StageStatus::Unstaged))
+    }
+
+    fn plain(path: &str) -> FileDiffInfo {
+        file(path, FileChangeKind::Modified, None)
+    }
+
+    fn header(text: &str) -> FilesPaneItem {
+        FilesPaneItem::Header(text.to_string())
+    }
+
+    fn fitem(f: FileDiffInfo) -> FilesPaneItem {
+        FilesPaneItem::File(f)
+    }
+
+    fn make_diff(files: Vec<FileDiffInfo>) -> CommitDiffInfo {
+        CommitDiffInfo {
+            files,
+            total_insertions: 0,
+            total_deletions: 0,
+            total_files: 0,
+            truncated: false,
+            staged_files: vec![],
+            unstaged_files: vec![],
+        }
+    }
+
+    fn make_uncommitted_diff(
+        staged_files: Vec<FileDiffInfo>,
+        unstaged_files: Vec<FileDiffInfo>,
+    ) -> CommitDiffInfo {
+        let mut all = staged_files.clone();
+        all.extend(unstaged_files.clone());
+        CommitDiffInfo {
+            files: all,
+            total_insertions: 0,
+            total_deletions: 0,
+            total_files: 0,
+            truncated: false,
+            staged_files,
+            unstaged_files,
+        }
+    }
+
+    fn path_at(items: &[FilesPaneItem], idx: usize) -> &str {
+        match &items[idx] {
+            FilesPaneItem::File(f) => f.path.to_str().unwrap(),
+            FilesPaneItem::Header(t) => panic!("expected file at index {}, got header: {}", idx, t),
+        }
+    }
+
+    // ─── FileSelection::resolve ───────────────────────────────────────
+
+    #[test]
+    fn resolve_exact_match_section_and_path() {
+        let items = vec![
+            header("Staged Changes"),
+            fitem(staged("a.rs")),
+            header("Unstaged Changes"),
+            fitem(unstaged("b.rs")),
+        ];
+        let sel = FileSelection {
+            section: Some("Unstaged Changes".to_string()),
+            path: Some(PathBuf::from("b.rs")),
+        };
+        assert_eq!(sel.resolve(&items), 3);
+    }
+
+    #[test]
+    fn resolve_path_match_wrong_section_falls_back_to_any_section() {
+        let items = vec![
+            header("Staged Changes"),
+            fitem(staged("a.rs")),
+            header("Unstaged Changes"),
+            fitem(unstaged("b.rs")),
+        ];
+        let sel = FileSelection {
+            section: Some("Nonexistent Section".to_string()),
+            path: Some(PathBuf::from("b.rs")),
+        };
+        // Falls back to path match in any section
+        assert_eq!(sel.resolve(&items), 3);
+    }
+
+    #[test]
+    fn resolve_path_match_no_section_set() {
+        let items = vec![
+            header("Staged Changes"),
+            fitem(staged("a.rs")),
+            fitem(staged("b.rs")),
+        ];
+        let sel = FileSelection {
+            section: None,
+            path: Some(PathBuf::from("b.rs")),
+        };
+        assert_eq!(sel.resolve(&items), 2);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_first_file_when_path_gone() {
+        let items = vec![
+            header("Staged Changes"),
+            fitem(staged("a.rs")),
+            fitem(staged("b.rs")),
+        ];
+        let sel = FileSelection {
+            section: Some("Staged Changes".to_string()),
+            path: Some(PathBuf::from("gone.rs")),
+        };
+        assert_eq!(sel.resolve(&items), 1); // first file, skipping header
+    }
+
+    #[test]
+    fn resolve_never_returns_header_index() {
+        let items = vec![
+            header("Section"),
+            fitem(plain("a.rs")),
+        ];
+        let sel = FileSelection::default();
+        let idx = sel.resolve(&items);
+        assert!(matches!(items[idx], FilesPaneItem::File(_)));
+    }
+
+    #[test]
+    fn resolve_returns_zero_for_empty_items() {
+        let sel = FileSelection {
+            section: Some("Staged Changes".to_string()),
+            path: Some(PathBuf::from("a.rs")),
+        };
+        assert_eq!(sel.resolve(&[]), 0);
+    }
+
+    // ─── section_of ──────────────────────────────────────────────────
+
+    #[test]
+    fn section_of_file_under_header() {
+        let items = vec![
+            header("Staged Changes"),
+            fitem(staged("a.rs")),
+            fitem(staged("b.rs")),
+        ];
+        assert_eq!(section_of(&items, 1), Some("Staged Changes"));
+        assert_eq!(section_of(&items, 2), Some("Staged Changes"));
+    }
+
+    #[test]
+    fn section_of_returns_none_when_no_header_above() {
+        let items = vec![fitem(plain("a.rs")), fitem(plain("b.rs"))];
+        assert_eq!(section_of(&items, 0), None);
+        assert_eq!(section_of(&items, 1), None);
+    }
+
+    #[test]
+    fn section_of_header_returns_its_own_text() {
+        let items = vec![header("My Section"), fitem(plain("a.rs"))];
+        assert_eq!(section_of(&items, 0), Some("My Section"));
+    }
+
+    #[test]
+    fn section_of_empty_items() {
+        assert_eq!(section_of(&[], 0), None);
+    }
+
+    // ─── folder_group ────────────────────────────────────────────────
+
+    #[test]
+    fn folder_group_root_files_have_no_header() {
+        let files = vec![plain("a.rs"), plain("b.rs")];
+        let items = FilesPaneState::folder_group(&files);
+        // Root files should not produce a header
+        assert!(items.iter().all(|i| matches!(i, FilesPaneItem::File(_))));
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn folder_group_nested_files_get_folder_header() {
+        let files = vec![plain("src/main.rs"), plain("src/lib.rs")];
+        let items = FilesPaneState::folder_group(&files);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "src/"));
+        assert_eq!(path_at(&items, 1), "src/main.rs");
+        assert_eq!(path_at(&items, 2), "src/lib.rs");
+    }
+
+    #[test]
+    fn folder_group_sorted_alphabetically_by_folder() {
+        let files = vec![
+            plain("z_dir/file.rs"),
+            plain("a_dir/file.rs"),
+        ];
+        let items = FilesPaneState::folder_group(&files);
+        // BTreeMap sorts keys, so a_dir comes before z_dir
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "a_dir/"));
+        assert!(matches!(&items[2], FilesPaneItem::Header(t) if t == "z_dir/"));
+    }
+
+    #[test]
+    fn folder_group_multiple_files_same_folder() {
+        let files = vec![
+            plain("src/a.rs"),
+            plain("src/b.rs"),
+            plain("src/c.rs"),
+        ];
+        let items = FilesPaneState::folder_group(&files);
+        // One header + three files
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "src/"));
+    }
+
+    #[test]
+    fn folder_group_mix_of_root_and_nested() {
+        let files = vec![
+            plain("root.rs"),
+            plain("src/nested.rs"),
+        ];
+        let items = FilesPaneState::folder_group(&files);
+        // BTreeMap: "." < "src", root files come first with no header
+        let mut saw_root_file = false;
+        let mut saw_folder_header = false;
+        for item in &items {
+            match item {
+                FilesPaneItem::File(f) if f.path == PathBuf::from("root.rs") => {
+                    // root file should appear before any folder header
+                    assert!(!saw_folder_header);
+                    saw_root_file = true;
+                }
+                FilesPaneItem::Header(t) if t == "src/" => saw_folder_header = true,
+                _ => {}
+            }
+        }
+        assert!(saw_root_file);
+        assert!(saw_folder_header);
+    }
+
+    // ─── build_staged_unstaged_items ─────────────────────────────────
+
+    #[test]
+    fn staged_unstaged_only_staged() {
+        let files = vec![staged("a.rs"), staged("b.rs")];
+        let items = FilesPaneState::build_staged_unstaged_items(&files);
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Staged Changes"));
+        assert_eq!(items.len(), 3); // 1 header + 2 files
+    }
+
+    #[test]
+    fn staged_unstaged_only_unstaged() {
+        let files = vec![unstaged("a.rs")];
+        let items = FilesPaneState::build_staged_unstaged_items(&files);
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Unstaged Changes"));
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn staged_unstaged_both() {
+        let files = vec![staged("s.rs"), unstaged("u.rs")];
+        let items = FilesPaneState::build_staged_unstaged_items(&files);
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Staged Changes"));
+        assert_eq!(path_at(&items, 1), "s.rs");
+        assert!(matches!(&items[2], FilesPaneItem::Header(t) if t == "Unstaged Changes"));
+        assert_eq!(path_at(&items, 3), "u.rs");
+    }
+
+    #[test]
+    fn staged_unstaged_empty() {
+        let items = FilesPaneState::build_staged_unstaged_items(&[]);
+        assert!(items.is_empty());
+    }
+
+    // ─── build_files_pane_items ──────────────────────────────────────
+
+    #[test]
+    fn build_committed_diff_flat_list() {
+        let diff = make_diff(vec![plain("a.rs"), plain("b.rs")]);
+        let state = FilesPaneState::new();
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| matches!(i, FilesPaneItem::File(_))));
+    }
+
+    #[test]
+    fn build_uncommitted_with_staged_unstaged() {
+        let diff = make_uncommitted_diff(vec![staged("s.rs")], vec![unstaged("u.rs")]);
+        let state = FilesPaneState::new();
+        let items = state.build_files_pane_items(Some(&diff), true, "/nonexistent");
+        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Staged Changes"));
+        assert_eq!(path_at(&items, 1), "s.rs");
+        assert!(matches!(&items[2], FilesPaneItem::Header(t) if t == "Unstaged Changes"));
+        assert_eq!(path_at(&items, 3), "u.rs");
+    }
+
+    #[test]
+    fn build_with_folder_grouping_committed() {
+        let diff = make_diff(vec![plain("src/a.rs"), plain("src/b.rs"), plain("root.rs")]);
+        let mut state = FilesPaneState::new();
+        state.files_group_by_folder = true;
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        // Should have folder headers
+        let headers: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                FilesPaneItem::Header(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(headers.contains(&"src/"));
+    }
+
+    #[test]
+    fn build_with_filter_active() {
+        let diff = make_diff(vec![plain("foo.rs"), plain("bar.py"), plain("baz.rs")]);
+        let mut state = FilesPaneState::new();
+        state.files_filter = "foo".to_string();
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        assert_eq!(items.len(), 1);
+        assert_eq!(path_at(&items, 0), "foo.rs");
+    }
+
+    #[test]
+    fn build_filter_no_matches() {
+        let diff = make_diff(vec![plain("foo.rs")]);
+        let mut state = FilesPaneState::new();
+        state.files_filter = "zzz".to_string();
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn build_none_diff_returns_empty() {
+        let state = FilesPaneState::new();
+        let items = state.build_files_pane_items(None, false, "/nonexistent");
+        assert!(items.is_empty());
+        let items = state.build_files_pane_items(None, true, "/nonexistent");
+        assert!(items.is_empty());
+    }
+
+    // ─── Index mapping ───────────────────────────────────────────────
+
+    fn make_state_with_items(items: Vec<FilesPaneItem>) -> FilesPaneState {
+        FilesPaneState {
+            display_items_cache: items,
+            ..FilesPaneState::default()
+        }
+    }
+
+    #[test]
+    fn display_to_flat_skips_headers() {
+        let state = make_state_with_items(vec![
+            header("Staged"),
+            fitem(staged("a.rs")),
+            fitem(staged("b.rs")),
+            header("Unstaged"),
+            fitem(unstaged("c.rs")),
+        ]);
+        // display 1 (a.rs) → flat 0
+        assert_eq!(state.display_index_to_flat_index(1), 0);
+        // display 2 (b.rs) → flat 1
+        assert_eq!(state.display_index_to_flat_index(2), 1);
+        // display 4 (c.rs) → flat 2
+        assert_eq!(state.display_index_to_flat_index(4), 2);
+    }
+
+    #[test]
+    fn flat_to_display_finds_correct_position() {
+        let state = make_state_with_items(vec![
+            header("Staged"),
+            fitem(staged("a.rs")),
+            fitem(staged("b.rs")),
+            header("Unstaged"),
+            fitem(unstaged("c.rs")),
+        ]);
+        assert_eq!(state.flat_index_to_display_index(0), 1);
+        assert_eq!(state.flat_index_to_display_index(1), 2);
+        assert_eq!(state.flat_index_to_display_index(2), 4);
+    }
+
+    #[test]
+    fn index_roundtrip_flat_display_flat() {
+        let state = make_state_with_items(vec![
+            header("Section"),
+            fitem(plain("a.rs")),
+            fitem(plain("b.rs")),
+            header("Section 2"),
+            fitem(plain("c.rs")),
+        ]);
+        for flat in 0..3 {
+            let display = state.flat_index_to_display_index(flat);
+            let back = state.display_index_to_flat_index(display);
+            assert_eq!(back, flat, "roundtrip failed for flat index {}", flat);
+        }
+    }
+
+    #[test]
+    fn index_boundary_first_and_last() {
+        let state = make_state_with_items(vec![
+            fitem(plain("first.rs")),
+            header("Mid"),
+            fitem(plain("last.rs")),
+        ]);
+        assert_eq!(state.display_index_to_flat_index(0), 0);
+        assert_eq!(state.display_index_to_flat_index(2), 1);
+        assert_eq!(state.flat_index_to_display_index(0), 0);
+        assert_eq!(state.flat_index_to_display_index(1), 2);
+    }
+
+    // ─── Navigation (move_file_selection) ────────────────────────────
+
+    #[test]
+    fn move_down_advances_to_next_file() {
+        let mut state = make_state_with_items(vec![
+            fitem(plain("a.rs")),
+            fitem(plain("b.rs")),
+            fitem(plain("c.rs")),
+        ]);
+        state.select_file_at(0);
+        state.move_file_selection(1);
+        assert_eq!(state.file_selected_index(), 1);
+    }
+
+    #[test]
+    fn move_up_goes_to_previous_file() {
+        let mut state = make_state_with_items(vec![
+            fitem(plain("a.rs")),
+            fitem(plain("b.rs")),
+            fitem(plain("c.rs")),
+        ]);
+        state.select_file_at(2);
+        state.move_file_selection(-1);
+        assert_eq!(state.file_selected_index(), 1);
+    }
+
+    #[test]
+    fn move_skips_headers() {
+        let mut state = make_state_with_items(vec![
+            header("Staged"),
+            fitem(staged("a.rs")),
+            header("Unstaged"),
+            fitem(unstaged("b.rs")),
+        ]);
+        state.select_file_at(1); // a.rs
+        state.move_file_selection(1); // should skip header at 2, land on b.rs at 3
+        assert_eq!(state.file_selected_index(), 3);
+    }
+
+    #[test]
+    fn move_clamps_at_bottom() {
+        let mut state = make_state_with_items(vec![
+            fitem(plain("a.rs")),
+            fitem(plain("b.rs")),
+        ]);
+        state.select_file_at(1);
+        state.move_file_selection(1);
+        assert_eq!(state.file_selected_index(), 1); // stays at last
+    }
+
+    #[test]
+    fn move_clamps_at_top() {
+        let mut state = make_state_with_items(vec![
+            fitem(plain("a.rs")),
+            fitem(plain("b.rs")),
+        ]);
+        state.select_file_at(0);
+        state.move_file_selection(-1);
+        assert_eq!(state.file_selected_index(), 0);
+    }
+
+    #[test]
+    fn move_empty_list_is_noop() {
+        let mut state = make_state_with_items(vec![]);
+        state.move_file_selection(1);
+        state.move_file_selection(-1);
+        // Just assert it doesn't panic
+    }
+
+    // ─── Filtering ──────────────────────────────────────────────────
+
+    #[test]
+    fn filter_is_case_insensitive() {
+        let diff = make_diff(vec![plain("Foo.RS"), plain("bar.py")]);
+        let mut state = FilesPaneState::new();
+        state.files_filter = "foo".to_string();
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        assert_eq!(items.len(), 1);
+        assert_eq!(path_at(&items, 0), "Foo.RS");
+    }
+
+    #[test]
+    fn filter_fuzzy_all_chars_must_appear() {
+        let diff = make_diff(vec![plain("abcdef.rs"), plain("xyz.rs")]);
+        let mut state = FilesPaneState::new();
+        // 'a', 'c', 'f' all appear in "abcdef.rs" but not in "xyz.rs"
+        state.files_filter = "acf".to_string();
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        assert_eq!(items.len(), 1);
+        assert_eq!(path_at(&items, 0), "abcdef.rs");
+    }
+
+    #[test]
+    fn filter_empty_shows_all() {
+        let diff = make_diff(vec![plain("a.rs"), plain("b.rs"), plain("c.rs")]);
+        let mut state = FilesPaneState::new();
+        state.files_filter = "".to_string();
+        let items = state.build_files_pane_items(Some(&diff), false, "/nonexistent");
+        assert_eq!(items.len(), 3);
+    }
+
+    // ─── set_from_index / set_selection ──────────────────────────────
+
+    #[test]
+    fn set_from_index_captures_section_and_path() {
+        let items = vec![
+            header("Staged Changes"),
+            fitem(staged("a.rs")),
+            header("Unstaged Changes"),
+            fitem(unstaged("b.rs")),
+        ];
+        let mut sel = FileSelection::default();
+        sel.set_from_index(3, &items);
+        assert_eq!(sel.path, Some(PathBuf::from("b.rs")));
+        assert_eq!(sel.section, Some("Unstaged Changes".to_string()));
+    }
+
+    #[test]
+    fn set_from_index_no_header_above() {
+        let items = vec![fitem(plain("a.rs")), fitem(plain("b.rs"))];
+        let mut sel = FileSelection::default();
+        sel.set_from_index(0, &items);
+        assert_eq!(sel.path, Some(PathBuf::from("a.rs")));
+        assert_eq!(sel.section, None);
+    }
+
+    // ─── build_staged_unstaged_folder_items ──────────────────────────
+
+    #[test]
+    fn folder_grouping_within_staged_unstaged_sections() {
+        let diff = make_uncommitted_diff(
+            vec![staged("src/a.rs"), staged("src/b.rs")],
+            vec![unstaged("tests/c.rs")],
+        );
+        let mut state = FilesPaneState::new();
+        state.files_group_by_folder = true;
+        let items = state.build_files_pane_items(Some(&diff), true, "/nonexistent");
+        // Staged Changes > src/ > a.rs, b.rs > Unstaged Changes > tests/ > c.rs
+        let headers: Vec<String> = items
+            .iter()
+            .filter_map(|i| match i {
+                FilesPaneItem::Header(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(headers.contains(&"Staged Changes".to_string()));
+        assert!(headers.contains(&"src/".to_string()));
+        assert!(headers.contains(&"Unstaged Changes".to_string()));
+        assert!(headers.contains(&"tests/".to_string()));
+    }
+}

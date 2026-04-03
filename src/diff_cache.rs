@@ -452,3 +452,637 @@ impl DiffCache {
         self.diff_cache.as_ref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    fn oid1() -> Oid {
+        Oid::from_str("0000000000000000000000000000000000000001").unwrap()
+    }
+
+    fn oid2() -> Oid {
+        Oid::from_str("0000000000000000000000000000000000000002").unwrap()
+    }
+
+    fn empty_diff() -> CommitDiffInfo {
+        CommitDiffInfo {
+            files: vec![],
+            total_insertions: 0,
+            total_deletions: 0,
+            total_files: 0,
+            truncated: false,
+            staged_files: vec![],
+            unstaged_files: vec![],
+        }
+    }
+
+    fn precise_status() -> WorkingTreeStatus {
+        WorkingTreeStatus {
+            file_paths: vec![PathBuf::from("a.txt")],
+            mtime_hash: 100,
+            has_collapsed_untracked_dirs: false,
+        }
+    }
+
+    fn precise_status_different() -> WorkingTreeStatus {
+        WorkingTreeStatus {
+            file_paths: vec![PathBuf::from("b.txt")],
+            mtime_hash: 200,
+            has_collapsed_untracked_dirs: false,
+        }
+    }
+
+    fn imprecise_status() -> WorkingTreeStatus {
+        WorkingTreeStatus {
+            file_paths: vec![PathBuf::from("a.txt")],
+            mtime_hash: 100,
+            has_collapsed_untracked_dirs: true,
+        }
+    }
+
+    // ── Cache clearing ──────────────────────────────────────────────
+
+    #[test]
+    fn clear_all_clears_everything() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        cache.set_quick_diff(Some(DiffTarget::Commit(oid1())), Some(empty_diff()));
+        cache.set_uncommitted_cache(Some(empty_diff()));
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        cache.set_uncommitted_loading(true);
+        cache.set_diff_loading_oid(Some(oid1()));
+
+        cache.clear_all();
+
+        assert!(cache.get_diff_cache().is_none());
+        assert!(cache.diff_cache_oid().is_none());
+        assert!(cache.diff_loading_oid().is_none());
+        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid1()))).is_none());
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
+        assert!(!cache.uncommitted_diff_loading());
+        assert!(!cache.uncommitted_diff_failed());
+        assert!(cache.uncommitted_cache_key().is_none());
+    }
+
+    #[test]
+    fn clear_uncommitted_only_clears_uncommitted_state() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        cache.set_uncommitted_cache(Some(empty_diff()));
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        cache.set_uncommitted_loading(true);
+        cache.set_uncommitted_failed(true);
+
+        cache.clear_uncommitted();
+
+        // Commit cache preserved
+        assert!(cache.get_diff_cache().is_some());
+        assert_eq!(cache.diff_cache_oid(), Some(oid1()));
+        // Uncommitted state cleared
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
+        assert!(!cache.uncommitted_diff_loading());
+        assert!(!cache.uncommitted_diff_failed());
+        assert!(cache.uncommitted_cache_key().is_none());
+    }
+
+    #[test]
+    fn clear_uncommitted_data_only_clears_diff_not_loading_state() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache(Some(empty_diff()));
+        cache.set_uncommitted_loading(true);
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+
+        cache.clear_uncommitted_data();
+
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
+        // Loading state and cache key preserved
+        assert!(cache.uncommitted_diff_loading());
+        assert!(cache.uncommitted_cache_key().is_some());
+    }
+
+    #[test]
+    fn invalidate_uncommitted_clears_key_but_keeps_data() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache(Some(empty_diff()));
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        cache.set_uncommitted_failed(true);
+
+        cache.invalidate_uncommitted();
+
+        // Data still present for display
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
+        // Cache key cleared to trigger reload
+        assert!(cache.uncommitted_cache_key().is_none());
+        // Failed flag cleared
+        assert!(!cache.uncommitted_diff_failed());
+    }
+
+    #[test]
+    fn invalidate_uncommitted_keeps_receiver_when_loading() {
+        let mut cache = DiffCache::new();
+        let (_tx, rx) = mpsc::channel::<UncommittedDiffResult>();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(true);
+
+        cache.invalidate_uncommitted();
+
+        assert!(cache.uncommitted_diff_receiver().is_some());
+    }
+
+    #[test]
+    fn invalidate_uncommitted_clears_receiver_when_not_loading() {
+        let mut cache = DiffCache::new();
+        let (_tx, rx) = mpsc::channel::<UncommittedDiffResult>();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(false);
+
+        cache.invalidate_uncommitted();
+
+        assert!(cache.uncommitted_diff_receiver().is_none());
+    }
+
+    // ── Cache reuse decisions ───────────────────────────────────────
+
+    #[test]
+    fn can_reuse_returns_false_when_no_cache_key() {
+        let cache = DiffCache::new();
+        let status = precise_status();
+        assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&status)));
+    }
+
+    #[test]
+    fn can_reuse_returns_false_when_no_current_status() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        assert!(!cache.can_reuse_uncommitted_cache(true, true, None));
+    }
+
+    #[test]
+    fn can_reuse_returns_false_when_not_uncommitted_selected() {
+        let mut cache = DiffCache::new();
+        let status = precise_status();
+        cache.set_uncommitted_cache_key(Some(status.clone()));
+        assert!(!cache.can_reuse_uncommitted_cache(false, true, Some(&status)));
+    }
+
+    #[test]
+    fn can_reuse_returns_false_when_no_uncommitted_node() {
+        let mut cache = DiffCache::new();
+        let status = precise_status();
+        cache.set_uncommitted_cache_key(Some(status.clone()));
+        assert!(!cache.can_reuse_uncommitted_cache(true, false, Some(&status)));
+    }
+
+    #[test]
+    fn can_reuse_returns_true_when_all_conditions_met() {
+        let mut cache = DiffCache::new();
+        let status = precise_status();
+        cache.set_uncommitted_cache_key(Some(status.clone()));
+        assert!(cache.can_reuse_uncommitted_cache(true, true, Some(&status)));
+    }
+
+    #[test]
+    fn can_reuse_returns_false_when_statuses_differ() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        let different = precise_status_different();
+        assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&different)));
+    }
+
+    #[test]
+    fn can_reuse_returns_false_when_cache_key_imprecise() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache_key(Some(imprecise_status()));
+        let status = imprecise_status();
+        assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&status)));
+    }
+
+    #[test]
+    fn can_reuse_returns_false_when_current_status_imprecise() {
+        let mut cache = DiffCache::new();
+        let precise = precise_status();
+        cache.set_uncommitted_cache_key(Some(precise));
+        let imprecise = imprecise_status();
+        assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&imprecise)));
+    }
+
+    // ── Auto-refresh invalidation ───────────────────────────────────
+
+    #[test]
+    fn auto_refresh_keeps_commit_cache_when_same_oid() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+
+        cache.invalidate_for_auto_refresh(Some(oid1()), false, false, None);
+
+        assert!(cache.get_diff_cache().is_some());
+        assert_eq!(cache.diff_cache_oid(), Some(oid1()));
+    }
+
+    #[test]
+    fn auto_refresh_clears_commit_cache_when_different_oid() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+
+        cache.invalidate_for_auto_refresh(Some(oid2()), false, false, None);
+
+        assert!(cache.get_diff_cache().is_none());
+        assert!(cache.diff_cache_oid().is_none());
+    }
+
+    #[test]
+    fn auto_refresh_clears_commit_cache_when_none_selected() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+
+        cache.invalidate_for_auto_refresh(None, false, false, None);
+
+        assert!(cache.get_diff_cache().is_none());
+    }
+
+    #[test]
+    fn auto_refresh_invalidates_uncommitted_when_cache_not_reusable() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        cache.set_uncommitted_cache(Some(empty_diff()));
+
+        // not uncommitted selected => can't reuse
+        cache.invalidate_for_auto_refresh(None, false, true, Some(&precise_status()));
+
+        assert!(cache.uncommitted_cache_key().is_none());
+        // Data kept for display (invalidate_uncommitted behavior)
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
+    }
+
+    #[test]
+    fn auto_refresh_keeps_uncommitted_when_reusable() {
+        let mut cache = DiffCache::new();
+        let status = precise_status();
+        cache.set_uncommitted_cache_key(Some(status.clone()));
+        cache.set_uncommitted_cache(Some(empty_diff()));
+
+        cache.invalidate_for_auto_refresh(None, true, true, Some(&status));
+
+        assert!(cache.uncommitted_cache_key().is_some());
+    }
+
+    // ── Target tracking ─────────────────────────────────────────────
+
+    #[test]
+    fn has_cached_diff_for_commit_checks_oid() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+
+        assert!(cache.has_cached_diff_for_target(DiffTarget::Commit(oid1())));
+        assert!(!cache.has_cached_diff_for_target(DiffTarget::Commit(oid2())));
+    }
+
+    #[test]
+    fn has_cached_diff_for_uncommitted_checks_key_and_data() {
+        let mut cache = DiffCache::new();
+
+        // No key, no data
+        assert!(!cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
+
+        // Key but no data or failed
+        cache.set_uncommitted_cache_key(Some(precise_status()));
+        assert!(!cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
+
+        // Key + data
+        cache.set_uncommitted_cache(Some(empty_diff()));
+        assert!(cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
+
+        // Key + failed (no data)
+        cache.set_uncommitted_cache(None);
+        cache.set_uncommitted_failed(true);
+        assert!(cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
+    }
+
+    #[test]
+    fn is_diff_loading_returns_false_when_no_target() {
+        let cache = DiffCache::new();
+        assert!(!cache.is_diff_loading(None));
+    }
+
+    #[test]
+    fn is_diff_loading_returns_false_when_cached() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        assert!(!cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    #[test]
+    fn is_diff_loading_returns_true_when_loading() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_loading_oid(Some(oid1()));
+        assert!(cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    #[test]
+    fn is_diff_loading_returns_true_when_in_flight_diff_exists() {
+        let mut cache = DiffCache::new();
+        // Loading oid2 but asking about oid1 — in-flight blocks
+        cache.set_diff_loading_oid(Some(oid2()));
+        assert!(cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    #[test]
+    fn is_diff_loading_returns_true_when_debouncing() {
+        let mut cache = DiffCache::new();
+        cache.set_selected_target(Some(DiffTarget::Commit(oid1())));
+        cache.set_selected_target_changed_at(Instant::now());
+        assert!(cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    #[test]
+    fn is_diff_loading_uncommitted_when_loading() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_loading(true);
+        assert!(cache.is_diff_loading(Some(DiffTarget::Uncommitted)));
+    }
+
+    // ── Diff retrieval ──────────────────────────────────────────────
+
+    #[test]
+    fn cached_diff_none_target_returns_none() {
+        let cache = DiffCache::new();
+        assert!(cache.cached_diff(None).is_none());
+    }
+
+    #[test]
+    fn cached_diff_commit_returns_diff_when_oid_matches() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        assert!(cache.cached_diff(Some(DiffTarget::Commit(oid1()))).is_some());
+    }
+
+    #[test]
+    fn cached_diff_commit_returns_none_when_oid_mismatch() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        assert!(cache.cached_diff(Some(DiffTarget::Commit(oid2()))).is_none());
+    }
+
+    #[test]
+    fn cached_diff_uncommitted_returns_cache() {
+        let mut cache = DiffCache::new();
+        cache.set_uncommitted_cache(Some(empty_diff()));
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
+    }
+
+    #[test]
+    fn cached_diff_or_quick_falls_back_to_quick() {
+        let mut cache = DiffCache::new();
+        cache.set_quick_diff(Some(DiffTarget::Commit(oid1())), Some(empty_diff()));
+        // No full diff cached, should fall back to quick
+        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid1()))).is_some());
+    }
+
+    #[test]
+    fn cached_diff_or_quick_prefers_full_over_quick() {
+        let mut cache = DiffCache::new();
+        let mut full = empty_diff();
+        full.total_files = 42;
+        cache.set_diff_cache(Some(oid1()), Some(full));
+        cache.set_quick_diff(Some(DiffTarget::Commit(oid1())), Some(empty_diff()));
+
+        let result = cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid1()))).unwrap();
+        assert_eq!(result.total_files, 42);
+    }
+
+    #[test]
+    fn is_line_stats_loading_true_when_quick_exists_but_full_doesnt() {
+        let mut cache = DiffCache::new();
+        cache.set_quick_diff(Some(DiffTarget::Commit(oid1())), Some(empty_diff()));
+        assert!(cache.is_line_stats_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    #[test]
+    fn is_line_stats_loading_false_when_full_exists() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        cache.set_quick_diff(Some(DiffTarget::Commit(oid1())), Some(empty_diff()));
+        assert!(!cache.is_line_stats_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    // ── Poll state machine ──────────────────────────────────────────
+
+    #[test]
+    fn poll_no_receivers_no_target_returns_default_events() {
+        let mut cache = DiffCache::new();
+        let events = cache.poll(None, "/dev/null", None);
+        assert!(!events.uncommitted_diff_loaded);
+        assert!(events.message.is_none());
+    }
+
+    #[test]
+    fn poll_receives_completed_commit_diff() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.set_diff_receiver(Some(rx));
+        cache.set_diff_loading_oid(Some(oid1()));
+
+        tx.send(DiffResult {
+            oid: oid1(),
+            diff: Ok(empty_diff()),
+        })
+        .unwrap();
+
+        let events = cache.poll(None, "/dev/null", None);
+
+        assert!(cache.get_diff_cache().is_some());
+        assert_eq!(cache.diff_cache_oid(), Some(oid1()));
+        assert!(cache.diff_loading_oid().is_none());
+        assert!(cache.diff_receiver().is_none());
+        assert!(events.message.is_none());
+    }
+
+    #[test]
+    fn poll_receives_failed_commit_diff() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.set_diff_receiver(Some(rx));
+        cache.set_diff_loading_oid(Some(oid1()));
+
+        tx.send(DiffResult {
+            oid: oid1(),
+            diff: Err("something broke".to_string()),
+        })
+        .unwrap();
+
+        let events = cache.poll(None, "/dev/null", None);
+
+        assert!(cache.get_diff_cache().is_none());
+        assert_eq!(cache.diff_cache_oid(), Some(oid1()));
+        assert!(events.message.is_some());
+        assert!(events.message.unwrap().contains("Failed to load diff"));
+    }
+
+    #[test]
+    fn poll_receives_completed_uncommitted_diff() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(true);
+
+        let status = precise_status();
+        tx.send((Ok(empty_diff()), Some(status.clone()))).unwrap();
+
+        let events = cache.poll(None, "/dev/null", Some(&status));
+
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
+        assert!(!cache.uncommitted_diff_failed());
+        assert!(!cache.uncommitted_diff_loading());
+        assert!(events.uncommitted_diff_loaded);
+        assert!(cache.uncommitted_cache_key().is_some());
+    }
+
+    #[test]
+    fn poll_receives_failed_uncommitted_diff() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(true);
+
+        tx.send((Err("fail".to_string()), None)).unwrap();
+
+        let events = cache.poll(None, "/dev/null", None);
+
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
+        assert!(cache.uncommitted_diff_failed());
+        assert!(!cache.uncommitted_diff_loading());
+        assert!(events.message.is_some());
+    }
+
+    #[test]
+    fn poll_does_not_start_load_when_debouncing() {
+        let mut cache = DiffCache::new();
+        cache.set_selected_target(Some(DiffTarget::Commit(oid1())));
+        cache.set_selected_target_changed_at(Instant::now());
+
+        // Target wants to load oid1 but debounce hasn't elapsed
+        let events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
+
+        assert!(cache.diff_loading_oid().is_none());
+        assert!(cache.diff_receiver().is_none());
+        assert!(events.message.is_none());
+    }
+
+    #[test]
+    fn poll_does_not_start_load_when_already_loading_for_target() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_loading_oid(Some(oid1()));
+        let (_tx, rx) = mpsc::channel();
+        cache.set_diff_receiver(Some(rx));
+
+        let _events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
+
+        // Should not have replaced the receiver
+        assert_eq!(cache.diff_loading_oid(), Some(oid1()));
+    }
+
+    #[test]
+    fn poll_does_not_start_second_load_when_one_in_flight() {
+        let mut cache = DiffCache::new();
+        // Commit diff is in flight for oid1
+        cache.set_diff_loading_oid(Some(oid1()));
+        let (_tx, rx) = mpsc::channel();
+        cache.set_diff_receiver(Some(rx));
+        // Set debounce far in the past so it wouldn't block
+        cache.set_selected_target(Some(DiffTarget::Uncommitted));
+        cache.set_selected_target_changed_at(Instant::now() - Duration::from_secs(10));
+
+        let _events = cache.poll(Some(DiffTarget::Uncommitted), "/dev/null", None);
+
+        // Should not have started uncommitted load
+        assert!(!cache.uncommitted_diff_loading());
+    }
+
+    #[test]
+    fn poll_handles_disconnected_commit_receiver() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel::<DiffResult>();
+        cache.set_diff_receiver(Some(rx));
+        cache.set_diff_loading_oid(Some(oid1()));
+        drop(tx);
+
+        let events = cache.poll(None, "/dev/null", None);
+
+        assert!(cache.diff_loading_oid().is_none());
+        assert!(cache.diff_receiver().is_none());
+        assert!(events.message.is_some());
+        assert!(events.message.unwrap().contains("failed unexpectedly"));
+    }
+
+    #[test]
+    fn poll_handles_disconnected_uncommitted_receiver() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel::<UncommittedDiffResult>();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(true);
+        drop(tx);
+
+        let status = precise_status();
+        let events = cache.poll(None, "/dev/null", Some(&status));
+
+        assert!(!cache.uncommitted_diff_loading());
+        assert!(cache.uncommitted_diff_receiver().is_none());
+        assert!(cache.uncommitted_diff_failed());
+        assert!(events.message.is_some());
+        assert!(events.message.unwrap().contains("failed unexpectedly"));
+        // Cache key should be set from working_tree_status
+        assert!(cache.uncommitted_cache_key().is_some());
+    }
+
+    #[test]
+    fn poll_does_not_start_load_when_already_cached() {
+        let mut cache = DiffCache::new();
+        cache.set_diff_cache(Some(oid1()), Some(empty_diff()));
+        // Debounce far in the past
+        cache.set_selected_target(Some(DiffTarget::Commit(oid1())));
+        cache.set_selected_target_changed_at(Instant::now() - Duration::from_secs(10));
+
+        let _events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
+
+        // Should not have started a new load
+        assert!(cache.diff_loading_oid().is_none());
+    }
+
+    #[test]
+    fn poll_uncommitted_diff_sets_cache_key_when_status_matches() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(true);
+
+        let status = precise_status();
+        // Thread sends back the same status
+        tx.send((Ok(empty_diff()), Some(status.clone()))).unwrap();
+
+        let _events = cache.poll(None, "/dev/null", Some(&status));
+
+        assert_eq!(cache.uncommitted_cache_key(), Some(&status));
+    }
+
+    #[test]
+    fn poll_uncommitted_diff_no_cache_key_when_status_diverged() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.set_uncommitted_diff_receiver(Some(rx));
+        cache.set_uncommitted_loading(true);
+
+        let old_status = precise_status();
+        let new_status = precise_status_different();
+        // Thread captured old status but current status changed
+        tx.send((Ok(empty_diff()), Some(old_status))).unwrap();
+
+        let _events = cache.poll(None, "/dev/null", Some(&new_status));
+
+        // effective_status (old) != working_tree_status (new), so no key set
+        assert!(cache.uncommitted_cache_key().is_none());
+    }
+}
