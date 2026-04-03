@@ -89,15 +89,15 @@ fn right_arrow_cycles_panel_right() {
 }
 
 #[test]
-fn tab_cycles_panel_left() {
-    assert_eq!(map_normal_graph(key(KeyCode::Tab)), Some(Action::PanelLeft));
+fn tab_cycles_panel_right() {
+    assert_eq!(map_normal_graph(key(KeyCode::Tab)), Some(Action::PanelRight));
 }
 
 #[test]
-fn shift_backtab_cycles_panel_right() {
+fn shift_backtab_cycles_panel_left() {
     assert_eq!(
         map_normal_graph(key_mod(KeyCode::BackTab, KeyModifiers::SHIFT)),
-        Some(Action::PanelRight)
+        Some(Action::PanelLeft)
     );
 }
 

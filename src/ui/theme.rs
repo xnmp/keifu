@@ -201,7 +201,7 @@ impl Theme {
         Self {
             // Panel borders
             border_focused: Color::Blue,
-            border_unfocused: Color::Gray,
+            border_unfocused: Color::DarkGray,
             border_filter_active: Color::Yellow,
 
             // Selection

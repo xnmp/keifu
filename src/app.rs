@@ -2233,14 +2233,25 @@ impl App {
     }
 
     fn load_file_diff_content(&self, file_path: &std::path::Path) -> Result<FileDiffContent> {
-        match self.current_diff_target() {
+        let result = match self.current_diff_target() {
             Some(DiffTarget::Commit(oid)) => {
                 FileDiffContent::from_commit(self.repo.repo(), oid, file_path)
             }
             Some(DiffTarget::Uncommitted) | None => {
                 FileDiffContent::from_working_tree(self.repo.repo(), file_path)
             }
-        }
+        };
+        // If diff fails (e.g. added file with no parent entry), return empty content
+        result.or_else(|_| {
+            Ok(FileDiffContent {
+                path: file_path.to_path_buf(),
+                kind: FileChangeKind::Added,
+                is_binary: false,
+                hunks: Vec::new(),
+                total_additions: 0,
+                total_deletions: 0,
+            })
+        })
     }
 
     /// Sync the file_list held by FileDiff with the latest

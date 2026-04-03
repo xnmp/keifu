@@ -65,10 +65,10 @@ fn map_normal_mode(
 
     // Panel navigation with left/right arrows and Tab (from any panel)
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Left) | (KeyModifiers::NONE, KeyCode::Tab) => {
+        (KeyModifiers::NONE, KeyCode::Left) | (KeyModifiers::SHIFT, KeyCode::BackTab) => {
             return Some(Action::PanelLeft)
         }
-        (KeyModifiers::NONE, KeyCode::Right) | (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+        (KeyModifiers::NONE, KeyCode::Right) | (KeyModifiers::NONE, KeyCode::Tab) => {
             return Some(Action::PanelRight)
         }
         _ => {}
