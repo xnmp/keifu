@@ -325,21 +325,37 @@ pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn friendly_commit_error(e: anyhow::Error) -> anyhow::Error {
+    let msg = e.to_string();
+    if msg.contains("nothing to commit") || msg.contains("nothing added to commit") {
+        anyhow::anyhow!("No files staged for commit (use 's' to stage files)")
+    } else if msg.contains("empty commit message") || msg.contains("Aborting commit due to empty") {
+        anyhow::anyhow!("Commit message cannot be empty")
+    } else if msg.contains("Please tell me who you are") {
+        anyhow::anyhow!("Git user not configured (run: git config user.email / user.name)")
+    } else {
+        e
+    }
+}
+
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
-    run_git(repo_path, &["commit", "-m", message])?;
+    run_git(repo_path, &["commit", "-m", message])
+        .map_err(|e| friendly_commit_error(e))?;
     Ok(())
 }
 
 /// Amend the last commit with a new message.
 pub fn commit_amend(repo_path: &str, message: &str) -> Result<()> {
-    run_git(repo_path, &["commit", "--amend", "-m", message])?;
+    run_git(repo_path, &["commit", "--amend", "-m", message])
+        .map_err(|e| friendly_commit_error(e))?;
     Ok(())
 }
 
 /// Amend the last commit without changing the message.
 pub fn commit_amend_no_edit(repo_path: &str) -> Result<()> {
-    run_git(repo_path, &["commit", "--amend", "--no-edit"])?;
+    run_git(repo_path, &["commit", "--amend", "--no-edit"])
+        .map_err(|e| friendly_commit_error(e))?;
     Ok(())
 }
 
