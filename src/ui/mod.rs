@@ -226,11 +226,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect(50, 20, area);
             frame.render_widget(ConfirmDialog::new(message, &theme), popup_area);
         }
-        AppMode::CommitMenu { items, selected } => {
+        AppMode::CommitMenu {
+            items,
+            selected,
+            filter,
+        } => {
             let menu_height = (items.len() + 2).min(20) as u16;
             let menu_width = 42;
             let popup_area = centered_rect_fixed(menu_width, menu_height, area);
-            frame.render_widget(CommitMenuWidget::new(items, *selected, &theme), popup_area);
+            frame.render_widget(
+                CommitMenuWidget::new(items, *selected, filter, &theme),
+                popup_area,
+            );
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);

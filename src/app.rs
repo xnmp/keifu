@@ -142,6 +142,7 @@ pub enum AppMode {
     CommitMenu {
         items: Vec<CommitMenuItem>,
         selected: usize,
+        filter: String,
     },
     BranchFilter {
         filter: String,
@@ -1552,29 +1553,71 @@ impl App {
         self.mode = AppMode::CommitMenu {
             items,
             selected: 0,
+            filter: String::new(),
         };
     }
 
     fn handle_commit_menu_action(&mut self, action: Action) -> Result<()> {
-        let AppMode::CommitMenu { items, selected } = &self.mode else {
+        let AppMode::CommitMenu {
+            items,
+            selected,
+            filter,
+        } = &self.mode
+        else {
             return Ok(());
         };
         let items = items.clone();
         let selected = *selected;
+        let mut filter = filter.clone();
 
         match action {
             Action::MoveUp => {
-                let new = if selected == 0 { items.len().saturating_sub(1) } else { selected - 1 };
-                self.mode = AppMode::CommitMenu { items, selected: new };
+                let visible = self.commit_menu_visible_count(&items, &filter);
+                let new = if selected == 0 {
+                    visible.saturating_sub(1)
+                } else {
+                    selected - 1
+                };
+                self.mode = AppMode::CommitMenu {
+                    items,
+                    selected: new,
+                    filter,
+                };
             }
             Action::MoveDown => {
-                let new = if selected + 1 >= items.len() { 0 } else { selected + 1 };
-                self.mode = AppMode::CommitMenu { items, selected: new };
+                let visible = self.commit_menu_visible_count(&items, &filter);
+                let new = if selected + 1 >= visible {
+                    0
+                } else {
+                    selected + 1
+                };
+                self.mode = AppMode::CommitMenu {
+                    items,
+                    selected: new,
+                    filter,
+                };
             }
             Action::MenuSelect | Action::Confirm => {
-                if let Some(item) = items.get(selected) {
+                let ordered = self.commit_menu_ordered(&items, &filter);
+                if let Some(item) = ordered.get(selected) {
                     self.execute_menu_item(*item)?;
                 }
+            }
+            Action::InputChar(c) => {
+                filter.push(c);
+                self.mode = AppMode::CommitMenu {
+                    items,
+                    selected: 0,
+                    filter,
+                };
+            }
+            Action::InputBackspace => {
+                filter.pop();
+                self.mode = AppMode::CommitMenu {
+                    items,
+                    selected: 0,
+                    filter,
+                };
             }
             Action::Cancel | Action::Quit => {
                 self.mode = AppMode::Normal;
@@ -1582,6 +1625,53 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn commit_menu_ordered(
+        &self,
+        items: &[CommitMenuItem],
+        filter: &str,
+    ) -> Vec<CommitMenuItem> {
+        if filter.is_empty() {
+            return items.to_vec();
+        }
+
+        use fuzzy_matcher::skim::SkimMatcherV2;
+        use fuzzy_matcher::FuzzyMatcher;
+        let matcher = SkimMatcherV2::default();
+
+        let mut scored: Vec<(CommitMenuItem, Option<i64>)> = items
+            .iter()
+            .map(|item| {
+                let score = matcher.fuzzy_match(item.label(), filter);
+                (*item, score)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| match (a.1, b.1) {
+            (Some(sa), Some(sb)) => sb.cmp(&sa),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+
+        scored.into_iter().map(|(item, _)| item).collect()
+    }
+
+    fn commit_menu_visible_count(&self, items: &[CommitMenuItem], filter: &str) -> usize {
+        if filter.is_empty() {
+            return items.len();
+        }
+
+        use fuzzy_matcher::skim::SkimMatcherV2;
+        use fuzzy_matcher::FuzzyMatcher;
+        let matcher = SkimMatcherV2::default();
+
+        items
+            .iter()
+            .filter(|item| matcher.fuzzy_match(item.label(), filter).is_some())
+            .count()
+            .max(1)
     }
 
     fn handle_branch_picker_action(&mut self, action: Action) -> Result<()> {
@@ -1872,6 +1962,7 @@ impl App {
                         CommitMenuItem::ResetHard,
                     ],
                     selected: 0,
+                    filter: String::new(),
                 };
             }
             CommitMenuItem::ResetSoft => {

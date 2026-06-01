@@ -487,6 +487,7 @@ fn commit_menu_navigation_wraps() {
             CommitMenuItem::Revert,
         ],
         selected: 0,
+        filter: String::new(),
     };
 
     // Down from 0 → 1
@@ -524,6 +525,7 @@ fn commit_menu_cancel_returns_to_normal() {
     app.mode = AppMode::CommitMenu {
         items: vec![CommitMenuItem::CopyHash],
         selected: 0,
+        filter: String::new(),
     };
 
     app.handle_action(Action::Cancel).unwrap();

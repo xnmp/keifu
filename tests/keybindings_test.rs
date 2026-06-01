@@ -392,6 +392,7 @@ fn commit_menu_navigation() {
     let mode = AppMode::CommitMenu {
         items: vec![],
         selected: 0,
+        filter: String::new(),
     };
     let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
 

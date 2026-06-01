@@ -339,6 +339,9 @@ fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
 }
