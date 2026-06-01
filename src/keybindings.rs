@@ -198,14 +198,14 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
 /// Key bindings when files filter is active (typing goes to filter)
 fn map_files_filter_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_files_filter_editing_shortcut(key) {
+        return Some(action);
+    }
     match (key.modifiers, key.code) {
         // Enter confirms filter (keep filter text, exit filter mode)
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
         // Esc cancels filter (clear filter text, exit filter mode)
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
-        // Word-level editing
-        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::FilesFilterBackspaceWord),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::FilesFilterClearLine),
         // Backspace
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilesFilterBackspace),
         // Characters go to filter
@@ -273,10 +273,13 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::EditorNewline)
         }
 
-        // Alt+Backspace / Ctrl+Backspace: delete word backward
+        // Alt+Backspace / Ctrl+Backspace / Ctrl+H: delete word backward
         (m, KeyCode::Backspace)
             if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) =>
         {
+            Some(Action::EditorBackspaceWord)
+        }
+        (m, KeyCode::Char('h')) if m.contains(KeyModifiers::CONTROL) => {
             Some(Action::EditorBackspaceWord)
         }
 
@@ -344,6 +347,9 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
@@ -351,8 +357,6 @@ fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }
-        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
@@ -361,14 +365,15 @@ fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::MenuSelect),
         (KeyModifiers::CONTROL, KeyCode::Char('a')) => Some(Action::SelectAll),
         (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::SelectNone),
-        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
@@ -385,19 +390,50 @@ fn map_help_mode(key: KeyEvent) -> Option<Action> {
     }
 }
 
+/// Common word-editing shortcuts for simple text fields (no cursor position).
+/// Returns Some(action) if the key is a word-editing shortcut, None otherwise.
+fn map_text_editing_shortcut(key: KeyEvent) -> Option<Action> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+    match key.code {
+        KeyCode::Backspace if ctrl || alt => Some(Action::InputBackspaceWord),
+        KeyCode::Char('h') if ctrl => Some(Action::InputBackspaceWord),
+        KeyCode::Char('u') if ctrl => Some(Action::InputClearLine),
+        _ => None,
+    }
+}
+
+/// Same as map_text_editing_shortcut but returns FilesFilter variants.
+fn map_files_filter_editing_shortcut(key: KeyEvent) -> Option<Action> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+    match key.code {
+        KeyCode::Backspace if ctrl || alt => Some(Action::FilesFilterBackspaceWord),
+        KeyCode::Char('h') if ctrl => Some(Action::FilesFilterBackspaceWord),
+        KeyCode::Char('u') if ctrl => Some(Action::FilesFilterClearLine),
+        _ => None,
+    }
+}
+
 fn map_input_mode(key: KeyEvent) -> Option<Action> {
-    match (key.modifiers, key.code) {
-        (_, KeyCode::Enter) => Some(Action::Confirm),
-        (_, KeyCode::Esc) => Some(Action::Cancel),
-        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
-        (_, KeyCode::Backspace) => Some(Action::InputBackspace),
-        (_, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
+    match key.code {
+        KeyCode::Enter => Some(Action::Confirm),
+        KeyCode::Esc => Some(Action::Cancel),
+        KeyCode::Backspace => Some(Action::InputBackspace),
+        KeyCode::Char(c) => Some(Action::InputChar(c)),
         _ => None,
     }
 }
 
 fn map_search_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::SearchSelectUp),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::SearchSelectDown),
@@ -407,8 +443,6 @@ fn map_search_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::SHIFT, KeyCode::BackTab) => Some(Action::SearchSelectUpQuiet),
         (_, KeyCode::Enter) => Some(Action::Confirm),
         (_, KeyCode::Esc) => Some(Action::Cancel),
-        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
         (_, KeyCode::Backspace) | (_, KeyCode::Delete) => Some(Action::InputBackspace),
         (_, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
