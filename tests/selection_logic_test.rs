@@ -7,7 +7,7 @@ use keifu::files_pane_state::{FileSelection, FilesPaneItem, section_of};
 use keifu::git::{FileChangeKind, FileDiffInfo};
 
 fn h(name: &str) -> FilesPaneItem {
-    FilesPaneItem::Header(name.to_string())
+    FilesPaneItem::SectionHeader(name.to_string())
 }
 
 fn f(name: &str) -> FilesPaneItem {
@@ -24,7 +24,9 @@ fn f(name: &str) -> FilesPaneItem {
 fn path_at(items: &[FilesPaneItem], idx: usize) -> &str {
     match &items[idx] {
         FilesPaneItem::File(f) => f.path.to_str().unwrap(),
-        FilesPaneItem::Header(t) => panic!("index {} is header: {}", idx, t),
+        FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+            panic!("index {} is header: {}", idx, t)
+        }
     }
 }
 
@@ -39,7 +41,7 @@ fn compute_next_selection(
 
     let next_in_section: Vec<PathBuf> = old_items[old_idx + 1..]
         .iter()
-        .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+        .take_while(|item| matches!(item, FilesPaneItem::File(_)))
         .filter_map(|item| match item {
             FilesPaneItem::File(f) => Some(f.path.clone()),
             _ => None,
@@ -49,7 +51,7 @@ fn compute_next_selection(
     let prev_in_section: Vec<PathBuf> = old_items[..old_idx]
         .iter()
         .rev()
-        .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+        .take_while(|item| matches!(item, FilesPaneItem::File(_)))
         .filter_map(|item| match item {
             FilesPaneItem::File(f) => Some(f.path.clone()),
             _ => None,

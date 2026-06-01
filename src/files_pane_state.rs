@@ -7,7 +7,8 @@ use crate::git::{
 /// Item in the files pane (header or file entry)
 #[derive(Debug, Clone)]
 pub enum FilesPaneItem {
-    Header(String),
+    SectionHeader(String),
+    FolderHeader(String),
     File(FileDiffInfo),
 }
 
@@ -30,7 +31,9 @@ impl FileSelection {
                 let mut current_section: Option<&str> = None;
                 for (i, item) in items.iter().enumerate() {
                     match item {
-                        FilesPaneItem::Header(t) => current_section = Some(t),
+                        FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                            current_section = Some(t);
+                        }
                         FilesPaneItem::File(f) if f.path == *path && current_section == Some(section) => {
                             return i;
                         }
@@ -60,7 +63,9 @@ impl FileSelection {
                 .iter()
                 .rev()
                 .find_map(|item| match item {
-                    FilesPaneItem::Header(t) => Some(t.clone()),
+                    FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                        Some(t.clone())
+                    }
                     _ => None,
                 });
         }
@@ -76,7 +81,7 @@ pub fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
         .iter()
         .rev()
         .find_map(|item| match item {
-            FilesPaneItem::Header(text) => Some(text.as_str()),
+            FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => Some(t.as_str()),
             _ => None,
         })
 }
@@ -198,7 +203,12 @@ impl FilesPaneState {
         let mut target = (current as i32 + delta).clamp(0, max) as usize;
         // Skip headers in the direction of movement
         let dir = if delta >= 0 { 1i32 } else { -1 };
-        while target < items.len() && matches!(items[target], FilesPaneItem::Header(_)) {
+        while target < items.len()
+            && matches!(
+                items[target],
+                FilesPaneItem::SectionHeader(_) | FilesPaneItem::FolderHeader(_)
+            )
+        {
             let next = target as i32 + dir;
             if next < 0 || next > max {
                 break;
@@ -263,7 +273,7 @@ impl FilesPaneState {
         if is_uncommitted {
             let archived = Self::list_archived_files(repo_path);
             if !archived.is_empty() {
-                items.push(FilesPaneItem::Header("Archived Files".to_string()));
+                items.push(FilesPaneItem::SectionHeader("Archived Files".to_string()));
                 items.extend(archived.into_iter().map(FilesPaneItem::File));
             }
         }
@@ -321,11 +331,11 @@ impl FilesPaneState {
 
         let mut items = Vec::new();
         if !staged.is_empty() {
-            items.push(FilesPaneItem::Header("Staged Changes".to_string()));
+            items.push(FilesPaneItem::SectionHeader("Staged Changes".to_string()));
             items.extend(staged.into_iter().map(FilesPaneItem::File));
         }
         if !unstaged.is_empty() {
-            items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
+            items.push(FilesPaneItem::SectionHeader("Unstaged Changes".to_string()));
             items.extend(unstaged.into_iter().map(FilesPaneItem::File));
         }
         items
@@ -350,11 +360,11 @@ impl FilesPaneState {
 
         let mut items = Vec::new();
         if !staged.is_empty() {
-            items.push(FilesPaneItem::Header("Staged Changes".to_string()));
+            items.push(FilesPaneItem::SectionHeader("Staged Changes".to_string()));
             items.extend(Self::folder_group(&staged));
         }
         if !unstaged.is_empty() {
-            items.push(FilesPaneItem::Header("Unstaged Changes".to_string()));
+            items.push(FilesPaneItem::SectionHeader("Unstaged Changes".to_string()));
             items.extend(Self::folder_group(&unstaged));
         }
         items
@@ -383,7 +393,7 @@ impl FilesPaneState {
         for (folder, folder_files) in &folders {
             // Skip header for root-level files ("./")
             if folder != "." {
-                items.push(FilesPaneItem::Header(format!("{}/", folder)));
+                items.push(FilesPaneItem::FolderHeader(format!("{}/", folder)));
             }
             for f in folder_files {
                 items.push(FilesPaneItem::File(f.clone()));
@@ -433,7 +443,11 @@ mod tests {
     }
 
     fn header(text: &str) -> FilesPaneItem {
-        FilesPaneItem::Header(text.to_string())
+        FilesPaneItem::SectionHeader(text.to_string())
+    }
+
+    fn folder(text: &str) -> FilesPaneItem {
+        FilesPaneItem::FolderHeader(text.to_string())
     }
 
     fn fitem(f: FileDiffInfo) -> FilesPaneItem {
@@ -472,7 +486,9 @@ mod tests {
     fn path_at(items: &[FilesPaneItem], idx: usize) -> &str {
         match &items[idx] {
             FilesPaneItem::File(f) => f.path.to_str().unwrap(),
-            FilesPaneItem::Header(t) => panic!("expected file at index {}, got header: {}", idx, t),
+            FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                panic!("expected file at index {}, got header: {}", idx, t)
+            }
         }
     }
 
@@ -604,7 +620,7 @@ mod tests {
         let files = vec![plain("src/main.rs"), plain("src/lib.rs")];
         let items = FilesPaneState::folder_group(&files);
         assert_eq!(items.len(), 3);
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "src/"));
+        assert!(matches!(&items[0], FilesPaneItem::FolderHeader(t) if t == "src/"));
         assert_eq!(path_at(&items, 1), "src/main.rs");
         assert_eq!(path_at(&items, 2), "src/lib.rs");
     }
@@ -617,8 +633,8 @@ mod tests {
         ];
         let items = FilesPaneState::folder_group(&files);
         // BTreeMap sorts keys, so a_dir comes before z_dir
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "a_dir/"));
-        assert!(matches!(&items[2], FilesPaneItem::Header(t) if t == "z_dir/"));
+        assert!(matches!(&items[0], FilesPaneItem::FolderHeader(t) if t == "a_dir/"));
+        assert!(matches!(&items[2], FilesPaneItem::FolderHeader(t) if t == "z_dir/"));
     }
 
     #[test]
@@ -631,7 +647,7 @@ mod tests {
         let items = FilesPaneState::folder_group(&files);
         // One header + three files
         assert_eq!(items.len(), 4);
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "src/"));
+        assert!(matches!(&items[0], FilesPaneItem::FolderHeader(t) if t == "src/"));
     }
 
     #[test]
@@ -651,7 +667,7 @@ mod tests {
                     assert!(!saw_folder_header);
                     saw_root_file = true;
                 }
-                FilesPaneItem::Header(t) if t == "src/" => saw_folder_header = true,
+                FilesPaneItem::FolderHeader(t) if t == "src/" => saw_folder_header = true,
                 _ => {}
             }
         }
@@ -665,7 +681,7 @@ mod tests {
     fn staged_unstaged_only_staged() {
         let files = vec![staged("a.rs"), staged("b.rs")];
         let items = FilesPaneState::build_staged_unstaged_items(&files);
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Staged Changes"));
+        assert!(matches!(&items[0], FilesPaneItem::SectionHeader(t) if t == "Staged Changes"));
         assert_eq!(items.len(), 3); // 1 header + 2 files
     }
 
@@ -673,7 +689,7 @@ mod tests {
     fn staged_unstaged_only_unstaged() {
         let files = vec![unstaged("a.rs")];
         let items = FilesPaneState::build_staged_unstaged_items(&files);
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Unstaged Changes"));
+        assert!(matches!(&items[0], FilesPaneItem::SectionHeader(t) if t == "Unstaged Changes"));
         assert_eq!(items.len(), 2);
     }
 
@@ -681,9 +697,9 @@ mod tests {
     fn staged_unstaged_both() {
         let files = vec![staged("s.rs"), unstaged("u.rs")];
         let items = FilesPaneState::build_staged_unstaged_items(&files);
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Staged Changes"));
+        assert!(matches!(&items[0], FilesPaneItem::SectionHeader(t) if t == "Staged Changes"));
         assert_eq!(path_at(&items, 1), "s.rs");
-        assert!(matches!(&items[2], FilesPaneItem::Header(t) if t == "Unstaged Changes"));
+        assert!(matches!(&items[2], FilesPaneItem::SectionHeader(t) if t == "Unstaged Changes"));
         assert_eq!(path_at(&items, 3), "u.rs");
     }
 
@@ -709,9 +725,9 @@ mod tests {
         let diff = make_uncommitted_diff(vec![staged("s.rs")], vec![unstaged("u.rs")]);
         let state = FilesPaneState::new();
         let items = state.build_files_pane_items(Some(&diff), true, "/nonexistent");
-        assert!(matches!(&items[0], FilesPaneItem::Header(t) if t == "Staged Changes"));
+        assert!(matches!(&items[0], FilesPaneItem::SectionHeader(t) if t == "Staged Changes"));
         assert_eq!(path_at(&items, 1), "s.rs");
-        assert!(matches!(&items[2], FilesPaneItem::Header(t) if t == "Unstaged Changes"));
+        assert!(matches!(&items[2], FilesPaneItem::SectionHeader(t) if t == "Unstaged Changes"));
         assert_eq!(path_at(&items, 3), "u.rs");
     }
 
@@ -725,7 +741,9 @@ mod tests {
         let headers: Vec<_> = items
             .iter()
             .filter_map(|i| match i {
-                FilesPaneItem::Header(t) => Some(t.as_str()),
+                FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                    Some(t.as_str())
+                }
                 _ => None,
             })
             .collect();
@@ -970,7 +988,9 @@ mod tests {
         let headers: Vec<String> = items
             .iter()
             .filter_map(|i| match i {
-                FilesPaneItem::Header(t) => Some(t.clone()),
+                FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                    Some(t.clone())
+                }
                 _ => None,
             })
             .collect();

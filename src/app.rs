@@ -486,7 +486,7 @@ impl App {
         // Next files in same section (forward until next header)
         let next_in_section: Vec<std::path::PathBuf> = old_items[old_idx + 1..]
             .iter()
-            .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+            .take_while(|item| matches!(item, FilesPaneItem::File(_)))
             .filter_map(|item| match item {
                 FilesPaneItem::File(f) => Some(f.path.clone()),
                 _ => None,
@@ -497,7 +497,7 @@ impl App {
         let prev_in_section: Vec<std::path::PathBuf> = old_items[..old_idx]
             .iter()
             .rev()
-            .take_while(|item| !matches!(item, FilesPaneItem::Header(_)))
+            .take_while(|item| matches!(item, FilesPaneItem::File(_)))
             .filter_map(|item| match item {
                 FilesPaneItem::File(f) => Some(f.path.clone()),
                 _ => None,
@@ -2174,14 +2174,13 @@ impl App {
 
         // Resolve the pattern: header → folder path, file → file path
         let pattern = match self.selected_display_item() {
-            Some(FilesPaneItem::Header(text)) => {
-                // Header text is like "src/utils/" — use as-is
+            Some(FilesPaneItem::FolderHeader(text)) => {
                 text.clone()
             }
             Some(FilesPaneItem::File(file)) => {
                 file.path.to_string_lossy().to_string()
             }
-            None => return Ok(()),
+            Some(FilesPaneItem::SectionHeader(_)) | None => return Ok(()),
         };
 
         match add_to_gitignore(&self.repo_path, &pattern)? {
@@ -2207,13 +2206,13 @@ impl App {
 
         // Resolve target: header → folder path (without trailing /), file → file path
         let target = match self.selected_display_item() {
-            Some(FilesPaneItem::Header(text)) => {
+            Some(FilesPaneItem::FolderHeader(text)) => {
                 text.trim_end_matches('/').to_string()
             }
             Some(FilesPaneItem::File(file)) => {
                 file.path.to_string_lossy().to_string()
             }
-            None => return Ok(()),
+            Some(FilesPaneItem::SectionHeader(_)) | None => return Ok(()),
         };
 
         archive_path(&self.repo_path, &target)?;

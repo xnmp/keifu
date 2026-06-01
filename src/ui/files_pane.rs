@@ -104,9 +104,16 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
             let is_selected = self.is_focused && state.selected == Some(state.offset + i);
 
             match item {
-                FilesPaneItem::Header(text) => {
+                FilesPaneItem::SectionHeader(text) => {
                     let style = Style::default()
                         .fg(self.theme.help_header)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+                    let line = Line::from(Span::styled(format!(" {}", text), style));
+                    buf.set_line(inner.x, y, &line, inner.width);
+                }
+                FilesPaneItem::FolderHeader(text) => {
+                    let style = Style::default()
+                        .fg(self.theme.text_muted)
                         .add_modifier(Modifier::BOLD);
                     let line = Line::from(Span::styled(format!("  {}", text), style));
                     buf.set_line(inner.x, y, &line, inner.width);

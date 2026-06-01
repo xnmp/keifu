@@ -178,7 +178,9 @@ fn selected_file_path(app: &App) -> String {
     let items = app.display_items();
     match &items[idx] {
         FilesPaneItem::File(f) => f.path.to_string_lossy().to_string(),
-        FilesPaneItem::Header(t) => panic!("selected a header: {}", t),
+        FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+            panic!("selected a header: {}", t)
+        }
     }
 }
 
