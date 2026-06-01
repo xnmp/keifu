@@ -1,4 +1,4 @@
-//! Input and confirmation dialog widgets
+//! Input, confirmation, and picker dialog widgets
 
 use ratatui::{
     buffer::Buffer,
@@ -7,15 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
-
-/// Truncate a string to fit within max_width, adding "..." if needed
-fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
-    if s.len() <= max_width {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_width.saturating_sub(3)])
-    }
-}
 
 use super::theme::Theme;
 
@@ -113,29 +104,29 @@ impl<'a> Widget for ConfirmDialog<'a> {
     }
 }
 
-/// Branch info popup (shown when multiple branches exist on selected node)
-pub struct BranchInfoPopup<'a> {
-    branches: &'a [&'a str],
-    selected_branch: Option<&'a str>,
+/// Branch picker dialog (shown when checking out a commit with multiple branches)
+pub struct BranchPickerWidget<'a> {
+    branches: &'a [String],
+    selected: usize,
     theme: &'a Theme,
 }
 
-impl<'a> BranchInfoPopup<'a> {
-    pub fn new(branches: &'a [&'a str], selected_branch: Option<&'a str>, theme: &'a Theme) -> Self {
+impl<'a> BranchPickerWidget<'a> {
+    pub fn new(branches: &'a [String], selected: usize, theme: &'a Theme) -> Self {
         Self {
             branches,
-            selected_branch,
+            selected,
             theme,
         }
     }
 }
 
-impl<'a> Widget for BranchInfoPopup<'a> {
+impl<'a> Widget for BranchPickerWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
         let block = Block::default()
-            .title(" Branches ")
+            .title(" Checkout Branch ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(self.theme.author_color))
             .style(Style::default().bg(self.theme.popup_bg));
@@ -143,14 +134,13 @@ impl<'a> Widget for BranchInfoPopup<'a> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Render branch list
         for (i, branch) in self.branches.iter().enumerate() {
             if i as u16 >= inner.height {
                 break;
             }
 
             let y = inner.y + i as u16;
-            let is_selected = self.selected_branch == Some(*branch);
+            let is_selected = i == self.selected;
             let style = if is_selected {
                 Style::default()
                     .fg(self.theme.list_selection_fg)
@@ -162,13 +152,14 @@ impl<'a> Widget for BranchInfoPopup<'a> {
 
             let prefix = if is_selected { "▶ " } else { "  " };
             let max_width = inner.width as usize;
-            let display = format!(
-                "{}{}",
-                prefix,
-                truncate_with_ellipsis(branch, max_width.saturating_sub(2))
-            );
+            let display = if branch.len() + 2 > max_width {
+                format!("{}{}...", prefix, &branch[..max_width.saturating_sub(5)])
+            } else {
+                format!("{}{}", prefix, branch)
+            };
 
             buf.set_string(inner.x, y, &display, style);
         }
     }
 }
+

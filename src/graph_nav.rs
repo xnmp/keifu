@@ -190,34 +190,6 @@ impl GraphNav {
         }
     }
 
-    /// Move to an adjacent branch within the same commit node.
-    pub fn move_branch_within_node(&mut self, delta: isize) {
-        let Some(pos) = self.selected_branch_position else {
-            return;
-        };
-        let new_pos = (pos as isize + delta) as usize;
-        if new_pos >= self.branch_positions.len() {
-            return;
-        }
-        let Some((current_node, _)) = self.branch_positions.get(pos) else {
-            return;
-        };
-        let Some((target_node, _)) = self.branch_positions.get(new_pos) else {
-            return;
-        };
-        if current_node == target_node {
-            self.selected_branch_position = Some(new_pos);
-        }
-    }
-
-    pub fn move_branch_left(&mut self) {
-        self.move_branch_within_node(-1);
-    }
-
-    pub fn move_branch_right(&mut self) {
-        self.move_branch_within_node(1);
-    }
-
     /// Jump to the HEAD branch by name.
     pub fn jump_to_head(&mut self, head_name: Option<&str>) {
         let Some(head_name) = head_name else {

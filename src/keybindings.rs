@@ -46,7 +46,7 @@ pub fn map_key_to_action(
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
-        AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
+        AppMode::CommitMenu { .. } | AppMode::BranchPicker { .. } => map_commit_menu_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }
@@ -115,10 +115,6 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Branch jump
         (_, KeyCode::Char(']')) => Some(Action::NextBranch),
         (_, KeyCode::Char('[')) => Some(Action::PrevBranch),
-
-        // Branch selection within same commit (h/l only, left/right now switch panels)
-        (KeyModifiers::NONE, KeyCode::Char('h')) => Some(Action::BranchLeft),
-        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::BranchRight),
 
         // Enter opens commit menu (or goes to files for uncommitted)
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenCommitMenu),

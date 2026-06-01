@@ -140,14 +140,8 @@ fn graph_mode_branch_navigation() {
         map_normal_graph(key(KeyCode::Char('['))),
         Some(Action::PrevBranch)
     );
-    assert_eq!(
-        map_normal_graph(key(KeyCode::Char('h'))),
-        Some(Action::BranchLeft)
-    );
-    assert_eq!(
-        map_normal_graph(key(KeyCode::Char('l'))),
-        Some(Action::BranchRight)
-    );
+    assert_eq!(map_normal_graph(key(KeyCode::Char('h'))), None);
+    assert_eq!(map_normal_graph(key(KeyCode::Char('l'))), None);
 }
 
 #[test]

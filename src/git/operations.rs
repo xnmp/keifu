@@ -341,21 +341,21 @@ fn friendly_commit_error(e: anyhow::Error) -> anyhow::Error {
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
     run_git(repo_path, &["commit", "-m", message])
-        .map_err(|e| friendly_commit_error(e))?;
+        .map_err(friendly_commit_error)?;
     Ok(())
 }
 
 /// Amend the last commit with a new message.
 pub fn commit_amend(repo_path: &str, message: &str) -> Result<()> {
     run_git(repo_path, &["commit", "--amend", "-m", message])
-        .map_err(|e| friendly_commit_error(e))?;
+        .map_err(friendly_commit_error)?;
     Ok(())
 }
 
 /// Amend the last commit without changing the message.
 pub fn commit_amend_no_edit(repo_path: &str) -> Result<()> {
     run_git(repo_path, &["commit", "--amend", "--no-edit"])
-        .map_err(|e| friendly_commit_error(e))?;
+        .map_err(friendly_commit_error)?;
     Ok(())
 }
 

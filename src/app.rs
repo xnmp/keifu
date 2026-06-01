@@ -146,6 +146,10 @@ pub enum AppMode {
         selected: usize,
         all_branches: Vec<String>,
     },
+    BranchPicker {
+        branches: Vec<String>,
+        selected: usize,
+    },
     FileDiff {
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
@@ -1003,6 +1007,7 @@ impl App {
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
+            AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }
@@ -1102,12 +1107,6 @@ impl App {
             }
             Action::PrevBranch => {
                 self.move_to_prev_branch();
-            }
-            Action::BranchLeft => {
-                self.move_branch_left();
-            }
-            Action::BranchRight => {
-                self.move_branch_right();
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
@@ -1541,6 +1540,37 @@ impl App {
             Action::MenuSelect | Action::Confirm => {
                 if let Some(item) = items.get(selected) {
                     self.execute_menu_item(*item)?;
+                }
+            }
+            Action::Cancel | Action::Quit => {
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_branch_picker_action(&mut self, action: Action) -> Result<()> {
+        let AppMode::BranchPicker { branches, selected } = &self.mode else {
+            return Ok(());
+        };
+        let branches = branches.clone();
+        let selected = *selected;
+
+        match action {
+            Action::MoveUp => {
+                let new = if selected == 0 { branches.len().saturating_sub(1) } else { selected - 1 };
+                self.mode = AppMode::BranchPicker { branches, selected: new };
+            }
+            Action::MoveDown => {
+                let new = if selected + 1 >= branches.len() { 0 } else { selected + 1 };
+                self.mode = AppMode::BranchPicker { branches, selected: new };
+            }
+            Action::MenuSelect | Action::Confirm => {
+                if let Some(branch_name) = branches.get(selected) {
+                    let name = branch_name.clone();
+                    self.mode = AppMode::Normal;
+                    self.checkout_branch_by_name(&name)?;
                 }
             }
             Action::Cancel | Action::Quit => {
@@ -2573,14 +2603,6 @@ impl App {
         self.graph_nav.move_to_prev_branch();
     }
 
-    fn move_branch_left(&mut self) {
-        self.graph_nav.move_branch_left();
-    }
-
-    fn move_branch_right(&mut self) {
-        self.graph_nav.move_branch_right();
-    }
-
     fn selected_branch(&self) -> Option<&BranchInfo> {
         self.graph_nav.selected_branch(&self.branches)
     }
@@ -2598,20 +2620,41 @@ impl App {
     }
 
     fn do_checkout(&mut self) -> Result<()> {
-        if let Some(branch) = self.selected_branch() {
-            let branch_name = branch.name.clone();
-            if branch_name.starts_with("origin/") {
-                checkout_remote_branch(self.repo.repo(), &branch_name)?;
-            } else {
-                checkout_branch(self.repo.repo(), &branch_name)?;
+        let branches: Vec<String> = self
+            .selected_node_branches()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        match branches.len() {
+            0 => {
+                if let Some(node) = self.selected_commit_node() {
+                    if let Some(commit) = &node.commit {
+                        checkout_commit(self.repo.repo(), commit.oid)?;
+                        self.refresh(true)?;
+                    }
+                }
             }
-            self.refresh(true)?;
-        } else if let Some(node) = self.selected_commit_node() {
-            if let Some(commit) = &node.commit {
-                checkout_commit(self.repo.repo(), commit.oid)?;
-                self.refresh(true)?;
+            1 => {
+                self.checkout_branch_by_name(&branches[0])?;
+            }
+            _ => {
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: 0,
+                };
             }
         }
+        Ok(())
+    }
+
+    fn checkout_branch_by_name(&mut self, branch_name: &str) -> Result<()> {
+        if branch_name.starts_with("origin/") {
+            checkout_remote_branch(self.repo.repo(), branch_name)?;
+        } else {
+            checkout_branch(self.repo.repo(), branch_name)?;
+        }
+        self.refresh(true)?;
         Ok(())
     }
 }

@@ -12,8 +12,6 @@ pub enum Action {
     JumpToHead,
     NextBranch,
     PrevBranch,
-    BranchLeft,
-    BranchRight,
 
     // Panel navigation
     PanelLeft,

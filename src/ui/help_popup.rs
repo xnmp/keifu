@@ -55,10 +55,6 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Previous branch", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  h / l      ", key_style),
-                Span::styled("Select branch (same commit)", desc_style),
-            ]),
-            Line::from(vec![
                 Span::styled("  Ctrl+d/u   ", key_style),
                 Span::styled("Page down/up", desc_style),
             ]),
