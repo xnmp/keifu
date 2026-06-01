@@ -47,7 +47,8 @@ pub fn map_key_to_action(
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
-        AppMode::CommitMenu { .. } | AppMode::BranchPicker { .. } | AppMode::BranchDeletePicker { .. } => map_commit_menu_mode(key),
+        AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
+        AppMode::BranchPicker { .. } | AppMode::BranchDeletePicker { .. } => map_picker_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }
@@ -370,6 +371,18 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::EditorChar(c))
         }
 
+        _ => None,
+    }
+}
+
+fn map_picker_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
         _ => None,
     }
 }

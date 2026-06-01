@@ -698,6 +698,10 @@ impl App {
             }
         }
 
+        if !self.commit_filter.is_empty() {
+            self.recompute_visible_commits();
+        }
+
         Ok(())
     }
 
@@ -1203,32 +1207,7 @@ impl App {
                 };
             }
             Action::DeleteBranch => {
-                let deletable: Vec<String> = self
-                    .selected_node_branches()
-                    .iter()
-                    .filter(|name| {
-                        self.branches
-                            .iter()
-                            .any(|b| b.name == **name && !b.is_head && !b.is_remote)
-                    })
-                    .map(|s| s.to_string())
-                    .collect();
-
-                match deletable.len() {
-                    0 => {}
-                    1 => {
-                        self.mode = AppMode::Confirm {
-                            message: format!("Delete branch '{}'?", deletable[0]),
-                            action: ConfirmAction::DeleteBranch(deletable[0].clone()),
-                        };
-                    }
-                    _ => {
-                        self.mode = AppMode::BranchDeletePicker {
-                            branches: deletable,
-                            selected: 0,
-                        };
-                    }
-                }
+                self.open_delete_branch_picker();
             }
             Action::OpenFileDiff => {
                 self.sync_file_list_cache();
@@ -1588,6 +1567,35 @@ impl App {
         // render will recompute the correct max.
     }
 
+    fn open_delete_branch_picker(&mut self) {
+        let deletable: Vec<String> = self
+            .selected_node_branches()
+            .iter()
+            .filter(|name| {
+                self.branches
+                    .iter()
+                    .any(|b| b.name == **name && !b.is_head && !b.is_remote)
+            })
+            .map(|s| s.to_string())
+            .collect();
+
+        match deletable.len() {
+            0 => {}
+            1 => {
+                self.mode = AppMode::Confirm {
+                    message: format!("Delete branch '{}'?", deletable[0]),
+                    action: ConfirmAction::DeleteBranch(deletable[0].clone()),
+                };
+            }
+            _ => {
+                self.mode = AppMode::BranchDeletePicker {
+                    branches: deletable,
+                    selected: 0,
+                };
+            }
+        }
+    }
+
     fn open_commit_menu(&mut self) {
         let Some(node) = self.selected_commit_node() else {
             return;
@@ -1749,20 +1757,16 @@ impl App {
         use fuzzy_matcher::FuzzyMatcher;
         let matcher = SkimMatcherV2::default();
 
-        let mut scored: Vec<(CommitMenuItem, Option<i64>)> = items
+        let mut scored: Vec<(CommitMenuItem, i64)> = items
             .iter()
-            .map(|item| {
-                let score = matcher.fuzzy_match(item.label(), filter);
-                (*item, score)
+            .filter_map(|item| {
+                matcher
+                    .fuzzy_match(item.label(), filter)
+                    .map(|score| (*item, score))
             })
             .collect();
 
-        scored.sort_by(|a, b| match (a.1, b.1) {
-            (Some(sa), Some(sb)) => sb.cmp(&sa),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
 
         scored.into_iter().map(|(item, _)| item).collect()
     }
@@ -1780,7 +1784,6 @@ impl App {
             .iter()
             .filter(|item| matcher.fuzzy_match(item.label(), filter).is_some())
             .count()
-            .max(1)
     }
 
     fn handle_branch_picker_action(&mut self, action: Action) -> Result<()> {
@@ -2023,32 +2026,7 @@ impl App {
                 };
             }
             CommitMenuItem::DeleteBranch => {
-                let deletable: Vec<String> = self
-                    .selected_node_branches()
-                    .iter()
-                    .filter(|name| {
-                        self.branches
-                            .iter()
-                            .any(|b| b.name == **name && !b.is_head && !b.is_remote)
-                    })
-                    .map(|s| s.to_string())
-                    .collect();
-
-                match deletable.len() {
-                    0 => {}
-                    1 => {
-                        self.mode = AppMode::Confirm {
-                            message: format!("Delete branch '{}'?", deletable[0]),
-                            action: ConfirmAction::DeleteBranch(deletable[0].clone()),
-                        };
-                    }
-                    _ => {
-                        self.mode = AppMode::BranchDeletePicker {
-                            branches: deletable,
-                            selected: 0,
-                        };
-                    }
-                }
+                self.open_delete_branch_picker();
             }
             CommitMenuItem::MergeIntoCurrent => {
                 if let Some(branch) = self.selected_branch() {
@@ -2975,11 +2953,48 @@ impl App {
     }
 
     fn move_to_next_branch(&mut self) {
-        self.graph_nav.move_to_next_branch();
+        if !self.commit_filter.is_empty() {
+            self.move_to_next_visible_branch(true);
+        } else {
+            self.graph_nav.move_to_next_branch();
+        }
     }
 
     fn move_to_prev_branch(&mut self) {
-        self.graph_nav.move_to_prev_branch();
+        if !self.commit_filter.is_empty() {
+            self.move_to_next_visible_branch(false);
+        } else {
+            self.graph_nav.move_to_prev_branch();
+        }
+    }
+
+    fn move_to_next_visible_branch(&mut self, forward: bool) {
+        let current_pos = self.graph_nav.selected_branch_position.unwrap_or(0);
+        let len = self.graph_nav.branch_positions.len();
+        if len == 0 {
+            return;
+        }
+        let mut pos = current_pos;
+        loop {
+            if forward {
+                if pos + 1 >= len {
+                    return;
+                }
+                pos += 1;
+            } else {
+                if pos == 0 {
+                    return;
+                }
+                pos -= 1;
+            }
+            if let Some((node_idx, _)) = self.graph_nav.branch_positions.get(pos) {
+                if self.visible_commit_indices.contains(node_idx) {
+                    self.graph_nav.selected_branch_position = Some(pos);
+                    self.graph_nav.graph_list_state.select(Some(*node_idx));
+                    return;
+                }
+            }
+        }
     }
 
     fn selected_branch(&self) -> Option<&BranchInfo> {

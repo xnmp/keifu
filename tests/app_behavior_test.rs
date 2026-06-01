@@ -850,3 +850,181 @@ fn commit_menu_on_uncommitted_node_switches_to_files() {
         app.mode
     );
 }
+
+// ── Commit menu fuzzy filter ───────────────────────────────────────
+
+#[test]
+fn commit_menu_filter_down_wraps_at_match_count() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    use keifu::app::CommitMenuItem;
+    app.mode = AppMode::CommitMenu {
+        items: vec![
+            CommitMenuItem::Checkout,
+            CommitMenuItem::CherryPick,
+            CommitMenuItem::Revert,
+        ],
+        selected: 0,
+        filter: String::new(),
+    };
+
+    // Type "ch" — matches Checkout and Cherry-pick (2 items)
+    app.handle_action(Action::InputChar('c')).unwrap();
+    app.handle_action(Action::InputChar('h')).unwrap();
+
+    // Move down twice — should wrap back to 0
+    app.handle_action(Action::MoveDown).unwrap();
+    app.handle_action(Action::MoveDown).unwrap();
+
+    if let AppMode::CommitMenu { selected, .. } = &app.mode {
+        assert_eq!(*selected, 0);
+    } else {
+        panic!("Expected CommitMenu mode");
+    }
+}
+
+#[test]
+fn commit_menu_filter_no_match_enter_does_nothing() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    use keifu::app::CommitMenuItem;
+    app.mode = AppMode::CommitMenu {
+        items: vec![CommitMenuItem::Checkout, CommitMenuItem::Revert],
+        selected: 0,
+        filter: String::new(),
+    };
+
+    // Type something that matches nothing
+    app.handle_action(Action::InputChar('z')).unwrap();
+    app.handle_action(Action::InputChar('z')).unwrap();
+    app.handle_action(Action::InputChar('z')).unwrap();
+
+    // Enter should not execute anything (stay in CommitMenu)
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
+}
+
+// ── Commit filter (graph panel) ────────────────────────────────────
+
+#[test]
+fn commit_filter_navigation_stays_within_matches() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "fix: bug in parser");
+    commit_file(repo.repo(), "b.txt", "b", "feat: new feature");
+    commit_file(repo.repo(), "c.txt", "c", "fix: another bug");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    app.handle_action(Action::CommitFilterChar('f')).unwrap();
+    app.handle_action(Action::CommitFilterChar('i')).unwrap();
+    app.handle_action(Action::CommitFilterChar('x')).unwrap();
+
+    // Navigate to bottom then try to go further — should stay bounded
+    app.handle_action(Action::GoToBottom).unwrap();
+    let bottom = app.graph_nav.selected_index().unwrap();
+
+    app.handle_action(Action::MoveDown).unwrap();
+    let after_bottom = app.graph_nav.selected_index().unwrap();
+    assert_eq!(bottom, after_bottom);
+
+    // The selected commit should contain "fix"
+    let node = app.graph_nav.selected_node(&app.graph_layout).unwrap();
+    let msg = node.commit.as_ref().unwrap().message.to_lowercase();
+    assert!(msg.contains("fix"));
+}
+
+#[test]
+fn commit_filter_cancel_allows_full_navigation() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    commit_file(repo.repo(), "c.txt", "c", "third");
+    let mut app = make_app(repo);
+
+    let total_nodes = app.graph_layout.nodes.len();
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    app.handle_action(Action::CommitFilterChar('x')).unwrap();
+
+    // Cancel should restore full navigation
+    app.handle_action(Action::Cancel).unwrap();
+
+    app.handle_action(Action::GoToBottom).unwrap();
+    let bottom_idx = app.graph_nav.selected_index().unwrap();
+    // Should be able to reach the last node
+    assert_eq!(bottom_idx, total_nodes - 1);
+}
+
+#[test]
+fn commit_filter_selected_commit_still_valid_after_refresh() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "fix: important");
+    commit_file(repo.repo(), "b.txt", "b", "feat: unrelated");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    app.handle_action(Action::CommitFilterChar('f')).unwrap();
+    app.handle_action(Action::CommitFilterChar('i')).unwrap();
+    app.handle_action(Action::CommitFilterChar('x')).unwrap();
+
+    // Refresh should preserve filter — selected commit should still match
+    app.refresh(true).unwrap();
+
+    let node = app.graph_nav.selected_node(&app.graph_layout).unwrap();
+    if let Some(commit) = &node.commit {
+        assert!(commit.message.to_lowercase().contains("fix"));
+    }
+}
+
+// ── Word-level editing ─────────────────────────────────────────────
+
+#[test]
+fn backspace_word_in_commit_filter_removes_last_word() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "hello world");
+    commit_file(repo.repo(), "b.txt", "b", "hello there");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    // Type "hello world"
+    for c in "hello world".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+
+    // Backspace word should remove "world", leaving "hello "
+    app.handle_action(Action::InputBackspaceWord).unwrap();
+
+    // Now both "hello world" and "hello there" should be visible
+    // (both contain "hello "). Navigate down — should reach second match.
+    app.handle_action(Action::GoToTop).unwrap();
+    let first = app.graph_nav.selected_index().unwrap();
+    app.handle_action(Action::MoveDown).unwrap();
+    let second = app.graph_nav.selected_index().unwrap();
+    assert_ne!(first, second);
+}
+
+#[test]
+fn clear_line_in_commit_filter_shows_all_commits() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    commit_file(repo.repo(), "c.txt", "c", "third");
+    let mut app = make_app(repo);
+
+    let total_nodes = app.graph_layout.nodes.len();
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    app.handle_action(Action::CommitFilterChar('z')).unwrap();
+
+    // Clear line should restore all commits
+    app.handle_action(Action::InputClearLine).unwrap();
+
+    // Should be able to reach the last node (all visible again)
+    app.handle_action(Action::GoToBottom).unwrap();
+    let bottom_idx = app.graph_nav.selected_index().unwrap();
+    assert_eq!(bottom_idx, total_nodes - 1);
+}

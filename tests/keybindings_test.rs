@@ -606,3 +606,124 @@ fn file_diff_mode_file_navigation() {
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
     assert_eq!(map(key(KeyCode::Char('q'))), Some(Action::Cancel));
 }
+
+// ── Commit menu filter ─────────────────────────────────────────────
+
+#[test]
+fn commit_menu_filter_typing() {
+    let mode = AppMode::CommitMenu {
+        items: vec![],
+        selected: 0,
+        filter: String::new(),
+    };
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
+
+    assert_eq!(
+        map(key(KeyCode::Char('a'))),
+        Some(Action::InputChar('a'))
+    );
+    assert_eq!(map(key(KeyCode::Backspace)), Some(Action::InputBackspace));
+}
+
+#[test]
+fn commit_menu_text_editing_shortcuts() {
+    let mode = AppMode::CommitMenu {
+        items: vec![],
+        selected: 0,
+        filter: String::new(),
+    };
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
+
+    assert_eq!(
+        map(key_mod(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+        Some(Action::InputClearLine)
+    );
+    assert_eq!(
+        map(key_mod(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+        Some(Action::InputBackspaceWord)
+    );
+}
+
+// ── Picker mode (no text editing) ──────────────────────────────────
+
+#[test]
+fn picker_mode_does_not_have_text_editing() {
+    let mode = AppMode::BranchPicker {
+        branches: vec![],
+        selected: 0,
+    };
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
+
+    assert_eq!(map(key(KeyCode::Up)), Some(Action::MoveUp));
+    assert_eq!(map(key(KeyCode::Down)), Some(Action::MoveDown));
+    assert_eq!(map(key(KeyCode::Enter)), Some(Action::MenuSelect));
+    assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
+    assert_eq!(
+        map(key_mod(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+        None
+    );
+    assert_eq!(map(key(KeyCode::Char('a'))), None);
+}
+
+// ── Commit filter mode ─────────────────────────────────────────────
+
+#[test]
+fn commit_filter_keybindings() {
+    let map = |k: KeyEvent| {
+        map_key_to_action(k, &AppMode::Normal, FocusedPanel::Graph, false, false, true)
+    };
+
+    assert_eq!(
+        map(key(KeyCode::Char('a'))),
+        Some(Action::CommitFilterChar('a'))
+    );
+    assert_eq!(
+        map(key(KeyCode::Backspace)),
+        Some(Action::CommitFilterBackspace)
+    );
+    assert_eq!(map(key(KeyCode::Enter)), Some(Action::Confirm));
+    assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
+    assert_eq!(map(key(KeyCode::Up)), Some(Action::MoveUp));
+    assert_eq!(map(key(KeyCode::Down)), Some(Action::MoveDown));
+}
+
+#[test]
+fn ctrl_f_starts_commit_filter() {
+    assert_eq!(
+        map_normal_graph(key_mod(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        Some(Action::StartCommitFilter)
+    );
+}
+
+// ── Word-level editing ─────────────────────────────────────────────
+
+#[test]
+fn input_mode_word_editing() {
+    let map = |k: KeyEvent| {
+        map_key_to_action(
+            k,
+            &AppMode::Input {
+                title: String::new(),
+                input: String::new(),
+                action: InputAction::CreateBranch,
+            },
+            FocusedPanel::Graph,
+            false,
+            false,
+            false,
+        )
+    };
+
+    assert_eq!(
+        map(key_mod(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+        Some(Action::InputClearLine)
+    );
+    assert_eq!(
+        map(key_mod(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+        Some(Action::InputBackspaceWord)
+    );
+    assert_eq!(
+        map(key_mod(KeyCode::Backspace, KeyModifiers::CONTROL)),
+        Some(Action::InputBackspaceWord)
+    );
+}

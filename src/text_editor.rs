@@ -720,4 +720,60 @@ mod tests {
         ed.move_left(false);
         assert_eq!(ed.cursor, 1); // before 'é'
     }
+
+    // ── pop_word ────────────────────────────────────────────────────
+
+    #[test]
+    fn pop_word_removes_last_word() {
+        let mut s = "hello world".to_string();
+        pop_word(&mut s);
+        assert_eq!(s, "hello ");
+    }
+
+    #[test]
+    fn pop_word_removes_trailing_spaces_then_word() {
+        let mut s = "hello   ".to_string();
+        pop_word(&mut s);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn pop_word_on_empty_string() {
+        let mut s = String::new();
+        pop_word(&mut s);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn pop_word_single_word() {
+        let mut s = "word".to_string();
+        pop_word(&mut s);
+        assert_eq!(s, "");
+    }
+
+    // ── kill_line ───────────────────────────────────────────────────
+
+    #[test]
+    fn kill_line_deletes_to_line_start() {
+        let mut ed = editor_at("hello world", 5);
+        ed.kill_line();
+        assert_eq!(ed.text, " world");
+        assert_eq!(ed.cursor, 0);
+    }
+
+    #[test]
+    fn kill_line_on_second_line() {
+        let mut ed = editor_at("first\nsecond", 9);
+        ed.kill_line();
+        assert_eq!(ed.text, "first\nond");
+        assert_eq!(ed.cursor, 6);
+    }
+
+    #[test]
+    fn kill_line_at_line_start_is_noop() {
+        let mut ed = editor_at("hello", 0);
+        ed.kill_line();
+        assert_eq!(ed.text, "hello");
+        assert_eq!(ed.cursor, 0);
+    }
 }
