@@ -48,6 +48,8 @@ pub enum Action {
     StartFilesFilter,
     FilesFilterChar(char),
     FilesFilterBackspace,
+    FilesFilterBackspaceWord,
+    FilesFilterClearLine,
 
     // Commit editor
     StartEditing,
@@ -68,6 +70,7 @@ pub enum Action {
     EditorWordRight(bool),
     EditorBackspaceWord,
     EditorDeleteWord,
+    EditorKillLine,
     EditorTextStart(bool),
     EditorTextEnd(bool),
 
@@ -82,6 +85,8 @@ pub enum Action {
     Cancel,
     InputChar(char),
     InputBackspace,
+    InputBackspaceWord,
+    InputClearLine,
 
     // Search dropdown
     SearchSelectUp,

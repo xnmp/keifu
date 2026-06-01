@@ -203,6 +203,9 @@ fn map_files_filter_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
         // Esc cancels filter (clear filter text, exit filter mode)
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
+        // Word-level editing
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::FilesFilterBackspaceWord),
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::FilesFilterClearLine),
         // Backspace
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FilesFilterBackspace),
         // Characters go to filter
@@ -270,14 +273,23 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::EditorNewline)
         }
 
-        // Alt+Backspace: delete word backward
-        (m, KeyCode::Backspace) if m.contains(KeyModifiers::ALT) => {
+        // Alt+Backspace / Ctrl+Backspace: delete word backward
+        (m, KeyCode::Backspace)
+            if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) =>
+        {
             Some(Action::EditorBackspaceWord)
         }
 
-        // Alt+Delete / Alt+d: delete word forward
-        (m, KeyCode::Delete) if m.contains(KeyModifiers::ALT) => {
+        // Alt+Delete / Ctrl+Delete / Alt+d: delete word forward
+        (m, KeyCode::Delete)
+            if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) =>
+        {
             Some(Action::EditorDeleteWord)
+        }
+
+        // Ctrl+U: kill line (delete to beginning of line)
+        (m, KeyCode::Char('u')) if m.contains(KeyModifiers::CONTROL) => {
+            Some(Action::EditorKillLine)
         }
         (m, KeyCode::Char('d')) if m.contains(KeyModifiers::ALT) => {
             Some(Action::EditorDeleteWord)
@@ -339,6 +351,8 @@ fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
@@ -353,6 +367,8 @@ fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::MenuSelect),
         (KeyModifiers::CONTROL, KeyCode::Char('a')) => Some(Action::SelectAll),
         (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::SelectNone),
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
@@ -370,11 +386,13 @@ fn map_help_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_input_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Enter => Some(Action::Confirm),
-        KeyCode::Esc => Some(Action::Cancel),
-        KeyCode::Backspace => Some(Action::InputBackspace),
-        KeyCode::Char(c) => Some(Action::InputChar(c)),
+    match (key.modifiers, key.code) {
+        (_, KeyCode::Enter) => Some(Action::Confirm),
+        (_, KeyCode::Esc) => Some(Action::Cancel),
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
+        (_, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (_, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
 }
@@ -389,6 +407,8 @@ fn map_search_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::SHIFT, KeyCode::BackTab) => Some(Action::SearchSelectUpQuiet),
         (_, KeyCode::Enter) => Some(Action::Confirm),
         (_, KeyCode::Esc) => Some(Action::Cancel),
+        (KeyModifiers::CONTROL, KeyCode::Backspace) => Some(Action::InputBackspaceWord),
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::InputClearLine),
         (_, KeyCode::Backspace) | (_, KeyCode::Delete) => Some(Action::InputBackspace),
         (_, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,

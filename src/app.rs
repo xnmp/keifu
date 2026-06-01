@@ -1296,6 +1296,12 @@ impl App {
                     self.files_pane.files_filter_active = false;
                 }
             }
+            Action::FilesFilterBackspaceWord => {
+                crate::text_editor::pop_word(&mut self.files_pane.files_filter);
+            }
+            Action::FilesFilterClearLine => {
+                self.files_pane.files_filter.clear();
+            }
             Action::Confirm => {
                 // Enter: keep filter, exit filter mode
                 self.files_pane.files_filter_active = false;
@@ -1467,6 +1473,7 @@ impl App {
             Action::EditorWordRight(s) => self.commit_editor.move_word_right(s),
             Action::EditorBackspaceWord => self.commit_editor.backspace_word(),
             Action::EditorDeleteWord => self.commit_editor.delete_word(),
+            Action::EditorKillLine => self.commit_editor.kill_line(),
             Action::EditorTextStart(s) => self.commit_editor.move_text_start(s),
             Action::EditorTextEnd(s) => self.commit_editor.move_text_end(s),
             _ => {}
@@ -1617,6 +1624,21 @@ impl App {
                     items,
                     selected: 0,
                     filter,
+                };
+            }
+            Action::InputBackspaceWord => {
+                crate::text_editor::pop_word(&mut filter);
+                self.mode = AppMode::CommitMenu {
+                    items,
+                    selected: 0,
+                    filter,
+                };
+            }
+            Action::InputClearLine => {
+                self.mode = AppMode::CommitMenu {
+                    items,
+                    selected: 0,
+                    filter: String::new(),
                 };
             }
             Action::Cancel | Action::Quit => {
@@ -1867,6 +1889,22 @@ impl App {
                 new_filter.pop();
                 self.mode = AppMode::BranchFilter {
                     filter: new_filter,
+                    selected: 0,
+                    all_branches,
+                };
+            }
+            Action::InputBackspaceWord => {
+                let mut new_filter = filter;
+                crate::text_editor::pop_word(&mut new_filter);
+                self.mode = AppMode::BranchFilter {
+                    filter: new_filter,
+                    selected: 0,
+                    all_branches,
+                };
+            }
+            Action::InputClearLine => {
+                self.mode = AppMode::BranchFilter {
+                    filter: String::new(),
                     selected: 0,
                     all_branches,
                 };
@@ -2662,6 +2700,34 @@ impl App {
                 input.pop();
 
                 // Update fuzzy search on backspace with live preview
+                if matches!(input_action, InputAction::Search) {
+                    self.update_fuzzy_search(&input);
+                    self.jump_to_search_result();
+                }
+
+                self.mode = AppMode::Input {
+                    title,
+                    input,
+                    action: input_action,
+                };
+            }
+            Action::InputBackspaceWord => {
+                crate::text_editor::pop_word(&mut input);
+
+                if matches!(input_action, InputAction::Search) {
+                    self.update_fuzzy_search(&input);
+                    self.jump_to_search_result();
+                }
+
+                self.mode = AppMode::Input {
+                    title,
+                    input,
+                    action: input_action,
+                };
+            }
+            Action::InputClearLine => {
+                input.clear();
+
                 if matches!(input_action, InputAction::Search) {
                     self.update_fuzzy_search(&input);
                     self.jump_to_search_result();

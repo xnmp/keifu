@@ -127,6 +127,16 @@ impl TextEditor {
         self.text.drain(self.cursor..target);
     }
 
+    pub fn kill_line(&mut self) {
+        self.selection = None;
+        let line_start = self.text[..self.cursor]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        self.text.drain(line_start..self.cursor);
+        self.cursor = line_start;
+    }
+
     // ── Movement ─────────────────────────────────────────────────────
 
     pub fn move_left(&mut self, shift: bool) {
@@ -298,7 +308,7 @@ fn next_char_boundary(text: &str, offset: usize) -> usize {
 }
 
 /// Word boundary left: spaces only. Skip spaces, then skip non-space/non-newline.
-fn word_boundary_left(text: &str, from: usize) -> usize {
+pub fn word_boundary_left(text: &str, from: usize) -> usize {
     if from == 0 {
         return 0;
     }
@@ -325,6 +335,12 @@ fn word_boundary_right(text: &str, from: usize) -> usize {
         pos += 1;
     }
     pos
+}
+
+/// Delete the last word from a string (cursor implicitly at end).
+pub fn pop_word(s: &mut String) {
+    let target = word_boundary_left(s, s.len());
+    s.truncate(target);
 }
 
 /// Get byte offset for (row, col) where col is in characters. Clamps to line length.
