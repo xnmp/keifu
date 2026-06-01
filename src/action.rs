@@ -49,6 +49,11 @@ pub enum Action {
     FilesFilterChar(char),
     FilesFilterBackspace,
 
+    // Commit filter (graph panel)
+    StartCommitFilter,
+    CommitFilterChar(char),
+    CommitFilterBackspace,
+
     // Commit editor
     StartEditing,
     StopEditing,

@@ -279,6 +279,11 @@ pub struct App {
     /// Visible rows in the commit detail pane (updated during render)
     pub commit_detail_visible_rows: u16,
 
+    // Commit filter (graph panel Ctrl+F)
+    pub commit_filter: String,
+    pub commit_filter_active: bool,
+    pub visible_commit_indices: Vec<usize>,
+
     // Search state
     pub search_state: SearchState,
 
@@ -372,6 +377,9 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
+            commit_filter: String::new(),
+            commit_filter_active: false,
+            visible_commit_indices: Vec::new(),
             search_state: SearchState::default(),
             working_tree_status,
             diff_cache: DiffCache::new(),
@@ -444,6 +452,9 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
+            commit_filter: String::new(),
+            commit_filter_active: false,
+            visible_commit_indices: Vec::new(),
             search_state: SearchState::default(),
             working_tree_status,
             diff_cache: DiffCache::new(),
@@ -924,6 +935,48 @@ impl App {
         self.graph_nav.is_head_commit_selected(&self.graph_layout)
     }
 
+    pub fn node_passes_commit_filter(&self, node: &crate::git::graph::GraphNode) -> bool {
+        if self.commit_filter.is_empty() {
+            return true;
+        }
+        if node.is_uncommitted {
+            return true;
+        }
+        let Some(commit) = &node.commit else {
+            return false;
+        };
+        let query = self.commit_filter.to_lowercase();
+        commit.message.to_lowercase().contains(&query)
+            || commit.author_name.to_lowercase().contains(&query)
+            || commit.short_id.to_lowercase().contains(&query)
+    }
+
+    pub fn recompute_visible_commits(&mut self) {
+        self.visible_commit_indices = self
+            .graph_layout
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| self.node_passes_commit_filter(node))
+            .map(|(idx, _)| idx)
+            .collect();
+
+        // Ensure selection is within visible range
+        if !self.visible_commit_indices.is_empty() {
+            let current = self.graph_nav.graph_list_state.selected().unwrap_or(0);
+            if !self.visible_commit_indices.contains(&current) {
+                // Move to nearest visible node
+                let nearest = self
+                    .visible_commit_indices
+                    .iter()
+                    .min_by_key(|&&idx| (idx as i64 - current as i64).unsigned_abs())
+                    .copied()
+                    .unwrap_or(0);
+                self.graph_nav.graph_list_state.select(Some(nearest));
+            }
+        }
+    }
+
     // ── Files pane delegation ──────────────────────────────────────
 
     /// Sync the file list cache and display items from the current diff.
@@ -1190,6 +1243,40 @@ impl App {
                 } else {
                     self.set_message("Diff not available");
                 }
+            }
+            Action::StartCommitFilter => {
+                self.commit_filter_active = true;
+                self.commit_filter.clear();
+                self.recompute_visible_commits();
+            }
+            Action::CommitFilterChar(c) => {
+                self.commit_filter.push(c);
+                self.recompute_visible_commits();
+            }
+            Action::CommitFilterBackspace => {
+                if !self.commit_filter.is_empty() {
+                    self.commit_filter.pop();
+                    self.recompute_visible_commits();
+                } else {
+                    self.commit_filter_active = false;
+                    self.recompute_visible_commits();
+                }
+            }
+            Action::InputBackspaceWord if self.commit_filter_active => {
+                crate::text_editor::pop_word(&mut self.commit_filter);
+                self.recompute_visible_commits();
+            }
+            Action::InputClearLine if self.commit_filter_active => {
+                self.commit_filter.clear();
+                self.recompute_visible_commits();
+            }
+            Action::Confirm if self.commit_filter_active => {
+                self.commit_filter_active = false;
+            }
+            Action::Cancel if self.commit_filter_active => {
+                self.commit_filter.clear();
+                self.commit_filter_active = false;
+                self.recompute_visible_commits();
             }
             _ => {}
         }
@@ -2849,15 +2936,42 @@ impl App {
     // ── Graph navigation delegates ────────────────────────────────
 
     fn move_selection(&mut self, delta: i32) {
-        self.graph_nav.move_selection(&self.graph_layout, delta);
+        if !self.commit_filter.is_empty() && !self.visible_commit_indices.is_empty() {
+            let current = self.graph_nav.graph_list_state.selected().unwrap_or(0);
+            let pos = self
+                .visible_commit_indices
+                .iter()
+                .position(|&idx| idx == current)
+                .unwrap_or(0);
+            let new_pos =
+                (pos as i32 + delta).clamp(0, self.visible_commit_indices.len() as i32 - 1)
+                    as usize;
+            let new_idx = self.visible_commit_indices[new_pos];
+            self.graph_nav.graph_list_state.select(Some(new_idx));
+            self.graph_nav.sync_branch_selection_to_node(new_idx);
+        } else {
+            self.graph_nav.move_selection(&self.graph_layout, delta);
+        }
     }
 
     fn select_first(&mut self) {
-        self.graph_nav.select_first(&self.graph_layout);
+        if !self.commit_filter.is_empty() && !self.visible_commit_indices.is_empty() {
+            let idx = self.visible_commit_indices[0];
+            self.graph_nav.graph_list_state.select(Some(idx));
+            self.graph_nav.sync_branch_selection_to_node(idx);
+        } else {
+            self.graph_nav.select_first(&self.graph_layout);
+        }
     }
 
     fn select_last(&mut self) {
-        self.graph_nav.select_last(&self.graph_layout);
+        if !self.commit_filter.is_empty() && !self.visible_commit_indices.is_empty() {
+            let idx = *self.visible_commit_indices.last().unwrap();
+            self.graph_nav.graph_list_state.select(Some(idx));
+            self.graph_nav.sync_branch_selection_to_node(idx);
+        } else {
+            self.graph_nav.select_last(&self.graph_layout);
+        }
     }
 
     fn move_to_next_branch(&mut self) {

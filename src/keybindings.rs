@@ -13,6 +13,7 @@ pub fn map_key_to_action(
     focused_panel: FocusedPanel,
     editing_commit: bool,
     files_filter_active: bool,
+    commit_filter_active: bool,
 ) -> Option<Action> {
     #[cfg(windows)]
     if key.kind != KeyEventKind::Press {
@@ -35,7 +36,7 @@ pub fn map_key_to_action(
     }
 
     match mode {
-        AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit, files_filter_active),
+        AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit, files_filter_active, commit_filter_active),
         AppMode::Help => map_help_mode(key),
         AppMode::Input { action, .. } => {
             if *action == crate::app::InputAction::Search {
@@ -57,6 +58,7 @@ fn map_normal_mode(
     panel: FocusedPanel,
     editing_commit: bool,
     files_filter_active: bool,
+    commit_filter_active: bool,
 ) -> Option<Action> {
     // If editing commit message, route to editor keybindings
     if editing_commit && panel == FocusedPanel::CommitDetail {
@@ -75,7 +77,13 @@ fn map_normal_mode(
     }
 
     match panel {
-        FocusedPanel::Graph => map_graph_mode(key),
+        FocusedPanel::Graph => {
+            if commit_filter_active {
+                map_commit_filter_mode(key)
+            } else {
+                map_graph_mode(key)
+            }
+        }
         FocusedPanel::Files => {
             if files_filter_active {
                 map_files_filter_mode(key)
@@ -126,6 +134,9 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
         // Space opens file diff for quick access
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenFileDiff),
+
+        // Commit filter
+        (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartCommitFilter),
 
         // Branch filter
         (KeyModifiers::SHIFT, KeyCode::Char('B')) => Some(Action::OpenBranchFilter),
@@ -192,6 +203,23 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Help
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
 
+        _ => None,
+    }
+}
+
+/// Key bindings when commit filter is active (typing goes to filter)
+fn map_commit_filter_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::CommitFilterBackspace),
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::CommitFilterChar(c)),
+        (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::CommitFilterChar(c)),
         _ => None,
     }
 }

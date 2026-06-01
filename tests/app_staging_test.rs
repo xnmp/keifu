@@ -103,6 +103,9 @@ fn make_base_app(
         commit_detail_max_scroll: 0,
         commit_editor_line_offset: 0,
         commit_detail_visible_rows: 20,
+        commit_filter: String::new(),
+        commit_filter_active: false,
+        visible_commit_indices: Vec::new(),
         search_state: SearchState::default(),
         working_tree_status,
         diff_cache: {

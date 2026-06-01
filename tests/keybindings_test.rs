@@ -16,11 +16,11 @@ fn key_mod(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
 }
 
 fn map_normal_graph(key_event: KeyEvent) -> Option<Action> {
-    map_key_to_action(key_event, &AppMode::Normal, FocusedPanel::Graph, false, false)
+    map_key_to_action(key_event, &AppMode::Normal, FocusedPanel::Graph, false, false, false)
 }
 
 fn map_normal_files(key_event: KeyEvent) -> Option<Action> {
-    map_key_to_action(key_event, &AppMode::Normal, FocusedPanel::Files, false, false)
+    map_key_to_action(key_event, &AppMode::Normal, FocusedPanel::Files, false, false, false)
 }
 
 fn map_normal_detail(key_event: KeyEvent) -> Option<Action> {
@@ -28,6 +28,7 @@ fn map_normal_detail(key_event: KeyEvent) -> Option<Action> {
         key_event,
         &AppMode::Normal,
         FocusedPanel::CommitDetail,
+        false,
         false,
         false,
     )
@@ -39,6 +40,7 @@ fn map_editor(key_event: KeyEvent) -> Option<Action> {
         &AppMode::Normal,
         FocusedPanel::CommitDetail,
         true,
+        false,
         false,
     )
 }
@@ -52,7 +54,7 @@ fn ctrl_q_always_force_quits() {
     assert_eq!(map_normal_graph(k), Some(Action::ForceQuit));
     assert_eq!(map_normal_files(k), Some(Action::ForceQuit));
     assert_eq!(
-        map_key_to_action(k, &AppMode::Help, FocusedPanel::Graph, false, false),
+        map_key_to_action(k, &AppMode::Help, FocusedPanel::Graph, false, false, false),
         Some(Action::ForceQuit)
     );
 }
@@ -246,7 +248,7 @@ fn files_mode_operations() {
 #[test]
 fn files_filter_mode_input() {
     let map = |k: KeyEvent| {
-        map_key_to_action(k, &AppMode::Normal, FocusedPanel::Files, false, true)
+        map_key_to_action(k, &AppMode::Normal, FocusedPanel::Files, false, true, false)
     };
     assert_eq!(map(key(KeyCode::Char('a'))), Some(Action::FilesFilterChar('a')));
     assert_eq!(
@@ -394,7 +396,7 @@ fn commit_menu_navigation() {
         selected: 0,
         filter: String::new(),
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Up)), Some(Action::MoveUp));
     assert_eq!(map(key(KeyCode::Down)), Some(Action::MoveDown));
@@ -412,7 +414,7 @@ fn branch_filter_controls() {
         selected: 0,
         all_branches: vec![],
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Up)), Some(Action::MoveUp));
     assert_eq!(map(key(KeyCode::Down)), Some(Action::MoveDown));
@@ -436,7 +438,7 @@ fn branch_filter_controls() {
 #[test]
 fn help_mode_dismiss() {
     let map =
-        |k: KeyEvent| map_key_to_action(k, &AppMode::Help, FocusedPanel::Graph, false, false);
+        |k: KeyEvent| map_key_to_action(k, &AppMode::Help, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::ToggleHelp));
     assert_eq!(map(key(KeyCode::Char('q'))), Some(Action::ToggleHelp));
@@ -453,7 +455,7 @@ fn input_mode_basic() {
         input: String::new(),
         action: InputAction::CreateBranch,
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Enter)), Some(Action::Confirm));
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
@@ -470,7 +472,7 @@ fn search_mode_controls() {
         input: String::new(),
         action: InputAction::Search,
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Up)), Some(Action::SearchSelectUp));
     assert_eq!(map(key(KeyCode::Down)), Some(Action::SearchSelectDown));
@@ -500,7 +502,7 @@ fn confirm_mode_yes_no() {
         message: String::new(),
         action: keifu::app::ConfirmAction::Push,
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Char('y'))), Some(Action::Confirm));
     assert_eq!(map(key(KeyCode::Enter)), Some(Action::Confirm));
@@ -516,7 +518,7 @@ fn error_mode_dismiss() {
     let mode = AppMode::Error {
         message: String::new(),
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
     assert_eq!(map(key(KeyCode::Enter)), Some(Action::Cancel));
@@ -546,7 +548,7 @@ fn file_diff_mode_scrolling() {
         max_line_width: 0,
         total_lines: 0,
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Down)), Some(Action::ScrollDown));
     assert_eq!(map(key(KeyCode::Up)), Some(Action::ScrollUp));
@@ -592,7 +594,7 @@ fn file_diff_mode_file_navigation() {
         max_line_width: 0,
         total_lines: 0,
     };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false);
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
     assert_eq!(map(key(KeyCode::Char(']'))), Some(Action::NextHunk));
     assert_eq!(map(key(KeyCode::Char('['))), Some(Action::PrevHunk));

@@ -54,41 +54,61 @@ fn display_width(s: &str) -> usize {
 
 pub struct GraphViewWidget<'a> {
     items: Vec<ListItem<'a>>,
+    selected_in_filtered: Option<usize>,
     is_focused: bool,
+    title: String,
     theme: &'a Theme,
 }
 
 impl<'a> GraphViewWidget<'a> {
     pub fn new(app: &App, width: u16, theme: &'a Theme) -> Self {
         let max_lane = app.graph_layout.max_lane;
-        // Actual width minus borders
         let inner_width = width.saturating_sub(2) as usize;
-
-        // Get the currently selected branch name
         let selected_branch_name = app.selected_branch_name();
+        let has_filter = !app.commit_filter.is_empty();
+        let current_selected = app.graph_nav.graph_list_state.selected();
 
-        let items: Vec<ListItem> = app
-            .graph_layout
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(idx, node)| {
-                let is_selected = app.graph_nav.graph_list_state.selected() == Some(idx);
-                let line = render_graph_line(
-                    node,
-                    max_lane,
-                    is_selected,
-                    inner_width,
-                    selected_branch_name,
-                    theme,
-                );
-                ListItem::new(line)
-            })
-            .collect();
+        let node_iter: Vec<(usize, &crate::git::graph::GraphNode)> = if has_filter {
+            app.visible_commit_indices
+                .iter()
+                .map(|&idx| (idx, &app.graph_layout.nodes[idx]))
+                .collect()
+        } else {
+            app.graph_layout.nodes.iter().enumerate().collect()
+        };
+
+        let mut selected_in_filtered = None;
+        let mut items: Vec<ListItem> = Vec::new();
+
+        for (filtered_pos, (full_idx, node)) in node_iter.into_iter().enumerate() {
+            let is_selected = current_selected == Some(full_idx);
+            if is_selected {
+                selected_in_filtered = Some(filtered_pos);
+            }
+            let line = render_graph_line(
+                node,
+                max_lane,
+                is_selected,
+                inner_width,
+                selected_branch_name,
+                theme,
+            );
+            items.push(ListItem::new(line));
+        }
+
+        let title = if app.commit_filter_active {
+            format!(" Commits: {}_ ", app.commit_filter)
+        } else if has_filter {
+            format!(" Commits [{}] ", app.commit_filter)
+        } else {
+            " Commits ".to_string()
+        };
 
         Self {
             items,
+            selected_in_filtered,
             is_focused: app.focused_panel == crate::app::FocusedPanel::Graph,
+            title,
             theme,
         }
     }
@@ -506,7 +526,7 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
         }
 
         let block = Block::default()
-            .title(" Commits ")
+            .title(self.title)
             .borders(Borders::ALL)
             .border_style(self.theme.border_style(self.is_focused))
             .border_type(self.theme.border_type(self.is_focused));
@@ -515,6 +535,10 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
             .block(block)
             .highlight_style(self.theme.selection_style());
 
-        StatefulWidget::render(list, area, buf, state);
+        let mut filtered_state = ListState::default();
+        filtered_state.select(self.selected_in_filtered);
+        StatefulWidget::render(list, area, buf, &mut filtered_state);
+        // Propagate scroll offset back to the original state
+        *state.offset_mut() = *filtered_state.offset_mut();
     }
 }
