@@ -198,7 +198,7 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
 /// Key bindings when files filter is active (typing goes to filter)
 fn map_files_filter_mode(key: KeyEvent) -> Option<Action> {
-    if let Some(action) = map_files_filter_editing_shortcut(key) {
+    if let Some(action) = map_text_editing_shortcut(key) {
         return Some(action);
     }
     match (key.modifiers, key.code) {
@@ -404,18 +404,6 @@ fn map_text_editing_shortcut(key: KeyEvent) -> Option<Action> {
     }
 }
 
-/// Same as map_text_editing_shortcut but returns FilesFilter variants.
-fn map_files_filter_editing_shortcut(key: KeyEvent) -> Option<Action> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-
-    match key.code {
-        KeyCode::Backspace if ctrl || alt => Some(Action::FilesFilterBackspaceWord),
-        KeyCode::Char('h') if ctrl => Some(Action::FilesFilterBackspaceWord),
-        KeyCode::Char('u') if ctrl => Some(Action::FilesFilterClearLine),
-        _ => None,
-    }
-}
 
 fn map_input_mode(key: KeyEvent) -> Option<Action> {
     if let Some(action) = map_text_editing_shortcut(key) {

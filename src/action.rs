@@ -48,8 +48,6 @@ pub enum Action {
     StartFilesFilter,
     FilesFilterChar(char),
     FilesFilterBackspace,
-    FilesFilterBackspaceWord,
-    FilesFilterClearLine,
 
     // Commit editor
     StartEditing,

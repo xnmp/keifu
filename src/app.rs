@@ -1296,10 +1296,10 @@ impl App {
                     self.files_pane.files_filter_active = false;
                 }
             }
-            Action::FilesFilterBackspaceWord => {
+            Action::InputBackspaceWord => {
                 crate::text_editor::pop_word(&mut self.files_pane.files_filter);
             }
-            Action::FilesFilterClearLine => {
+            Action::InputClearLine => {
                 self.files_pane.files_filter.clear();
             }
             Action::Confirm => {
