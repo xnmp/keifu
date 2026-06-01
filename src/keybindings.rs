@@ -46,7 +46,7 @@ pub fn map_key_to_action(
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
-        AppMode::CommitMenu { .. } | AppMode::BranchPicker { .. } => map_commit_menu_mode(key),
+        AppMode::CommitMenu { .. } | AppMode::BranchPicker { .. } | AppMode::BranchDeletePicker { .. } => map_commit_menu_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }

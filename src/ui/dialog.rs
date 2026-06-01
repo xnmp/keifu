@@ -104,11 +104,12 @@ impl<'a> Widget for ConfirmDialog<'a> {
     }
 }
 
-/// Branch picker dialog (shown when checking out a commit with multiple branches)
+/// Branch picker dialog (shown when selecting from multiple branches on a commit)
 pub struct BranchPickerWidget<'a> {
     branches: &'a [String],
     selected: usize,
     theme: &'a Theme,
+    title: &'a str,
 }
 
 impl<'a> BranchPickerWidget<'a> {
@@ -117,6 +118,21 @@ impl<'a> BranchPickerWidget<'a> {
             branches,
             selected,
             theme,
+            title: " Checkout Branch ",
+        }
+    }
+
+    pub fn with_title(
+        branches: &'a [String],
+        selected: usize,
+        theme: &'a Theme,
+        title: &'a str,
+    ) -> Self {
+        Self {
+            branches,
+            selected,
+            theme,
+            title,
         }
     }
 }
@@ -126,7 +142,7 @@ impl<'a> Widget for BranchPickerWidget<'a> {
         Clear.render(area, buf);
 
         let block = Block::default()
-            .title(" Checkout Branch ")
+            .title(self.title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(self.theme.author_color))
             .style(Style::default().bg(self.theme.popup_bg));

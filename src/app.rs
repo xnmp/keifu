@@ -77,6 +77,7 @@ pub enum CommitMenuItem {
     Push,
     Checkout,
     CreateBranch,
+    DeleteBranch,
     MergeIntoCurrent,
     CherryPick,
     Rebase,
@@ -95,6 +96,7 @@ impl CommitMenuItem {
             Self::Push => "Push to origin",
             Self::Checkout => "Checkout",
             Self::CreateBranch => "Create branch here",
+            Self::DeleteBranch => "Delete branch",
             Self::MergeIntoCurrent => "Merge into current branch",
             Self::CherryPick => "Cherry-pick",
             Self::Rebase => "Rebase current branch onto this",
@@ -147,6 +149,10 @@ pub enum AppMode {
         all_branches: Vec<String>,
     },
     BranchPicker {
+        branches: Vec<String>,
+        selected: usize,
+    },
+    BranchDeletePicker {
         branches: Vec<String>,
         selected: usize,
     },
@@ -1008,6 +1014,7 @@ impl App {
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
+            AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }
@@ -1142,11 +1149,29 @@ impl App {
                 };
             }
             Action::DeleteBranch => {
-                if let Some(branch) = self.selected_branch() {
-                    if !branch.is_head && !branch.is_remote {
+                let deletable: Vec<String> = self
+                    .selected_node_branches()
+                    .iter()
+                    .filter(|name| {
+                        self.branches
+                            .iter()
+                            .any(|b| b.name == **name && !b.is_head && !b.is_remote)
+                    })
+                    .map(|s| s.to_string())
+                    .collect();
+
+                match deletable.len() {
+                    0 => {}
+                    1 => {
                         self.mode = AppMode::Confirm {
-                            message: format!("Delete branch '{}'?", branch.name),
-                            action: ConfirmAction::DeleteBranch(branch.name.clone()),
+                            message: format!("Delete branch '{}'?", deletable[0]),
+                            action: ConfirmAction::DeleteBranch(deletable[0].clone()),
+                        };
+                    }
+                    _ => {
+                        self.mode = AppMode::BranchDeletePicker {
+                            branches: deletable,
+                            selected: 0,
                         };
                     }
                 }
@@ -1490,6 +1515,15 @@ impl App {
         items.push(CommitMenuItem::Checkout);
         items.push(CommitMenuItem::CreateBranch);
 
+        let has_deletable_branch = self.selected_node_branches().iter().any(|name| {
+            self.branches
+                .iter()
+                .any(|b| b.name == *name && !b.is_head && !b.is_remote)
+        });
+        if has_deletable_branch {
+            items.push(CommitMenuItem::DeleteBranch);
+        }
+
         if has_branch {
             if let Some(branch) = self.selected_branch() {
                 if !branch.is_head {
@@ -1571,6 +1605,52 @@ impl App {
                     let name = branch_name.clone();
                     self.mode = AppMode::Normal;
                     self.checkout_branch_by_name(&name)?;
+                }
+            }
+            Action::Cancel | Action::Quit => {
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_branch_delete_picker_action(&mut self, action: Action) -> Result<()> {
+        let AppMode::BranchDeletePicker { branches, selected } = &self.mode else {
+            return Ok(());
+        };
+        let branches = branches.clone();
+        let selected = *selected;
+
+        match action {
+            Action::MoveUp => {
+                let new = if selected == 0 {
+                    branches.len().saturating_sub(1)
+                } else {
+                    selected - 1
+                };
+                self.mode = AppMode::BranchDeletePicker {
+                    branches,
+                    selected: new,
+                };
+            }
+            Action::MoveDown => {
+                let new = if selected + 1 >= branches.len() {
+                    0
+                } else {
+                    selected + 1
+                };
+                self.mode = AppMode::BranchDeletePicker {
+                    branches,
+                    selected: new,
+                };
+            }
+            Action::MenuSelect | Action::Confirm => {
+                if let Some(branch_name) = branches.get(selected) {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Delete branch '{}'?", branch_name),
+                        action: ConfirmAction::DeleteBranch(branch_name.clone()),
+                    };
                 }
             }
             Action::Cancel | Action::Quit => {
@@ -1726,6 +1806,34 @@ impl App {
                     input: String::new(),
                     action: InputAction::CreateBranch,
                 };
+            }
+            CommitMenuItem::DeleteBranch => {
+                let deletable: Vec<String> = self
+                    .selected_node_branches()
+                    .iter()
+                    .filter(|name| {
+                        self.branches
+                            .iter()
+                            .any(|b| b.name == **name && !b.is_head && !b.is_remote)
+                    })
+                    .map(|s| s.to_string())
+                    .collect();
+
+                match deletable.len() {
+                    0 => {}
+                    1 => {
+                        self.mode = AppMode::Confirm {
+                            message: format!("Delete branch '{}'?", deletable[0]),
+                            action: ConfirmAction::DeleteBranch(deletable[0].clone()),
+                        };
+                    }
+                    _ => {
+                        self.mode = AppMode::BranchDeletePicker {
+                            branches: deletable,
+                            selected: 0,
+                        };
+                    }
+                }
             }
             CommitMenuItem::MergeIntoCurrent => {
                 if let Some(branch) = self.selected_branch() {

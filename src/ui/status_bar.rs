@@ -267,7 +267,9 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
             }
-            AppMode::CommitMenu { .. } | AppMode::BranchPicker { .. } => {
+            AppMode::CommitMenu { .. }
+            | AppMode::BranchPicker { .. }
+            | AppMode::BranchDeletePicker { .. } => {
                 spans.push(Span::styled(" ↑/↓ ", key_style));
                 spans.push(Span::styled("select ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
@@ -299,6 +301,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Error { .. } => Some(" ERROR "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
+            AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
         };

@@ -242,6 +242,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
         }
+        AppMode::BranchDeletePicker { branches, selected } => {
+            let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
+            let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
+            let popup_height = (branches.len() + 2).min(12) as u16;
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                BranchPickerWidget::with_title(branches, *selected, &theme, " Delete Branch "),
+                popup_area,
+            );
+        }
         AppMode::BranchFilter {
             filter,
             selected,
