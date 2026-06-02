@@ -137,6 +137,8 @@ fn make_diff_app(selected_oid: Oid, in_flight_oid: Option<Oid>) -> App {
         branch_names: Vec::new(),
         is_head: false,
         is_uncommitted: false,
+        is_stash: false,
+        stash_label: None,
         uncommitted_count: None,
         cells: vec![CellType::Commit(0)],
     };
@@ -153,6 +155,8 @@ fn make_uncommitted_app() -> App {
         branch_names: Vec::new(),
         is_head: false,
         is_uncommitted: true,
+        is_stash: false,
+        stash_label: None,
         uncommitted_count: Some(1),
         cells: vec![CellType::Commit(0)],
     };

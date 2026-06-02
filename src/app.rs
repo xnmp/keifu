@@ -333,7 +333,7 @@ impl App {
     }
 
     /// Create an App from a given repository (for testing and embedding)
-    pub fn from_repo(repo: GitRepository) -> Result<Self> {
+    pub fn from_repo(mut repo: GitRepository) -> Result<Self> {
         let config = Config::default();
         let now = Instant::now();
         let repo_path = repo.path.clone();
@@ -341,7 +341,8 @@ impl App {
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
-        let commits = repo.get_commits(500)?;
+        let stashes = repo.get_stashes();
+        let commits = repo.get_commits(500, &stashes)?;
         let branches = repo.get_branches()?;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
@@ -349,7 +350,7 @@ impl App {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
+        let graph_layout = build_graph(&commits, &branches, &stashes, uncommitted_count, head_commit_oid);
 
         let mut graph_nav = GraphNav::new();
         graph_nav.rebuild_branch_positions(&graph_layout);
@@ -408,13 +409,14 @@ impl App {
         let ui_state = UiState::load();
         let now = Instant::now();
 
-        let repo = GitRepository::discover()?;
+        let mut repo = GitRepository::discover()?;
         let repo_path = repo.path.clone();
         let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
-        let commits = repo.get_commits(500)?;
+        let stashes = repo.get_stashes();
+        let commits = repo.get_commits(500, &stashes)?;
         let branches = repo.get_branches()?;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
@@ -422,7 +424,7 @@ impl App {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, uncommitted_count, head_commit_oid);
+        let graph_layout = build_graph(&commits, &branches, &stashes, uncommitted_count, head_commit_oid);
 
         let mut graph_nav = GraphNav::new();
         graph_nav.rebuild_branch_positions(&graph_layout);
@@ -597,7 +599,8 @@ impl App {
             .map(|s| s.accurate_file_count());
         self.working_tree_status = working_tree_status;
 
-        self.commits = self.repo.get_commits(500)?;
+        let stashes = self.repo.get_stashes();
+        self.commits = self.repo.get_commits(500, &stashes)?;
         self.branches = self.repo.get_branches()?;
         let visible_branches: Vec<BranchInfo> = self
             .branches
@@ -609,6 +612,7 @@ impl App {
         self.graph_layout = build_graph(
             &self.commits,
             &visible_branches,
+            &stashes,
             uncommitted_count,
             head_commit_oid,
         );

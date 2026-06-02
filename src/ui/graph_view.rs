@@ -479,9 +479,25 @@ fn render_graph_line<'a>(
         left_width += 1;
     }
 
-    // Compute max message width (remaining space after branch and right side)
+    // Render stash label
+    let stash_width = if let Some(stash_label) = &node.stash_label {
+        let label = format!("{{{}}}", stash_label);
+        let stash_style = Style::default()
+            .fg(theme.text_muted)
+            .add_modifier(Modifier::ITALIC);
+        let w = display_width(&label) + 1;
+        left_width += w;
+        spans.push(Span::styled(label, stash_style));
+        spans.push(Span::raw(" "));
+        w
+    } else {
+        0
+    };
+
+    // Compute max message width (remaining space after branch, stash label, and right side)
     let available_for_message = remaining_for_content
         .saturating_sub(branch_width)
+        .saturating_sub(stash_width)
         .saturating_sub(right_width);
     let message = truncate_to_width(&commit.message, available_for_message);
     let message_width = display_width(&message);

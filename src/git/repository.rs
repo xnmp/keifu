@@ -10,6 +10,14 @@ use git2::Oid;
 
 use super::{BranchInfo, CommitDiffInfo, CommitInfo};
 
+#[derive(Debug, Clone)]
+pub struct StashInfo {
+    pub index: usize,
+    pub message: String,
+    pub oid: Oid,
+    pub base_oid: Oid,
+}
+
 pub struct GitRepository {
     repo: Repository,
     pub path: String,
@@ -49,7 +57,11 @@ impl GitRepository {
     }
 
     /// Get commit history (newest first)
-    pub fn get_commits(&self, max_count: usize) -> Result<Vec<CommitInfo>> {
+    pub fn get_commits(
+        &self,
+        max_count: usize,
+        stashes: &[StashInfo],
+    ) -> Result<Vec<CommitInfo>> {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
 
@@ -61,14 +73,64 @@ impl GitRepository {
             }
         }
 
+        // Collect stash OIDs and their internal commits (index, untracked)
+        // that should be excluded from the graph.
+        let stash_oids: std::collections::HashSet<Oid> =
+            stashes.iter().map(|s| s.oid).collect();
+        let mut stash_internal_oids: std::collections::HashSet<Oid> =
+            std::collections::HashSet::new();
+        for stash in stashes {
+            if let Ok(commit) = self.repo.find_commit(stash.oid) {
+                // Parents beyond the first (index tree, untracked tree) are internal
+                for i in 1..commit.parent_count() {
+                    if let Ok(parent_id) = commit.parent_id(i) {
+                        stash_internal_oids.insert(parent_id);
+                    }
+                }
+            }
+            let _ = revwalk.push(stash.oid);
+        }
+
         let mut commits = Vec::new();
         for oid_result in revwalk.take(max_count) {
             let oid = oid_result?;
+            // Skip stash internal commits (index tree, untracked tree)
+            if stash_internal_oids.contains(&oid) {
+                continue;
+            }
             let commit = self.repo.find_commit(oid)?;
-            commits.push(CommitInfo::from_git2_commit(&commit));
+            let mut info = CommitInfo::from_git2_commit(&commit);
+            // Stash commits have 2-3 parents (base + index + untracked).
+            // Treat them as single-parent to avoid merge rendering.
+            if stash_oids.contains(&oid) {
+                info.parent_oids.truncate(1);
+            }
+            commits.push(info);
         }
 
         Ok(commits)
+    }
+
+    pub fn get_stashes(&mut self) -> Vec<StashInfo> {
+        let mut raw_stashes = Vec::new();
+        let _ = self.repo.stash_foreach(|index, message, oid| {
+            raw_stashes.push((index, message.to_string(), *oid));
+            true
+        });
+
+        raw_stashes
+            .into_iter()
+            .filter_map(|(index, message, oid)| {
+                let commit = self.repo.find_commit(oid).ok()?;
+                let base_oid = commit.parent_id(0).ok()?;
+                Some(StashInfo {
+                    index,
+                    message,
+                    oid,
+                    base_oid,
+                })
+            })
+            .collect()
     }
 
     /// Get branch list

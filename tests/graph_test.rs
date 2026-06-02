@@ -74,7 +74,7 @@ fn test_linear_history() {
     ];
     let branches = vec![make_branch("main", "c3", true)];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("Linear history:");
     for node in &layout.nodes {
@@ -90,7 +90,7 @@ fn test_linear_history() {
 
 #[test]
 fn test_unborn_repo_shows_uncommitted_node() {
-    let layout = build_graph(&[], &[], Some(Some(1)), None);
+    let layout = build_graph(&[], &[], &[], Some(Some(1)), None);
 
     assert_eq!(layout.max_lane, 0);
     assert_eq!(layout.nodes.len(), 1);
@@ -120,7 +120,7 @@ fn test_simple_branch_merge() {
         make_branch("feature", "c2", false),
     ];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nSimple branch merge:");
     for node in &layout.nodes {
@@ -169,7 +169,7 @@ fn test_multiple_merges() {
         make_branch("develop", "c2", false),
     ];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nMultiple merges:");
     for node in &layout.nodes {
@@ -202,7 +202,7 @@ fn test_cell_structure() {
     ];
     let branches = vec![make_branch("main", "m1", true)];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nCell structure analysis:");
     for node in &layout.nodes {
@@ -243,7 +243,7 @@ fn test_octopus_merge() {
         make_branch("branch-c", "C", false),
     ];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nOctopus merge:");
     for node in &layout.nodes {
@@ -279,7 +279,7 @@ fn test_parallel_branches() {
     ];
     let branches = vec![make_branch("main", "M2", true)];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nParallel branches:");
     for node in &layout.nodes {
@@ -318,7 +318,7 @@ fn test_many_active_lanes() {
         make_branch("d", "D", false),
     ];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nMany active lanes:");
     for node in &layout.nodes {
@@ -370,7 +370,7 @@ fn test_chained_merges_different_branches() {
         make_branch("develop", "develop-merge", true),
     ];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nChained merges (keifu-demo structure):");
     for node in &layout.nodes {
@@ -452,7 +452,7 @@ fn test_hotfix_merged_into_multiple_branches() {
         make_branch("hotfix", "hotfix", false),
     ];
 
-    let layout = build_graph(&commits, &branches, None, None);
+    let layout = build_graph(&commits, &branches, &[], None, None);
 
     println!("\nHotfix merged into multiple branches:");
     for node in &layout.nodes {

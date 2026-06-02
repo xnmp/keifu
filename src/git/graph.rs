@@ -1,6 +1,6 @@
 //! Commit graph construction
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use git2::Oid;
 
@@ -22,6 +22,10 @@ pub struct GraphNode {
     pub is_head: bool,
     /// Whether this is an uncommitted changes node
     pub is_uncommitted: bool,
+    /// Whether this is a stash commit
+    pub is_stash: bool,
+    /// Stash label (e.g. "stash@{0}: WIP on main")
+    pub stash_label: Option<String>,
     /// Number of uncommitted files (None when count is inaccurate, e.g.
     /// collapsed untracked directories).  Valid only when is_uncommitted is true.
     pub uncommitted_count: Option<usize>,
@@ -73,9 +77,17 @@ pub struct GraphLayout {
 pub fn build_graph(
     commits: &[CommitInfo],
     branches: &[BranchInfo],
+    stashes: &[super::repository::StashInfo],
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
 ) -> GraphLayout {
+    // Map stash oid -> short label like "stash@{0}"
+    let stash_oid_labels: HashMap<Oid, String> = stashes
+        .iter()
+        .map(|s| (s.oid, format!("stash@{{{}}}", s.index)))
+        .collect();
+    let stash_oids: HashSet<Oid> = stashes.iter().map(|s| s.oid).collect();
+
     if commits.is_empty() {
         if let Some(count) = uncommitted_count {
             return GraphLayout {
@@ -86,6 +98,8 @@ pub fn build_graph(
                     branch_names: Vec::new(),
                     is_head: false,
                     is_uncommitted: true,
+                    is_stash: false,
+                    stash_label: None,
                     uncommitted_count: count,
                     cells: vec![CellType::Commit(UNCOMMITTED_COLOR_INDEX)],
                 }],
@@ -229,6 +243,8 @@ pub fn build_graph(
                 branch_names: Vec::new(),
                 is_head: false,
                 is_uncommitted: false,
+                is_stash: false,
+                stash_label: None,
                 uncommitted_count: None,
                 cells: fork_connector_cells,
             });
@@ -391,6 +407,8 @@ pub fn build_graph(
         let is_head = head_oid.map(|h| h == commit.oid).unwrap_or(false);
 
         // Add commit row
+        let is_stash = stash_oids.contains(&commit.oid);
+        let stash_label = stash_oid_labels.get(&commit.oid).cloned();
         nodes.push(GraphNode {
             commit: Some(commit.clone()),
             lane,
@@ -398,6 +416,8 @@ pub fn build_graph(
             branch_names,
             is_head,
             is_uncommitted: false,
+            is_stash,
+            stash_label,
             uncommitted_count: None,
             cells,
         });
@@ -560,6 +580,8 @@ pub fn build_graph(
                     branch_names: Vec::new(),
                     is_head: false,
                     is_uncommitted: true,
+                    is_stash: false,
+                    stash_label: None,
                     uncommitted_count: count,
                     cells,
                 },
