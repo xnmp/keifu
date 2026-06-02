@@ -112,11 +112,21 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                     buf.set_line(inner.x, y, &line, inner.width);
                 }
                 FilesPaneItem::FolderHeader(text) => {
-                    let style = Style::default()
-                        .fg(self.theme.text_muted)
-                        .add_modifier(Modifier::BOLD);
+                    let style = if is_selected {
+                        self.theme.selection_style().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(self.theme.text_muted)
+                            .add_modifier(Modifier::BOLD)
+                    };
                     let line = Line::from(Span::styled(format!("  {}", text), style));
                     buf.set_line(inner.x, y, &line, inner.width);
+                    if is_selected {
+                        buf.set_style(
+                            Rect::new(inner.x, y, inner.width, 1),
+                            self.theme.selection_style(),
+                        );
+                    }
                 }
                 FilesPaneItem::File(file) => {
                     let (indicator, color) = self.theme.file_change_style(&file.kind);

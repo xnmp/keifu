@@ -23,8 +23,19 @@ pub struct FileSelection {
 
 impl FileSelection {
     /// Resolve this selection to an index within the given items.
-    /// Returns the index of the matching file, or the first file if not found.
+    /// Returns the index of the matching item (file or folder header).
     pub fn resolve(&self, items: &[FilesPaneItem]) -> usize {
+        // If path is None but section is set, we're selecting a folder header
+        if self.path.is_none() {
+            if let Some(ref section) = self.section {
+                for (i, item) in items.iter().enumerate() {
+                    if matches!(item, FilesPaneItem::FolderHeader(t) if t == section) {
+                        return i;
+                    }
+                }
+            }
+        }
+
         // Try to find exact match (section + path)
         if let Some(ref path) = self.path {
             if let Some(ref section) = self.section {
@@ -48,26 +59,33 @@ impl FileSelection {
                 }
             }
         }
-        // Fall back to first file
+        // Fall back to first non-section-header item
         items
             .iter()
-            .position(|item| matches!(item, FilesPaneItem::File(_)))
+            .position(|item| !matches!(item, FilesPaneItem::SectionHeader(_)))
             .unwrap_or(0)
     }
 
     /// Set selection from an index in the given items.
     pub(crate) fn set_from_index(&mut self, idx: usize, items: &[FilesPaneItem]) {
-        if let Some(FilesPaneItem::File(f)) = items.get(idx) {
-            self.path = Some(f.path.clone());
-            self.section = items[..=idx]
-                .iter()
-                .rev()
-                .find_map(|item| match item {
-                    FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
-                        Some(t.clone())
-                    }
-                    _ => None,
-                });
+        match items.get(idx) {
+            Some(FilesPaneItem::File(f)) => {
+                self.path = Some(f.path.clone());
+                self.section = items[..=idx]
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                            Some(t.clone())
+                        }
+                        _ => None,
+                    });
+            }
+            Some(FilesPaneItem::FolderHeader(t)) => {
+                self.path = None;
+                self.section = Some(t.clone());
+            }
+            _ => {}
         }
     }
 }
@@ -157,9 +175,22 @@ impl FilesPaneState {
     }
 
     /// Resolve the selected display item to all affected files.
+    /// For a single file, returns just that file.
+    /// For a folder header, returns all files under that folder (until the next header).
     pub fn selected_files(&self) -> Vec<&FileDiffInfo> {
-        match self.selected_display_item() {
+        let idx = self.file_selected_index();
+        let items = &self.display_items_cache;
+
+        match items.get(idx) {
             Some(FilesPaneItem::File(f)) => vec![f],
+            Some(FilesPaneItem::FolderHeader(_)) => items[idx + 1..]
+                .iter()
+                .take_while(|item| matches!(item, FilesPaneItem::File(_)))
+                .filter_map(|item| match item {
+                    FilesPaneItem::File(f) => Some(f),
+                    _ => None,
+                })
+                .collect(),
             _ => vec![],
         }
     }
@@ -201,14 +232,9 @@ impl FilesPaneState {
         let current = self.file_selection.resolve(items);
         let max = items.len() as i32 - 1;
         let mut target = (current as i32 + delta).clamp(0, max) as usize;
-        // Skip headers in the direction of movement
+        // Skip only section headers (folder headers are selectable)
         let dir = if delta >= 0 { 1i32 } else { -1 };
-        while target < items.len()
-            && matches!(
-                items[target],
-                FilesPaneItem::SectionHeader(_) | FilesPaneItem::FolderHeader(_)
-            )
-        {
+        while target < items.len() && matches!(items[target], FilesPaneItem::SectionHeader(_)) {
             let next = target as i32 + dir;
             if next < 0 || next > max {
                 break;
