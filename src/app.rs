@@ -833,15 +833,21 @@ impl App {
         if matches!(self.mode, AppMode::FileDiff { .. }) {
             return;
         }
-        let should_refresh = self
-            .watcher
-            .as_mut()
-            .is_some_and(|w| w.poll());
-        if should_refresh {
-            if let Err(e) = self.refresh(false) {
-                self.set_message(format!("Watch refresh failed: {e}"));
+        let Some(watcher) = self.watcher.as_mut() else {
+            return;
+        };
+        match watcher.poll() {
+            crate::watcher::PollResult::Refresh => {
+                if let Err(e) = self.refresh(false) {
+                    self.set_message(format!("Watch refresh failed: {e}"));
+                }
+                self.network.mark_refreshed();
             }
-            self.network.mark_refreshed();
+            crate::watcher::PollResult::Disconnected => {
+                self.set_message("Filesystem watcher disconnected".to_string());
+                self.watcher = None;
+            }
+            crate::watcher::PollResult::Idle => {}
         }
     }
 
