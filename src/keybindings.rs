@@ -263,6 +263,9 @@ fn map_commit_detail_mode(key: KeyEvent) -> Option<Action> {
         // Ctrl+Enter: amend --no-edit (on uncommitted node with staged files)
         (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => Some(Action::AmendCommit),
 
+        // Ctrl+S: stash staged changes with commit message
+        (m, KeyCode::Char('s')) if m.contains(KeyModifiers::CONTROL) => Some(Action::StashStaged),
+
         // Esc returns to graph
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
 
@@ -290,6 +293,11 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
         // Ctrl+Enter amends last commit
         (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => {
             Some(Action::AmendCommit)
+        }
+
+        // Ctrl+S: stash staged changes with commit message
+        (m, KeyCode::Char('s')) if m.contains(KeyModifiers::CONTROL) => {
+            Some(Action::StashStaged)
         }
 
         // Esc exits edit mode

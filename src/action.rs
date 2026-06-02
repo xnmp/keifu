@@ -59,6 +59,7 @@ pub enum Action {
     StopEditing,
     CommitChanges,
     AmendCommit,
+    StashStaged,
     EditorChar(char),
     EditorNewline,
     EditorBackspace,

@@ -359,6 +359,16 @@ pub fn commit_amend_no_edit(repo_path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn stash_staged(repo_path: &str, message: &str) -> Result<()> {
+    let args = if message.is_empty() {
+        vec!["stash", "push", "--staged"]
+    } else {
+        vec!["stash", "push", "--staged", "-m", message]
+    };
+    run_git(repo_path, &args)?;
+    Ok(())
+}
+
 /// Get the message of the last commit.
 pub fn get_last_commit_message(repo_path: &str) -> Result<String> {
     let output = run_git(repo_path, &["log", "-1", "--format=%B"])?;

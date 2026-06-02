@@ -151,6 +151,8 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("commit ", desc_style));
                             spans.push(Span::styled(" Ctrl+Enter ", key_style));
                             spans.push(Span::styled("amend ", desc_style));
+                            spans.push(Span::styled(" Ctrl+S ", key_style));
+                            spans.push(Span::styled("stash ", desc_style));
                         }
                         spans.push(Span::styled(" Esc ", key_style));
                         spans.push(Span::styled("cancel", desc_style));

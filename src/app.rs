@@ -21,7 +21,7 @@ use crate::{
             commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
             delete_branch, get_last_commit_message, merge_branch,
             rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
-            unstage_file, ResetMode,
+            stash_staged, unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
         GitRepository, StageStatus, WorkingTreeStatus,
@@ -1556,6 +1556,18 @@ impl App {
                     self.set_message("Commit amended");
                     self.focused_panel = FocusedPanel::Graph;
                 }
+            }
+            Action::StashStaged => {
+                if !self.is_uncommitted_selected() {
+                    return Ok(());
+                }
+                let msg = self.commit_editor.text.trim().to_string();
+                stash_staged(&self.repo_path, &msg)?;
+                self.commit_editor = crate::text_editor::TextEditor::new();
+                self.editing_commit_message = false;
+                self.refresh(true)?;
+                self.set_message("Staged changes stashed");
+                self.focused_panel = FocusedPanel::Graph;
             }
             Action::EditorChar(c) => self.commit_editor.insert_char(c),
             Action::EditorNewline => self.commit_editor.insert_newline(),
