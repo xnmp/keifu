@@ -36,28 +36,29 @@ fn main() -> Result<()> {
     // Initialize terminal
     let mut terminal = tui::init()?;
 
+    // Render the first frame immediately
+    terminal.draw(|frame| {
+        ui::draw(frame, &mut app);
+    })?;
+
     // Main loop
     loop {
-        // Render
-        terminal.draw(|frame| {
-            ui::draw(frame, &mut app);
-        })?;
-
-        // Check if async operations have completed
-        app.update_fetch_status();
-        app.update_push_status();
-
-        // Auto-refresh check
-        app.check_auto_refresh();
-        app.poll_fs_watcher();
-
         // Exit check
         if app.should_quit {
             break;
         }
 
-        // Event handling
-        if let Some(event) = poll_event()? {
+        // Wait for input (blocks up to 33ms)
+        let event = poll_event()?;
+
+        // Check background operations (cheap — just polls mpsc channels)
+        app.update_fetch_status();
+        app.update_push_status();
+        app.check_auto_refresh();
+        app.poll_fs_watcher();
+
+        // Process input
+        if let Some(event) = event {
             if let Some(key) = get_key_event(&event) {
                 if app.debug_keys {
                     app.set_message(format!(
@@ -74,14 +75,12 @@ fn main() -> Result<()> {
                     app.commit_filter_active,
                 ) {
                     if let Err(e) = app.handle_action(action) {
-                        // Show errors in the UI
                         app.show_error(format!("{}", e));
                     }
                 }
             } else if let Some(scroll) = get_mouse_scroll(&event) {
                 let (action, multiplier) = match &app.mode {
                     AppMode::FileDiff { .. } => {
-                        // Diff view: 3x scroll speed
                         let a = if scroll > 0 {
                             keifu::action::Action::ScrollDown
                         } else {
@@ -90,7 +89,6 @@ fn main() -> Result<()> {
                         (a, 3)
                     }
                     _ => {
-                        // Normal/other modes: standard graph movement
                         let a = if scroll > 0 {
                             keifu::action::Action::MoveDown
                         } else {
@@ -106,8 +104,12 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            // Resize events trigger redraw automatically
         }
+
+        // Render after processing
+        terminal.draw(|frame| {
+            ui::draw(frame, &mut app);
+        })?;
     }
 
     // Restore terminal

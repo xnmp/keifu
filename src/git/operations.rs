@@ -1,7 +1,7 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository};
@@ -11,6 +11,7 @@ fn run_git(repo_path: &str, args: &[&str]) -> Result<std::process::Output> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repo_path)
+        .stdin(Stdio::null())
         .output()
         .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
     if !output.status.success() {
