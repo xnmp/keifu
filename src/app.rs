@@ -306,6 +306,9 @@ pub struct App {
     // Network operations (fetch/push/auto-refresh)
     pub network: NetworkManager,
 
+    // Filesystem watcher
+    pub watcher: Option<crate::watcher::FsWatcher>,
+
     // Undo
     pub last_undoable_op: Option<UndoableOperation>,
 
@@ -334,6 +337,7 @@ impl App {
         let config = Config::default();
         let now = Instant::now();
         let repo_path = repo.path.clone();
+        let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
@@ -390,6 +394,7 @@ impl App {
             message: initial_message,
             message_time: initial_message_time,
             network: NetworkManager::new(),
+            watcher: fs_watcher,
             last_undoable_op: None,
             side_panel_layout: false,
             debug_keys: false,
@@ -405,6 +410,7 @@ impl App {
 
         let repo = GitRepository::discover()?;
         let repo_path = repo.path.clone();
+        let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
@@ -465,6 +471,7 @@ impl App {
             message: initial_message,
             message_time: initial_message_time,
             network: NetworkManager::new(),
+            watcher: fs_watcher,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             debug_keys: false,
@@ -814,6 +821,25 @@ impl App {
         } else if events.should_auto_refresh {
             if let Err(e) = self.refresh(false) {
                 self.set_message(format!("Auto-refresh failed: {e}"));
+            }
+            self.network.mark_refreshed();
+        }
+    }
+
+    pub fn poll_fs_watcher(&mut self) {
+        if !self.config.refresh.auto_refresh {
+            return;
+        }
+        if matches!(self.mode, AppMode::FileDiff { .. }) {
+            return;
+        }
+        let should_refresh = self
+            .watcher
+            .as_mut()
+            .is_some_and(|w| w.poll());
+        if should_refresh {
+            if let Err(e) = self.refresh(false) {
+                self.set_message(format!("Watch refresh failed: {e}"));
             }
             self.network.mark_refreshed();
         }

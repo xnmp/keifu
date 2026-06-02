@@ -121,6 +121,7 @@ fn make_base_app(
         message: None,
         message_time: None,
         network: NetworkManager::new(),
+        watcher: None,
         last_undoable_op: None,
         side_panel_layout: false,
         debug_keys: false,

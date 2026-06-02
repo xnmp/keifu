@@ -49,6 +49,7 @@ fn main() -> Result<()> {
 
         // Auto-refresh check
         app.check_auto_refresh();
+        app.poll_fs_watcher();
 
         // Exit check
         if app.should_quit {
