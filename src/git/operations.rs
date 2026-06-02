@@ -370,6 +370,24 @@ pub fn stash_staged(repo_path: &str, message: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn stash_apply(repo_path: &str, index: usize) -> Result<()> {
+    let ref_name = format!("stash@{{{index}}}");
+    run_git(repo_path, &["stash", "apply", &ref_name])?;
+    Ok(())
+}
+
+pub fn stash_pop(repo_path: &str, index: usize) -> Result<()> {
+    let ref_name = format!("stash@{{{index}}}");
+    run_git(repo_path, &["stash", "pop", &ref_name])?;
+    Ok(())
+}
+
+pub fn stash_drop(repo_path: &str, index: usize) -> Result<()> {
+    let ref_name = format!("stash@{{{index}}}");
+    run_git(repo_path, &["stash", "drop", &ref_name])?;
+    Ok(())
+}
+
 /// Get the message of the last commit.
 pub fn get_last_commit_message(repo_path: &str) -> Result<String> {
     let output = run_git(repo_path, &["log", "-1", "--format=%B"])?;

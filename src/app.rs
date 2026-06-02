@@ -21,7 +21,7 @@ use crate::{
             commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
             delete_branch, get_last_commit_message, merge_branch,
             rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
-            stash_staged, unstage_file, ResetMode,
+            stash_apply, stash_drop, stash_pop, stash_staged, unstage_file, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
         GitRepository, StageStatus, WorkingTreeStatus,
@@ -88,6 +88,9 @@ pub enum CommitMenuItem {
     AddTag,
     Revert,
     CopyHash,
+    StashApply,
+    StashPop,
+    StashDrop,
 }
 
 impl CommitMenuItem {
@@ -107,6 +110,9 @@ impl CommitMenuItem {
             Self::AddTag => "Add tag",
             Self::Revert => "Revert this commit",
             Self::CopyHash => "Copy commit hash",
+            Self::StashApply => "Apply stash",
+            Self::StashPop => "Pop stash (apply + drop)",
+            Self::StashDrop => "Drop stash",
         }
     }
 }
@@ -192,6 +198,7 @@ pub enum ConfirmAction {
     Push,
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
+    StashDrop(usize),
 }
 
 
@@ -1686,6 +1693,20 @@ impl App {
             return;
         }
 
+        if node.is_stash {
+            let items = vec![
+                CommitMenuItem::StashApply,
+                CommitMenuItem::StashPop,
+                CommitMenuItem::StashDrop,
+            ];
+            self.mode = AppMode::CommitMenu {
+                items,
+                selected: 0,
+                filter: String::new(),
+            };
+            return;
+        }
+
         let has_branch = self.selected_branch().is_some();
         let mut items = Vec::new();
 
@@ -2201,8 +2222,36 @@ impl App {
             CommitMenuItem::Push => {
                 self.start_push();
             }
+            CommitMenuItem::StashApply => {
+                if let Some(index) = self.selected_stash_index() {
+                    stash_apply(&self.repo_path, index)?;
+                    self.refresh(false)?;
+                    self.set_message("Stash applied");
+                }
+            }
+            CommitMenuItem::StashPop => {
+                if let Some(index) = self.selected_stash_index() {
+                    stash_pop(&self.repo_path, index)?;
+                    self.refresh(true)?;
+                    self.set_message("Stash popped");
+                }
+            }
+            CommitMenuItem::StashDrop => {
+                if let Some(index) = self.selected_stash_index() {
+                    self.mode = AppMode::Confirm {
+                        message: format!("Drop stash@{{{}}}? This cannot be undone.", index),
+                        action: ConfirmAction::StashDrop(index),
+                    };
+                }
+            }
         }
         Ok(())
+    }
+
+    fn selected_stash_index(&self) -> Option<usize> {
+        let node = self.selected_commit_node()?;
+        let label = node.stash_label.as_ref()?;
+        label.strip_prefix("stash@{")?.strip_suffix('}')?.parse().ok()
     }
 
     fn toggle_stage_selected_file(&mut self) -> Result<()> {
@@ -2976,6 +3025,10 @@ impl App {
                         self.mode = AppMode::Normal;
                         self.refresh_after_file_op()?;
                         return Ok(());
+                    }
+                    ConfirmAction::StashDrop(index) => {
+                        stash_drop(&self.repo_path, index)?;
+                        self.set_message(format!("Dropped stash@{{{}}}", index));
                     }
                 }
                 self.refresh(true)?;
