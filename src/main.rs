@@ -3,9 +3,11 @@
 use anyhow::Result;
 use clap::Parser;
 
+use std::time::{Duration, Instant};
+
 use keifu::{
     app::{App, AppMode},
-    event::{get_key_event, get_mouse_scroll, poll_event},
+    event::{get_key_event, get_mouse_scroll, poll_event_with_timeout},
     git::configure_git_extensions,
     keybindings::map_key_to_action,
     tui, ui,
@@ -36,26 +38,44 @@ fn main() -> Result<()> {
     // Initialize terminal
     let mut terminal = tui::init()?;
 
-    // Render the first frame immediately
-    terminal.draw(|frame| {
-        ui::draw(frame, &mut app);
-    })?;
+    let mut needs_render = true;
+    let mut render_deadline: Option<Instant> = None;
 
     // Main loop
     loop {
-        // Exit check
+        // Render only when state has changed
+        if needs_render {
+            terminal.draw(|frame| {
+                ui::draw(frame, &mut app);
+            })?;
+            needs_render = false;
+        }
+
         if app.should_quit {
             break;
         }
 
-        // Wait for input (blocks up to 33ms)
-        let event = poll_event()?;
+        // Determine poll timeout — shorter if a render deadline is approaching
+        let timeout = match render_deadline {
+            Some(dl) => dl
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(33)),
+            None => Duration::from_millis(33),
+        };
 
-        // Check background operations (cheap — just polls mpsc channels)
-        app.update_fetch_status();
-        app.update_push_status();
-        app.check_auto_refresh();
-        app.poll_fs_watcher();
+        let event = poll_event_with_timeout(timeout)?;
+
+        // Check if render deadline has elapsed (message expiry)
+        if render_deadline.is_some_and(|dl| Instant::now() >= dl) {
+            needs_render = true;
+        }
+
+        // Poll background operations
+        needs_render |= app.update_diff_cache();
+        needs_render |= app.update_fetch_status();
+        needs_render |= app.update_push_status();
+        needs_render |= app.check_auto_refresh();
+        needs_render |= app.poll_fs_watcher();
 
         // Process input
         if let Some(event) = event {
@@ -104,12 +124,11 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            needs_render = true;
         }
 
-        // Render after processing
-        terminal.draw(|frame| {
-            ui::draw(frame, &mut app);
-        })?;
+        // Refresh message expiry deadline
+        render_deadline = app.message_expiry_time();
     }
 
     // Restore terminal

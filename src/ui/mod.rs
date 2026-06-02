@@ -56,8 +56,6 @@ pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
 
 /// Render the main UI
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    // Update the diff cache once before rendering
-    app.update_diff_cache();
     // Rebuild display items so they match the latest diff data.
     // Selection is path-based so this doesn't reset it.
     app.sync_file_list_cache();

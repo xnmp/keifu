@@ -33,6 +33,8 @@ pub const DIFF_LOAD_DEBOUNCE: Duration = Duration::from_millis(120);
 /// Signals returned by `poll()` to notify App of state changes.
 #[derive(Debug, Default)]
 pub struct DiffCacheEvents {
+    /// A diff result was received (commit or uncommitted).
+    pub diff_loaded: bool,
     /// A new uncommitted diff has been loaded; App should sync file list.
     pub uncommitted_diff_loaded: bool,
     /// A status message to display to the user.
@@ -282,10 +284,12 @@ impl DiffCache {
                     }
                     self.diff_loading_oid = None;
                     self.diff_receiver = None;
+                    events.diff_loaded = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.diff_loading_oid = None;
                     self.diff_receiver = None;
+                    events.diff_loaded = true;
                     events.message = Some("Diff computation failed unexpectedly".to_string());
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -314,12 +318,14 @@ impl DiffCache {
                     }
                     self.uncommitted_diff_loading = false;
                     self.uncommitted_diff_receiver = None;
+                    events.diff_loaded = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.uncommitted_diff_loading = false;
                     self.uncommitted_diff_receiver = None;
                     self.uncommitted_diff_failed = true;
                     self.uncommitted_cache_key = working_tree_status.cloned();
+                    events.diff_loaded = true;
                     events.message = Some("Diff computation failed unexpectedly".to_string());
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}

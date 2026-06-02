@@ -5,13 +5,18 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEvent, MouseEvent, MouseEventKind};
 
-/// Poll for events (33ms timeout — ~30fps tick rate)
-pub fn poll_event() -> Result<Option<Event>> {
-    if event::poll(Duration::from_millis(33))? {
+/// Poll for events with a custom timeout.
+pub fn poll_event_with_timeout(timeout: Duration) -> Result<Option<Event>> {
+    if event::poll(timeout)? {
         Ok(Some(event::read()?))
     } else {
         Ok(None)
     }
+}
+
+/// Poll for events (33ms timeout — ~30fps tick rate)
+pub fn poll_event() -> Result<Option<Event>> {
+    poll_event_with_timeout(Duration::from_millis(33))
 }
 
 /// Extract key event

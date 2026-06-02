@@ -775,9 +775,9 @@ impl App {
         self.graph_nav.jump_to_head(self.head_name.as_deref());
     }
 
-    pub fn update_fetch_status(&mut self) {
+    pub fn update_fetch_status(&mut self) -> bool {
         let Some(result) = self.network.poll_fetch() else {
-            return;
+            return false;
         };
         match result {
             Ok(()) => {
@@ -801,6 +801,7 @@ impl App {
             }
             Err(e) => self.show_error(e),
         }
+        true
     }
 
     pub fn is_fetching(&self) -> bool {
@@ -815,30 +816,34 @@ impl App {
         self.network.is_busy()
     }
 
-    pub fn check_auto_refresh(&mut self) {
+    pub fn check_auto_refresh(&mut self) -> bool {
         if matches!(self.mode, AppMode::FileDiff { .. }) {
-            return;
+            return false;
         }
         let events = self.network.check_auto_timers(&self.config.refresh);
         if events.should_auto_fetch {
             self.start_fetch(false, true);
+            true
         } else if events.should_auto_refresh {
             if let Err(e) = self.refresh(false) {
                 self.set_message(format!("Auto-refresh failed: {e}"));
             }
             self.network.mark_refreshed();
+            true
+        } else {
+            false
         }
     }
 
-    pub fn poll_fs_watcher(&mut self) {
+    pub fn poll_fs_watcher(&mut self) -> bool {
         if !self.config.refresh.auto_refresh {
-            return;
+            return false;
         }
         if matches!(self.mode, AppMode::FileDiff { .. }) {
-            return;
+            return false;
         }
         let Some(watcher) = self.watcher.as_mut() else {
-            return;
+            return false;
         };
         match watcher.poll() {
             crate::watcher::PollResult::Refresh => {
@@ -846,12 +851,14 @@ impl App {
                     self.set_message(format!("Watch refresh failed: {e}"));
                 }
                 self.network.mark_refreshed();
+                true
             }
             crate::watcher::PollResult::Disconnected => {
                 self.set_message("Filesystem watcher disconnected".to_string());
                 self.watcher = None;
+                true
             }
-            crate::watcher::PollResult::Idle => {}
+            crate::watcher::PollResult::Idle => false,
         }
     }
 
@@ -866,9 +873,9 @@ impl App {
         self.set_message(msg);
     }
 
-    pub fn update_push_status(&mut self) {
+    pub fn update_push_status(&mut self) -> bool {
         let Some(result) = self.network.poll_push() else {
-            return;
+            return false;
         };
         match result {
             Ok(()) => {
@@ -879,6 +886,7 @@ impl App {
             }
             Err(e) => self.show_error(e),
         }
+        true
     }
 
     fn reset_timers(&mut self) {
@@ -910,25 +918,48 @@ impl App {
         }
     }
 
+    /// Returns the instant when the current message should expire and be cleared
+    /// from the display. Returns `None` if no message, already expired, or network
+    /// busy (busy messages don't expire).
+    pub fn message_expiry_time(&self) -> Option<std::time::Instant> {
+        const MESSAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        if self.is_network_busy() {
+            return None;
+        }
+        let _msg = self.message.as_ref()?;
+        let time = self.message_time.as_ref()?;
+        if time.elapsed() < MESSAGE_TIMEOUT {
+            Some(*time + MESSAGE_TIMEOUT)
+        } else {
+            None
+        }
+    }
+
     /// Get search match count
     pub fn search_match_count(&self) -> usize {
         self.search_state.fuzzy_matches.len()
     }
 
     /// Update diff info for the selected node (commit or uncommitted changes, async)
-    pub fn update_diff_cache(&mut self) {
+    pub fn update_diff_cache(&mut self) -> bool {
         let target = self.sync_selected_diff_target();
         let events = self.diff_cache.poll(
             target,
             &self.repo_path,
             self.working_tree_status.as_ref(),
         );
+        let has_message = events.message.is_some();
         if let Some(msg) = events.message {
             self.set_message(msg);
         }
         if events.uncommitted_diff_loaded {
             self.sync_file_list_with_uncommitted_diff();
         }
+        if events.diff_loaded {
+            self.sync_file_list_cache();
+        }
+        events.diff_loaded || has_message
     }
 
     /// Get cached diff info for the currently selected node
