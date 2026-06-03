@@ -520,13 +520,13 @@ impl App {
             })
             .collect();
 
-        // Invalidate and clear the stale full diff so the fresh quick diff
-        // takes precedence via cached_diff_or_quick().
-        self.diff_cache.invalidate_uncommitted();
-        self.diff_cache.clear_uncommitted_data();
         self.refresh(false)?;
-        // Force quick diff recomputation so file list updates immediately
+        // Recompute quick diff for the new staging state
         self.diff_cache.set_quick_uncommitted(self.repo.repo());
+        // Reclassify the existing full diff's staging status in place
+        // (avoids a redundant async reload — line counts don't change).
+        // Then seal the cache key so poll() won't trigger a reload.
+        self.diff_cache.reclassify_uncommitted_staging(self.working_tree_status.as_ref());
         self.sync_file_list_cache();
 
         // Find best target: next in same section, then prev, then any file

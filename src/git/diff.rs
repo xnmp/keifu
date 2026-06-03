@@ -255,6 +255,7 @@ impl CommitDiffInfo {
 
         let staged_diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
         let unstaged_diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
+        let workdir = repo.workdir().unwrap_or_else(|| repo.path());
 
         let mut staged_files = Vec::new();
         for delta in staged_diff.deltas() {
@@ -277,6 +278,9 @@ impl CommitDiffInfo {
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
+            if is_untracked && Self::is_plain_directory(&workdir.join(path)) {
+                continue;
+            }
             let status = if is_untracked {
                 StageStatus::Untracked
             } else {
@@ -291,6 +295,10 @@ impl CommitDiffInfo {
                 stage_status: Some(status),
             });
         }
+
+        // Sort unstaged: tracked modifications first, then untracked
+        // (matches the order produced by the full diff's separate scans)
+        unstaged_files.sort_by_key(|f| matches!(f.stage_status, Some(StageStatus::Untracked)));
 
         // Merge for the flat files list
         let mut all_files = staged_files.clone();

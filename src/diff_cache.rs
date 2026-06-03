@@ -201,6 +201,40 @@ impl DiffCache {
             CommitDiffInfo::quick_file_list_for_working_tree(repo).ok();
     }
 
+    /// Reclassify the cached full uncommitted diff's staging status using the
+    /// quick diff as the source of truth. This avoids a redundant async reload
+    /// after stage/unstage operations where line counts don't change.
+    /// Seals the cache key so `poll()` won't trigger a reload.
+    pub fn reclassify_uncommitted_staging(&mut self, current_status: Option<&crate::git::WorkingTreeStatus>) {
+        let (Some(quick), Some(full)) = (self.quick_diff_cache.as_ref(), self.uncommitted_diff_cache.as_mut()) else {
+            return;
+        };
+
+        // Build a lookup: path → stage_status from the quick diff
+        let stage_map: std::collections::HashMap<&std::path::Path, Option<crate::git::StageStatus>> =
+            quick.files.iter().map(|f| (f.path.as_path(), f.stage_status)).collect();
+
+        // Update stage_status on each file in the full diff
+        for file in &mut full.files {
+            if let Some(&status) = stage_map.get(file.path.as_path()) {
+                file.stage_status = status;
+            }
+        }
+
+        // Rebuild staged/unstaged separation
+        full.staged_files = full.files.iter()
+            .filter(|f| matches!(f.stage_status, Some(crate::git::StageStatus::Staged)))
+            .cloned()
+            .collect();
+        full.unstaged_files = full.files.iter()
+            .filter(|f| !matches!(f.stage_status, Some(crate::git::StageStatus::Staged)))
+            .cloned()
+            .collect();
+
+        // Seal cache key to match current working tree status so poll() won't reload
+        self.uncommitted_cache_key = current_status.cloned();
+    }
+
     pub fn has_cached_diff_for_target(&self, target: DiffTarget) -> bool {
         match target {
             DiffTarget::Commit(oid) => self.diff_cache_oid == Some(oid),
