@@ -206,7 +206,13 @@ impl DiffCache {
     /// after stage/unstage operations where line counts don't change.
     /// Seals the cache key so `poll()` won't trigger a reload.
     pub fn reclassify_uncommitted_staging(&mut self, current_status: Option<&crate::git::WorkingTreeStatus>) {
-        let (Some(quick), Some(full)) = (self.quick_diff_cache.as_ref(), self.uncommitted_diff_cache.as_mut()) else {
+        let Some(full) = self.uncommitted_diff_cache.as_mut() else {
+            // Full cache not yet loaded — seal the key so poll() won't
+            // trigger a reload (the quick diff is already correct).
+            self.uncommitted_cache_key = current_status.cloned();
+            return;
+        };
+        let Some(quick) = self.quick_diff_cache.as_ref() else {
             return;
         };
 
