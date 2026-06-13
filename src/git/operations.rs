@@ -282,7 +282,8 @@ pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<()> {
 }
 
 /// Restore (discard changes to) the given files.
-/// Tracked files are restored via `git checkout -- <path>`.
+/// Tracked files are restored via `git checkout HEAD -- <path>`, which discards
+/// both staged (index) and unstaged (working tree) changes — a hard reset of the file.
 /// Untracked files are moved to the system recycle bin.
 pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
     let repo = Repository::open(repo_path).context("Failed to open repository")?;
