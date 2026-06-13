@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget},
 };
+use chrono::Local;
 use unicode_width::UnicodeWidthChar;
 
 use crate::{
@@ -479,7 +480,12 @@ fn render_graph_line<'a>(
     );
 
     // === Right-aligned: date author hash (fixed width) ===
-    let date = commit.timestamp.format("%Y-%m-%d").to_string(); // 10 chars
+    // Show the time for commits made today, otherwise the date (both 10 chars wide for alignment).
+    let date = if commit.timestamp.date_naive() == Local::now().date_naive() {
+        format!("{:<10}", commit.timestamp.format("%H:%M:%S"))
+    } else {
+        commit.timestamp.format("%Y-%m-%d").to_string()
+    };
     let author = truncate_to_width(&commit.author_name, 8);
     let author_formatted = format!("{:<8}", author); // fixed 8 chars
     let hash = truncate_to_width(&commit.short_id, 7);
