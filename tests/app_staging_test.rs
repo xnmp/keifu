@@ -126,6 +126,7 @@ fn make_base_app(
         side_panel_layout: false,
         debug_keys: false,
         config: Config::default(),
+        terminal_bg: None,
     }
 }
 

@@ -327,6 +327,11 @@ pub struct App {
 
     // Config
     pub config: Config,
+
+    // Terminal background color (r, g, b), detected once at startup.
+    // Used to derive theme-adaptive structural colors. `None` when the
+    // terminal doesn't report it (e.g. headless tests).
+    pub terminal_bg: Option<(u8, u8, u8)>,
 }
 
 impl App {
@@ -407,7 +412,18 @@ impl App {
             side_panel_layout: false,
             debug_keys: false,
             config,
+            // No terminal to query in the embedded/test path.
+            terminal_bg: None,
         })
+    }
+
+    /// Detect the terminal's background color once, as (r, g, b).
+    /// Returns `None` if the terminal doesn't support the query.
+    fn detect_terminal_bg() -> Option<(u8, u8, u8)> {
+        terminal_light::background_color()
+            .ok()
+            .map(|c| c.rgb())
+            .map(|rgb| (rgb.r, rgb.g, rgb.b))
     }
 
     /// Create a new application
@@ -485,6 +501,7 @@ impl App {
             side_panel_layout: ui_state.side_panel_layout,
             debug_keys: false,
             config,
+            terminal_bg: Self::detect_terminal_bg(),
         })
     }
 
@@ -992,16 +1009,31 @@ impl App {
     /// Check if the currently selected node is the uncommitted changes node
     /// Return the active theme based on config.
     pub fn theme(&self) -> crate::ui::theme::Theme {
-        match self.config.ui.theme.as_str() {
-            "light" => crate::ui::theme::Theme::light(),
-            "dark" => crate::ui::theme::Theme::dark(),
-            _ => {
-                // Auto-detect from terminal background
-                match terminal_light::luma() {
-                    Ok(luma) if luma > 0.5 => crate::ui::theme::Theme::light(),
-                    _ => crate::ui::theme::Theme::dark(),
+        use crate::ui::theme::Theme;
+
+        // Pick the base palette: explicit config, else auto from the cached
+        // terminal background (luma > 0.5 ⇒ light).
+        let base = match self.config.ui.theme.as_str() {
+            "light" => Theme::light(),
+            "dark" => Theme::dark(),
+            _ => match self.terminal_bg {
+                Some((r, g, b)) => {
+                    let luma = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
+                    if luma > 0.5 {
+                        Theme::light()
+                    } else {
+                        Theme::dark()
+                    }
                 }
-            }
+                None => Theme::dark(),
+            },
+        };
+
+        // Derive structural colors (borders, dates, muted text) from the real
+        // background so they stay visible and track the terminal theme.
+        match self.terminal_bg {
+            Some(bg) => base.adapt_to_background(bg),
+            None => base,
         }
     }
 

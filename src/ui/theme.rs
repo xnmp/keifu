@@ -101,6 +101,8 @@ impl Theme {
         Self {
             // Panel borders
             border_focused: Color::Green,
+            // Fallback when the terminal background can't be detected;
+            // `adapt_to_background` derives a visible value from the real bg.
             border_unfocused: Color::DarkGray,
             border_filter_active: Color::Yellow,
 
@@ -134,6 +136,7 @@ impl Theme {
             // Git metadata
             hash_color: Color::Yellow,
             author_color: Color::Cyan,
+            // Fallback; `adapt_to_background` derives this from the real bg.
             date_color: Color::DarkGray,
 
             // Status bar
@@ -164,8 +167,9 @@ impl Theme {
             search_match: Color::Yellow,
             search_cursor: Color::Cyan,
 
-            // Branch labels
-            branch_head: Color::Green,
+            // Branch labels — bright ANSI green follows the terminal palette
+            // while staying legible for the checked-out HEAD label and node.
+            branch_head: Color::LightGreen,
 
             // Editor selection
             editor_selection_fg: Color::White,
@@ -298,6 +302,35 @@ impl Theme {
         }
     }
 
+    /// Derive background-relative structural colors from the terminal's actual
+    /// background color, so inactive borders, dates and muted text keep a
+    /// consistent, visible contrast on *any* terminal theme (light or dark,
+    /// custom palettes included) instead of relying on the dim `DarkGray` ANSI
+    /// slot — which many themes render nearly invisible.
+    ///
+    /// Each color is a blend from the real background toward its contrast
+    /// (white on dark backgrounds, black on light ones), so the result is
+    /// tinted by the terminal theme while guaranteeing legibility.
+    pub fn adapt_to_background(mut self, bg: (u8, u8, u8)) -> Self {
+        let contrast = if luma(bg) < 0.5 {
+            (255, 255, 255)
+        } else {
+            (0, 0, 0)
+        };
+        // Selected row band: a clear step off the background so the highlighted
+        // graph/file row stands out, while keeping foreground text readable.
+        self.selection_bg = mix(bg, contrast, 0.24);
+        // Inactive borders: present but clearly dimmer than the focused accent.
+        self.border_unfocused = mix(bg, contrast, 0.30);
+        // Muted text and the uncommitted node: low-key but readable.
+        self.text_secondary = mix(bg, contrast, 0.45);
+        self.text_muted = mix(bg, contrast, 0.40);
+        self.uncommitted_color = mix(bg, contrast, 0.40);
+        // Date column: a touch brighter so it reads at a glance.
+        self.date_color = mix(bg, contrast, 0.50);
+        self
+    }
+
     // -- convenience style constructors --
 
     pub fn selection_style(&self) -> Style {
@@ -355,4 +388,15 @@ impl Theme {
             FileChangeKind::Copied => ("C", self.file_renamed),
         }
     }
+}
+
+/// Relative luminance of an sRGB color, 0.0 (black) – 1.0 (white).
+fn luma((r, g, b): (u8, u8, u8)) -> f32 {
+    (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0
+}
+
+/// Linearly interpolate between two colors; `t` in 0.0..=1.0 (0 = `from`).
+fn mix(from: (u8, u8, u8), to: (u8, u8, u8), t: f32) -> Color {
+    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+    Color::Rgb(lerp(from.0, to.0), lerp(from.1, to.1), lerp(from.2, to.2))
 }

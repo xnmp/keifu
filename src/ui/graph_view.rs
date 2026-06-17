@@ -159,7 +159,12 @@ fn optimize_branch_display(
     let make_style = |branch_name: &str| -> Style {
         let style = Style::default().fg(base_color).add_modifier(Modifier::BOLD);
         if selected_branch_name == Some(branch_name) {
-            style.fg(theme.list_selection_fg).bg(base_color)
+            // Reverse video rather than an explicit bg: when this branch's row
+            // is also the highlighted row, the list's highlight_style patches a
+            // bg over the whole line, which would clobber an explicit bg and
+            // leave the label invisible. REVERSED is resolved after that patch,
+            // so the selected branch stays legible on any terminal theme.
+            style.add_modifier(Modifier::REVERSED)
         } else {
             style
         }
