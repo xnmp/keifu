@@ -309,9 +309,9 @@ pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
         }
     }
 
-    // Restore tracked files
+    // Restore tracked files (checkout from HEAD to unstage + discard in one step)
     if !tracked.is_empty() {
-        let mut args: Vec<String> = vec!["checkout".into(), "--".into()];
+        let mut args: Vec<String> = vec!["checkout".into(), "HEAD".into(), "--".into()];
         args.extend(tracked);
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         run_git(repo_path, &args_ref)?;
