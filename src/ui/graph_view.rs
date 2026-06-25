@@ -356,23 +356,53 @@ fn render_graph_line<'a>(
     spans.push(Span::raw(" "));
     let mut left_width: usize = 1;
 
-    // Render cells
-    for cell in &node.cells {
-        let (ch, color) = match cell {
-            CellType::Empty => (' ', Color::Reset),
-            CellType::Pipe(color_idx) => ('│', theme.lane_color(*color_idx)),
-            CellType::Commit(color_idx) => {
-                // HEAD uses a double circle, others use a filled circle
-                let ch = if node.is_head { '◉' } else { '●' };
-                // Main branch (blue) stays blue; other HEADs are green
+    // Render cells.
+    //
+    // The HEAD commit is drawn with a width-2 star emoji so it stands out. To
+    // keep column alignment intact, the emoji occupies the commit cell *and*
+    // the cell to its right — but only when that right cell carries no graph
+    // line (Empty or a plain Horizontal connector). If a pipe or junction sits
+    // there, painting over it would corrupt the graph, so we fall back to the
+    // width-1 glyph instead.
+    let mut idx = 0;
+    while idx < node.cells.len() {
+        let cell = &node.cells[idx];
+
+        // Special-case the HEAD commit star (may consume the next cell).
+        if node.is_head {
+            if let CellType::Commit(color_idx) = cell {
                 let is_main = *color_idx == crate::graph::colors::MAIN_BRANCH_COLOR;
-                let color = if node.is_head && !is_main {
+                let color = if !is_main {
                     theme.branch_head
                 } else {
                     theme.lane_color(*color_idx)
                 };
-                (ch, color)
+                let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+
+                let right_is_clear = matches!(
+                    node.cells.get(idx + 1),
+                    None | Some(CellType::Empty) | Some(CellType::Horizontal(_))
+                );
+                if right_is_clear {
+                    // ⭐ is width-2; it spans the commit cell + the cleared neighbor.
+                    spans.push(Span::styled("⭐", style));
+                    left_width += 2;
+                    idx += 2; // skip the swallowed cell
+                    continue;
+                } else {
+                    // No room to widen: keep the distinct width-1 HEAD glyph.
+                    spans.push(Span::styled("◉".to_string(), style));
+                    left_width += 1;
+                    idx += 1;
+                    continue;
+                }
             }
+        }
+
+        let (ch, color) = match cell {
+            CellType::Empty => (' ', Color::Reset),
+            CellType::Pipe(color_idx) => ('│', theme.lane_color(*color_idx)),
+            CellType::Commit(color_idx) => ('●', theme.lane_color(*color_idx)),
             CellType::BranchRight(color_idx) => ('╭', theme.lane_color(*color_idx)),
             CellType::BranchLeft(color_idx) => ('╮', theme.lane_color(*color_idx)),
             CellType::MergeRight(color_idx) => ('╰', theme.lane_color(*color_idx)),
@@ -394,6 +424,7 @@ fn render_graph_line<'a>(
         let ch_width = display_width(&ch_str);
         spans.push(Span::styled(ch_str, style));
         left_width += ch_width;
+        idx += 1;
     }
 
     // Padding to align graph width (display width based)
