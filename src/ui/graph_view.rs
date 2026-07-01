@@ -7,13 +7,43 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget},
 };
-use chrono::Local;
+use chrono::{DateTime, Local};
 use unicode_width::UnicodeWidthChar;
 
 use crate::{
     app::App,
     git::graph::{CellType, GraphNode},
 };
+
+/// Fixed display width for the date field (fits "59 minutes ago").
+const DATE_FIELD_WIDTH: usize = 14;
+
+/// Format a commit timestamp. Within the past week, show a relative string
+/// ("just now", "5 minutes ago", "3 days ago"); otherwise the absolute date.
+/// Result is right-padded to `DATE_FIELD_WIDTH` so columns stay aligned.
+fn format_date_field(timestamp: DateTime<Local>) -> String {
+    let now = Local::now();
+    let delta = now.signed_duration_since(timestamp);
+    let secs = delta.num_seconds();
+
+    // Future timestamps or older than a week fall back to the absolute date.
+    let label = if secs < 0 || delta.num_days() >= 7 {
+        timestamp.format("%Y-%m-%d").to_string()
+    } else if secs < 60 {
+        "just now".to_string()
+    } else if delta.num_minutes() < 60 {
+        let m = delta.num_minutes();
+        format!("{} minute{} ago", m, if m == 1 { "" } else { "s" })
+    } else if delta.num_hours() < 24 {
+        let h = delta.num_hours();
+        format!("{} hour{} ago", h, if h == 1 { "" } else { "s" })
+    } else {
+        let d = delta.num_days();
+        format!("{} day{} ago", d, if d == 1 { "" } else { "s" })
+    };
+
+    format!("{:<width$}", label, width = DATE_FIELD_WIDTH)
+}
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
@@ -212,8 +242,11 @@ fn optimize_branch_display(
         }
     }
 
-    // Collapse multiple branches to single + count
+    // Collapse multiple branches: show up to two labels, then "+N" for the rest
     if result.len() > 1 {
+        // Number of labels to display inline before collapsing the remainder
+        const SHOWN_LABELS: usize = 2;
+
         // Find selected index directly from branch_names, clamped to result bounds
         let selected_idx = selected_branch_name
             .and_then(|sel| {
@@ -224,15 +257,38 @@ fn optimize_branch_display(
             .unwrap_or(0)
             .min(result.len().saturating_sub(1));
 
-        let (label, style) = &result[selected_idx];
-        let clean_name = label
-            .trim_start_matches('[')
-            .split([']', ' '])
-            .next()
-            .unwrap_or(label);
-        let abbreviated = abbreviate_branch_label(clean_name, MAX_LABEL_WIDTH, result.len() - 1);
+        // Display order: selected first, then remaining in original order
+        let order: Vec<usize> = std::iter::once(selected_idx)
+            .chain((0..result.len()).filter(|&i| i != selected_idx))
+            .collect();
 
-        return vec![(abbreviated, *style)];
+        let shown = SHOWN_LABELS.min(result.len());
+        let extra_count = result.len() - shown;
+
+        // Helper: strip "[...]" / suffix to recover the bare branch name
+        let clean = |label: &str| -> String {
+            label
+                .trim_start_matches('[')
+                .split([']', ' '])
+                .next()
+                .unwrap_or(label)
+                .to_string()
+        };
+
+        // Budget the available width across the shown labels
+        let per_label = MAX_LABEL_WIDTH / shown;
+
+        let mut combined = String::new();
+        for (pos, &idx) in order.iter().take(shown).enumerate() {
+            let clean_name = clean(&result[idx].0);
+            // Only the last shown label carries the "+N" suffix
+            let extra = if pos == shown - 1 { extra_count } else { 0 };
+            combined.push_str(&abbreviate_branch_label(&clean_name, per_label, extra));
+        }
+
+        // Style follows the selected branch
+        let style = result[selected_idx].1;
+        return vec![(combined, style)];
     }
 
     result
@@ -269,8 +325,8 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 /// Priority: author > date > hash (hash disappears first, then date, then author)
 fn compute_right_side_visibility(remaining_for_content: usize) -> (bool, bool, bool, usize) {
     // Widths for each display level (right-aligned block)
-    const WIDTH_DATE_AUTHOR_HASH: usize = 31; // " YYYY-MM-DD  author    hash   "
-    const WIDTH_DATE_AUTHOR: usize = 22; // " YYYY-MM-DD  author   "
+    const WIDTH_DATE_AUTHOR_HASH: usize = 35; // " <date:14>  author    hash   "
+    const WIDTH_DATE_AUTHOR: usize = 26; // " <date:14>  author   "
     const WIDTH_AUTHOR_ONLY: usize = 11; // "  author   "
 
     // Ensure minimum space for branch + commit message before showing right-side info
@@ -480,12 +536,7 @@ fn render_graph_line<'a>(
     );
 
     // === Right-aligned: date author hash (fixed width) ===
-    // Show the time for commits made today, otherwise the date (both 10 chars wide for alignment).
-    let date = if commit.timestamp.date_naive() == Local::now().date_naive() {
-        format!("{:<10}", commit.timestamp.format("%H:%M:%S"))
-    } else {
-        commit.timestamp.format("%Y-%m-%d").to_string()
-    };
+    let date = format_date_field(commit.timestamp); // DATE_FIELD_WIDTH chars
     let author = truncate_to_width(&commit.author_name, 8);
     let author_formatted = format!("{:<8}", author); // fixed 8 chars
     let hash = truncate_to_width(&commit.short_id, 7);
