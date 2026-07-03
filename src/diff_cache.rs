@@ -166,13 +166,15 @@ impl DiffCache {
     }
 
     /// Update the selected diff target and compute quick diff if target changed.
-    /// Returns the new target.
+    /// Returns the new target and whether it changed (callers should re-render
+    /// when it did, since the quick diff was recomputed).
     pub fn sync_selected_target(
         &mut self,
         target: Option<DiffTarget>,
         repo: &git2::Repository,
-    ) -> Option<DiffTarget> {
-        if self.selected_diff_target != target {
+    ) -> (Option<DiffTarget>, bool) {
+        let changed = self.selected_diff_target != target;
+        if changed {
             self.selected_diff_target = target;
             self.selected_diff_target_changed_at = Instant::now();
 
@@ -191,7 +193,7 @@ impl DiffCache {
                 }
             }
         }
-        target
+        (target, changed)
     }
 
     /// Force-set quick diff for uncommitted (used after file operations).
@@ -276,14 +278,25 @@ impl DiffCache {
         }
     }
 
+    /// Get the quick diff, but only if it was computed for the given target —
+    /// a quick diff for a different target is stale and must not be shown.
+    fn quick_diff_for_target(&self, target: Option<DiffTarget>) -> Option<&CommitDiffInfo> {
+        if target.is_some() && self.quick_diff_target == target {
+            self.quick_diff_cache.as_ref()
+        } else {
+            None
+        }
+    }
+
     /// Get the best available diff: full if cached, otherwise quick file list.
     pub fn cached_diff_or_quick(&self, target: Option<DiffTarget>) -> Option<&CommitDiffInfo> {
-        self.cached_diff(target).or(self.quick_diff_cache.as_ref())
+        self.cached_diff(target)
+            .or_else(|| self.quick_diff_for_target(target))
     }
 
     /// Whether line stats are still loading (full diff not yet available but quick is).
     pub fn is_line_stats_loading(&self, target: Option<DiffTarget>) -> bool {
-        self.cached_diff(target).is_none() && self.quick_diff_cache.is_some()
+        self.cached_diff(target).is_none() && self.quick_diff_for_target(target).is_some()
     }
 
     /// Whether diff is loading or pending (debouncing) for the selected node.
@@ -835,6 +848,23 @@ mod tests {
     }
 
     #[test]
+    fn cached_diff_or_quick_ignores_quick_for_different_target() {
+        let mut cache = DiffCache::new();
+        // Quick diff was computed for oid1, but oid2 is now selected —
+        // returning it would show the previous commit's files.
+        set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
+        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid2()))).is_none());
+        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Uncommitted)).is_none());
+    }
+
+    #[test]
+    fn cached_diff_or_quick_returns_none_when_no_target() {
+        let mut cache = DiffCache::new();
+        set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
+        assert!(cache.cached_diff_or_quick(None).is_none());
+    }
+
+    #[test]
     fn cached_diff_or_quick_prefers_full_over_quick() {
         let mut cache = DiffCache::new();
         let mut full = empty_diff();
@@ -859,6 +889,35 @@ mod tests {
         set_diff(&mut cache, oid1(), empty_diff());
         set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
         assert!(!cache.is_line_stats_loading(Some(DiffTarget::Commit(oid1()))));
+    }
+
+    #[test]
+    fn is_line_stats_loading_false_when_quick_is_for_different_target() {
+        let mut cache = DiffCache::new();
+        set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
+        assert!(!cache.is_line_stats_loading(Some(DiffTarget::Commit(oid2()))));
+    }
+
+    // ── Target sync ─────────────────────────────────────────────────
+
+    #[test]
+    fn sync_selected_target_reports_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut cache = DiffCache::new();
+
+        let (target, changed) =
+            cache.sync_selected_target(Some(DiffTarget::Uncommitted), &repo);
+        assert_eq!(target, Some(DiffTarget::Uncommitted));
+        assert!(changed);
+
+        // Same target again — no change, no re-render needed
+        let (_, changed) = cache.sync_selected_target(Some(DiffTarget::Uncommitted), &repo);
+        assert!(!changed);
+
+        // Selection cleared — change again
+        let (_, changed) = cache.sync_selected_target(None, &repo);
+        assert!(changed);
     }
 
     // ── Poll state machine ──────────────────────────────────────────

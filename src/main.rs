@@ -70,13 +70,6 @@ fn main() -> Result<()> {
             needs_render = true;
         }
 
-        // Poll background operations
-        needs_render |= app.update_diff_cache();
-        needs_render |= app.update_fetch_status();
-        needs_render |= app.update_push_status();
-        needs_render |= app.check_auto_refresh();
-        needs_render |= app.poll_fs_watcher();
-
         // Process input
         if let Some(event) = event {
             if let Some(key) = get_key_event(&event) {
@@ -126,6 +119,14 @@ fn main() -> Result<()> {
             }
             needs_render = true;
         }
+
+        // Poll background operations after input, so the quick diff for a
+        // newly selected commit is computed before the frame that renders it
+        needs_render |= app.update_diff_cache();
+        needs_render |= app.update_fetch_status();
+        needs_render |= app.update_push_status();
+        needs_render |= app.check_auto_refresh();
+        needs_render |= app.poll_fs_watcher();
 
         // Refresh message expiry deadline
         render_deadline = app.message_expiry_time();

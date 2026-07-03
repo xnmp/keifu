@@ -586,7 +586,8 @@ impl App {
         }
     }
 
-    fn sync_selected_diff_target(&mut self) -> Option<DiffTarget> {
+    /// Returns the new target and whether it changed since the last sync.
+    fn sync_selected_diff_target(&mut self) -> (Option<DiffTarget>, bool) {
         let target = self.current_diff_target();
         self.diff_cache.sync_selected_target(target, self.repo.repo())
     }
@@ -967,7 +968,7 @@ impl App {
 
     /// Update diff info for the selected node (commit or uncommitted changes, async)
     pub fn update_diff_cache(&mut self) -> bool {
-        let target = self.sync_selected_diff_target();
+        let (target, target_changed) = self.sync_selected_diff_target();
         let events = self.diff_cache.poll(
             target,
             &self.repo_path,
@@ -983,7 +984,8 @@ impl App {
         if events.diff_loaded {
             self.sync_file_list_cache();
         }
-        events.diff_loaded || has_message
+        // target_changed means a fresh quick diff was computed and must be rendered
+        events.diff_loaded || has_message || target_changed
     }
 
     /// Get cached diff info for the currently selected node
