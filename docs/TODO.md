@@ -45,6 +45,9 @@ When the uncommitted files panel is selected, pressing `i` adds the selected fil
 ### [DONE] Fuzzy Filter Typing in Files Panel
 Typing in the files panel filters the file list by character matching. Filter shown in panel title. Backspace removes characters, Esc clears filter.
 
+### [DONE] Fix Laggy/Stale Files Pane When Navigating Commits
+Navigating the graph showed the previous commit's file list until the full diff loaded (~150-250ms). Three fixes: background polls (including quick-diff sync) now run after input processing so the new selection's quick diff is computed before the next frame; `update_diff_cache()` reports a needed render when the diff target changes; `cached_diff_or_quick()` no longer falls back to a quick diff computed for a different target.
+
 ### [DONE] Fix Selection Jump and Flash After File Operations
 After s/i/v in folder view, selection no longer jumps to top. Flash during panel refresh eliminated by keeping stale quick-diff visible and recomputing synchronously before redraw. Cursor advances to next file instead of resetting.
 
