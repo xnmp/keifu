@@ -278,6 +278,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
         }
+        AppMode::RemotePicker { remotes, selected, op } => {
+            let title = match op {
+                crate::app::RemoteOp::Fetch => " Fetch from remote ",
+                crate::app::RemoteOp::Pull => " Pull from remote ",
+                crate::app::RemoteOp::Push => " Push to remote ",
+                crate::app::RemoteOp::Prune => " Prune remote ",
+            };
+            let max_name_len = remotes.iter().map(|b| b.len()).max().unwrap_or(10);
+            let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
+            let popup_height = (remotes.len() + 2).min(12) as u16;
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                BranchPickerWidget::with_title(remotes, *selected, &theme, title),
+                popup_area,
+            );
+        }
         AppMode::BranchFilter {
             filter,
             selected,

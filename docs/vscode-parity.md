@@ -17,8 +17,11 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
    `o` ours / `t` theirs / `c` continue / `A` abort (via Confirm). Conflicts
    are a typed `OpOutcome`, not an error. Full 3-way merge editor remains
    XL and deferred.
-2. **Pull (M)** — no fetch+integrate orchestration; both halves exist.
-   Conflict path now exists (#1).
+2. ~~**Pull (M)**~~ — **DONE (2026-07-13).** `p` pulls (background `git pull`,
+   honoring `pull.rebase`); Pull also in the commit menu on the HEAD tip.
+   Fast-forward / merge-commit / conflict all handled — a conflicting pull
+   returns the typed `OpOutcome::Conflicts` and lands in the guided resolve
+   flow via op-state detection (#1). `GIT_EDITOR=true` so it never blocks.
 3. ~~**Hunk / line-level staging (L)**~~ — **DONE (2026-07-13).** In the
    FileDiff viewer for uncommitted changes: `s` stage hunk, `u` unstage hunk,
    `x` discard hunk (via Confirm). Patch synthesis in `git/patch.rs` →
@@ -26,8 +29,14 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
 4. ~~**Real branch filtering (M)**~~ — **DONE (2026-07-13).** `get_commits()`
    takes the visible branch set and walks only those tips (HEAD always
    pushed), so hiding a branch removes its exclusive commits, not just labels.
-5. **Multi-remote + push -u / upstream / publish (M)** — origin-only and
-   hardcoded today (`git push origin HEAD`).
+5. ~~**Multi-remote + push -u / upstream / publish (M)**~~ — **DONE
+   (2026-07-13).** Fetch/pull/push resolve the remote from the branch's
+   upstream, prompting via a `RemotePicker` only when several remotes and no
+   upstream disambiguate (single-remote repos never prompt). `P` pushes to the
+   configured upstream, or publishes with `git push -u <remote> <branch>` when
+   none is set. Status bar shows HEAD ahead/behind (`↑2 ↓1`). Extras: `git
+   remote prune` menu action, and remote-branch delete (`git push <remote>
+   --delete`) from the delete picker behind Confirm.
 
 Near-free S wins — **DONE (2026-07-13)**: branch rename (commit-menu
 "Rename branch" → prefilled Input → `git branch -m`), tag delete/push

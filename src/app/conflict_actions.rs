@@ -41,7 +41,7 @@ impl App {
 
     /// Select the uncommitted node, focus the files pane, and prime its diff so
     /// the Merge Changes section is visible immediately.
-    fn focus_conflict_files(&mut self) {
+    pub(crate) fn focus_conflict_files(&mut self) {
         let has_uncommitted = self
             .graph_layout
             .nodes

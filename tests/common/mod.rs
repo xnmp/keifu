@@ -121,19 +121,53 @@ pub fn stash_count(repo_path: &str) -> usize {
     stash_list(repo_path).len()
 }
 
-/// Create a bare repository and register it as `origin` of `repo_path`.
-/// Returns the bare repo's `TempDir`, which the caller must keep alive.
-pub fn add_bare_origin(repo_path: &str) -> TempDir {
-    let origin = tempfile::tempdir().unwrap();
+/// Create a bare repository and register it under `name` as a remote of
+/// `repo_path`. Returns the bare repo's `TempDir`, which the caller must keep
+/// alive (dropping it removes the remote directory).
+pub fn add_bare_remote(repo_path: &str, name: &str) -> TempDir {
+    let remote = tempfile::tempdir().unwrap();
     let status = Command::new("git")
         .args(["init", "--bare"])
-        .arg(origin.path())
+        .arg(remote.path())
         .output()
-        .expect("failed to init bare origin");
+        .expect("failed to init bare remote");
     assert!(status.status.success(), "git init --bare failed");
     git_cli(
         repo_path,
-        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        &["remote", "add", name, remote.path().to_str().unwrap()],
     );
-    origin
+    remote
+}
+
+/// Create a bare repository and register it as `origin` of `repo_path`.
+/// Returns the bare repo's `TempDir`, which the caller must keep alive.
+pub fn add_bare_origin(repo_path: &str) -> TempDir {
+    add_bare_remote(repo_path, "origin")
+}
+
+/// Current short branch name that HEAD resolves to.
+pub fn current_branch(repo: &Repository) -> String {
+    repo.head().unwrap().shorthand().unwrap().to_string()
+}
+
+/// Clone a bare repo into a fresh temp working dir, with a distinct committer
+/// identity configured. Returns the clone's `TempDir` (its `.path()` is the
+/// working tree). Used to simulate "someone else advanced the remote".
+pub fn clone_from(origin: &Path) -> TempDir {
+    let dest = tempfile::tempdir().unwrap();
+    let status = Command::new("git")
+        .args(["clone"])
+        .arg(origin)
+        .arg(dest.path())
+        .output()
+        .expect("failed to spawn git clone");
+    assert!(
+        status.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&status.stderr).trim()
+    );
+    let p = dest.path().to_str().unwrap();
+    git_cli(p, &["config", "user.name", "Other User"]);
+    git_cli(p, &["config", "user.email", "other@example.com"]);
+    dest
 }

@@ -55,7 +55,16 @@ impl App {
                         reset_to_commit(&self.repo_path, oid, ResetMode::Hard)?;
                     }
                     ConfirmAction::Push => {
-                        self.start_push();
+                        self.mode = AppMode::Normal;
+                        self.initiate_push();
+                        return Ok(());
+                    }
+                    ConfirmAction::DeleteRemoteBranch { remote, branch } => {
+                        delete_remote_branch(&self.repo_path, &remote, &branch)?;
+                        self.refresh(true)?;
+                        self.set_message(format!("Deleted {remote}/{branch}"));
+                        self.mode = AppMode::Normal;
+                        return Ok(());
                     }
                     ConfirmAction::RestoreFile(paths) => {
                         restore_files(&self.repo_path, &paths)?;

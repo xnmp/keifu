@@ -50,7 +50,8 @@ pub fn map_key_to_action(
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
-        | AppMode::TagPicker { .. } => map_picker_mode(key),
+        | AppMode::TagPicker { .. }
+        | AppMode::RemotePicker { .. } => map_picker_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }
@@ -134,6 +135,9 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
+        // Pull / push pairing: lowercase pull, Shift+P push.
+        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Pull),
+        (KeyModifiers::SHIFT, KeyCode::Char('P')) => Some(Action::Push),
 
         // Space opens file diff for quick access
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenFileDiff),

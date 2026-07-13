@@ -34,6 +34,8 @@ fn make_branch(name: &str, tip: &str, is_head: bool) -> BranchInfo {
         is_head,
         is_remote: false,
         upstream: None,
+        ahead: 0,
+        behind: 0,
     }
 }
 

@@ -331,9 +331,41 @@ pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<OpOutcome> 
     Ok(OpOutcome::Completed)
 }
 
-/// Fetch from origin remote using git command
+/// Fetch from a named remote using the git CLI.
+pub fn fetch_remote(repo_path: &str, remote: &str) -> Result<()> {
+    run_git(repo_path, &["fetch", remote])?;
+    Ok(())
+}
+
+/// Fetch from the `origin` remote (thin wrapper over [`fetch_remote`]).
 pub fn fetch_origin(repo_path: &str) -> Result<()> {
-    run_git(repo_path, &["fetch", "origin"])?;
+    fetch_remote(repo_path, "origin")
+}
+
+/// Fetch and integrate from a remote (`git pull`), honoring the user's
+/// `pull.rebase` config.
+///
+/// With `remote`/`branch` = `None`, runs a bare `git pull`, which resolves the
+/// current branch's configured upstream. With an explicit remote (+ branch),
+/// runs `git pull <remote> <branch>` — used when no upstream is set yet.
+///
+/// A conflicting merge/rebase is reported as `OpOutcome::Conflicts` (leaving the
+/// repo mid-operation for the guided resolve flow), not an error. The editor is
+/// disabled so a merge-commit prompt never blocks the TUI.
+pub fn pull(repo_path: &str, remote: Option<&str>, branch: Option<&str>) -> Result<OpOutcome> {
+    let mut args = vec!["pull"];
+    if let Some(r) = remote {
+        args.push(r);
+        if let Some(b) = branch {
+            args.push(b);
+        }
+    }
+    run_git_allow_conflict(repo_path, &args)
+}
+
+/// Prune stale remote-tracking refs for a remote (`git remote prune <remote>`).
+pub fn prune_remote(repo_path: &str, remote: &str) -> Result<()> {
+    run_git(repo_path, &["remote", "prune", remote])?;
     Ok(())
 }
 
@@ -385,9 +417,31 @@ pub fn revert_commit(repo_path: &str, commit_oid: Oid) -> Result<OpOutcome> {
     run_git_allow_conflict(repo_path, &["revert", "--no-edit", &commit_oid.to_string()])
 }
 
-/// Push current branch to origin
+/// Push the current branch to its configured upstream (bare `git push`).
+///
+/// Fails if the branch has no upstream — callers should route to
+/// [`push_set_upstream`] (publish) in that case.
+pub fn push_current(repo_path: &str) -> Result<()> {
+    run_git(repo_path, &["push"])?;
+    Ok(())
+}
+
+/// Publish `branch` to `remote`, setting it as the branch's upstream
+/// (`git push -u <remote> <branch>`).
+pub fn push_set_upstream(repo_path: &str, remote: &str, branch: &str) -> Result<()> {
+    run_git(repo_path, &["push", "-u", remote, branch])?;
+    Ok(())
+}
+
+/// Push current branch to origin (thin wrapper; `git push origin HEAD`).
 pub fn push_to_origin(repo_path: &str) -> Result<()> {
     run_git(repo_path, &["push", "origin", "HEAD"])?;
+    Ok(())
+}
+
+/// Delete a branch on a remote (`git push <remote> --delete <branch>`).
+pub fn delete_remote_branch(repo_path: &str, remote: &str, branch: &str) -> Result<()> {
+    run_git(repo_path, &["push", remote, "--delete", branch])?;
     Ok(())
 }
 

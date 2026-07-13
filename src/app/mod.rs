@@ -12,7 +12,7 @@ use crate::{
     diff_cache::{DiffCache, DiffTarget},
     files_pane_state::{FilesPaneState, section_of},
     graph_nav::GraphNav,
-    network::NetworkManager,
+    network::{NetworkManager, PushSpec},
     git::{
         build_graph,
         graph::GraphLayout,
@@ -21,10 +21,11 @@ use crate::{
             apply_patch_cached_reverse, apply_patch_worktree_reverse, cherry_pick,
             checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
-            delete_branch, delete_tag, get_last_commit_message, merge_branch, push_tag,
-            rebase_branch, rename_branch, reset_to_commit, restore_files, revert_commit,
-            stage_all, stage_file, stash_all, stash_apply, stash_branch, stash_drop,
-            stash_pop, stash_staged, unstage_all, unstage_file, OpOutcome, ResetMode,
+            delete_branch, delete_remote_branch, delete_tag, get_last_commit_message,
+            merge_branch, prune_remote, push_tag, rebase_branch, rename_branch,
+            reset_to_commit, restore_files, revert_commit, stage_all, stage_file,
+            stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
+            unstage_all, unstage_file, OpOutcome, ResetMode,
         },
         extract_hunk_from_working_tree, render_hunk_patch,
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
@@ -38,6 +39,7 @@ mod init;
 mod refresh;
 mod conflict_actions;
 mod network_ops;
+mod remote_ops;
 mod status_message;
 mod search_ops;
 mod graph_actions;
@@ -122,10 +124,20 @@ pub enum FocusedPanel {
     CommitDetail,
 }
 
+/// Which network operation a remote picker runs once a remote is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteOp {
+    Fetch,
+    Pull,
+    Push,
+    Prune,
+}
+
 /// Items in the commit context menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitMenuItem {
     Push,
+    Pull,
     Checkout,
     CreateBranch,
     DeleteBranch,
@@ -141,6 +153,7 @@ pub enum CommitMenuItem {
     DeleteTag,
     PushTag,
     Revert,
+    Prune,
     CopyHash,
     CopyMessage,
     StashApply,
@@ -156,7 +169,8 @@ pub enum CommitMenuItem {
 impl CommitMenuItem {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Push => "Push to origin",
+            Self::Push => "Push",
+            Self::Pull => "Pull",
             Self::Checkout => "Checkout",
             Self::CreateBranch => "Create branch here",
             Self::DeleteBranch => "Delete branch",
@@ -172,6 +186,7 @@ impl CommitMenuItem {
             Self::DeleteTag => "Delete tag",
             Self::PushTag => "Push tag",
             Self::Revert => "Revert this commit",
+            Self::Prune => "Prune remote-tracking refs",
             Self::CopyHash => "Copy commit hash",
             Self::CopyMessage => "Copy commit message",
             Self::StashApply => "Apply stash",
@@ -237,6 +252,14 @@ pub enum AppMode {
         selected: usize,
         action: TagAction,
     },
+    /// Pick which remote a network op (fetch/pull/push/prune) targets, shown
+    /// only when the repo has multiple remotes and the branch's upstream can't
+    /// disambiguate.
+    RemotePicker {
+        remotes: Vec<String>,
+        selected: usize,
+        op: RemoteOp,
+    },
     FileDiff {
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
@@ -294,6 +317,8 @@ pub enum ConfirmAction {
     ResetMixed(Oid),
     ResetHard(Oid),
     Push,
+    /// Delete a branch on a remote (`git push <remote> --delete <branch>`).
+    DeleteRemoteBranch { remote: String, branch: String },
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
     StashDrop(usize),
@@ -581,6 +606,7 @@ impl App {
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,
+            AppMode::RemotePicker { .. } => self.handle_remote_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }
