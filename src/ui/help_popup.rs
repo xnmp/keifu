@@ -130,6 +130,23 @@ impl<'a> Widget for HelpPopup<'a> {
                     Span::styled("  Ctrl+z     ", key_style),
                     Span::styled("Undo last file operation", desc_style),
                 ]),
+                Line::from(Span::styled("  Merge conflicts", header_style)),
+                Line::from(vec![
+                    Span::styled("  o          ", key_style),
+                    Span::styled("Accept ours (on conflicted file)", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  t          ", key_style),
+                    Span::styled("Accept theirs (on conflicted file)", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  c          ", key_style),
+                    Span::styled("Continue merge/rebase/cherry-pick/revert", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  A          ", key_style),
+                    Span::styled("Abort the in-progress operation", desc_style),
+                ]),
             ]);
         }
 

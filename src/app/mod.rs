@@ -17,14 +17,15 @@ use crate::{
         build_graph,
         graph::GraphLayout,
         operations::{
-            add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
-            commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
-            delete_branch, get_last_commit_message, merge_branch,
-            rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
-            stash_apply, stash_drop, stash_pop, stash_staged, unstage_file, ResetMode,
+            abort_operation, accept_ours, accept_theirs, add_tag, cherry_pick, checkout_branch,
+            checkout_commit, checkout_remote_branch, commit_amend, commit_amend_no_edit,
+            commit_with_message, continue_operation, create_branch, delete_branch,
+            get_last_commit_message, merge_branch, rebase_branch, reset_to_commit, restore_files,
+            revert_commit, stage_file, stash_apply, stash_drop, stash_pop, stash_staged,
+            unstage_file, OpOutcome, ResetMode,
         },
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
-        GitRepository, StageStatus, WorkingTreeStatus,
+        GitRepository, OperationState, StageStatus, WorkingTreeStatus,
     },
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
@@ -32,6 +33,7 @@ use crate::{
 
 mod init;
 mod refresh;
+mod conflict_actions;
 mod network_ops;
 mod status_message;
 mod search_ops;
@@ -245,6 +247,8 @@ pub enum ConfirmAction {
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
     StashDrop(usize),
+    /// Abort the in-progress merge/rebase/cherry-pick/revert.
+    AbortOperation(OperationState),
 }
 
 /// Search state for branch search feature
@@ -341,6 +345,12 @@ pub struct App {
 
     // Latest working tree status snapshot
     pub working_tree_status: Option<WorkingTreeStatus>,
+
+    // In-progress operation (merge/rebase/cherry-pick/revert) and its conflict
+    // count, refreshed alongside the working tree. Drives the status-bar
+    // indicator and the conflict-resolution keybindings.
+    pub op_state: OperationState,
+    pub conflict_count: usize,
 
     // Diff caching subsystem
     pub diff_cache: DiffCache,

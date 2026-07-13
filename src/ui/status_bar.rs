@@ -10,6 +10,7 @@ use ratatui::{
 
 use super::theme::Theme;
 use crate::app::{App, AppMode, FocusedPanel, InputAction};
+use crate::git::OperationState;
 
 pub struct StatusBar<'a> {
     mode: &'a AppMode,
@@ -25,6 +26,8 @@ pub struct StatusBar<'a> {
     editing_commit: bool,
     amending_commit: bool,
     search_info: Option<String>,
+    op_state: OperationState,
+    conflict_count: usize,
     theme: &'a Theme,
 }
 
@@ -65,6 +68,8 @@ impl<'a> StatusBar<'a> {
             editing_commit: app.editing_commit_message,
             amending_commit: app.amending_commit,
             search_info,
+            op_state: app.op_state,
+            conflict_count: app.conflict_count,
             theme,
         }
     }
@@ -113,6 +118,31 @@ impl<'a> Widget for StatusBar<'a> {
                 ));
             }
             spans.push(Span::raw(" "));
+        }
+
+        // In-progress operation indicator (merge/rebase/…): prominent, shown in
+        // Normal mode regardless of message/hints so conflicts stay visible.
+        if matches!(self.mode, AppMode::Normal) && self.op_state.is_in_progress() {
+            let op_style = Style::default()
+                .fg(self.theme.status_error_fg)
+                .bg(self.theme.status_error_bg)
+                .add_modifier(Modifier::BOLD);
+            let label = if self.conflict_count > 0 {
+                format!(
+                    " {} ({} conflict{}) ",
+                    self.op_state.label(),
+                    self.conflict_count,
+                    if self.conflict_count == 1 { "" } else { "s" }
+                )
+            } else {
+                format!(" {} ", self.op_state.label())
+            };
+            spans.push(Span::styled(label, op_style));
+            spans.push(Span::styled(" c ", key_style));
+            spans.push(Span::styled("continue ", desc_style));
+            spans.push(Span::styled(" A ", key_style));
+            spans.push(Span::styled("abort ", desc_style));
+            spans.push(Span::raw("  "));
         }
 
         // Key hints (vary by mode)

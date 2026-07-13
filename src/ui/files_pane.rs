@@ -129,7 +129,14 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                     }
                 }
                 FilesPaneItem::File(file) => {
-                    let (indicator, color) = self.theme.file_change_style(&file.kind);
+                    let is_conflicted = file.stage_status == Some(StageStatus::Conflicted);
+                    // Conflicts get a distinct "!" marker in a warning color;
+                    // otherwise use the change-kind indicator.
+                    let (indicator, color) = if is_conflicted {
+                        ("!", self.theme.file_deleted)
+                    } else {
+                        self.theme.file_change_style(&file.kind)
+                    };
 
                     let path_str = file.path.to_string_lossy().to_string();
                     let icon = super::file_icons::file_icon(&file.path);
@@ -141,7 +148,12 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
 
                     // Show stage status indicator for uncommitted files
                     if let Some(status) = file.stage_status {
-                        if status == StageStatus::Untracked {
+                        if status == StageStatus::Conflicted {
+                            spans.push(Span::styled(
+                                " (conflict)",
+                                Style::default().fg(self.theme.file_deleted),
+                            ));
+                        } else if status == StageStatus::Untracked {
                             spans.push(Span::styled(
                                 " (untracked)",
                                 Style::default().fg(self.theme.text_muted),

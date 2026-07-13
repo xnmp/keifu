@@ -33,6 +33,9 @@ pub enum StageStatus {
     Staged,
     Unstaged,
     Untracked,
+    /// Unmerged path from an in-progress merge/rebase/cherry-pick/revert.
+    /// Grouped into the files pane's "Merge Changes" section.
+    Conflicted,
 }
 
 /// Per-file diff info
@@ -115,11 +118,21 @@ impl CommitDiffInfo {
         let workdir = repo.workdir().unwrap_or_else(|| repo.path());
         let mut staged_result = Self::scan_diff(&staged_diff)?;
         for file in &mut staged_result.files {
-            file.stage_status = Some(StageStatus::Staged);
+            if file.stage_status != Some(StageStatus::Conflicted) {
+                file.stage_status = Some(StageStatus::Staged);
+            }
         }
+        // An unmerged path surfaces in BOTH the HEAD→index and index→workdir
+        // diffs as Delta::Conflicted. Drop it from the staged side so it renders
+        // once, in the Merge Changes section, rather than duplicated.
+        staged_result
+            .files
+            .retain(|f| f.stage_status != Some(StageStatus::Conflicted));
         let mut unstaged_result = Self::scan_diff(&unstaged_diff)?;
         for file in &mut unstaged_result.files {
-            file.stage_status = Some(StageStatus::Unstaged);
+            if file.stage_status != Some(StageStatus::Conflicted) {
+                file.stage_status = Some(StageStatus::Unstaged);
+            }
         }
         let refresh_paths: HashSet<PathBuf> = staged_result
             .all_paths
@@ -259,6 +272,11 @@ impl CommitDiffInfo {
 
         let mut staged_files = Vec::new();
         for delta in staged_diff.deltas() {
+            // Conflicts appear in both diffs; keep them only on the unstaged
+            // side so the Merge Changes section shows each once.
+            if delta.status() == Delta::Conflicted {
+                continue;
+            }
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
@@ -275,13 +293,16 @@ impl CommitDiffInfo {
         let mut unstaged_files = Vec::new();
         for delta in unstaged_diff.deltas() {
             let is_untracked = delta.status() == git2::Delta::Untracked;
+            let is_conflicted = delta.status() == Delta::Conflicted;
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
             if is_untracked && Self::is_plain_directory(&workdir.join(path)) {
                 continue;
             }
-            let status = if is_untracked {
+            let status = if is_conflicted {
+                StageStatus::Conflicted
+            } else if is_untracked {
                 StageStatus::Untracked
             } else {
                 StageStatus::Unstaged
@@ -296,9 +317,13 @@ impl CommitDiffInfo {
             });
         }
 
-        // Sort unstaged: tracked modifications first, then untracked
-        // (matches the order produced by the full diff's separate scans)
-        unstaged_files.sort_by_key(|f| matches!(f.stage_status, Some(StageStatus::Untracked)));
+        // Sort: conflicts first (Merge Changes), then tracked modifications,
+        // then untracked — matching the full diff's separate-scan ordering.
+        unstaged_files.sort_by_key(|f| match f.stage_status {
+            Some(StageStatus::Conflicted) => 0,
+            Some(StageStatus::Untracked) => 2,
+            _ => 1,
+        });
 
         // Merge for the flat files list
         let mut all_files = staged_files.clone();
@@ -322,6 +347,7 @@ impl CommitDiffInfo {
         let mut all_paths = HashSet::new();
 
         for (delta_idx, delta) in diff.deltas().enumerate() {
+            let is_conflicted = delta.status() == Delta::Conflicted;
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
@@ -340,7 +366,10 @@ impl CommitDiffInfo {
                 is_binary,
                 insertions,
                 deletions,
-                stage_status: None,
+                // Preserve conflict classification so working-tree callers can
+                // route it into the Merge Changes section; commit diffs never
+                // carry conflicts, so this stays None there.
+                stage_status: is_conflicted.then_some(StageStatus::Conflicted),
             });
         }
 

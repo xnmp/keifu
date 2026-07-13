@@ -82,6 +82,18 @@ impl App {
             Action::RestoreFile => {
                 self.restore_selected_file()?;
             }
+            Action::AcceptOurs => {
+                self.accept_conflict_side(true)?;
+            }
+            Action::AcceptTheirs => {
+                self.accept_conflict_side(false)?;
+            }
+            Action::ContinueOperation => {
+                self.continue_in_progress_operation()?;
+            }
+            Action::AbortOperation => {
+                self.prompt_abort_operation();
+            }
             Action::UndoLastFileOp => {
                 self.undo_last_file_op()?;
             }
