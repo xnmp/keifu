@@ -66,6 +66,12 @@ impl App {
             Action::ToggleStage => {
                 self.toggle_stage_selected_file()?;
             }
+            Action::StageAll => {
+                self.stage_all_files()?;
+            }
+            Action::UnstageAll => {
+                self.unstage_all_files()?;
+            }
             Action::AddToGitignore => {
                 self.add_selected_to_gitignore()?;
             }
@@ -183,6 +189,26 @@ impl App {
             });
         }
 
+        self.refresh_after_file_op()?;
+        Ok(())
+    }
+
+    fn stage_all_files(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+        stage_all(&self.repo_path)?;
+        self.set_message("Staged all changes");
+        self.refresh_after_file_op()?;
+        Ok(())
+    }
+
+    fn unstage_all_files(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+        unstage_all(&self.repo_path)?;
+        self.set_message("Unstaged all changes");
         self.refresh_after_file_op()?;
         Ok(())
     }

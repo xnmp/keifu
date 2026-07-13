@@ -6,6 +6,7 @@ pub mod diff;
 pub mod extensions;
 pub mod graph;
 pub mod operations;
+pub mod patch;
 pub mod repository;
 
 pub use branch::BranchInfo;
@@ -14,6 +15,7 @@ pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,
     FileDiffContent, FileDiffInfo, StageStatus,
 };
+pub use patch::{extract_hunk_from_working_tree, render_hunk_patch, HunkPatch, PatchLine, PatchLineKind};
 pub use extensions::configure_git_extensions;
 pub use graph::build_graph;
 pub use repository::{GitRepository, OperationState, StashInfo, TagInfo, WorkingTreeStatus};

@@ -111,6 +111,10 @@ impl<'a> Widget for HelpPopup<'a> {
                     Span::styled("Stage/unstage file", desc_style),
                 ]),
                 Line::from(vec![
+                    Span::styled("  S / U      ", key_style),
+                    Span::styled("Stage all / unstage all", desc_style),
+                ]),
+                Line::from(vec![
                     Span::styled("  i          ", key_style),
                     Span::styled("Add to .gitignore (folder in folder mode)", desc_style),
                 ]),
@@ -162,6 +166,28 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("File Diff Viewer", header_style)),
+            Line::from(vec![
+                Span::styled("  [ / ]      ", key_style),
+                Span::styled("Previous / next hunk", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  n / N      ", key_style),
+                Span::styled("Next / previous file", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  s          ", key_style),
+                Span::styled("Stage hunk under cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  u          ", key_style),
+                Span::styled("Unstage hunk under cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  x          ", key_style),
+                Span::styled("Discard hunk (working tree)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Commit Panel", header_style)),

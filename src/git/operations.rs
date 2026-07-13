@@ -1,5 +1,6 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -72,6 +73,39 @@ fn run_git_allow_conflict(repo_path: &str, args: &[&str]) -> Result<OpOutcome> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     bail!("git {} failed: {}", subcommand, stderr.trim());
+}
+
+/// Run a git CLI command, feeding `stdin_bytes` to its standard input.
+/// Used for commands that read a patch from stdin (`git apply`).
+fn run_git_with_stdin(
+    repo_path: &str,
+    args: &[&str],
+    stdin_bytes: &[u8],
+) -> Result<std::process::Output> {
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
+
+    child
+        .stdin
+        .take()
+        .context("Failed to open git stdin")?
+        .write_all(stdin_bytes)
+        .context("Failed to write patch to git stdin")?;
+
+    let output = child
+        .wait_with_output()
+        .context(format!("Failed to run git {}", args.first().unwrap_or(&"")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
+    }
+    Ok(output)
 }
 
 /// Checkout a branch
@@ -448,6 +482,40 @@ pub fn stage_file(repo_path: &str, file_path: &str) -> Result<()> {
 /// Unstage a file
 pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<()> {
     run_git(repo_path, &["reset", "HEAD", "--", file_path])?;
+    Ok(())
+}
+
+/// Stage every change in the working tree, including untracked files and
+/// deletions (`git add -A`).
+pub fn stage_all(repo_path: &str) -> Result<()> {
+    run_git(repo_path, &["add", "-A"])?;
+    Ok(())
+}
+
+/// Unstage everything (`git reset`), leaving working-tree changes intact.
+pub fn unstage_all(repo_path: &str) -> Result<()> {
+    run_git(repo_path, &["reset"])?;
+    Ok(())
+}
+
+/// Apply a unified-diff patch to the index (`git apply --cached`) — stages the
+/// change described by `patch`.
+pub fn apply_patch_cached(repo_path: &str, patch: &str) -> Result<()> {
+    run_git_with_stdin(repo_path, &["apply", "--cached", "-"], patch.as_bytes())?;
+    Ok(())
+}
+
+/// Reverse-apply a unified-diff patch to the index (`git apply --cached -R`) —
+/// unstages the change described by `patch`.
+pub fn apply_patch_cached_reverse(repo_path: &str, patch: &str) -> Result<()> {
+    run_git_with_stdin(repo_path, &["apply", "--cached", "-R", "-"], patch.as_bytes())?;
+    Ok(())
+}
+
+/// Reverse-apply a unified-diff patch to the working tree (`git apply -R`) —
+/// discards the change described by `patch`. Destructive.
+pub fn apply_patch_worktree_reverse(repo_path: &str, patch: &str) -> Result<()> {
+    run_git_with_stdin(repo_path, &["apply", "-R", "-"], patch.as_bytes())?;
     Ok(())
 }
 

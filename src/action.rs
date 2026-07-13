@@ -40,6 +40,8 @@ pub enum Action {
     // File operations
     RestoreFile,
     ToggleStage,
+    StageAll,
+    UnstageAll,
     AddToGitignore,
     ArchiveFile,
     TrashFile,
@@ -125,4 +127,7 @@ pub enum Action {
     PrevFile,
     NextHunk,
     PrevHunk,
+    StageHunk,
+    UnstageHunk,
+    DiscardHunk,
 }

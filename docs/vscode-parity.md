@@ -11,28 +11,28 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
 
 ## Priority gaps
 
-1. **Merge-conflict awareness + abort/continue + accept ours/theirs (M-L)** —
-   today `merge_branch` bails with "resolve manually" AFTER libgit2 has
-   written conflict markers and MERGE_HEAD (`operations.rs:168`), stranding
-   the repo mid-merge with no in-app recovery; conflicted files render as
-   plain "Modified". Minimal slice: detect conflict/in-progress state
-   (MERGE_HEAD/REBASE_HEAD/CHERRY_PICK_HEAD), show a conflicted-files group,
-   offer `--abort`/`--continue` and `git checkout --ours/--theirs -- path`.
-   Full 3-way merge editor is XL and deferred.
+1. ~~**Merge-conflict awareness + abort/continue + accept ours/theirs**~~ —
+   **DONE (2026-07-13).** Op-state detection (`OperationState`), conflicted
+   files in a "Merge Changes" section (`!` marker), status-bar indicator,
+   `o` ours / `t` theirs / `c` continue / `A` abort (via Confirm). Conflicts
+   are a typed `OpOutcome`, not an error. Full 3-way merge editor remains
+   XL and deferred.
 2. **Pull (M)** — no fetch+integrate orchestration; both halves exist.
-   Needs #1 for the conflict path.
-3. **Hunk / line-level staging (L)** — signature SCM feature. Hunks are
-   parsed; work is patch synthesis → `git apply --cached` (and reverse-apply
-   for partial discard).
-4. ~~**Real branch filtering (M)**~~ — DONE. `get_commits()` now takes the
-   visible branch set and walks only those tips (HEAD always pushed), so
-   hiding a branch removes its exclusive commits, not just labels.
+   Conflict path now exists (#1).
+3. ~~**Hunk / line-level staging (L)**~~ — **DONE (2026-07-13).** In the
+   FileDiff viewer for uncommitted changes: `s` stage hunk, `u` unstage hunk,
+   `x` discard hunk (via Confirm). Patch synthesis in `git/patch.rs` →
+   `git apply --cached` / `--cached -R` / `-R`. See architecture.md.
+4. ~~**Real branch filtering (M)**~~ — **DONE (2026-07-13).** `get_commits()`
+   takes the visible branch set and walks only those tips (HEAD always
+   pushed), so hiding a branch removes its exclusive commits, not just labels.
 5. **Multi-remote + push -u / upstream / publish (M)** — origin-only and
    hardcoded today (`git push origin HEAD`).
 
-Near-free S wins to bundle: branch rename, tag delete/list/push (tags are now
+Near-free S wins to bundle: branch rename, tag delete/push (tags are now
 shown as graph refs — DONE), stash-all (`git stash push [-u]`; today only
-`--staged`), create-branch-from-stash, stage-all/unstage-all, copy file path.
+`--staged`), create-branch-from-stash, copy file path. (stage-all/unstage-all
+done 2026-07-13: `S`/`U` in the files pane.)
 
 ## Notable full-parity areas
 

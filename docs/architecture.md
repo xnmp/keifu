@@ -70,3 +70,27 @@
 **Gotcha — rebase abort/continue must use libgit2, not the CLI.** `rebase_branch` starts the rebase via `repo.rebase()`, which writes a `.git/rebase-merge` layout *without* a `git-rebase-todo`. `git rebase --continue/--abort` then fails with "could not open '.git/rebase-merge/git-rebase-todo'". So `abort_operation`/`continue_operation` special-case `Rebase` to `Rebase::abort()` / `open_rebase()+commit()+finish()`. Merge/cherry-pick/revert use `git <op> --abort|--continue` (libgit2's merge writes a CLI-compatible MERGE_HEAD; cherry-pick/revert are CLI-driven throughout). Continue runs with `GIT_EDITOR=true` so it never blocks the TUI.
 
 **Keys (files pane):** `o` accept ours, `t` accept theirs, `c` continue, `A` abort (behind the Confirm dialog).
+
+## Hunk-Level Staging Model (2026-07-13)
+
+**Decision:** The FileDiff viewer for uncommitted changes shows the *combined*
+`git diff HEAD` diff (`diff_tree_to_workdir_with_index`). Hunk operations
+synthesise a minimal single-hunk unified diff for the hunk under the cursor and
+shell out to `git apply`: stage → `--cached`, unstage → `--cached -R`, discard
+→ `-R` (working tree, routed through Confirm). Direction is chosen by the key
+(`s`/`u`/`x`), not inferred from the hunk, because the combined view cannot tell
+a staged hunk from an unstaged one.
+
+**Why patch synthesis, not libgit2 apply:** libgit2 has no hunk-scoped index
+apply. Patches are built by `git/patch.rs::extract_hunk_from_working_tree` from
+libgit2's *raw* line bytes (not the display `DiffLineContent`, whose content is
+trimmed and would lose CRLF), then rendered by the pure `render_hunk_patch`. A
+line whose raw content lacks a trailing `\n` yields the `\ No newline at end of
+file` marker; CRLF endings pass through verbatim.
+
+**Correctness boundary:** `git apply` validates the patch against the target
+(index or worktree) and fails loudly rather than corrupting state. In the common
+case (a file with only unstaged changes, so index == HEAD) every direction
+applies cleanly. Untracked files have no index/HEAD entry, so stage-hunk falls
+back to a whole-file `git add` (the combined diff is a single all-additions hunk
+== the whole file) and unstage/discard-hunk defer to the files pane.

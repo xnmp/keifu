@@ -736,3 +736,153 @@ fn detached_orphan_head_commit_appears_in_history() {
         "detached HEAD commit missing from history"
     );
 }
+
+// ── Hunk-level staging through App.handle_action ────────────────────
+
+/// A 20-line file with well-separated edits (line 2 and line 19) so the
+/// working-tree diff yields two distinct hunks.
+fn base_20() -> String {
+    (1..=20).map(|i| format!("l{i}\n")).collect()
+}
+fn two_edits_20() -> String {
+    (1..=20)
+        .map(|i| match i {
+            2 => "TOP\n".to_string(),
+            19 => "BOTTOM\n".to_string(),
+            _ => format!("l{i}\n"),
+        })
+        .collect()
+}
+
+fn git_out(repo_path: &str, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+fn open_two_hunk_diff(tempdir: &Path) -> App {
+    let repo = Repository::init(tempdir).unwrap();
+    commit_file(&repo, "f.txt", &base_20(), "base");
+    fs::write(tempdir.join("f.txt"), two_edits_20()).unwrap();
+
+    let mut app = make_test_app(tempdir);
+    app.focused_panel = FocusedPanel::Files;
+    app.diff_viewport_height = 40;
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("f.txt".into()),
+    };
+    app.sync_file_list_cache();
+    app.handle_action(Action::OpenFileDiff).unwrap();
+    assert!(matches!(app.mode, AppMode::FileDiff { .. }), "diff should open");
+    app
+}
+
+/// Point the viewer's cursor at hunk `idx` by scrolling to its header row.
+fn target_hunk(app: &mut App, idx: usize) {
+    let pos = if let AppMode::FileDiff { hunk_positions, .. } = &app.mode {
+        assert_eq!(hunk_positions.len(), 2, "expected two hunks");
+        hunk_positions[idx]
+    } else {
+        panic!("not in FileDiff mode");
+    };
+    if let AppMode::FileDiff { scroll_offset, .. } = &mut app.mode {
+        *scroll_offset = pos;
+    }
+}
+
+#[test]
+fn stage_hunk_action_stages_only_the_hunk_under_cursor() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let mut app = open_two_hunk_diff(tempdir.path());
+    let rp = app.repo_path.clone();
+
+    // Cursor on the second hunk (BOTTOM); stage it.
+    target_hunk(&mut app, 1);
+    app.handle_action(Action::StageHunk).unwrap();
+
+    let staged = git_out(&rp, &["diff", "--cached"]);
+    assert!(staged.contains("+BOTTOM"), "BOTTOM should be staged:\n{staged}");
+    assert!(!staged.contains("+TOP"), "TOP must stay unstaged:\n{staged}");
+    // Viewer stays open on the same (still-changed) file.
+    assert!(matches!(app.mode, AppMode::FileDiff { .. }));
+}
+
+#[test]
+fn unstage_hunk_action_removes_that_hunk_from_the_index() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let mut app = open_two_hunk_diff(tempdir.path());
+    let rp = app.repo_path.clone();
+
+    // Stage the whole file first, then unstage just the TOP hunk.
+    stage_file(&rp, "f.txt").unwrap();
+    target_hunk(&mut app, 0);
+    app.handle_action(Action::UnstageHunk).unwrap();
+
+    let staged = git_out(&rp, &["diff", "--cached"]);
+    assert!(!staged.contains("+TOP"), "TOP should be unstaged:\n{staged}");
+    assert!(staged.contains("+BOTTOM"), "BOTTOM stays staged:\n{staged}");
+}
+
+#[test]
+fn discard_hunk_action_routes_through_confirm_then_reverts_worktree() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let mut app = open_two_hunk_diff(tempdir.path());
+
+    // Cursor on the first hunk (TOP); request discard.
+    target_hunk(&mut app, 0);
+    app.handle_action(Action::DiscardHunk).unwrap();
+    assert!(
+        matches!(app.mode, AppMode::Confirm { .. }),
+        "discard must prompt for confirmation"
+    );
+
+    app.handle_action(Action::Confirm).unwrap();
+
+    let contents = fs::read_to_string(tempdir.path().join("f.txt")).unwrap();
+    assert!(!contents.contains("TOP"), "TOP reverted:\n{contents}");
+    assert!(contents.contains("BOTTOM"), "BOTTOM survives:\n{contents}");
+    // One hunk remains, so the viewer reopens rather than closing.
+    assert!(matches!(app.mode, AppMode::FileDiff { .. }));
+}
+
+#[test]
+fn cancelling_discard_hunk_returns_to_the_diff_viewer() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let mut app = open_two_hunk_diff(tempdir.path());
+
+    target_hunk(&mut app, 0);
+    app.handle_action(Action::DiscardHunk).unwrap();
+    assert!(matches!(app.mode, AppMode::Confirm { .. }));
+
+    // Cancelling must reopen the viewer, not drop to Normal, and leave the
+    // working tree untouched.
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(matches!(app.mode, AppMode::FileDiff { .. }), "should reopen diff");
+    let contents = fs::read_to_string(tempdir.path().join("f.txt")).unwrap();
+    assert!(contents.contains("TOP") && contents.contains("BOTTOM"));
+}
+
+#[test]
+fn stage_all_action_stages_tracked_and_untracked_from_files_pane() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "tracked.txt", "v1\n", "initial");
+    fs::write(tempdir.path().join("tracked.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("untracked.txt"), "new\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.focused_panel = FocusedPanel::Files;
+    let rp = app.repo_path.clone();
+
+    app.handle_action(Action::StageAll).unwrap();
+
+    let staged = git_out(&rp, &["diff", "--cached", "--name-only"]);
+    assert!(staged.contains("tracked.txt") && staged.contains("untracked.txt"), "{staged}");
+
+    app.handle_action(Action::UnstageAll).unwrap();
+    assert!(git_out(&rp, &["diff", "--cached", "--name-only"]).trim().is_empty());
+}

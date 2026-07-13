@@ -87,6 +87,18 @@ impl App {
                         stash_drop(&self.repo_path, index)?;
                         self.set_message(format!("Dropped stash@{{{}}}", index));
                     }
+                    ConfirmAction::DiscardHunk {
+                        patch,
+                        file_path,
+                        scroll_offset,
+                    } => {
+                        apply_patch_worktree_reverse(&self.repo_path, &patch)?;
+                        self.set_message("Discarded hunk");
+                        // Reopen the diff viewer where we left off instead of
+                        // falling through to Normal mode.
+                        self.reload_file_diff_for_path(&file_path, scroll_offset)?;
+                        return Ok(());
+                    }
                 }
                 self.refresh(true)?;
                 self.mode = AppMode::Normal;
@@ -95,7 +107,18 @@ impl App {
                 }
             }
             Action::Cancel => {
-                self.mode = AppMode::Normal;
+                // A discard-hunk prompt was launched from the diff viewer;
+                // dismissing it should return there, not drop to Normal.
+                if let ConfirmAction::DiscardHunk {
+                    file_path,
+                    scroll_offset,
+                    ..
+                } = confirm_action
+                {
+                    self.reopen_file_diff_for_path(&file_path, scroll_offset)?;
+                } else {
+                    self.mode = AppMode::Normal;
+                }
             }
             _ => {}
         }
