@@ -4,7 +4,22 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
-use git2::{BranchType, Oid, Repository};
+use git2::{BranchType, Oid, Repository, Status};
+
+use super::repository::OperationState;
+
+/// Outcome of a history-integrating operation (merge/rebase/cherry-pick/revert).
+///
+/// A conflict is a first-class outcome, not an error: the operation genuinely
+/// started and left the repo mid-way with resolvable conflicts. Callers show a
+/// guided "resolve then continue / abort" flow instead of a raw error popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpOutcome {
+    /// The operation finished cleanly.
+    Completed,
+    /// The operation stopped on conflicts; the repo is left in-progress.
+    Conflicts { count: usize },
+}
 
 /// Run a git CLI command and return its output, or bail with stderr on failure.
 fn run_git(repo_path: &str, args: &[&str]) -> Result<std::process::Output> {
@@ -19,6 +34,44 @@ fn run_git(repo_path: &str, args: &[&str]) -> Result<std::process::Output> {
         bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
     }
     Ok(output)
+}
+
+/// Count unmerged (conflicted) paths in the repo at `repo_path`.
+fn count_conflicts(repo_path: &str) -> usize {
+    Repository::open(repo_path)
+        .and_then(|repo| {
+            Ok(repo
+                .statuses(None)?
+                .iter()
+                .filter(|e| e.status().contains(Status::CONFLICTED))
+                .count())
+        })
+        .unwrap_or(0)
+}
+
+/// Run a git command that may legitimately stop on conflicts (cherry-pick,
+/// revert, …). On non-zero exit, a still-present conflict is reported as
+/// `Conflicts` rather than an error; a genuine failure bails with stderr.
+fn run_git_allow_conflict(repo_path: &str, args: &[&str]) -> Result<OpOutcome> {
+    let subcommand = args.first().copied().unwrap_or("");
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        // Never block the TUI on an editor prompt.
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .stdin(Stdio::null())
+        .output()
+        .context(format!("Failed to execute git {subcommand}"))?;
+    if output.status.success() {
+        return Ok(OpOutcome::Completed);
+    }
+    let count = count_conflicts(repo_path);
+    if count > 0 {
+        return Ok(OpOutcome::Conflicts { count });
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!("git {} failed: {}", subcommand, stderr.trim());
 }
 
 /// Checkout a branch
@@ -132,8 +185,12 @@ pub fn delete_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Perform a merge
-pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<()> {
+/// Perform a merge.
+///
+/// On a conflicting normal merge this returns `Ok(OpOutcome::Conflicts)` and
+/// deliberately leaves the repo mid-merge (conflicted index + MERGE_HEAD), so
+/// the caller can offer resolve/continue/abort. It is NOT an error.
+pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
     let branch = repo
         .find_branch(branch_name, BranchType::Local)
         .context(format!("Branch '{}' not found", branch_name))?;
@@ -144,7 +201,7 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let (analysis, _) = repo.merge_analysis(&[&annotated_commit])?;
 
     if analysis.is_up_to_date() {
-        return Ok(());
+        return Ok(OpOutcome::Completed);
     }
 
     if analysis.is_fast_forward() {
@@ -158,7 +215,7 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<()> {
         let mut head_ref = repo.head()?;
         head_ref.set_target(target_oid, &format!("Fast-forward merge: {}", branch_name))?;
 
-        return Ok(());
+        return Ok(OpOutcome::Completed);
     }
 
     if analysis.is_normal() {
@@ -166,7 +223,17 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<()> {
         repo.merge(&[&annotated_commit], None, None)?;
 
         if repo.index()?.has_conflicts() {
-            bail!("Merge conflict occurred. Please resolve manually.");
+            // Leave MERGE_HEAD + conflicted index in place; the user resolves
+            // then continues (or aborts) from the UI.
+            let count = repo
+                .statuses(None)
+                .map(|s| {
+                    s.iter()
+                        .filter(|e| e.status().contains(Status::CONFLICTED))
+                        .count()
+                })
+                .unwrap_or(0);
+            return Ok(OpOutcome::Conflicts { count });
         }
 
         // Create a merge commit
@@ -189,11 +256,15 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<()> {
         repo.cleanup_state()?;
     }
 
-    Ok(())
+    Ok(OpOutcome::Completed)
 }
 
-/// Perform a rebase (simple implementation)
-pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<()> {
+/// Perform a rebase (simple implementation).
+///
+/// On a conflicting step this returns `Ok(OpOutcome::Conflicts)` and leaves the
+/// rebase in progress (REBASE_HEAD etc.) for resolve/continue/abort — it does
+/// NOT abort automatically.
+pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<OpOutcome> {
     let onto = repo
         .find_branch(onto_branch, BranchType::Local)
         .context(format!("Branch '{}' not found", onto_branch))?;
@@ -204,13 +275,26 @@ pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<()> {
 
     while let Some(op) = rebase.next() {
         let _operation = op?;
+        // A conflicting patch leaves unmerged entries in the index; committing
+        // now would fail. Stop and leave the rebase in progress instead.
+        if repo.index()?.has_conflicts() {
+            let count = repo
+                .statuses(None)
+                .map(|s| {
+                    s.iter()
+                        .filter(|e| e.status().contains(Status::CONFLICTED))
+                        .count()
+                })
+                .unwrap_or(0);
+            return Ok(OpOutcome::Conflicts { count });
+        }
         let signature = repo.signature()?;
         rebase.commit(None, &signature, None)?;
     }
 
     rebase.finish(None)?;
 
-    Ok(())
+    Ok(OpOutcome::Completed)
 }
 
 /// Fetch from origin remote using git command
@@ -219,10 +303,12 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Cherry-pick a commit
-pub fn cherry_pick(repo_path: &str, commit_oid: Oid) -> Result<()> {
-    run_git(repo_path, &["cherry-pick", &commit_oid.to_string()])?;
-    Ok(())
+/// Cherry-pick a commit.
+///
+/// A conflict is reported as `OpOutcome::Conflicts` (leaving CHERRY_PICK_HEAD in
+/// place), not an error.
+pub fn cherry_pick(repo_path: &str, commit_oid: Oid) -> Result<OpOutcome> {
+    run_git_allow_conflict(repo_path, &["cherry-pick", &commit_oid.to_string()])
 }
 
 /// Reset mode for `reset_to_commit`
@@ -257,16 +343,100 @@ pub fn add_tag(repo: &Repository, tag_name: &str, commit_oid: Oid) -> Result<()>
     Ok(())
 }
 
-/// Revert a commit without opening an editor
-pub fn revert_commit(repo_path: &str, commit_oid: Oid) -> Result<()> {
-    run_git(repo_path, &["revert", "--no-edit", &commit_oid.to_string()])?;
-    Ok(())
+/// Revert a commit without opening an editor.
+///
+/// A conflict is reported as `OpOutcome::Conflicts` (leaving REVERT_HEAD in
+/// place), not an error.
+pub fn revert_commit(repo_path: &str, commit_oid: Oid) -> Result<OpOutcome> {
+    run_git_allow_conflict(repo_path, &["revert", "--no-edit", &commit_oid.to_string()])
 }
 
 /// Push current branch to origin
 pub fn push_to_origin(repo_path: &str) -> Result<()> {
     run_git(repo_path, &["push", "origin", "HEAD"])?;
     Ok(())
+}
+
+/// Resolve a conflicted path by taking "our" side (stage 2) and staging it.
+pub fn accept_ours(repo_path: &str, path: &str) -> Result<()> {
+    run_git(repo_path, &["checkout", "--ours", "--", path])?;
+    run_git(repo_path, &["add", "--", path])?;
+    Ok(())
+}
+
+/// Resolve a conflicted path by taking "their" side (stage 3) and staging it.
+pub fn accept_theirs(repo_path: &str, path: &str) -> Result<()> {
+    run_git(repo_path, &["checkout", "--theirs", "--", path])?;
+    run_git(repo_path, &["add", "--", path])?;
+    Ok(())
+}
+
+/// Abort the in-progress operation, restoring the pre-operation state.
+///
+/// Rebase is aborted through libgit2 (`Rebase::abort`) because `rebase_branch`
+/// starts it via libgit2, whose `.git/rebase-merge` layout the `git` CLI can't
+/// drive. Merge/cherry-pick/revert use `git <op> --abort`.
+pub fn abort_operation(repo_path: &str, op: OperationState) -> Result<()> {
+    match op {
+        OperationState::Rebase => {
+            let repo = Repository::open(repo_path)?;
+            let mut rebase = repo.open_rebase(None)?;
+            rebase.abort()?;
+            Ok(())
+        }
+        _ => {
+            let Some(sub) = op.git_subcommand() else {
+                bail!("No operation in progress to abort");
+            };
+            run_git(repo_path, &[sub, "--abort"])?;
+            Ok(())
+        }
+    }
+}
+
+/// Continue the in-progress operation after conflicts are resolved.
+///
+/// If conflicts remain unresolved, returns `Ok(OpOutcome::Conflicts)` so the
+/// caller can surface the shortfall; other failures bail with git's message.
+/// Rebase continues through libgit2 (see `abort_operation`); the rest use
+/// `git <op> --continue` with the editor disabled so it never blocks the TUI.
+pub fn continue_operation(repo_path: &str, op: OperationState) -> Result<OpOutcome> {
+    match op {
+        OperationState::Rebase => continue_rebase(repo_path),
+        _ => {
+            let Some(sub) = op.git_subcommand() else {
+                bail!("No operation in progress to continue");
+            };
+            run_git_allow_conflict(repo_path, &[sub, "--continue"])
+        }
+    }
+}
+
+/// Resume a libgit2 rebase left in progress: commit the resolved current patch,
+/// then replay the rest until finished or the next conflict.
+fn continue_rebase(repo_path: &str) -> Result<OpOutcome> {
+    let repo = Repository::open(repo_path)?;
+    // Unresolved conflicts still sitting in the index — nothing to commit yet.
+    if repo.index()?.has_conflicts() {
+        return Ok(OpOutcome::Conflicts {
+            count: count_conflicts(repo_path),
+        });
+    }
+    let mut rebase = repo.open_rebase(None)?;
+    let signature = repo.signature()?;
+    // Commit the patch that previously conflicted (now resolved + staged).
+    rebase.commit(None, &signature, None)?;
+    while let Some(op) = rebase.next() {
+        op?;
+        if repo.index()?.has_conflicts() {
+            return Ok(OpOutcome::Conflicts {
+                count: count_conflicts(repo_path),
+            });
+        }
+        rebase.commit(None, &signature, None)?;
+    }
+    rebase.finish(None)?;
+    Ok(OpOutcome::Completed)
 }
 
 /// Stage a file

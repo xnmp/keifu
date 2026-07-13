@@ -41,6 +41,8 @@ impl App {
         let commits = repo.get_commits(500, &branches, &stashes)?;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
+        let op_state = repo.operation_state();
+        let conflict_count = repo.conflicted_count();
         let uncommitted_count = working_tree_status
             .as_ref()
             .map(|s| s.accurate_file_count());
@@ -87,6 +89,8 @@ impl App {
             visible_commit_indices: Vec::new(),
             search_state: SearchState::default(),
             working_tree_status,
+            op_state,
+            conflict_count,
             diff_cache: DiffCache::new(),
             should_quit: false,
             pending_refresh: false,

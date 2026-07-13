@@ -49,6 +49,12 @@ pub enum Action {
     FilesFilterChar(char),
     FilesFilterBackspace,
 
+    // Merge-conflict resolution (files pane, when an operation is in progress)
+    AcceptOurs,
+    AcceptTheirs,
+    ContinueOperation,
+    AbortOperation,
+
     // Commit filter (graph panel)
     StartCommitFilter,
     CommitFilterChar(char),

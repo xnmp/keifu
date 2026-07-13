@@ -15,21 +15,35 @@ impl App {
 
         match action {
             Action::Confirm => {
+                // Set when a history-integrating op runs, so we can guide the
+                // user through conflicts (or confirm success) after refresh.
+                let mut op_outcome: Option<(OpOutcome, OperationState)> = None;
                 match confirm_action {
                     ConfirmAction::DeleteBranch(name) => {
                         delete_branch(self.repo.repo(), &name)?;
                     }
                     ConfirmAction::Merge(name) => {
-                        merge_branch(self.repo.repo(), &name)?;
+                        let outcome = merge_branch(self.repo.repo(), &name)?;
+                        op_outcome = Some((outcome, OperationState::Merge));
                     }
                     ConfirmAction::Rebase(name) => {
-                        rebase_branch(self.repo.repo(), &name)?;
+                        let outcome = rebase_branch(self.repo.repo(), &name)?;
+                        op_outcome = Some((outcome, OperationState::Rebase));
                     }
                     ConfirmAction::CherryPick(oid) => {
-                        cherry_pick(&self.repo_path, oid)?;
+                        let outcome = cherry_pick(&self.repo_path, oid)?;
+                        op_outcome = Some((outcome, OperationState::CherryPick));
                     }
                     ConfirmAction::Revert(oid) => {
-                        revert_commit(&self.repo_path, oid)?;
+                        let outcome = revert_commit(&self.repo_path, oid)?;
+                        op_outcome = Some((outcome, OperationState::Revert));
+                    }
+                    ConfirmAction::AbortOperation(op) => {
+                        abort_operation(&self.repo_path, op)?;
+                        self.refresh(true)?;
+                        self.set_message(format!("{} aborted", op.verb()));
+                        self.mode = AppMode::Normal;
+                        return Ok(());
                     }
                     ConfirmAction::ResetSoft(oid) => {
                         reset_to_commit(&self.repo_path, oid, ResetMode::Soft)?;
@@ -76,6 +90,9 @@ impl App {
                 }
                 self.refresh(true)?;
                 self.mode = AppMode::Normal;
+                if let Some((outcome, op)) = op_outcome {
+                    self.handle_op_outcome(outcome, op);
+                }
             }
             Action::Cancel => {
                 self.mode = AppMode::Normal;

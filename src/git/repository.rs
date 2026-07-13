@@ -26,6 +26,67 @@ pub struct TagInfo {
     pub target_oid: Oid,
 }
 
+/// The in-progress git operation the repository is currently mid-way through,
+/// derived from `git2::RepositoryState`. Drives conflict-recovery UI
+/// (abort/continue) and the status-bar indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationState {
+    Clean,
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl OperationState {
+    /// Map a libgit2 repository state to the coarse operation it represents.
+    /// States outside the four resolvable operations (bisect, mailbox, …) are
+    /// treated as `Clean` — the conflict-recovery UI doesn't cover them.
+    pub fn from_repo_state(state: git2::RepositoryState) -> Self {
+        use git2::RepositoryState as S;
+        match state {
+            S::Merge => Self::Merge,
+            S::Revert | S::RevertSequence => Self::Revert,
+            S::CherryPick | S::CherryPickSequence => Self::CherryPick,
+            S::Rebase | S::RebaseInteractive | S::RebaseMerge => Self::Rebase,
+            _ => Self::Clean,
+        }
+    }
+
+    /// Whether an operation is in progress (i.e. not `Clean`).
+    pub fn is_in_progress(self) -> bool {
+        !matches!(self, Self::Clean)
+    }
+
+    /// Uppercase label for the status bar (e.g. "MERGING").
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clean => "",
+            Self::Merge => "MERGING",
+            Self::Rebase => "REBASING",
+            Self::CherryPick => "CHERRY-PICKING",
+            Self::Revert => "REVERTING",
+        }
+    }
+
+    /// Lowercase verb for user-facing messages (e.g. "merge").
+    pub fn verb(self) -> &'static str {
+        self.git_subcommand().unwrap_or("operation")
+    }
+
+    /// The `git` subcommand used for `--abort` / `--continue`, or `None` when
+    /// clean.
+    pub fn git_subcommand(self) -> Option<&'static str> {
+        match self {
+            Self::Clean => None,
+            Self::Merge => Some("merge"),
+            Self::Rebase => Some("rebase"),
+            Self::CherryPick => Some("cherry-pick"),
+            Self::Revert => Some("revert"),
+        }
+    }
+}
+
 pub struct GitRepository {
     repo: Repository,
     pub path: String,
@@ -202,6 +263,24 @@ impl GitRepository {
             .map(|c| c.id())
     }
 
+    /// The in-progress git operation (merge/rebase/cherry-pick/revert), if any.
+    pub fn operation_state(&self) -> OperationState {
+        OperationState::from_repo_state(self.repo.state())
+    }
+
+    /// Number of paths currently in a conflicted (unmerged) state.
+    pub fn conflicted_count(&self) -> usize {
+        self.repo
+            .statuses(None)
+            .map(|statuses| {
+                statuses
+                    .iter()
+                    .filter(|e| e.status().contains(Status::CONFLICTED))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Get working tree status (staged + unstaged + untracked changes)
     /// Returns None if there are no changes
     pub fn get_working_tree_status(&self) -> Result<Option<WorkingTreeStatus>> {
@@ -244,7 +323,12 @@ impl GitRepository {
                     | git2::Status::WT_TYPECHANGE,
             );
 
-            if is_staged || has_worktree_changes {
+            // Conflicted (unmerged) paths report only CONFLICTED — without this
+            // a merge whose sole change is the conflicted file would leave the
+            // uncommitted node (and its Merge Changes section) invisible.
+            let is_conflicted = status.contains(Status::CONFLICTED);
+
+            if is_staged || has_worktree_changes || is_conflicted {
                 let path = super::path_from_bytes(entry.path_bytes());
                 if status.intersects(Status::WT_NEW) {
                     let full_path = workdir.join(&path);

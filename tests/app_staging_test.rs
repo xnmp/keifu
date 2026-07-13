@@ -109,6 +109,8 @@ fn make_base_app(
         visible_commit_indices: Vec::new(),
         search_state: SearchState::default(),
         working_tree_status,
+        op_state: keifu::git::OperationState::Clean,
+        conflict_count: 0,
         diff_cache: {
             let mut dc = DiffCache::new();
             dc.selected_diff_target = Some(diff_target);

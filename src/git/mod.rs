@@ -16,7 +16,7 @@ pub use diff::{
 };
 pub use extensions::configure_git_extensions;
 pub use graph::build_graph;
-pub use repository::{GitRepository, StashInfo, TagInfo, WorkingTreeStatus};
+pub use repository::{GitRepository, OperationState, StashInfo, TagInfo, WorkingTreeStatus};
 
 use std::path::PathBuf;
 

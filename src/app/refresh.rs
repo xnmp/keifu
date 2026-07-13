@@ -127,6 +127,11 @@ impl App {
             .map(|s| s.accurate_file_count());
         self.working_tree_status = working_tree_status;
 
+        // Refresh in-progress operation state (merge/rebase/…) and conflict
+        // count so the status bar and conflict keybindings stay accurate.
+        self.op_state = self.repo.operation_state();
+        self.conflict_count = self.repo.conflicted_count();
+
         let stashes = self.repo.get_stashes();
         self.branches = self.repo.get_branches()?;
         // Hidden branches are excluded from the revwalk, so their exclusive

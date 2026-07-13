@@ -189,6 +189,12 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Restore all changes (discard)
         (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RestoreFile),
 
+        // Merge-conflict resolution (active only when an operation is in progress)
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::AcceptOurs),
+        (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::AcceptTheirs),
+        (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::ContinueOperation),
+        (KeyModifiers::SHIFT, KeyCode::Char('A')) => Some(Action::AbortOperation),
+
         // Open file with default app
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenWithDefault),
 
