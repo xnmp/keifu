@@ -35,15 +35,18 @@ impl App {
         let head_detached = repo.is_head_detached();
 
         let stashes = repo.get_stashes();
-        let commits = repo.get_commits(500, &stashes)?;
+        // No branches are hidden at startup, so all branches are visible.
         let branches = repo.get_branches()?;
+        let tags = repo.get_tags();
+        let commits = repo.get_commits(500, &branches, &stashes)?;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
         let uncommitted_count = working_tree_status
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, &stashes, uncommitted_count, head_commit_oid);
+        let graph_layout =
+            build_graph(&commits, &branches, &tags, &stashes, uncommitted_count, head_commit_oid);
 
         let mut graph_nav = GraphNav::new();
         graph_nav.rebuild_branch_positions(&graph_layout);

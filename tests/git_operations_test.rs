@@ -343,6 +343,29 @@ fn add_duplicate_tag_fails() {
     assert!(result.is_err());
 }
 
+#[test]
+fn get_tags_resolves_lightweight_and_annotated_tags() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let c1 = commit_file(repo, "a.txt", "a", "first");
+    let c2 = commit_file(repo, "b.txt", "b", "second");
+
+    // Lightweight tag on c1; annotated tag (its own tag object) on c2.
+    add_tag(repo, "light", c1).unwrap();
+    git_cli(
+        repo_path(&git_repo),
+        &["tag", "-a", "annot", "-m", "release", &c2.to_string()],
+    );
+
+    let tags = git_repo.get_tags();
+    let target = |name: &str| tags.iter().find(|t| t.name == name).map(|t| t.target_oid);
+
+    // The annotated tag must be peeled through its tag object to the commit
+    // it references (c2), not report the tag object's own oid.
+    assert_eq!(target("light"), Some(c1));
+    assert_eq!(target("annot"), Some(c2));
+}
+
 // ── Restore ─────────────────────────────────────────────────────────
 
 #[test]

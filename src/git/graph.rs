@@ -18,6 +18,8 @@ pub struct GraphNode {
     pub color_index: usize,
     /// Branch names pointing to this commit
     pub branch_names: Vec<String>,
+    /// Tag names pointing to this commit
+    pub tag_names: Vec<String>,
     /// Whether HEAD points to this commit
     pub is_head: bool,
     /// Whether this is an uncommitted changes node
@@ -77,6 +79,7 @@ pub struct GraphLayout {
 pub fn build_graph(
     commits: &[CommitInfo],
     branches: &[BranchInfo],
+    tags: &[super::repository::TagInfo],
     stashes: &[super::repository::StashInfo],
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
@@ -88,6 +91,15 @@ pub fn build_graph(
         .collect();
     let stash_oids: HashSet<Oid> = stashes.iter().map(|s| s.oid).collect();
 
+    // Map commit oid -> tag names pointing at it.
+    let mut oid_to_tags: HashMap<Oid, Vec<String>> = HashMap::new();
+    for tag in tags {
+        oid_to_tags
+            .entry(tag.target_oid)
+            .or_default()
+            .push(tag.name.clone());
+    }
+
     if commits.is_empty() {
         if let Some(count) = uncommitted_count {
             return GraphLayout {
@@ -96,6 +108,7 @@ pub fn build_graph(
                     lane: 0,
                     color_index: UNCOMMITTED_COLOR_INDEX,
                     branch_names: Vec::new(),
+                    tag_names: Vec::new(),
                     is_head: false,
                     is_uncommitted: true,
                     is_stash: false,
@@ -241,6 +254,7 @@ pub fn build_graph(
                 lane: main_lane,
                 color_index: main_color,
                 branch_names: Vec::new(),
+                tag_names: Vec::new(),
                 is_head: false,
                 is_uncommitted: false,
                 is_stash: false,
@@ -413,11 +427,13 @@ pub fn build_graph(
         // Add commit row
         let is_stash = stash_oids.contains(&commit.oid);
         let stash_label = stash_oid_labels.get(&commit.oid).cloned();
+        let tag_names = oid_to_tags.get(&commit.oid).cloned().unwrap_or_default();
         nodes.push(GraphNode {
             commit: Some(commit.clone()),
             lane,
             color_index: final_color_index,
             branch_names,
+            tag_names,
             is_head,
             is_uncommitted: false,
             is_stash,
@@ -583,6 +599,7 @@ pub fn build_graph(
                     lane: uncommitted_lane,
                     color_index: UNCOMMITTED_COLOR_INDEX,
                     branch_names: Vec::new(),
+                    tag_names: Vec::new(),
                     is_head: false,
                     is_uncommitted: true,
                     is_stash: false,

@@ -24,14 +24,14 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
 3. **Hunk / line-level staging (L)** — signature SCM feature. Hunks are
    parsed; work is patch synthesis → `git apply --cached` (and reverse-apply
    for partial discard).
-4. **Real branch filtering (M)** — Shift+B only removes labels; commits from
-   hidden branches still walk into the graph. Fix: pass visible branch tips
-   into `get_commits()` (already flagged in TODO.md).
+4. ~~**Real branch filtering (M)**~~ — DONE. `get_commits()` now takes the
+   visible branch set and walks only those tips (HEAD always pushed), so
+   hiding a branch removes its exclusive commits, not just labels.
 5. **Multi-remote + push -u / upstream / publish (M)** — origin-only and
    hardcoded today (`git push origin HEAD`).
 
-Near-free S wins to bundle: branch rename, tag delete/list/push (tags aren't
-even shown as graph refs — S-M), stash-all (`git stash push [-u]`; today only
+Near-free S wins to bundle: branch rename, tag delete/list/push (tags are now
+shown as graph refs — DONE), stash-all (`git stash push [-u]`; today only
 `--staged`), create-branch-from-stash, stage-all/unstage-all, copy file path.
 
 ## Notable full-parity areas

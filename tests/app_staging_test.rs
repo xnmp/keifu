@@ -138,6 +138,7 @@ fn make_diff_app(selected_oid: Oid, in_flight_oid: Option<Oid>) -> App {
         lane: 0,
         color_index: 0,
         branch_names: Vec::new(),
+        tag_names: Vec::new(),
         is_head: false,
         is_uncommitted: false,
         is_stash: false,
@@ -156,6 +157,7 @@ fn make_uncommitted_app() -> App {
         lane: 0,
         color_index: 0,
         branch_names: Vec::new(),
+        tag_names: Vec::new(),
         is_head: false,
         is_uncommitted: true,
         is_stash: false,
@@ -723,8 +725,10 @@ fn detached_orphan_head_commit_appears_in_history() {
         .unwrap();
 
     let mut git_repo = GitRepository::open(tempdir.path()).unwrap();
+    // The branch still points at `first`; `orphan` is reachable only via HEAD.
+    let branches = git_repo.get_branches().unwrap();
     let stashes = git_repo.get_stashes();
-    let commits = git_repo.get_commits(500, &stashes).unwrap();
+    let commits = git_repo.get_commits(500, &branches, &stashes).unwrap();
     assert!(
         commits.iter().any(|c| c.oid == orphan),
         "detached HEAD commit missing from history"

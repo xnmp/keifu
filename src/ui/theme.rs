@@ -75,6 +75,8 @@ pub struct Theme {
 
     // Branch labels in graph
     pub branch_head: Color,
+    // Tag labels in graph (distinct from branch labels)
+    pub tag_label: Color,
 
     // Editor selection
     pub editor_selection_fg: Color,
@@ -170,6 +172,8 @@ impl Theme {
             // Branch labels — bright ANSI green follows the terminal palette
             // while staying legible for the checked-out HEAD label and node.
             branch_head: Color::LightGreen,
+            // Tag labels — gold, the git convention for tag refs.
+            tag_label: Color::LightYellow,
 
             // Editor selection
             editor_selection_fg: Color::White,
@@ -271,6 +275,8 @@ impl Theme {
 
             // Branch labels
             branch_head: Color::Green,
+            // Tag labels — dark gold, legible on light backgrounds.
+            tag_label: Color::Rgb(150, 110, 0),
 
             // Editor selection
             editor_selection_fg: Color::White,

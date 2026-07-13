@@ -128,18 +128,22 @@ impl App {
         self.working_tree_status = working_tree_status;
 
         let stashes = self.repo.get_stashes();
-        self.commits = self.repo.get_commits(500, &stashes)?;
         self.branches = self.repo.get_branches()?;
+        // Hidden branches are excluded from the revwalk, so their exclusive
+        // commits are removed from the graph — not merely their labels.
         let visible_branches: Vec<BranchInfo> = self
             .branches
             .iter()
             .filter(|b| !self.hidden_branches.contains(&b.name))
             .cloned()
             .collect();
+        self.commits = self.repo.get_commits(500, &visible_branches, &stashes)?;
+        let tags = self.repo.get_tags();
         let head_commit_oid = self.repo.head_oid();
         self.graph_layout = build_graph(
             &self.commits,
             &visible_branches,
+            &tags,
             &stashes,
             uncommitted_count,
             head_commit_oid,

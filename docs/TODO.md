@@ -13,7 +13,10 @@ Enter on a commit opens a full options menu with: checkout, create branch, merge
 ### [DONE] Branch Select/Deselect with Filter
 Shift+B in graph pane opens branch filter popup. Space toggles branches, `a` selects all, `n` deselects all, typing filters by name. Hidden branches excluded from graph on refresh.
 
-**Note:** Currently hides branch labels only. Full commit filtering (hiding commits not reachable from any visible branch) would require changing `get_commits()` to accept branch tips — left as future enhancement.
+**Update:** Now performs *real* commit filtering — `get_commits()` accepts the visible branch set and only walks from those tips (HEAD is always pushed too), so hiding a branch removes its exclusive commits from the graph, not just the labels. Commits reachable from a visible branch stay. Hiding every branch still shows HEAD's history.
+
+### [DONE] Tags Rendered as Graph Refs
+Lightweight and annotated tags (peeled to their target commit) are loaded via `repository.get_tags()`, threaded through `build_graph` onto `GraphNode.tag_names`, and rendered next to branch labels as `<tag>` in a distinct tag color (`theme.tag_label`).
 
 ---
 

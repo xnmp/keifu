@@ -1616,3 +1616,113 @@ fn archive_moves_file_and_gitignores_archive_dir() {
         "the archive dir is gitignored, was: {contents:?}"
     );
 }
+
+// ── Branch filtering: hiding a branch removes its commits ────────────
+
+/// A repo where `feature` branches off a shared root (`c1`) and adds one
+/// exclusive commit (`f1`), while HEAD stays on `main` at `c2`.
+/// Returns (tempdir, app, shared_c1, feature_f1, main_c2).
+fn repo_with_feature_branch() -> (TempDir, App, Oid, Oid, Oid) {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "shared root");
+    let c2 = commit_file(repo.repo(), "b.txt", "b", "main work"); // HEAD = main @ c2
+    // Branch `feature` off the shared root, then add a commit reachable only
+    // through `feature` (HEAD and the working tree are left untouched).
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    let f1 = commit_to_ref(repo.repo(), "refs/heads/feature", "f.txt", "f", "feature work");
+    let app = make_app(repo);
+    (td, app, c1, f1, c2)
+}
+
+fn commit_oids(app: &App) -> Vec<Oid> {
+    app.commits.iter().map(|c| c.oid).collect()
+}
+
+#[test]
+fn hiding_a_branch_removes_exclusive_commits_but_keeps_shared_ancestors() {
+    let (_td, mut app, c1, f1, c2) = repo_with_feature_branch();
+
+    // Baseline: the exclusive commit is present before hiding.
+    assert!(commit_oids(&app).contains(&f1));
+
+    app.hidden_branches.insert("feature".to_string());
+    app.refresh(true).unwrap();
+
+    let oids = commit_oids(&app);
+    assert!(!oids.contains(&f1), "feature's exclusive commit must vanish");
+    assert!(oids.contains(&c1), "shared ancestor must remain");
+    assert!(oids.contains(&c2), "main's own commit must remain");
+    // The hidden commit is gone from the rendered graph nodes too.
+    assert!(
+        app.graph_layout
+            .nodes
+            .iter()
+            .all(|n| n.commit.as_ref().map(|c| c.oid) != Some(f1)),
+        "hidden commit must not appear as a graph node"
+    );
+}
+
+#[test]
+fn unhiding_a_branch_brings_its_commits_back() {
+    let (_td, mut app, _c1, f1, _c2) = repo_with_feature_branch();
+
+    app.hidden_branches.insert("feature".to_string());
+    app.refresh(true).unwrap();
+    assert!(!commit_oids(&app).contains(&f1));
+
+    app.hidden_branches.remove("feature");
+    app.refresh(true).unwrap();
+    assert!(
+        commit_oids(&app).contains(&f1),
+        "unhiding the branch restores its commits"
+    );
+}
+
+#[test]
+fn hiding_all_branches_still_shows_head_history() {
+    let (_td, mut app, c1, f1, c2) = repo_with_feature_branch();
+
+    // Hide literally every branch.
+    let all: Vec<String> = app.branches.iter().map(|b| b.name.clone()).collect();
+    for name in all {
+        app.hidden_branches.insert(name);
+    }
+    app.refresh(true).unwrap();
+
+    let oids = commit_oids(&app);
+    // HEAD (main @ c2) and its ancestor are still walked via the HEAD push.
+    assert!(oids.contains(&c2), "HEAD commit must remain");
+    assert!(oids.contains(&c1), "HEAD's ancestor must remain");
+    // feature is hidden and its exclusive commit is unreachable from HEAD.
+    assert!(!oids.contains(&f1));
+    // No panic / empty-crash: the graph still has nodes.
+    assert!(!app.graph_layout.nodes.is_empty());
+}
+
+#[test]
+fn selection_survives_branch_hide_refresh() {
+    let (_td, mut app, _c1, _f1, c2) = repo_with_feature_branch();
+
+    // Select the HEAD/main commit node (c2), which stays visible.
+    let c2_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(c2))
+        .unwrap();
+    app.graph_nav.graph_list_state.select(Some(c2_idx));
+
+    app.hidden_branches.insert("feature".to_string());
+    app.refresh(true).unwrap();
+
+    // Selection stays in bounds and still points at the same commit.
+    let sel = app.graph_nav.graph_list_state.selected().unwrap();
+    assert!(sel < app.graph_layout.nodes.len(), "selection stays in bounds");
+    assert_eq!(
+        app.graph_layout.nodes[sel].commit.as_ref().map(|c| c.oid),
+        Some(c2),
+        "the selected commit is preserved across the shrinking refresh"
+    );
+}

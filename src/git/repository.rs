@@ -18,6 +18,14 @@ pub struct StashInfo {
     pub base_oid: Oid,
 }
 
+/// A tag pointing at a commit. Annotated tags are peeled to the commit they
+/// ultimately reference, so `target_oid` is always a commit OID.
+#[derive(Debug, Clone)]
+pub struct TagInfo {
+    pub name: String,
+    pub target_oid: Oid,
+}
+
 pub struct GitRepository {
     repo: Repository,
     pub path: String,
@@ -56,26 +64,30 @@ impl GitRepository {
         })
     }
 
-    /// Get commit history (newest first)
+    /// Get commit history (newest first).
+    ///
+    /// Walks from the tips of the supplied `branches` — the caller decides
+    /// which branches are visible (e.g. by excluding hidden ones), so hiding a
+    /// branch removes its exclusive commits from the graph. HEAD and stash
+    /// commits are always pushed as well.
     pub fn get_commits(
         &self,
         max_count: usize,
+        branches: &[BranchInfo],
         stashes: &[StashInfo],
     ) -> Result<Vec<CommitInfo>> {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
 
-        // Include all branches
-        for branch_result in self.repo.branches(None)? {
-            let (branch, _) = branch_result?;
-            if let Some(oid) = branch.get().target() {
-                revwalk.push(oid)?;
-            }
+        // Walk from the tips of the requested (visible) branches.
+        for branch in branches {
+            let _ = revwalk.push(branch.tip_oid);
         }
 
-        // Include HEAD itself: a detached HEAD on a commit not reachable
-        // from any branch tip would otherwise vanish from the graph
-        // (taking the uncommitted-changes node with it).
+        // Include HEAD itself: a detached HEAD on a commit not reachable from
+        // any branch tip — or a HEAD whose own branch is hidden — would
+        // otherwise vanish from the graph (taking the uncommitted-changes node
+        // with it).
         if let Some(oid) = self.repo.head().ok().and_then(|h| h.target()) {
             let _ = revwalk.push(oid);
         }
@@ -143,6 +155,29 @@ impl GitRepository {
     /// Get branch list
     pub fn get_branches(&self) -> Result<Vec<BranchInfo>> {
         BranchInfo::list_all(&self.repo)
+    }
+
+    /// Load all tags as (name -> target commit OID). Both lightweight and
+    /// annotated tags are resolved to the commit they point at (annotated tags
+    /// are peeled through their tag object). Malformed tags are skipped rather
+    /// than failing the whole load.
+    pub fn get_tags(&self) -> Vec<TagInfo> {
+        let mut tags = Vec::new();
+        let Ok(names) = self.repo.tag_names(None) else {
+            return tags;
+        };
+        for name in names.iter().flatten() {
+            if let Ok(reference) = self.repo.find_reference(&format!("refs/tags/{name}")) {
+                // peel_to_commit follows annotated tag objects to the commit.
+                if let Ok(commit) = reference.peel_to_commit() {
+                    tags.push(TagInfo {
+                        name: name.to_string(),
+                        target_oid: commit.id(),
+                    });
+                }
+            }
+        }
+        tags
     }
 
     /// Get the current HEAD name
