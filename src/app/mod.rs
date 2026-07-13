@@ -1,0 +1,537 @@
+//! Application state management
+
+use std::time::Instant;
+
+use anyhow::Result;
+
+use git2::Oid;
+
+use crate::{
+    action::Action,
+    config::{Config, UiState},
+    diff_cache::{DiffCache, DiffTarget},
+    files_pane_state::{FilesPaneState, section_of},
+    graph_nav::GraphNav,
+    network::NetworkManager,
+    git::{
+        build_graph,
+        graph::GraphLayout,
+        operations::{
+            add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
+            commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
+            delete_branch, get_last_commit_message, merge_branch,
+            rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
+            stash_apply, stash_drop, stash_pop, stash_staged, unstage_file, ResetMode,
+        },
+        BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
+        GitRepository, StageStatus, WorkingTreeStatus,
+    },
+    search::{fuzzy_search_branches, FuzzySearchResult},
+    workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
+};
+
+mod init;
+mod refresh;
+mod network_ops;
+mod status_message;
+mod search_ops;
+mod graph_actions;
+mod file_ops;
+mod commit_editor_actions;
+mod commit_menu_actions;
+mod branch_picker_actions;
+mod file_diff_actions;
+mod input_actions;
+mod confirm_actions;
+
+/// Copy text to system clipboard using platform-specific commands
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let commands: &[(&str, &[&str])] = &[
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+        ("wl-copy", &[]),
+        ("pbcopy", &[]),
+    ];
+
+    for (cmd, args) in commands {
+        if let Ok(mut child) = Command::new(cmd)
+            .args(*args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if child.wait().is_ok() {
+                return Ok(());
+            }
+        }
+    }
+
+    anyhow::bail!("No clipboard tool found (install xclip, xsel, or wl-copy)")
+}
+
+/// Format a file-count label: the single quoted path, or "N files".
+fn file_count_label(paths: &[String]) -> String {
+    if paths.len() == 1 {
+        format!("'{}'", paths[0])
+    } else {
+        format!("{} files", paths.len())
+    }
+}
+
+/// Previous index with wrap-around; returns 0 when `len` is 0.
+fn cyclic_prev(selected: usize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    if selected == 0 {
+        len - 1
+    } else {
+        selected - 1
+    }
+}
+
+/// Next index with wrap-around; returns 0 when `len` is 0.
+fn cyclic_next(selected: usize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    if selected + 1 >= len {
+        0
+    } else {
+        selected + 1
+    }
+}
+
+/// Which panel is focused
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPanel {
+    Graph,
+    Files,
+    CommitDetail,
+}
+
+/// Items in the commit context menu
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitMenuItem {
+    Push,
+    Checkout,
+    CreateBranch,
+    DeleteBranch,
+    MergeIntoCurrent,
+    CherryPick,
+    Rebase,
+    Reset,
+    ResetSoft,
+    ResetMixed,
+    ResetHard,
+    AddTag,
+    Revert,
+    CopyHash,
+    StashApply,
+    StashPop,
+    StashDrop,
+}
+
+impl CommitMenuItem {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Push => "Push to origin",
+            Self::Checkout => "Checkout",
+            Self::CreateBranch => "Create branch here",
+            Self::DeleteBranch => "Delete branch",
+            Self::MergeIntoCurrent => "Merge into current branch",
+            Self::CherryPick => "Cherry-pick",
+            Self::Rebase => "Rebase current branch onto this",
+            Self::Reset => "Reset to this commit...",
+            Self::ResetSoft => "Soft (keep changes staged)",
+            Self::ResetMixed => "Mixed (keep changes unstaged)",
+            Self::ResetHard => "Hard (discard all changes)",
+            Self::AddTag => "Add tag",
+            Self::Revert => "Revert this commit",
+            Self::CopyHash => "Copy commit hash",
+            Self::StashApply => "Apply stash",
+            Self::StashPop => "Pop stash (apply + drop)",
+            Self::StashDrop => "Drop stash",
+        }
+    }
+}
+
+// Re-export FilesPaneItem so external code can use `crate::app::FilesPaneItem`
+pub use crate::files_pane_state::FilesPaneItem;
+
+/// An operation that can be undone with Ctrl+Z
+#[derive(Debug, Clone)]
+pub enum UndoableOperation {
+    Stage { path: String, was_staged: bool },
+    Gitignore { pattern: String },
+    Archive { relative_path: String },
+}
+
+/// Application modes
+#[derive(Debug, Clone)]
+pub enum AppMode {
+    Normal,
+    Help,
+    Input {
+        title: String,
+        input: String,
+        action: InputAction,
+    },
+    Confirm {
+        message: String,
+        action: ConfirmAction,
+    },
+    Error {
+        message: String,
+    },
+    CommitMenu {
+        items: Vec<CommitMenuItem>,
+        selected: usize,
+        filter: String,
+    },
+    BranchFilter {
+        filter: String,
+        selected: usize,
+        all_branches: Vec<String>,
+    },
+    BranchPicker {
+        branches: Vec<String>,
+        selected: usize,
+    },
+    BranchDeletePicker {
+        branches: Vec<String>,
+        selected: usize,
+    },
+    FileDiff {
+        file_index: usize,
+        file_list: Vec<FileDiffInfo>,
+        content: FileDiffContent,
+        rendered_lines: Vec<ratatui::text::Line<'static>>,
+        hunk_positions: Vec<usize>,
+        scroll_offset: usize,
+        horizontal_offset: usize,
+        max_line_width: usize,
+        total_lines: usize,
+    },
+}
+
+/// Input action kinds
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputAction {
+    CreateBranch,
+    AddTag,
+    Search,
+}
+
+/// Confirmation action kinds
+#[derive(Debug, Clone)]
+pub enum ConfirmAction {
+    DeleteBranch(String),
+    Merge(String),
+    Rebase(String),
+    CherryPick(Oid),
+    Revert(Oid),
+    ResetSoft(Oid),
+    ResetMixed(Oid),
+    ResetHard(Oid),
+    Push,
+    TrashFile(Vec<String>),
+    RestoreFile(Vec<String>),
+    StashDrop(usize),
+}
+
+/// Search state for branch search feature
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    pub fuzzy_matches: Vec<FuzzySearchResult>,
+    pub dropdown_selection: Option<usize>,
+    pub original_position: Option<usize>,
+    pub original_node: Option<usize>,
+}
+
+impl SearchState {
+    /// Move selection up in the dropdown (with wrap-around)
+    fn select_up(&mut self) {
+        if self.fuzzy_matches.is_empty() {
+            return;
+        }
+        self.dropdown_selection = Some(match self.dropdown_selection {
+            Some(0) | None => self.fuzzy_matches.len() - 1,
+            Some(idx) => idx - 1,
+        });
+    }
+
+    /// Move selection down in the dropdown (with wrap-around)
+    fn select_down(&mut self) {
+        if self.fuzzy_matches.is_empty() {
+            return;
+        }
+        let last_idx = self.fuzzy_matches.len() - 1;
+        self.dropdown_selection = Some(match self.dropdown_selection {
+            Some(idx) if idx < last_idx => idx + 1,
+            _ => 0,
+        });
+    }
+
+    /// Get the currently selected result
+    fn selected_result(&self) -> Option<&FuzzySearchResult> {
+        self.dropdown_selection
+            .and_then(|idx| self.fuzzy_matches.get(idx))
+    }
+
+    /// Clamp dropdown selection to valid range after results update
+    fn clamp_selection(&mut self) {
+        if self.fuzzy_matches.is_empty() {
+            self.dropdown_selection = None;
+        } else if let Some(idx) = self.dropdown_selection {
+            if idx >= self.fuzzy_matches.len() {
+                self.dropdown_selection = Some(self.fuzzy_matches.len() - 1);
+            }
+        } else {
+            // Auto-select first result if we have results
+            self.dropdown_selection = Some(0);
+        }
+    }
+}
+
+/// Application state
+pub struct App {
+    pub mode: AppMode,
+    pub repo: GitRepository,
+    pub repo_path: String,
+    pub head_name: Option<String>,
+    pub head_detached: bool,
+
+    // Data
+    pub commits: Vec<CommitInfo>,
+    pub branches: Vec<BranchInfo>,
+    pub graph_layout: GraphLayout,
+
+    // UI state
+    pub graph_nav: GraphNav,
+    pub focused_panel: FocusedPanel,
+    /// Files pane subsystem state
+    pub files_pane: FilesPaneState,
+    pub hidden_branches: std::collections::HashSet<String>,
+    pub commit_editor: crate::text_editor::TextEditor,
+    pub editing_commit_message: bool,
+    /// When true, the editor is amending the HEAD commit (not creating a new one)
+    pub amending_commit: bool,
+    pub commit_detail_scroll: u16,
+    pub commit_detail_max_scroll: u16,
+    /// Number of lines before the editor text in the commit detail pane
+    pub commit_editor_line_offset: u16,
+    /// Visible rows in the commit detail pane (updated during render)
+    pub commit_detail_visible_rows: u16,
+
+    // Commit filter (graph panel Ctrl+F)
+    pub commit_filter: String,
+    pub commit_filter_active: bool,
+    pub visible_commit_indices: Vec<usize>,
+
+    // Search state
+    pub search_state: SearchState,
+
+    // Latest working tree status snapshot
+    pub working_tree_status: Option<WorkingTreeStatus>,
+
+    // Diff caching subsystem
+    pub diff_cache: DiffCache,
+
+    // Flags
+    pub should_quit: bool,
+    pub pending_refresh: bool,
+    pub diff_viewport_height: u16,
+    pub diff_viewport_width: u16,
+
+    // Status message with auto-clear
+    pub message: Option<String>,
+    pub message_time: Option<std::time::Instant>,
+
+    // Network operations (fetch/push/auto-refresh)
+    pub network: NetworkManager,
+
+    // Filesystem watcher
+    pub watcher: Option<crate::watcher::FsWatcher>,
+    // Watcher still being built on a background thread; installed into
+    // `watcher` by poll_fs_watcher once ready.
+    pub pending_watcher: Option<crate::watcher::PendingFsWatcher>,
+
+    // Undo
+    pub last_undoable_op: Option<UndoableOperation>,
+
+    // Layout
+    pub side_panel_layout: bool,
+
+    // Debug mode
+    pub debug_keys: bool,
+
+    // Config
+    pub config: Config,
+
+    // Terminal background color (r, g, b), detected once at startup.
+    // Used to derive theme-adaptive structural colors. `None` when the
+    // terminal doesn't report it (e.g. headless tests).
+    pub terminal_bg: Option<(u8, u8, u8)>,
+}
+
+impl App {
+
+    /// Check if the currently selected node is the uncommitted changes node
+    /// Return the active theme based on config.
+    pub fn theme(&self) -> crate::ui::theme::Theme {
+        use crate::ui::theme::Theme;
+
+        // Pick the base palette: explicit config, else auto from the cached
+        // terminal background (luma > 0.5 ⇒ light).
+        let base = match self.config.ui.theme.as_str() {
+            "light" => Theme::light(),
+            "dark" => Theme::dark(),
+            _ => match self.terminal_bg {
+                Some((r, g, b)) => {
+                    let luma = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
+                    if luma > 0.5 {
+                        Theme::light()
+                    } else {
+                        Theme::dark()
+                    }
+                }
+                None => Theme::dark(),
+            },
+        };
+
+        // Derive structural colors (borders, dates, muted text) from the real
+        // background so they stay visible and track the terminal theme.
+        match self.terminal_bg {
+            Some(bg) => base.adapt_to_background(bg),
+            None => base,
+        }
+    }
+
+    pub fn is_uncommitted_selected(&self) -> bool {
+        self.graph_nav.is_uncommitted_selected(&self.graph_layout)
+    }
+
+    pub fn is_head_commit_selected(&self) -> bool {
+        self.graph_nav.is_head_commit_selected(&self.graph_layout)
+    }
+
+    // ── Files pane delegation ──────────────────────────────────────
+
+    /// Sync the file list cache and display items from the current diff.
+    pub fn sync_file_list_cache(&mut self) {
+        let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
+        let is_uncommitted = self.is_uncommitted_selected();
+        self.files_pane.sync_file_list_cache(diff, is_uncommitted, &self.repo_path);
+    }
+
+    /// Resolve the current selection to an index in display_items_cache.
+    pub fn file_selected_index(&self) -> usize {
+        self.files_pane.file_selected_index()
+    }
+
+    /// Get the cached display items.
+    pub fn display_items(&self) -> &[FilesPaneItem] {
+        self.files_pane.display_items()
+    }
+
+    /// Build a fresh set of files pane items (not cached).
+    pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
+        let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
+        let is_uncommitted = self.is_uncommitted_selected();
+        self.files_pane.build_files_pane_items(diff, is_uncommitted, &self.repo_path)
+    }
+
+    fn select_file_at(&mut self, idx: usize) {
+        self.files_pane.select_file_at(idx);
+    }
+
+    fn selected_display_item(&self) -> Option<&FilesPaneItem> {
+        self.files_pane.selected_display_item()
+    }
+
+    fn selected_file(&self) -> Option<&FileDiffInfo> {
+        self.files_pane.selected_file()
+    }
+
+    fn selected_files(&self) -> Vec<&FileDiffInfo> {
+        self.files_pane.selected_files()
+    }
+
+    fn display_index_to_flat_index(&self, display_index: usize) -> usize {
+        self.files_pane.display_index_to_flat_index(display_index)
+    }
+
+    fn flat_index_to_display_index(&self, flat_index: usize) -> usize {
+        self.files_pane.flat_index_to_display_index(flat_index)
+    }
+
+    fn is_in_archived_section(&self) -> bool {
+        self.files_pane.is_in_archived_section()
+    }
+
+    /// Handle an action
+    pub fn handle_action(&mut self, action: Action) -> Result<()> {
+        // Ctrl+Q always quits
+        if matches!(action, Action::ForceQuit) {
+            self.should_quit = true;
+            return Ok(());
+        }
+        if matches!(action, Action::ToggleLayout) {
+            self.side_panel_layout = !self.side_panel_layout;
+            UiState {
+                side_panel_layout: self.side_panel_layout,
+            }
+            .save();
+            return Ok(());
+        }
+        if matches!(action, Action::ToggleDebugKeys) {
+            self.debug_keys = !self.debug_keys;
+            self.set_message(if self.debug_keys {
+                "Debug keys ON"
+            } else {
+                "Debug keys OFF"
+            });
+            return Ok(());
+        }
+
+        match &self.mode {
+            AppMode::Normal => self.handle_normal_action(action)?,
+            AppMode::Help => self.handle_help_action(action),
+            AppMode::Input { .. } => self.handle_input_action(action)?,
+            AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
+            AppMode::Error { .. } => self.handle_error_action(action),
+            AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
+            AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
+            AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
+            AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
+            AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
+        }
+        Ok(())
+    }
+
+    /// Show an error
+    pub fn show_error(&mut self, message: String) {
+        self.mode = AppMode::Error { message };
+    }
+
+    fn handle_help_action(&mut self, action: Action) {
+        if matches!(action, Action::ToggleHelp | Action::Quit | Action::Cancel) {
+            self.mode = AppMode::Normal;
+        }
+    }
+
+    fn handle_error_action(&mut self, action: Action) {
+        // Close the error on any key
+        if matches!(action, Action::Quit | Action::Cancel | Action::Confirm) {
+            self.mode = AppMode::Normal;
+        }
+    }
+}

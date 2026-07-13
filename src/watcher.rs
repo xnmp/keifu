@@ -160,3 +160,30 @@ pub enum PollResult {
     Refresh,
     Disconnected,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn spawned_watcher_becomes_available() {
+        let tempdir = tempfile::tempdir().unwrap();
+        git2::Repository::init(tempdir.path()).unwrap();
+
+        let mut pending = FsWatcher::spawn(tempdir.path());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match pending.try_take() {
+                Some(watcher) => {
+                    assert!(watcher.is_some(), "watcher construction failed");
+                    break;
+                }
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                None => panic!("watcher construction did not finish in 5s"),
+            }
+        }
+    }
+}
