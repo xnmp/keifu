@@ -38,3 +38,23 @@
 **Decision:** `FileDiffInfo.stage_status` is set during `from_working_tree()` BEFORE the merge scan, and separate `staged_files`/`unstaged_files` vectors are stored alongside the merged `files` list.
 
 **Why:** The merge scan combines files that appear in both staged and unstaged diffs (e.g., partially staged files). Keeping pre-merge copies preserves the staged/unstaged distinction for the UI. The merged `files` list is still used for total counts and the flat file view for committed changes.
+
+## Deferred Filesystem Watcher (2026-07-13)
+
+**Decision:** `FsWatcher` is constructed on a background thread (`FsWatcher::spawn`) and installed into `App.watcher` by `poll_fs_watcher` once ready, instead of synchronously in `App::new`.
+
+**Why:** Registering a recursive inotify watch walks every directory in the working tree (including `node_modules`, `target`, `.git/objects`). Profiling showed this was 91–94% of pre-first-frame time — 142ms on a small repo, ~500ms on a 135k-file repo. The watcher only drives auto-refresh; nothing about the first frame needs it. Events during the sub-second construction window are covered by the auto-refresh timer.
+
+**Also:** the OSC-11 terminal background-color query (blocking, typically 5–15ms, worst case 100ms) runs on a parallel thread during `App::new` and is joined before `tui::init`, so it can't race the TUI's raw-mode handling.
+
+**Future:** the watch could be scoped to `.git/{refs,HEAD,...}` + non-ignored directories, cutting inotify watch counts 10–100× (relevant near `fs.inotify.max_user_watches`).
+
+## Diff Viewer File List = Display Order (2026-07-13)
+
+**Decision:** The `FileDiff` viewer's `file_list` snapshot is built from the files pane's display items (`display_file_list()`), not from the deduplicated `diff.files`.
+
+**Why:** `file_index` is computed in display space (a partially-staged file appears once in the staged section and once in the unstaged section). Mixing display-space indices with the shorter deduplicated list caused an out-of-bounds panic in PrevFile navigation. One index space everywhere: display order.
+
+## UI Render Pass May Write Layout State Back to App (2026-07-13)
+
+**Documented exception:** `ui/*` is otherwise stateless over `&App`, but `draw()` writes render-time layout facts back to `App` (`sync_file_list_cache`, `diff_viewport_*`, commit-detail scroll clamps) because terminal size is only known at render time. This is intentional; new widgets should not add other kinds of mutation.

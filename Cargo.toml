@@ -15,15 +15,15 @@ categories = ["command-line-utilities", "development-tools"]
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
 
-# Git
-git2 = { version = "0.19", features = ["vendored-openssl"] }
+# Git — network transports (https/ssh, and with them openssl-sys) are
+# unused: fetch/push shell out to the git CLI (see git/operations.rs).
+git2 = { version = "0.19", default-features = false }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
 # Utils
 anyhow = "1.0"
-thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 unicode-width = "0.2"
 

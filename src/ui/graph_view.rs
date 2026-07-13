@@ -21,8 +21,8 @@ const DATE_FIELD_WIDTH: usize = 14;
 /// Format a commit timestamp. Within the past week, show a relative string
 /// ("just now", "5 minutes ago", "3 days ago"); otherwise the absolute date.
 /// Result is right-padded to `DATE_FIELD_WIDTH` so columns stay aligned.
-fn format_date_field(timestamp: DateTime<Local>) -> String {
-    let now = Local::now();
+/// `now` is passed in so it's computed once per render, not once per row.
+fn format_date_field(timestamp: DateTime<Local>, now: DateTime<Local>) -> String {
     let delta = now.signed_duration_since(timestamp);
     let secs = delta.num_seconds();
 
@@ -66,18 +66,20 @@ fn char_width_with_vs16(c: char, next_char: Option<char>) -> usize {
 /// Calculate display width of a string.
 /// Handles VS16 which changes preceding character to emoji presentation (width 2).
 fn display_width(s: &str) -> usize {
-    let chars: Vec<char> = s.chars().collect();
+    if s.is_ascii() {
+        // No VS16 (non-ASCII) possible. Printable ASCII (0x20..=0x7E) is width
+        // 1; control chars are width 0 per unicode-width, matching the
+        // general-case per-char width function below.
+        return s.bytes().filter(|b| (0x20..=0x7E).contains(b)).count();
+    }
     let mut width = 0;
-    let mut i = 0;
-    while i < chars.len() {
-        let next_char = chars.get(i + 1).copied();
-        let ch_width = char_width_with_vs16(chars[i], next_char);
-        width += ch_width;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let next_char = chars.peek().copied();
+        width += char_width_with_vs16(c, next_char);
         // Skip next char if it was VS16 (already accounted for)
         if next_char == Some(VS16) {
-            i += 2;
-        } else {
-            i += 1;
+            chars.next();
         }
     }
     width
@@ -98,6 +100,7 @@ impl<'a> GraphViewWidget<'a> {
         let selected_branch_name = app.selected_branch_name();
         let has_filter = !app.commit_filter.is_empty();
         let current_selected = app.graph_nav.graph_list_state.selected();
+        let now = Local::now();
 
         let node_iter: Vec<(usize, &crate::git::graph::GraphNode)> = if has_filter {
             app.visible_commit_indices
@@ -123,6 +126,7 @@ impl<'a> GraphViewWidget<'a> {
                 inner_width,
                 selected_branch_name,
                 theme,
+                now,
             );
             items.push(ListItem::new(line));
         }
@@ -297,13 +301,11 @@ fn optimize_branch_display(
 /// Truncate a string to the specified display width.
 /// Handles VS16 which changes preceding character to emoji presentation (width 2).
 fn truncate_to_width(s: &str, max_width: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
     let mut result = String::new();
     let mut current_width = 0;
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        let next_char = chars.get(i + 1).copied();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let next_char = chars.peek().copied();
         let ch_width = char_width_with_vs16(c, next_char);
         if current_width + ch_width > max_width {
             break;
@@ -312,9 +314,7 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
         current_width += ch_width;
         if next_char == Some(VS16) {
             result.push(VS16);
-            i += 2;
-        } else {
-            i += 1;
+            chars.next();
         }
     }
     result
@@ -406,6 +406,7 @@ fn render_graph_line<'a>(
     total_width: usize,
     selected_branch_name: Option<&str>,
     theme: &Theme,
+    now: DateTime<Local>,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -536,7 +537,7 @@ fn render_graph_line<'a>(
     );
 
     // === Right-aligned: date author hash (fixed width) ===
-    let date = format_date_field(commit.timestamp); // DATE_FIELD_WIDTH chars
+    let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
     let author = truncate_to_width(&commit.author_name, 8);
     let author_formatted = format!("{:<8}", author); // fixed 8 chars
     let hash = truncate_to_width(&commit.short_id, 7);

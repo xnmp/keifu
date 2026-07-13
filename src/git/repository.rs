@@ -73,6 +73,13 @@ impl GitRepository {
             }
         }
 
+        // Include HEAD itself: a detached HEAD on a commit not reachable
+        // from any branch tip would otherwise vanish from the graph
+        // (taking the uncommitted-changes node with it).
+        if let Some(oid) = self.repo.head().ok().and_then(|h| h.target()) {
+            let _ = revwalk.push(oid);
+        }
+
         // Collect stash OIDs and their internal commits (index, untracked)
         // that should be excluded from the graph.
         let stash_oids: std::collections::HashSet<Oid> =

@@ -96,11 +96,6 @@ impl ColorAssigner {
         }
     }
 
-    /// Get the lane color index (if active)
-    pub fn get_lane_color_index(&self, lane: usize) -> Option<usize> {
-        self.lane_colors.get(lane).and_then(|c| *c)
-    }
-
     /// Start a new row (reset fork sibling tracking)
     pub fn advance_row(&mut self) {
         self.current_row += 1;

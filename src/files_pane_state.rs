@@ -108,7 +108,6 @@ pub fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
 #[derive(Default)]
 pub struct FilesPaneState {
     pub file_selection: FileSelection,
-    pub file_list_cache: Vec<FileDiffInfo>,
     display_items_cache: Vec<FilesPaneItem>,
     pub files_group_by_folder: bool,
     pub files_filter: String,
@@ -120,24 +119,28 @@ impl FilesPaneState {
         Self::default()
     }
 
-    /// Sync the file list cache and display items from the current diff.
+    /// Sync the display items cache from the current diff.
     pub fn sync_file_list_cache(
         &mut self,
         diff: Option<&CommitDiffInfo>,
         is_uncommitted: bool,
         repo_path: &str,
     ) {
-        if let Some(diff) = diff {
-            if self.file_list_cache.len() != diff.files.len()
-                || self.file_list_cache.first().map(|f| &f.path)
-                    != diff.files.first().map(|f| &f.path)
-            {
-                self.file_list_cache = diff.files.clone();
-            }
-        } else {
-            self.file_list_cache.clear();
-        }
         self.display_items_cache = self.build_files_pane_items(diff, is_uncommitted, repo_path);
+    }
+
+    /// Files in display order — the flat list the diff viewer's file
+    /// navigation cycles through. Must stay in the same index space as
+    /// `display_index_to_flat_index`/`flat_index_to_display_index`
+    /// (a partially-staged file appears once per section it's shown in).
+    pub fn display_file_list(&self) -> Vec<FileDiffInfo> {
+        self.display_items_cache
+            .iter()
+            .filter_map(|item| match item {
+                FilesPaneItem::File(f) => Some(f.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Resolve the current selection to an index in display_items_cache.
@@ -443,7 +446,7 @@ impl FilesPaneState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn file(path: &str, kind: FileChangeKind, stage: Option<StageStatus>) -> FileDiffInfo {
         FileDiffInfo {
@@ -470,10 +473,6 @@ mod tests {
 
     fn header(text: &str) -> FilesPaneItem {
         FilesPaneItem::SectionHeader(text.to_string())
-    }
-
-    fn folder(text: &str) -> FilesPaneItem {
-        FilesPaneItem::FolderHeader(text.to_string())
     }
 
     fn fitem(f: FileDiffInfo) -> FilesPaneItem {
@@ -688,7 +687,7 @@ mod tests {
         let mut saw_folder_header = false;
         for item in &items {
             match item {
-                FilesPaneItem::File(f) if f.path == PathBuf::from("root.rs") => {
+                FilesPaneItem::File(f) if f.path == Path::new("root.rs") => {
                     // root file should appear before any folder header
                     assert!(!saw_folder_header);
                     saw_root_file = true;

@@ -95,3 +95,29 @@ j/k removed from graph panel movement (arrow keys only). j/k retained in FileSel
 - Status bar shows panel-specific key hints
 - Help popup updated with all new keybindings organized by context
 - Ctrl+Q documented as quit-from-anywhere
+
+---
+
+## Maintenance Sweeps
+
+### [DONE] 2026-07-13 comprehensive perf/bug/architecture sweep
+Startup: FsWatcher (recursive inotify registration, 91-94% of pre-first-frame
+time) now builds on a background thread; terminal-bg OSC query overlaps repo
+loading. App::new dropped 167ms -> 11ms (keifu repo), 656ms -> 48ms (135k-file
+repo), dev profile. Render path: files-pane/commit-detail no longer rebuilt
+multiple times per frame; per-row Local::now() and Vec<char> allocations
+removed; build_graph O(N^2) scans replaced with map lookups. Bugs fixed (with
+regression tests): PrevFile OOB panic with partially-staged files, empty-pane
+refresh_after_file_op panic, orphan detached HEAD missing from graph,
+NetworkManager stuck on dead worker. Deps: openssl-sys removed entirely
+(git2 default-features off — network transports unused), thiserror removed.
+app.rs split into src/app/ modules.
+
+**Future startup work (not currently worth it):** get_commits + status scan +
+build_graph are the remaining ~48ms on huge repos; could render first frame
+before status scan, or cap initial walk at ~100 commits and extend lazily.
+**Other deferred items:** notify 6->8 bump (breaking API); scope the fs watch
+to .git + non-ignored dirs (cuts inotify watch count 10-100x, matters near
+fs.inotify.max_user_watches); rename ui::files_pane::FilesPaneState to avoid
+collision with crate::files_pane_state::FilesPaneState; UiState::save silently
+ignores IO errors.

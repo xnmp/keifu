@@ -11,6 +11,7 @@ use chrono::Local;
 use git2::{Oid, Repository, Signature};
 use tempfile::TempDir;
 
+use keifu::action::Action;
 use keifu::app::{App, AppMode, FocusedPanel, SearchState};
 use keifu::config::Config;
 use keifu::diff_cache::{DiffCache, DiffResult, DiffTarget, DIFF_LOAD_DEBOUNCE};
@@ -18,7 +19,7 @@ use keifu::files_pane_state::{FileSelection, FilesPaneItem, FilesPaneState, sect
 use keifu::git::graph::{CellType, GraphLayout, GraphNode};
 use keifu::git::operations::{stage_file, unstage_file};
 use keifu::git::{
-    build_graph, BranchInfo, CommitDiffInfo, CommitInfo, FileDiffInfo, GitRepository,
+    CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffInfo, GitRepository, StageStatus,
     WorkingTreeStatus,
 };
 use keifu::graph_nav::GraphNav;
@@ -122,6 +123,7 @@ fn make_base_app(
         message_time: None,
         network: NetworkManager::new(),
         watcher: None,
+        pending_watcher: None,
         last_undoable_op: None,
         side_panel_layout: false,
         debug_keys: false,
@@ -621,5 +623,110 @@ fn integration_quick_diff_includes_untracked_files() {
         paths.contains(&"new_file.txt".to_string()),
         "quick diff should include untracked files, got: {:?}",
         paths
+    );
+}
+
+// ── Regressions: diff viewer navigation & empty-pane refresh ────────
+
+fn wt_file(path: &str, status: StageStatus) -> FileDiffInfo {
+    FileDiffInfo {
+        path: PathBuf::from(path),
+        kind: FileChangeKind::Modified,
+        is_binary: false,
+        insertions: 1,
+        deletions: 1,
+        stage_status: Some(status),
+    }
+}
+
+/// A partially-staged file appears in both the staged and unstaged
+/// sections, so the pane shows more file entries than the deduplicated
+/// diff. PrevFile used to index past the end of the deduped list.
+#[test]
+fn prev_file_in_diff_viewer_survives_partially_staged_files() {
+    let mut app = make_uncommitted_app();
+    app.diff_cache.uncommitted_diff_cache = Some(CommitDiffInfo {
+        files: vec![
+            wt_file("a.rs", StageStatus::Staged),
+            wt_file("b.rs", StageStatus::Staged),
+        ],
+        staged_files: vec![
+            wt_file("a.rs", StageStatus::Staged),
+            wt_file("b.rs", StageStatus::Staged),
+        ],
+        unstaged_files: vec![
+            wt_file("a.rs", StageStatus::Unstaged),
+            wt_file("b.rs", StageStatus::Unstaged),
+        ],
+        total_files: 2,
+        ..Default::default()
+    });
+    app.sync_file_list_cache();
+
+    // Select the last displayed file (unstaged b.rs).
+    let last_file_idx = app
+        .display_items()
+        .iter()
+        .rposition(|item| matches!(item, FilesPaneItem::File(_)))
+        .expect("pane should list files");
+    app.files_pane.select_file_at(last_file_idx);
+    app.focused_panel = FocusedPanel::Files;
+
+    app.handle_action(Action::OpenFileDiff).unwrap();
+    let AppMode::FileDiff { file_index, ref file_list, .. } = app.mode else {
+        panic!("expected FileDiff mode, got {:?}", app.mode);
+    };
+    assert_eq!(file_list.len(), 4, "viewer must cycle the displayed entries");
+    assert_eq!(file_index, 3);
+
+    app.handle_action(Action::PrevFile).unwrap();
+    let AppMode::FileDiff { file_index, .. } = app.mode else {
+        panic!("expected FileDiff mode after PrevFile, got {:?}", app.mode);
+    };
+    assert_eq!(file_index, 2);
+}
+
+/// Undo can trigger a refresh while a node with no file changes is
+/// selected; the selection-restore logic used to slice past the end of
+/// the empty items list.
+#[test]
+fn refresh_after_file_op_with_empty_files_pane_does_not_panic() {
+    let tempdir = tempfile::tempdir().unwrap();
+    Repository::init(tempdir.path()).unwrap();
+    let mut app = make_test_app(tempdir.path());
+    app.focused_panel = FocusedPanel::Files;
+    assert!(app.display_items().is_empty());
+
+    app.refresh_after_file_op().unwrap();
+}
+
+/// A detached HEAD on a commit not reachable from any branch must still
+/// appear in the graph (it also anchors the uncommitted-changes node).
+#[test]
+fn detached_orphan_head_commit_appears_in_history() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    let first = commit_file(&repo, "a.txt", "v1\n", "initial");
+
+    // Detach at the branch tip, then commit: the new commit is reachable
+    // only through HEAD.
+    repo.set_head_detached(first).unwrap();
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = Signature::now("Test User", "test@example.com").unwrap();
+    let parent = repo.find_commit(first).unwrap();
+    let orphan = repo
+        .commit(Some("HEAD"), &sig, &sig, "detached work", &tree, &[&parent])
+        .unwrap();
+
+    let mut git_repo = GitRepository::open(tempdir.path()).unwrap();
+    let stashes = git_repo.get_stashes();
+    let commits = git_repo.get_commits(500, &stashes).unwrap();
+    assert!(
+        commits.iter().any(|c| c.oid == orphan),
+        "detached HEAD commit missing from history"
     );
 }
