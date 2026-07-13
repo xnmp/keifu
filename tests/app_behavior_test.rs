@@ -9,20 +9,115 @@
 use std::fs;
 use std::path::Path;
 
-use git2::{Oid, Repository, Signature};
+use git2::{Oid, Repository, Signature, Status};
 use tempfile::TempDir;
 
 use keifu::action::Action;
-use keifu::app::{AppMode, FocusedPanel};
+use keifu::app::{App, AppMode, CommitMenuItem, ConfirmAction, FilesPaneItem, FocusedPanel};
 use keifu::git::GitRepository;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn init_repo() -> (TempDir, GitRepository) {
     let tempdir = tempfile::tempdir().unwrap();
-    Repository::init(tempdir.path()).unwrap();
+    let git2_repo = Repository::init(tempdir.path()).unwrap();
+    // Configure a committer identity so shell-git operations (cherry-pick,
+    // revert, reset) and git2's `repo.signature()` (merge commits) succeed,
+    // and disable gpg signing so they don't block on a key.
+    {
+        let mut cfg = git2_repo.config().unwrap();
+        cfg.set_str("user.name", "Test User").unwrap();
+        cfg.set_str("user.email", "test@example.com").unwrap();
+        cfg.set_bool("commit.gpgsign", false).unwrap();
+    }
+    drop(git2_repo);
     let repo = GitRepository::open(tempdir.path()).unwrap();
     (tempdir, repo)
+}
+
+/// Create a commit on top of `refname` (e.g. "refs/heads/feature") without
+/// touching HEAD or the working tree. Advances `refname` and returns the new oid.
+fn commit_to_ref(
+    repo: &Repository,
+    refname: &str,
+    path: &str,
+    contents: &str,
+    message: &str,
+) -> Oid {
+    let parent = repo
+        .find_reference(refname)
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    let mut builder = repo.treebuilder(Some(&parent.tree().unwrap())).unwrap();
+    let blob = repo.blob(contents.as_bytes()).unwrap();
+    builder.insert(path, blob, 0o100644).unwrap();
+    let tree_id = builder.write().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let sig = Signature::now("Test User", "test@example.com").unwrap();
+    repo.commit(Some(refname), &sig, &sig, message, &tree, &[&parent])
+        .unwrap()
+}
+
+/// The OID that HEAD currently points at, read from a fresh handle on disk.
+fn head_oid(repo_dir: &Path) -> Oid {
+    Repository::open(repo_dir)
+        .unwrap()
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id()
+}
+
+/// Owned facts about the HEAD commit, read from a fresh handle on disk:
+/// (oid, parent_count, parent_oids, message). Returns owned data so the
+/// backing `Repository` can be dropped before the values are used.
+fn head_commit_facts(repo_dir: &Path) -> (Oid, usize, Vec<Oid>, String) {
+    let repo = Repository::open(repo_dir).unwrap();
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    let parents = (0..commit.parent_count())
+        .map(|i| commit.parent_id(i).unwrap())
+        .collect();
+    (
+        commit.id(),
+        commit.parent_count(),
+        parents,
+        commit.message().unwrap_or("").to_string(),
+    )
+}
+
+/// The git status flags for a single path (untracked included), read from disk.
+fn path_status(repo_dir: &Path, file: &str) -> Status {
+    let repo = Repository::open(repo_dir).unwrap();
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true);
+    let statuses = repo.statuses(Some(&mut opts)).unwrap();
+    statuses
+        .iter()
+        .find(|entry| entry.path() == Some(file))
+        .map(|entry| entry.status())
+        .unwrap_or(Status::CURRENT)
+}
+
+/// Number of stash entries, read from a fresh handle on disk.
+fn stash_count(repo_dir: &Path) -> usize {
+    let mut repo = Repository::open(repo_dir).unwrap();
+    let mut count = 0;
+    repo.stash_foreach(|_, _, _| {
+        count += 1;
+        true
+    })
+    .unwrap();
+    count
+}
+
+/// Populate the uncommitted quick-diff + files-pane cache synchronously so
+/// files-pane operations can resolve the selected file (the async diff loader
+/// never runs in tests).
+fn prime_uncommitted(app: &mut App) {
+    app.diff_cache.set_quick_uncommitted(app.repo.repo());
+    app.sync_file_list_cache();
 }
 
 fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> Oid {
@@ -140,23 +235,30 @@ fn graph_navigation_resets_commit_detail_scroll() {
 #[test]
 fn next_prev_branch_traverses_branches() {
     let (_td, repo) = init_repo();
-    commit_file(repo.repo(), "a.txt", "a", "initial");
-    // Create a second branch
-    {
-        let head = repo.repo().head().unwrap().peel_to_commit().unwrap();
-        repo.repo().branch("feature", &head, false).unwrap();
-    }
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "first");
+    // "old" stays at c1; main advances to a second commit, so the two branch
+    // tips live on two distinct graph nodes.
+    repo.repo()
+        .branch("old", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
 
-    // Should have at least one branch position
-    assert!(!app.graph_nav.branch_positions.is_empty());
+    // Two branch tips on two distinct nodes: main@node0, old@node1.
+    assert_eq!(app.graph_nav.branch_positions.len(), 2);
+    assert_eq!(app.graph_nav.selected_branch_position, Some(0));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
 
-    let initial_pos = app.graph_nav.selected_branch_position;
+    // NextBranch moves the selection to the older branch tip on node 1.
     app.handle_action(Action::NextBranch).unwrap();
-    // If there's more than one branch, position should change
-    if app.graph_nav.branch_positions.len() > 1 {
-        assert_ne!(app.graph_nav.selected_branch_position, initial_pos);
-    }
+    assert_eq!(app.graph_nav.selected_branch_position, Some(1));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(1));
+    assert_eq!(app.graph_nav.selected_branch_name(), Some("old"));
+
+    // PrevBranch moves it back to the first branch tip on node 0.
+    app.handle_action(Action::PrevBranch).unwrap();
+    assert_eq!(app.graph_nav.selected_branch_position, Some(0));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
 }
 
 #[test]
@@ -165,19 +267,30 @@ fn jump_to_head_selects_head_branch() {
     commit_file(repo.repo(), "a.txt", "a", "first");
     commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
-    app.head_name = Some("main".to_string());
+    let head_branch = app.head_name.clone().expect("repo has a head branch");
+    // The HEAD branch tip is the newest commit, at graph node 0.
+    let head_node = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.is_head && !n.is_uncommitted)
+        .expect("a HEAD commit node exists");
 
-    // Move away from HEAD
+    // Move away from HEAD, then jump back.
     app.handle_action(Action::GoToBottom).unwrap();
+    assert_ne!(app.graph_nav.graph_list_state.selected(), Some(head_node));
 
-    // Jump back
     app.handle_action(Action::JumpToHead).unwrap();
 
-    // Should be at a node with the HEAD branch
-    if let Some(pos) = app.graph_nav.selected_branch_position {
-        let (_, name) = &app.graph_nav.branch_positions[pos];
-        assert_eq!(name, "main");
-    }
+    // The selection must resolve to the HEAD branch position (not silently skipped).
+    let pos = app
+        .graph_nav
+        .selected_branch_position
+        .expect("JumpToHead selects the HEAD branch position");
+    let (node_idx, name) = &app.graph_nav.branch_positions[pos];
+    assert_eq!(name, &head_branch);
+    assert_eq!(*node_idx, head_node);
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(head_node));
 }
 
 // ── Panel Navigation ────────────────────────────────────────────────
@@ -494,24 +607,32 @@ fn commit_menu_navigation_wraps() {
     app.handle_action(Action::MoveDown).unwrap();
     if let AppMode::CommitMenu { selected, .. } = &app.mode {
         assert_eq!(*selected, 1);
+    } else {
+        panic!("expected CommitMenu mode, got {:?}", app.mode);
     }
 
     // Down from 1 → 2
     app.handle_action(Action::MoveDown).unwrap();
     if let AppMode::CommitMenu { selected, .. } = &app.mode {
         assert_eq!(*selected, 2);
+    } else {
+        panic!("expected CommitMenu mode, got {:?}", app.mode);
     }
 
     // Down from 2 → wraps to 0
     app.handle_action(Action::MoveDown).unwrap();
     if let AppMode::CommitMenu { selected, .. } = &app.mode {
         assert_eq!(*selected, 0);
+    } else {
+        panic!("expected CommitMenu mode, got {:?}", app.mode);
     }
 
     // Up from 0 → wraps to 2
     app.handle_action(Action::MoveUp).unwrap();
     if let AppMode::CommitMenu { selected, .. } = &app.mode {
         assert_eq!(*selected, 2);
+    } else {
+        panic!("expected CommitMenu mode, got {:?}", app.mode);
     }
 }
 
@@ -975,9 +1096,12 @@ fn commit_filter_selected_commit_still_valid_after_refresh() {
     app.refresh(true).unwrap();
 
     let node = app.graph_nav.selected_node(&app.graph_layout).unwrap();
-    if let Some(commit) = &node.commit {
-        assert!(commit.message.to_lowercase().contains("fix"));
-    }
+    assert!(
+        node.commit.is_some(),
+        "filtered selection must land on a real commit node after refresh"
+    );
+    let commit = node.commit.as_ref().unwrap();
+    assert!(commit.message.to_lowercase().contains("fix"));
 }
 
 // ── Word-level editing ─────────────────────────────────────────────
@@ -1027,4 +1151,468 @@ fn clear_line_in_commit_filter_shows_all_commits() {
     app.handle_action(Action::GoToBottom).unwrap();
     let bottom_idx = app.graph_nav.selected_index().unwrap();
     assert_eq!(bottom_idx, total_nodes - 1);
+}
+
+// ── handle_confirm_action dispatch → repository mutation ────────────
+//
+// Each test sets AppMode::Confirm { action } directly, dispatches
+// Action::Confirm, and asserts the repository changed as that operation
+// requires. These catch a mis-wired confirm→operation dispatch.
+
+#[test]
+fn confirm_merge_creates_merge_commit() {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "root");
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    let c_feat = commit_to_ref(repo.repo(), "refs/heads/feature", "feature.txt", "f", "feature work");
+    let c_main = commit_file(repo.repo(), "main.txt", "m", "main work");
+    let mut app = make_app(repo);
+    assert_eq!(head_oid(td.path()), c_main);
+
+    app.mode = AppMode::Confirm {
+        message: "Merge 'feature'?".to_string(),
+        action: ConfirmAction::Merge("feature".to_string()),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    // main and feature diverged, so the merge produces a two-parent commit.
+    let (_, parent_count, parents, _) = head_commit_facts(td.path());
+    assert_eq!(parent_count, 2, "merge should create a two-parent merge commit");
+    assert!(parents.contains(&c_main), "one parent is the previous HEAD");
+    assert!(parents.contains(&c_feat), "other parent is the merged branch tip");
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+#[test]
+fn confirm_rebase_replays_head_onto_branch() {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "root");
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    let c_feat = commit_to_ref(repo.repo(), "refs/heads/feature", "feature.txt", "f", "feature work");
+    let c_main = commit_file(repo.repo(), "main.txt", "m", "main work");
+    let mut app = make_app(repo);
+
+    app.mode = AppMode::Confirm {
+        message: "Rebase onto 'feature'?".to_string(),
+        action: ConfirmAction::Rebase("feature".to_string()),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    // HEAD's "main work" commit is replayed on top of the feature tip.
+    let (id, parent_count, parents, message) = head_commit_facts(td.path());
+    assert_ne!(id, c_main, "rebase creates a new commit");
+    assert_eq!(parent_count, 1);
+    assert_eq!(parents[0], c_feat, "rebased commit sits on the feature tip");
+    assert!(message.contains("main work"));
+    assert!(td.path().join("feature.txt").exists());
+    assert!(td.path().join("main.txt").exists());
+}
+
+#[test]
+fn confirm_cherry_pick_applies_commit_to_head() {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "root");
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    let c_feat = commit_to_ref(
+        repo.repo(),
+        "refs/heads/feature",
+        "feature.txt",
+        "picked",
+        "add feature file",
+    );
+    let mut app = make_app(repo);
+    assert_eq!(head_oid(td.path()), c1);
+
+    app.mode = AppMode::Confirm {
+        message: "Cherry-pick?".to_string(),
+        action: ConfirmAction::CherryPick(c_feat),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    let (id, _, parents, _) = head_commit_facts(td.path());
+    assert_ne!(id, c1, "HEAD advanced with the cherry-picked change");
+    assert_eq!(parents[0], c1, "new commit sits on the previous HEAD");
+    assert!(
+        td.path().join("feature.txt").exists(),
+        "cherry-picked file is present in the working tree"
+    );
+}
+
+#[test]
+fn confirm_revert_undoes_commit_changes() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    let c2 = commit_file(repo.repo(), "b.txt", "b", "add b");
+    let mut app = make_app(repo);
+    assert!(td.path().join("b.txt").exists());
+
+    app.mode = AppMode::Confirm {
+        message: "Revert?".to_string(),
+        action: ConfirmAction::Revert(c2),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    let (_, _, parents, _) = head_commit_facts(td.path());
+    assert_eq!(parents[0], c2, "revert commit sits on top of the reverted commit");
+    assert!(!td.path().join("b.txt").exists(), "revert removed the file the commit added");
+    assert!(td.path().join("a.txt").exists());
+}
+
+#[test]
+fn confirm_reset_soft_moves_head_keeps_changes_staged() {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "root");
+    commit_file(repo.repo(), "b.txt", "b", "add b");
+    let mut app = make_app(repo);
+
+    app.mode = AppMode::Confirm {
+        message: "Reset soft?".to_string(),
+        action: ConfirmAction::ResetSoft(c1),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert_eq!(head_oid(td.path()), c1, "HEAD moved back to c1");
+    assert!(td.path().join("b.txt").exists(), "working-tree file is preserved");
+    let st = path_status(td.path(), "b.txt");
+    assert!(st.contains(Status::INDEX_NEW), "b.txt stays staged after a soft reset");
+    assert!(!st.contains(Status::WT_NEW), "b.txt is not an unstaged/untracked change");
+}
+
+#[test]
+fn confirm_reset_mixed_moves_head_unstages_changes() {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "root");
+    commit_file(repo.repo(), "b.txt", "b", "add b");
+    let mut app = make_app(repo);
+
+    app.mode = AppMode::Confirm {
+        message: "Reset mixed?".to_string(),
+        action: ConfirmAction::ResetMixed(c1),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert_eq!(head_oid(td.path()), c1, "HEAD moved back to c1");
+    assert!(td.path().join("b.txt").exists(), "working-tree file is preserved");
+    let st = path_status(td.path(), "b.txt");
+    assert!(st.contains(Status::WT_NEW), "b.txt is unstaged (untracked) after a mixed reset");
+    assert!(!st.contains(Status::INDEX_NEW), "b.txt is not staged after a mixed reset");
+}
+
+#[test]
+fn confirm_reset_hard_moves_head_and_reverts_worktree() {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "original", "root");
+    commit_file(repo.repo(), "a.txt", "modified", "change a");
+    let mut app = make_app(repo);
+    assert_eq!(fs::read_to_string(td.path().join("a.txt")).unwrap(), "modified");
+
+    app.mode = AppMode::Confirm {
+        message: "Reset hard?".to_string(),
+        action: ConfirmAction::ResetHard(c1),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert_eq!(head_oid(td.path()), c1, "HEAD moved back to c1");
+    assert_eq!(
+        fs::read_to_string(td.path().join("a.txt")).unwrap(),
+        "original",
+        "hard reset reverted the working-tree file content"
+    );
+}
+
+#[test]
+fn confirm_stash_drop_removes_stash() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "original", "root");
+    fs::write(td.path().join("a.txt"), "changed").unwrap();
+    {
+        let mut r = Repository::open(td.path()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        r.stash_save(&sig, "wip", None).unwrap();
+    }
+    assert_eq!(stash_count(td.path()), 1);
+    let mut app = make_app(repo);
+
+    app.mode = AppMode::Confirm {
+        message: "Drop stash?".to_string(),
+        action: ConfirmAction::StashDrop(0),
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert_eq!(stash_count(td.path()), 0, "the stash was dropped");
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+// ── open_commit_menu item-list construction ────────────────────────
+
+#[test]
+fn commit_menu_stash_node_shows_stash_items() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "original", "root");
+    fs::write(td.path().join("a.txt"), "changed").unwrap();
+    {
+        let mut r = Repository::open(td.path()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        r.stash_save(&sig, "wip", None).unwrap();
+    }
+    let mut app = make_app(repo);
+
+    let stash_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.is_stash)
+        .expect("a stash node is present");
+    app.graph_nav.graph_list_state.select(Some(stash_idx));
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => assert_eq!(
+            items,
+            &vec![
+                CommitMenuItem::StashApply,
+                CommitMenuItem::StashPop,
+                CommitMenuItem::StashDrop,
+            ],
+        ),
+        other => panic!("expected a stash CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn commit_menu_branch_tip_includes_branch_ops() {
+    let (_td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "first");
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    // Select the "feature" branch tip — a non-HEAD local branch on its own node.
+    let pos = app
+        .graph_nav
+        .branch_positions
+        .iter()
+        .position(|(_, n)| n == "feature")
+        .unwrap();
+    app.graph_nav.selected_branch_position = Some(pos);
+    let (node_idx, _) = app.graph_nav.branch_positions[pos];
+    app.graph_nav.graph_list_state.select(Some(node_idx));
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            for expected in [
+                CommitMenuItem::Push,
+                CommitMenuItem::MergeIntoCurrent,
+                CommitMenuItem::Rebase,
+                CommitMenuItem::DeleteBranch,
+            ] {
+                assert!(
+                    items.contains(&expected),
+                    "branch-tip menu should include {:?}, got {:?}",
+                    expected,
+                    items
+                );
+            }
+        }
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn commit_menu_non_tip_excludes_branch_ops() {
+    let (_td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    // Select the first commit, which has no branch pointing at it.
+    let c1_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(c1))
+        .unwrap();
+    app.graph_nav.graph_list_state.select(Some(c1_idx));
+    app.graph_nav.selected_branch_position = None;
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            for absent in [
+                CommitMenuItem::Push,
+                CommitMenuItem::MergeIntoCurrent,
+                CommitMenuItem::Rebase,
+                CommitMenuItem::DeleteBranch,
+            ] {
+                assert!(
+                    !items.contains(&absent),
+                    "non-tip menu should exclude {:?}, got {:?}",
+                    absent,
+                    items
+                );
+            }
+            // The commit-level actions are still present.
+            assert!(items.contains(&CommitMenuItem::Checkout));
+            assert!(items.contains(&CommitMenuItem::CherryPick));
+        }
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+// ── File-op orchestration (stage / gitignore / archive + undo) ─────
+
+#[test]
+fn undo_stage_unstages_file() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    fs::write(td.path().join("b.txt"), "new file").unwrap();
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+    prime_uncommitted(&mut app);
+
+    // b.txt starts untracked (unstaged).
+    assert!(path_status(td.path(), "b.txt").contains(Status::WT_NEW));
+
+    app.handle_action(Action::ToggleStage).unwrap();
+    assert!(
+        path_status(td.path(), "b.txt").contains(Status::INDEX_NEW),
+        "b.txt is staged after ToggleStage"
+    );
+    assert!(app.last_undoable_op.is_some());
+
+    app.handle_action(Action::UndoLastFileOp).unwrap();
+    let st = path_status(td.path(), "b.txt");
+    assert!(st.contains(Status::WT_NEW), "undo returned b.txt to unstaged");
+    assert!(!st.contains(Status::INDEX_NEW), "undo removed the staged entry");
+    assert!(app.last_undoable_op.is_none(), "undo cleared the undo slot");
+}
+
+#[test]
+fn undo_gitignore_removes_pattern() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    fs::write(td.path().join("b.txt"), "new file").unwrap();
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+    prime_uncommitted(&mut app);
+
+    app.handle_action(Action::AddToGitignore).unwrap();
+    let gitignore = || fs::read_to_string(td.path().join(".gitignore")).unwrap_or_default();
+    assert!(
+        gitignore().lines().any(|l| l.trim() == "b.txt"),
+        "pattern added to .gitignore"
+    );
+    assert!(app.last_undoable_op.is_some());
+
+    app.handle_action(Action::UndoLastFileOp).unwrap();
+    assert!(
+        !gitignore().lines().any(|l| l.trim() == "b.txt"),
+        "pattern removed from .gitignore on undo"
+    );
+    assert!(app.last_undoable_op.is_none());
+}
+
+#[test]
+fn undo_archive_restores_file() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    fs::write(td.path().join("b.txt"), "keep me").unwrap();
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+    prime_uncommitted(&mut app);
+
+    app.handle_action(Action::ArchiveFile).unwrap();
+    assert!(!td.path().join("b.txt").exists(), "file moved out of the working tree");
+    assert!(td.path().join(".archive/b.txt").exists(), "file moved into .archive/");
+    assert!(app.last_undoable_op.is_some());
+
+    app.handle_action(Action::UndoLastFileOp).unwrap();
+    assert!(
+        td.path().join("b.txt").exists(),
+        "undo restored the file to its original path"
+    );
+    assert!(
+        !td.path().join(".archive/b.txt").exists(),
+        "file removed from .archive/ on undo"
+    );
+    assert_eq!(fs::read_to_string(td.path().join("b.txt")).unwrap(), "keep me");
+    assert!(app.last_undoable_op.is_none());
+}
+
+#[test]
+fn gitignore_file_selection_uses_file_path() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    fs::write(td.path().join("junk.log"), "noise").unwrap();
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+    prime_uncommitted(&mut app);
+
+    app.handle_action(Action::AddToGitignore).unwrap();
+    let contents = fs::read_to_string(td.path().join(".gitignore")).unwrap();
+    assert!(
+        contents.lines().any(|l| l.trim() == "junk.log"),
+        "gitignore got the file path, was: {contents:?}"
+    );
+}
+
+#[test]
+fn gitignore_folder_header_selection_uses_folder_pattern() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    fs::create_dir_all(td.path().join("build")).unwrap();
+    fs::write(td.path().join("build/out1.o"), "x").unwrap();
+    fs::write(td.path().join("build/out2.o"), "y").unwrap();
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+    app.files_pane.files_group_by_folder = true;
+    prime_uncommitted(&mut app);
+
+    // Select the "build/" folder header (a header, not a file).
+    let header_idx = app
+        .files_pane
+        .display_items()
+        .iter()
+        .position(|i| matches!(i, FilesPaneItem::FolderHeader(t) if t == "build/"))
+        .expect("build/ folder header is present");
+    app.files_pane.select_file_at(header_idx);
+
+    app.handle_action(Action::AddToGitignore).unwrap();
+    let contents = fs::read_to_string(td.path().join(".gitignore")).unwrap();
+    assert!(
+        contents.lines().any(|l| l.trim() == "build/"),
+        "gitignore got the folder pattern, was: {contents:?}"
+    );
+}
+
+#[test]
+fn archive_moves_file_and_gitignores_archive_dir() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "root");
+    fs::write(td.path().join("scratch.txt"), "temp").unwrap();
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+    prime_uncommitted(&mut app);
+
+    app.handle_action(Action::ArchiveFile).unwrap();
+
+    assert!(!td.path().join("scratch.txt").exists(), "file moved out of working tree");
+    assert_eq!(
+        fs::read_to_string(td.path().join(".archive/scratch.txt")).unwrap(),
+        "temp"
+    );
+    let contents = fs::read_to_string(td.path().join(".gitignore")).unwrap();
+    assert!(
+        contents.lines().any(|l| l.trim() == ".archive"),
+        "the archive dir is gitignored, was: {contents:?}"
+    );
 }

@@ -16,7 +16,8 @@ pub struct FuzzySearchResult {
 
 /// Performs fuzzy search on branch names
 ///
-/// Returns results sorted by score (descending), then by branch name (ascending) for ties.
+/// Returns results sorted by score (descending), then by `branch_idx` —
+/// the branch's position in the input `branches` slice — ascending for ties.
 pub fn fuzzy_search_branches(query: &str, branches: &[(usize, String)]) -> Vec<FuzzySearchResult> {
     if query.is_empty() {
         return Vec::new();
@@ -95,6 +96,47 @@ mod tests {
         let branches = vec![(0, "main".to_string()), (1, "develop".to_string())];
         let results = fuzzy_search_branches("xyz123", &branches);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_empty_branch_list_returns_empty() {
+        let branches: Vec<(usize, String)> = Vec::new();
+        let results = fuzzy_search_branches("main", &branches);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_whitespace_only_query_matches_names_containing_a_space() {
+        // A whitespace-only query is not filtered by the empty-query check,
+        // so it's handed to the fuzzy matcher like any other query. Pinning
+        // the actual (not assumed) behavior: branch names without a space
+        // character don't match a " " query...
+        let branches = vec![(0, "main".to_string()), (1, "feature/test".to_string())];
+        let results = fuzzy_search_branches(" ", &branches);
+        assert!(results.is_empty());
+
+        // ...but a name that does contain a literal space is matched.
+        let branches_with_space = vec![(0, "weird branch".to_string())];
+        let results = fuzzy_search_branches(" ", &branches_with_space);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].branch_idx, 0);
+    }
+
+    #[test]
+    fn test_ties_broken_by_branch_idx_ascending() {
+        // Three branches with an identical name produce identical fuzzy
+        // scores, so the sort must fall back to `branch_idx` — the index
+        // into the `branches` slice (assigned via `.enumerate()`), NOT the
+        // branch name and NOT the tuple's first field — ascending.
+        let branches = vec![
+            (99, "abc".to_string()),
+            (5, "abc".to_string()),
+            (42, "abc".to_string()),
+        ];
+        let results = fuzzy_search_branches("abc", &branches);
+        assert_eq!(results.len(), 3);
+        let indices: Vec<usize> = results.iter().map(|r| r.branch_idx).collect();
+        assert_eq!(indices, vec![0, 1, 2]);
     }
 
     #[test]

@@ -451,9 +451,21 @@ impl DiffCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::git::{FileChangeKind, StageStatus};
+    use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::time::Instant;
+
+    fn diff_file(path: &str, stage: Option<StageStatus>) -> crate::git::FileDiffInfo {
+        crate::git::FileDiffInfo {
+            path: PathBuf::from(path),
+            kind: FileChangeKind::Modified,
+            is_binary: false,
+            insertions: 1,
+            deletions: 0,
+            stage_status: stage,
+        }
+    }
 
     fn set_diff(cache: &mut DiffCache, oid: Oid, diff: CommitDiffInfo) {
         cache.diff_cache_oid = Some(oid);
@@ -586,28 +598,132 @@ mod tests {
         assert!(!cache.uncommitted_diff_failed);
     }
 
+    // Rewritten from asserting `uncommitted_diff_receiver.is_some()/is_none()`
+    // (an implementation detail) to the observable contract: whether a
+    // result that arrives on the channel after invalidation is still picked
+    // up by `poll()`.
     #[test]
-    fn invalidate_uncommitted_keeps_receiver_when_loading() {
+    fn invalidate_while_loading_still_applies_in_flight_result() {
         let mut cache = DiffCache::new();
-        let (_tx, rx) = mpsc::channel::<UncommittedDiffResult>();
+        let (tx, rx) = mpsc::channel::<UncommittedDiffResult>();
         cache.uncommitted_diff_receiver = Some(rx);
         cache.uncommitted_diff_loading = true;
 
+        // Invalidate while a load is genuinely in flight: the receiver must
+        // be kept alive so the eventual result isn't lost.
         cache.invalidate_uncommitted();
 
-        assert!(cache.uncommitted_diff_receiver.is_some());
+        // The in-flight load completes after invalidation.
+        let status = precise_status();
+        tx.send((Ok(empty_diff()), Some(status.clone()))).unwrap();
+
+        let events = cache.poll(None, "/dev/null", Some(&status));
+
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
+        assert!(events.uncommitted_diff_loaded);
     }
 
     #[test]
-    fn invalidate_uncommitted_clears_receiver_when_not_loading() {
+    fn invalidate_while_not_loading_discards_late_result() {
         let mut cache = DiffCache::new();
-        let (_tx, rx) = mpsc::channel::<UncommittedDiffResult>();
+        let (tx, rx) = mpsc::channel::<UncommittedDiffResult>();
         cache.uncommitted_diff_receiver = Some(rx);
         cache.uncommitted_diff_loading = false;
 
+        // A result from a stale/abandoned load is already sitting in the
+        // channel...
+        let status = precise_status();
+        tx.send((Ok(empty_diff()), Some(status.clone()))).unwrap();
+
+        // ...but invalidating while not "loading" treats the channel as
+        // stale and drops it, so the late result can never be observed.
         cache.invalidate_uncommitted();
 
-        assert!(cache.uncommitted_diff_receiver.is_none());
+        let events = cache.poll(None, "/dev/null", Some(&status));
+
+        assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
+        assert!(!events.uncommitted_diff_loaded);
+    }
+
+    // ── Reclassify uncommitted staging ──────────────────────────────
+
+    #[test]
+    fn reclassify_updates_stage_status_from_quick_diff() {
+        let mut cache = DiffCache::new();
+
+        // Full (async) cache: a.txt staged, b.txt unstaged — now stale.
+        let full = CommitDiffInfo {
+            files: vec![
+                diff_file("a.txt", Some(StageStatus::Staged)),
+                diff_file("b.txt", Some(StageStatus::Unstaged)),
+            ],
+            total_insertions: 2,
+            total_deletions: 0,
+            total_files: 2,
+            truncated: false,
+            staged_files: vec![diff_file("a.txt", Some(StageStatus::Staged))],
+            unstaged_files: vec![diff_file("b.txt", Some(StageStatus::Unstaged))],
+        };
+        cache.uncommitted_diff_cache = Some(full);
+
+        // Quick (sync) diff reflects the real, just-changed staging state:
+        // the user staged b.txt and unstaged a.txt.
+        let quick = CommitDiffInfo {
+            files: vec![
+                diff_file("a.txt", Some(StageStatus::Unstaged)),
+                diff_file("b.txt", Some(StageStatus::Staged)),
+            ],
+            ..Default::default()
+        };
+        cache.quick_diff_cache = Some(quick);
+
+        let status = precise_status();
+        cache.reclassify_uncommitted_staging(Some(&status));
+
+        let full = cache.uncommitted_diff_cache.as_ref().unwrap();
+        let a = full.files.iter().find(|f| f.path == Path::new("a.txt")).unwrap();
+        let b = full.files.iter().find(|f| f.path == Path::new("b.txt")).unwrap();
+        assert_eq!(a.stage_status, Some(StageStatus::Unstaged));
+        assert_eq!(b.stage_status, Some(StageStatus::Staged));
+
+        // staged_files/unstaged_files rebuilt to match the new statuses.
+        assert_eq!(full.staged_files.len(), 1);
+        assert_eq!(full.staged_files[0].path, PathBuf::from("b.txt"));
+        assert_eq!(full.unstaged_files.len(), 1);
+        assert_eq!(full.unstaged_files[0].path, PathBuf::from("a.txt"));
+
+        // Cache key sealed to the current status so poll() treats this
+        // target as already cached (no reload needed).
+        assert_eq!(cache.uncommitted_cache_key.as_ref(), Some(&status));
+    }
+
+    #[test]
+    fn reclassify_without_full_cache_still_seals_key() {
+        let mut cache = DiffCache::new();
+        // No full diff cached yet, but the quick diff already ran, and a
+        // background load for the full diff is in flight (the realistic
+        // scenario when a file gets staged mid-load).
+        cache.quick_diff_cache = Some(empty_diff());
+        cache.quick_diff_target = Some(DiffTarget::Uncommitted);
+        let (_tx, rx) = mpsc::channel();
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
+
+        let status = precise_status();
+        cache.reclassify_uncommitted_staging(Some(&status));
+
+        // Nothing to reclassify — full cache still absent.
+        assert!(cache.uncommitted_diff_cache.is_none());
+        // But the key is sealed to the current status regardless (early
+        // return path at the top of reclassify_uncommitted_staging).
+        assert_eq!(cache.uncommitted_cache_key.as_ref(), Some(&status));
+
+        // Observable contract: poll() does not spawn a second concurrent
+        // load — the in-flight receiver is left untouched.
+        let events = cache.poll(Some(DiffTarget::Uncommitted), "/dev/null", Some(&status));
+        assert!(cache.uncommitted_diff_loading);
+        assert!(cache.uncommitted_diff_receiver.is_some());
+        assert!(!events.uncommitted_diff_loaded);
     }
 
     // ── Cache reuse decisions ───────────────────────────────────────

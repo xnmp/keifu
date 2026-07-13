@@ -121,3 +121,15 @@ to .git + non-ignored dirs (cuts inotify watch count 10-100x, matters near
 fs.inotify.max_user_watches); rename ui::files_pane::FilesPaneState to avoid
 collision with crate::files_pane_state::FilesPaneState; UiState::save silently
 ignores IO errors.
+
+### [DONE] 2026-07-13 test suite hardening (audit + implementation)
+347 -> 439 tests. Plugged zero-coverage destructive ops (rebase, all stash
+ops, remote checkout, restore-untracked/trash), confirm->operation dispatch
+(merge/rebase/cherry-pick/revert/reset x3/stash-drop), undo direction logic,
+commit-menu construction, graph edge cases (octopus, stash nodes, uncommitted
+lane collision, orphan roots), config parsing, unicode editor edges. Fixed 6
+vacuous/tautological tests, removed 1 duplicate, rewrote 2 transport-coupled
+diff-cache tests to observable contracts. Conflict-stranding behavior of
+merge/rebase/cherry-pick/revert pinned with "documents current behavior"
+tests (baseline for the merge-conflict feature work, see vscode-parity.md).
+Shared tests/common harness; removed 1.1s sleep (suite: 1.2s -> 0.2s).

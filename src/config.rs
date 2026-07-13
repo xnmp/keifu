@@ -127,3 +127,128 @@ impl UiState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_valid_toml_with_all_fields() {
+        let toml_str = r#"
+            [refresh]
+            auto_refresh = false
+            refresh_interval = 30
+            auto_fetch = false
+            fetch_interval = 120
+
+            [ui]
+            theme = "light"
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(!cfg.refresh.auto_refresh);
+        assert_eq!(cfg.refresh.refresh_interval, 30);
+        assert!(!cfg.refresh.auto_fetch);
+        assert_eq!(cfg.refresh.fetch_interval, 120);
+        assert_eq!(cfg.ui.theme, "light");
+    }
+
+    #[test]
+    fn refresh_interval_zero_clamps_to_one() {
+        let toml_str = r#"
+            [refresh]
+            refresh_interval = 0
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.refresh.refresh_interval, 1);
+    }
+
+    #[test]
+    fn fetch_interval_below_minimum_clamps_to_ten() {
+        let toml_str = r#"
+            [refresh]
+            fetch_interval = 3
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.refresh.fetch_interval, 10);
+    }
+
+    #[test]
+    fn interval_values_above_minimum_pass_through_unchanged() {
+        let toml_str = r#"
+            [refresh]
+            refresh_interval = 45
+            fetch_interval = 300
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.refresh.refresh_interval, 45);
+        assert_eq!(cfg.refresh.fetch_interval, 300);
+    }
+
+    #[test]
+    fn malformed_toml_fails_to_parse() {
+        // Unterminated inline table — invalid TOML syntax.
+        let bad = "refresh = { auto_refresh = tru";
+        let result: Result<Config, _> = toml::from_str(bad);
+        assert!(result.is_err());
+        // Config::load() converts this Err via `.ok()` into `None`, then
+        // `.unwrap_or_default()` falls back to `Config::default()` — a
+        // malformed config file on disk is silently replaced by defaults
+        // rather than surfacing a parse error to the user.
+    }
+
+    #[test]
+    fn missing_sections_fall_back_to_defaults() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.refresh.auto_refresh);
+        assert_eq!(cfg.refresh.refresh_interval, 10);
+        assert!(cfg.refresh.auto_fetch);
+        assert_eq!(cfg.refresh.fetch_interval, 60);
+        assert_eq!(cfg.ui.theme, "auto");
+    }
+
+    #[test]
+    fn partial_config_missing_refresh_section_uses_defaults() {
+        let toml_str = r#"
+            [ui]
+            theme = "dark"
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.ui.theme, "dark");
+        assert!(cfg.refresh.auto_refresh);
+        assert_eq!(cfg.refresh.refresh_interval, 10);
+        assert_eq!(cfg.refresh.fetch_interval, 60);
+    }
+
+    #[test]
+    fn partial_config_missing_ui_section_uses_defaults() {
+        let toml_str = r#"
+            [refresh]
+            auto_refresh = false
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(!cfg.refresh.auto_refresh);
+        assert_eq!(cfg.ui.theme, "auto");
+    }
+
+    #[test]
+    fn unknown_keys_are_ignored() {
+        // No `deny_unknown_fields` on Config/UiConfig/RefreshConfig, so serde
+        // silently drops keys it doesn't recognize instead of erroring —
+        // pin that behavior so a future `deny_unknown_fields` addition is a
+        // deliberate, visible change to this test.
+        let toml_str = r#"
+            unknown_top_level = "surprise"
+
+            [refresh]
+            auto_refresh = false
+            unknown_refresh_key = 123
+
+            [ui]
+            theme = "light"
+            unknown_ui_key = true
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(!cfg.refresh.auto_refresh);
+        assert_eq!(cfg.ui.theme, "light");
+    }
+}

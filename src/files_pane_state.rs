@@ -938,7 +938,8 @@ mod tests {
         let mut state = make_state_with_items(vec![]);
         state.move_file_selection(1);
         state.move_file_selection(-1);
-        // Just assert it doesn't panic
+        // No items to select — resolve() always falls back to index 0.
+        assert_eq!(state.file_selected_index(), 0);
     }
 
     // ─── Filtering ──────────────────────────────────────────────────

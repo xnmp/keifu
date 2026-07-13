@@ -381,12 +381,10 @@ fn offset_at(text: &str, target_row: usize, target_col: usize) -> usize {
 mod tests {
     use super::*;
 
+    // Delegates to the real constructor so `from_text` gets exercised by
+    // every test that uses this helper.
     fn editor_with(text: &str) -> TextEditor {
-        TextEditor {
-            text: text.to_string(),
-            cursor: text.len(),
-            selection: None,
-        }
+        TextEditor::from_text(text)
     }
 
     fn editor_at(text: &str, cursor: usize) -> TextEditor {
@@ -719,6 +717,101 @@ mod tests {
         assert_eq!(ed.cursor, 3); // before 'b'
         ed.move_left(false);
         assert_eq!(ed.cursor, 1); // before 'é'
+    }
+
+    // ── Emoji / multi-byte codepoints ─────────────────────────────────
+
+    #[test]
+    fn emoji_insert_and_move_keeps_valid_utf8_and_moves_whole_codepoint() {
+        let mut ed = TextEditor::new();
+        ed.insert_char('a');
+        ed.insert_char('\u{1F600}'); // 😀, 4 bytes
+        ed.insert_char('b');
+        assert_eq!(ed.text, "a\u{1F600}b");
+        assert_eq!(ed.cursor, 6); // a(1) + emoji(4) + b(1)
+        assert!(ed.text.is_char_boundary(ed.cursor));
+
+        ed.move_left(false);
+        assert_eq!(ed.cursor, 5); // before 'b', right after the emoji
+        assert!(ed.text.is_char_boundary(ed.cursor));
+
+        ed.move_left(false);
+        assert_eq!(ed.cursor, 1); // before the emoji — jumped all 4 bytes at once
+        assert!(ed.text.is_char_boundary(ed.cursor));
+
+        ed.move_right(false);
+        assert_eq!(ed.cursor, 5); // after the emoji again
+        assert!(ed.text.is_char_boundary(ed.cursor));
+    }
+
+    #[test]
+    fn emoji_backspace_removes_whole_codepoint() {
+        let mut ed = editor_at("a\u{1F600}b", 5); // cursor right after the emoji
+        ed.backspace();
+        assert_eq!(ed.text, "ab");
+        assert_eq!(ed.cursor, 1);
+        assert!(ed.text.is_char_boundary(ed.cursor));
+    }
+
+    #[test]
+    fn emoji_delete_removes_whole_codepoint() {
+        let mut ed = editor_at("a\u{1F600}b", 1); // cursor right before the emoji
+        ed.delete();
+        assert_eq!(ed.text, "ab");
+        assert_eq!(ed.cursor, 1);
+        assert!(ed.text.is_char_boundary(ed.cursor));
+    }
+
+    #[test]
+    fn combining_sequence_moves_per_codepoint_not_grapheme() {
+        // "e" + combining acute accent (U+0301) is a single grapheme cluster
+        // visually, but two separate Unicode scalar values. This editor
+        // moves per-codepoint, not per-grapheme, so clearing the whole
+        // visual character from the end takes two `move_left` calls. This
+        // pins the CURRENT behavior (arguably not ideal UX) rather than
+        // asserting it's correct.
+        let mut ed = editor_with("e\u{0301}"); // cursor at end (byte 3)
+        assert_eq!(ed.cursor, 3);
+        ed.move_left(false);
+        assert_eq!(ed.cursor, 1); // stopped between 'e' and the combining mark
+        ed.move_left(false);
+        assert_eq!(ed.cursor, 0);
+    }
+
+    #[test]
+    fn combining_sequence_backspace_removes_mark_before_base_char() {
+        // Same per-codepoint behavior as above, via backspace: the
+        // combining mark is deleted first, leaving the bare base character.
+        let mut ed = editor_with("e\u{0301}");
+        ed.backspace();
+        assert_eq!(ed.text, "e");
+        ed.backspace();
+        assert_eq!(ed.text, "");
+    }
+
+    // ── Empty buffer / huge line ───────────────────────────────────────
+
+    #[test]
+    fn empty_buffer_vertical_and_home_end_movement_is_noop() {
+        let mut ed = TextEditor::new();
+        ed.move_up(false);
+        assert_eq!(ed.cursor, 0);
+        ed.move_down(false);
+        assert_eq!(ed.cursor, 0);
+        ed.move_home(false);
+        assert_eq!(ed.cursor, 0);
+        ed.move_end(false);
+        assert_eq!(ed.cursor, 0);
+    }
+
+    #[test]
+    fn huge_line_move_end_and_home() {
+        let text = "a".repeat(10_000);
+        let mut ed = editor_at(&text, 0);
+        ed.move_end(false);
+        assert_eq!(ed.cursor, 10_000);
+        ed.move_home(false);
+        assert_eq!(ed.cursor, 0);
     }
 
     // ── pop_word ────────────────────────────────────────────────────
