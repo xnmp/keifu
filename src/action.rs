@@ -36,6 +36,7 @@ pub enum Action {
 
     // Files
     OpenWithDefault,
+    CopyPath,
 
     // File operations
     RestoreFile,

@@ -301,7 +301,8 @@ impl<'a> Widget for StatusBar<'a> {
             }
             AppMode::CommitMenu { .. }
             | AppMode::BranchPicker { .. }
-            | AppMode::BranchDeletePicker { .. } => {
+            | AppMode::BranchDeletePicker { .. }
+            | AppMode::TagPicker { .. } => {
                 spans.push(Span::styled(" ↑/↓ ", key_style));
                 spans.push(Span::styled("select ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
@@ -334,6 +335,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
+            AppMode::TagPicker { .. } => Some(" TAG "),
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
         };

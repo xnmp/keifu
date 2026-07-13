@@ -13,7 +13,9 @@ use git2::{Oid, Repository, Signature, Status};
 use tempfile::TempDir;
 
 use keifu::action::Action;
-use keifu::app::{App, AppMode, CommitMenuItem, ConfirmAction, FilesPaneItem, FocusedPanel};
+use keifu::app::{
+    App, AppMode, CommitMenuItem, ConfirmAction, FilesPaneItem, FocusedPanel, InputAction,
+};
 use keifu::git::GitRepository;
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -1378,11 +1380,158 @@ fn commit_menu_stash_node_shows_stash_items() {
             &vec![
                 CommitMenuItem::StashApply,
                 CommitMenuItem::StashPop,
+                CommitMenuItem::BranchFromStash,
                 CommitMenuItem::StashDrop,
             ],
         ),
         other => panic!("expected a stash CommitMenu, got {:?}", other),
     }
+}
+
+#[test]
+fn commit_menu_tagged_commit_includes_tag_ops() {
+    let (_td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "first");
+    // Lightweight tag on the single commit.
+    repo.repo()
+        .tag_lightweight("v1.0", &repo.repo().find_object(c1, None).unwrap(), false)
+        .unwrap();
+    let mut app = make_app(repo);
+
+    // Selection starts on the tagged commit node.
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            assert!(
+                items.contains(&CommitMenuItem::DeleteTag),
+                "menu should offer Delete tag, got {:?}",
+                items
+            );
+            assert!(
+                items.contains(&CommitMenuItem::PushTag),
+                "menu should offer Push tag, got {:?}",
+                items
+            );
+        }
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn commit_menu_untagged_commit_omits_tag_ops() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            assert!(!items.contains(&CommitMenuItem::DeleteTag));
+            assert!(!items.contains(&CommitMenuItem::PushTag));
+        }
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn commit_menu_branch_tip_includes_rename() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => assert!(
+            items.contains(&CommitMenuItem::RenameBranch),
+            "branch tip menu should offer Rename branch, got {:?}",
+            items
+        ),
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+// ── Rename / stash / branch-from-stash input wiring ─────────────────
+
+#[test]
+fn rename_branch_via_input_renames_current_branch() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    let old = app.head_name.clone().expect("HEAD is on a branch");
+
+    // The rename input is launched prefilled with the current name; the user
+    // replaces it and confirms.
+    app.mode = AppMode::Input {
+        title: format!("Rename '{}' to", old),
+        input: "renamed-branch".to_string(),
+        action: InputAction::RenameBranch {
+            old_name: old.clone(),
+        },
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert!(matches!(app.mode, AppMode::Normal));
+    let r = Repository::open(td.path()).unwrap();
+    assert_eq!(r.head().unwrap().shorthand().unwrap(), "renamed-branch");
+    assert!(r.find_branch(&old, git2::BranchType::Local).is_err());
+}
+
+#[test]
+fn ctrl_s_opens_stash_options_menu_on_uncommitted_node() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    fs::write(td.path().join("a.txt"), "changed").unwrap();
+    let mut app = make_app(repo);
+    assert!(app.is_uncommitted_selected());
+    app.focused_panel = FocusedPanel::CommitDetail;
+
+    app.handle_action(Action::StashStaged).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => assert_eq!(
+            items,
+            &vec![
+                CommitMenuItem::StashPushStaged,
+                CommitMenuItem::StashPushAll,
+                CommitMenuItem::StashPushUntracked,
+            ],
+        ),
+        other => panic!("expected a stash options CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn branch_from_stash_via_input_creates_branch_and_drops_stash() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "original", "root");
+    fs::write(td.path().join("a.txt"), "changed").unwrap();
+    {
+        let mut r = Repository::open(td.path()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        r.stash_save(&sig, "wip", None).unwrap();
+    }
+    let mut app = make_app(repo);
+    let stash_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.is_stash)
+        .expect("a stash node is present");
+    app.graph_nav.graph_list_state.select(Some(stash_idx));
+
+    app.mode = AppMode::Input {
+        title: "Branch from stash".to_string(),
+        input: "stash-work".to_string(),
+        action: InputAction::BranchFromStash { index: 0 },
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert!(matches!(app.mode, AppMode::Normal));
+    let r = Repository::open(td.path()).unwrap();
+    assert!(
+        r.find_branch("stash-work", git2::BranchType::Local).is_ok(),
+        "a branch was created from the stash"
+    );
+    assert_eq!(stash_count(td.path()), 0, "the stash was consumed");
 }
 
 #[test]

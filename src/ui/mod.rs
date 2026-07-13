@@ -260,6 +260,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
         }
+        AppMode::TagPicker {
+            tags,
+            selected,
+            action,
+        } => {
+            let max_name_len = tags.iter().map(|t| t.len()).max().unwrap_or(10);
+            let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
+            let popup_height = (tags.len() + 2).min(12) as u16;
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            let title = match action {
+                crate::app::TagAction::Delete => " Delete Tag ",
+                crate::app::TagAction::Push => " Push Tag ",
+            };
+            frame.render_widget(
+                BranchPickerWidget::with_title(tags, *selected, &theme, title),
+                popup_area,
+            );
+        }
         AppMode::BranchFilter {
             filter,
             selected,

@@ -164,6 +164,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Open file with default app", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  y          ", key_style),
+                Span::styled("Copy file path", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
             ]),
@@ -206,6 +210,10 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Ctrl+Enter   ", key_style),
                 Span::styled("Amend last commit", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+S       ", key_style),
+                Span::styled("Stash changes (staged / all / +untracked)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Search", header_style)),

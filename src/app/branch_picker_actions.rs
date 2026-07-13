@@ -72,6 +72,60 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn handle_tag_picker_action(&mut self, action: Action) -> Result<()> {
+        let AppMode::TagPicker {
+            tags,
+            selected,
+            action: tag_action,
+        } = &self.mode
+        else {
+            return Ok(());
+        };
+        let tags = tags.clone();
+        let selected = *selected;
+        let tag_action = *tag_action;
+
+        match action {
+            Action::MoveUp => {
+                let new = cyclic_prev(selected, tags.len());
+                self.mode = AppMode::TagPicker {
+                    tags,
+                    selected: new,
+                    action: tag_action,
+                };
+            }
+            Action::MoveDown => {
+                let new = cyclic_next(selected, tags.len());
+                self.mode = AppMode::TagPicker {
+                    tags,
+                    selected: new,
+                    action: tag_action,
+                };
+            }
+            Action::MenuSelect | Action::Confirm => {
+                if let Some(tag) = tags.get(selected) {
+                    match tag_action {
+                        TagAction::Delete => {
+                            self.mode = AppMode::Confirm {
+                                message: format!("Delete tag '{}'?", tag),
+                                action: ConfirmAction::DeleteTag(tag.clone()),
+                            };
+                        }
+                        TagAction::Push => {
+                            let tag = tag.clone();
+                            self.push_tag_by_name(&tag);
+                        }
+                    }
+                }
+            }
+            Action::Cancel | Action::Quit => {
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub(crate) fn open_branch_filter(&mut self) {
         let mut all_branches: Vec<String> = self
             .branches

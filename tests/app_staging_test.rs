@@ -367,6 +367,39 @@ fn integration_stage_modified_with_untracked_selects_untracked() {
 }
 
 #[test]
+fn selected_file_repo_path_returns_repo_relative_path() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "tracked.txt", "v1\n", "initial");
+
+    // An untracked file nested in a subdirectory, so "repo-relative" is
+    // meaningful (not just a bare filename).
+    fs::create_dir_all(tempdir.path().join("src")).unwrap();
+    fs::write(tempdir.path().join("src/new.txt"), "hi\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    app.focused_panel = FocusedPanel::Files;
+    app.files_pane.file_selection = FileSelection {
+        section: Some("Unstaged Changes".to_string()),
+        path: Some("src/new.txt".into()),
+    };
+    app.sync_file_list_cache();
+
+    // The path resolver returns the selected file's repo-relative path ...
+    assert_eq!(
+        app.selected_file_repo_path().as_deref(),
+        Some("src/new.txt")
+    );
+
+    // ... and the CopyPath action runs the handler and reports a status
+    // message (clipboard shell-out may fail headless, so we assert a message
+    // was produced, not the clipboard contents).
+    app.handle_action(Action::CopyPath).unwrap();
+    assert!(app.message.is_some(), "CopyPath should set a status message");
+    assert!(matches!(app.mode, AppMode::Normal));
+}
+
+#[test]
 fn integration_stage_only_unstaged_selects_staged() {
     let tempdir = tempfile::tempdir().unwrap();
     let repo = Repository::init(tempdir.path()).unwrap();

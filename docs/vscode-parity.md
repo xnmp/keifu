@@ -29,10 +29,15 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
 5. **Multi-remote + push -u / upstream / publish (M)** — origin-only and
    hardcoded today (`git push origin HEAD`).
 
-Near-free S wins to bundle: branch rename, tag delete/push (tags are now
-shown as graph refs — DONE), stash-all (`git stash push [-u]`; today only
-`--staged`), create-branch-from-stash, copy file path. (stage-all/unstage-all
-done 2026-07-13: `S`/`U` in the files pane.)
+Near-free S wins — **DONE (2026-07-13)**: branch rename (commit-menu
+"Rename branch" → prefilled Input → `git branch -m`), tag delete/push
+(commit-menu "Delete tag" behind Confirm / "Push tag" to origin-or-sole-remote,
+picker when a commit carries several tags), stash-all (`Ctrl+S` now opens a
+stash-options menu: staged / all / all+untracked, each with an optional Input
+message), create-branch-from-stash (stash-node menu "Branch from stash" →
+`git stash branch`), copy file path (`y` in the files pane) plus "Copy commit
+message" in the commit menu. (stage-all/unstage-all done earlier: `S`/`U` in the
+files pane.)
 
 ## Notable full-parity areas
 

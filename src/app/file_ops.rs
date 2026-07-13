@@ -63,6 +63,9 @@ impl App {
                     self.open_with_default(&full_path, &path);
                 }
             }
+            Action::CopyPath => {
+                self.copy_selected_file_path();
+            }
             Action::ToggleStage => {
                 self.toggle_stage_selected_file()?;
             }
@@ -384,6 +387,24 @@ impl App {
 
         self.refresh_after_file_op()?;
         Ok(())
+    }
+
+    /// Repo-relative path of the currently selected file in the files pane.
+    pub fn selected_file_repo_path(&self) -> Option<String> {
+        self.selected_file()
+            .map(|f| f.path.to_string_lossy().to_string())
+    }
+
+    /// Copy the selected file's repo-relative path to the clipboard, reporting
+    /// the outcome in the status line.
+    fn copy_selected_file_path(&mut self) {
+        let Some(path) = self.selected_file_repo_path() else {
+            return;
+        };
+        match copy_to_clipboard(&path) {
+            Ok(()) => self.set_message(format!("Copied path '{}'", path)),
+            Err(e) => self.set_message(format!("Clipboard error: {}", e)),
+        }
     }
 
     pub(crate) fn selected_stash_index(&self) -> Option<usize> {

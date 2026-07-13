@@ -87,6 +87,10 @@ impl App {
                         stash_drop(&self.repo_path, index)?;
                         self.set_message(format!("Dropped stash@{{{}}}", index));
                     }
+                    ConfirmAction::DeleteTag(name) => {
+                        delete_tag(&self.repo_path, &name)?;
+                        self.set_message(format!("Deleted tag '{}'", name));
+                    }
                     ConfirmAction::DiscardHunk {
                         patch,
                         file_path,

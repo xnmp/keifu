@@ -233,6 +233,10 @@ fn files_mode_operations() {
         Some(Action::OpenWithDefault)
     );
     assert_eq!(
+        map_normal_files(key(KeyCode::Char('y'))),
+        Some(Action::CopyPath)
+    );
+    assert_eq!(
         map_normal_files(key(KeyCode::Enter)),
         Some(Action::OpenFileDiff)
     );

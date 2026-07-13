@@ -48,7 +48,9 @@ pub fn map_key_to_action(
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
-        AppMode::BranchPicker { .. } | AppMode::BranchDeletePicker { .. } => map_picker_mode(key),
+        AppMode::BranchPicker { .. }
+        | AppMode::BranchDeletePicker { .. }
+        | AppMode::TagPicker { .. } => map_picker_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
     }
@@ -201,6 +203,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
         // Open file with default app
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenWithDefault),
+
+        // Copy the selected file's repo-relative path
+        (KeyModifiers::NONE, KeyCode::Char('y')) => Some(Action::CopyPath),
 
         // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),

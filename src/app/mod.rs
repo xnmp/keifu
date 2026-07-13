@@ -21,10 +21,10 @@ use crate::{
             apply_patch_cached_reverse, apply_patch_worktree_reverse, cherry_pick,
             checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
-            delete_branch, get_last_commit_message, merge_branch, rebase_branch,
-            reset_to_commit, restore_files, revert_commit, stage_all, stage_file,
-            stash_apply, stash_drop, stash_pop, stash_staged, unstage_all, unstage_file,
-            OpOutcome, ResetMode,
+            delete_branch, delete_tag, get_last_commit_message, merge_branch, push_tag,
+            rebase_branch, rename_branch, reset_to_commit, restore_files, revert_commit,
+            stage_all, stage_file, stash_all, stash_apply, stash_branch, stash_drop,
+            stash_pop, stash_staged, unstage_all, unstage_file, OpOutcome, ResetMode,
         },
         extract_hunk_from_working_tree, render_hunk_patch,
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
@@ -132,16 +132,25 @@ pub enum CommitMenuItem {
     MergeIntoCurrent,
     CherryPick,
     Rebase,
+    RenameBranch,
     Reset,
     ResetSoft,
     ResetMixed,
     ResetHard,
     AddTag,
+    DeleteTag,
+    PushTag,
     Revert,
     CopyHash,
+    CopyMessage,
     StashApply,
     StashPop,
     StashDrop,
+    BranchFromStash,
+    /// Stash options (shown in the stash menu on the uncommitted node).
+    StashPushStaged,
+    StashPushAll,
+    StashPushUntracked,
 }
 
 impl CommitMenuItem {
@@ -154,16 +163,24 @@ impl CommitMenuItem {
             Self::MergeIntoCurrent => "Merge into current branch",
             Self::CherryPick => "Cherry-pick",
             Self::Rebase => "Rebase current branch onto this",
+            Self::RenameBranch => "Rename branch",
             Self::Reset => "Reset to this commit...",
             Self::ResetSoft => "Soft (keep changes staged)",
             Self::ResetMixed => "Mixed (keep changes unstaged)",
             Self::ResetHard => "Hard (discard all changes)",
             Self::AddTag => "Add tag",
+            Self::DeleteTag => "Delete tag",
+            Self::PushTag => "Push tag",
             Self::Revert => "Revert this commit",
             Self::CopyHash => "Copy commit hash",
+            Self::CopyMessage => "Copy commit message",
             Self::StashApply => "Apply stash",
             Self::StashPop => "Pop stash (apply + drop)",
             Self::StashDrop => "Drop stash",
+            Self::BranchFromStash => "Branch from stash",
+            Self::StashPushStaged => "Stash staged changes",
+            Self::StashPushAll => "Stash all changes",
+            Self::StashPushUntracked => "Stash all + untracked",
         }
     }
 }
@@ -214,6 +231,12 @@ pub enum AppMode {
         branches: Vec<String>,
         selected: usize,
     },
+    /// Pick which tag to act on when a commit carries more than one.
+    TagPicker {
+        tags: Vec<String>,
+        selected: usize,
+        action: TagAction,
+    },
     FileDiff {
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
@@ -227,12 +250,36 @@ pub enum AppMode {
     },
 }
 
+/// Which tag operation a [`AppMode::TagPicker`] resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagAction {
+    Delete,
+    Push,
+}
+
+/// Scope of a `git stash push`, chosen from the stash options menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashScope {
+    /// Only staged changes (`git stash push --staged`).
+    Staged,
+    /// All tracked working-tree changes (`git stash push`).
+    All,
+    /// All changes including untracked files (`git stash push -u`).
+    AllUntracked,
+}
+
 /// Input action kinds
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputAction {
     CreateBranch,
     AddTag,
     Search,
+    /// Rename the local branch `old_name` to the typed name.
+    RenameBranch { old_name: String },
+    /// Create a branch from `stash@{index}` with the typed name.
+    BranchFromStash { index: usize },
+    /// Stash the working tree with the typed (optional) message.
+    StashPush { scope: StashScope },
 }
 
 /// Confirmation action kinds
@@ -250,6 +297,7 @@ pub enum ConfirmAction {
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
     StashDrop(usize),
+    DeleteTag(String),
     /// Abort the in-progress merge/rebase/cherry-pick/revert.
     AbortOperation(OperationState),
     /// Discard a single hunk in the working tree (reverse-apply). Carries the
@@ -532,6 +580,7 @@ impl App {
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
+            AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
         }

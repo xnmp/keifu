@@ -627,6 +627,51 @@ pub fn stash_drop(repo_path: &str, index: usize) -> Result<()> {
     Ok(())
 }
 
+/// Stash all working-tree changes (`git stash push`), optionally including
+/// untracked files (`-u`), with an optional message. Staged and unstaged
+/// tracked changes are both captured; the working tree is left clean.
+pub fn stash_all(repo_path: &str, message: &str, include_untracked: bool) -> Result<()> {
+    let mut args: Vec<&str> = vec!["stash", "push"];
+    if include_untracked {
+        args.push("-u");
+    }
+    if !message.is_empty() {
+        args.push("-m");
+        args.push(message);
+    }
+    run_git(repo_path, &args)?;
+    Ok(())
+}
+
+/// Create a branch from a stash entry and drop it (`git stash branch <name>
+/// stash@{n}`). Git checks the new branch out at the stash's base commit,
+/// re-applies the stashed changes, and drops the stash once it applies cleanly.
+pub fn stash_branch(repo_path: &str, branch_name: &str, index: usize) -> Result<()> {
+    let ref_name = format!("stash@{{{index}}}");
+    run_git(repo_path, &["stash", "branch", branch_name, &ref_name])?;
+    Ok(())
+}
+
+/// Rename a local branch (`git branch -m <old> <new>`). Works on the current
+/// branch too — git moves HEAD to follow the rename. A name collision surfaces
+/// as an error from git.
+pub fn rename_branch(repo_path: &str, old_name: &str, new_name: &str) -> Result<()> {
+    run_git(repo_path, &["branch", "-m", old_name, new_name])?;
+    Ok(())
+}
+
+/// Delete a tag (`git tag -d <name>`).
+pub fn delete_tag(repo_path: &str, tag_name: &str) -> Result<()> {
+    run_git(repo_path, &["tag", "-d", tag_name])?;
+    Ok(())
+}
+
+/// Push a tag to a remote (`git push <remote> <tag>`), making it visible there.
+pub fn push_tag(repo_path: &str, remote: &str, tag_name: &str) -> Result<()> {
+    run_git(repo_path, &["push", remote, tag_name])?;
+    Ok(())
+}
+
 /// Get the message of the last commit.
 pub fn get_last_commit_message(repo_path: &str) -> Result<String> {
     let output = run_git(repo_path, &["log", "-1", "--format=%B"])?;

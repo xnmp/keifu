@@ -1377,3 +1377,193 @@ fn commit_without_configured_user_maps_to_friendly_error() {
         "unconfigured identity should map to a friendly error, got: {err}"
     );
 }
+
+// ── Branch rename ───────────────────────────────────────────────────
+
+#[test]
+fn rename_branch_renames_local_branch() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    create_branch(repo, "feature", oid).unwrap();
+
+    rename_branch(path, "feature", "feature-2").unwrap();
+
+    // Old name gone, new name present at the same commit.
+    assert!(repo.find_branch("feature", git2::BranchType::Local).is_err());
+    let renamed = repo
+        .find_branch("feature-2", git2::BranchType::Local)
+        .unwrap();
+    assert_eq!(renamed.get().peel_to_commit().unwrap().id(), oid);
+}
+
+#[test]
+fn rename_branch_renames_current_branch_and_moves_head() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let path = repo_path(&git_repo);
+    let old = git_repo
+        .repo()
+        .head()
+        .unwrap()
+        .shorthand()
+        .unwrap()
+        .to_string();
+
+    rename_branch(path, &old, "trunk").unwrap();
+
+    // HEAD follows the rename; the old branch no longer exists.
+    let repo = git2::Repository::open(path).unwrap();
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "trunk");
+    assert!(repo.find_branch(&old, git2::BranchType::Local).is_err());
+}
+
+#[test]
+fn rename_branch_collision_errors_and_preserves_both() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    create_branch(repo, "one", oid).unwrap();
+    create_branch(repo, "two", oid).unwrap();
+
+    // Renaming onto an existing name must fail (no -M force) ...
+    assert!(rename_branch(path, "one", "two").is_err());
+    // ... and leave both branches intact.
+    assert!(repo.find_branch("one", git2::BranchType::Local).is_ok());
+    assert!(repo.find_branch("two", git2::BranchType::Local).is_ok());
+}
+
+// ── Tag delete / push ───────────────────────────────────────────────
+
+#[test]
+fn delete_tag_removes_tag() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    add_tag(repo, "v1.0", oid).unwrap();
+    assert!(repo.revparse_single("v1.0").is_ok(), "precondition: tag exists");
+
+    delete_tag(path, "v1.0").unwrap();
+
+    // A fresh handle confirms the tag ref is gone from the refdb.
+    let repo = git2::Repository::open(path).unwrap();
+    assert!(repo.revparse_single("v1.0").is_err());
+}
+
+#[test]
+fn delete_tag_nonexistent_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(delete_tag(repo_path(&git_repo), "nope").is_err());
+}
+
+#[test]
+fn push_tag_publishes_tag_to_remote() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    add_tag(repo, "v1.0", oid).unwrap();
+    let origin = add_bare_origin(path);
+
+    push_tag(path, "origin", "v1.0").unwrap();
+
+    // The tag is now listed in the bare remote.
+    let remote_tags = git_cli(origin.path().to_str().unwrap(), &["tag", "-l"]);
+    assert!(
+        remote_tags.contains("v1.0"),
+        "tag should be visible on the remote, got: {remote_tags:?}"
+    );
+}
+
+#[test]
+fn push_tag_without_remote_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    add_tag(repo, "v1.0", oid).unwrap();
+    assert!(push_tag(repo_path(&git_repo), "origin", "v1.0").is_err());
+}
+
+// ── Stash all / stash branch ────────────────────────────────────────
+
+#[test]
+fn stash_all_stashes_staged_and_unstaged() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "base\n", "add a");
+    commit_file(repo, "b.txt", "base\n", "add b");
+
+    // a.txt: staged change; b.txt: unstaged change.
+    fs::write(repo.workdir().unwrap().join("a.txt"), "staged\n").unwrap();
+    stage_file(path, "a.txt").unwrap();
+    fs::write(repo.workdir().unwrap().join("b.txt"), "unstaged\n").unwrap();
+
+    stash_all(path, "", false).unwrap();
+
+    // Both files revert to committed content and the tree is clean.
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "base\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("b.txt")).unwrap(),
+        "base\n"
+    );
+    assert!(
+        repo.statuses(None).unwrap().is_empty(),
+        "working tree should be clean after stash-all"
+    );
+    assert_eq!(stash_count(path), 1);
+}
+
+#[test]
+fn stash_all_untracked_includes_untracked_files() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "base\n", "initial");
+
+    let untracked = repo.workdir().unwrap().join("new.txt");
+    fs::write(&untracked, "brand new\n").unwrap();
+
+    stash_all(path, "wip", true).unwrap();
+
+    // -u sweeps the untracked file into the stash, leaving the tree clean.
+    assert!(!untracked.exists(), "untracked file should be stashed with -u");
+    assert_eq!(stash_count(path), 1);
+
+    // Popping restores it.
+    stash_pop(path, 0).unwrap();
+    assert!(untracked.exists(), "untracked file should return after pop");
+}
+
+#[test]
+fn stash_branch_creates_branch_with_changes_and_drops_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let base = commit_file(repo, "a.txt", "base\n", "initial");
+
+    // Stash a staged change.
+    fs::write(repo.workdir().unwrap().join("a.txt"), "changed\n").unwrap();
+    stage_file(path, "a.txt").unwrap();
+    stash_staged(path, "wip").unwrap();
+    assert_eq!(stash_count(path), 1);
+
+    stash_branch(path, "from-stash", 0).unwrap();
+
+    // New branch checked out at the stash's base commit, with the stashed
+    // change applied, and the stash dropped (git's stash-branch behaviour).
+    let repo = git2::Repository::open(path).unwrap();
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "from-stash");
+    assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), base);
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "changed\n"
+    );
+    assert_eq!(stash_count(path), 0);
+}

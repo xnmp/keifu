@@ -38,6 +38,23 @@ impl App {
                             }
                         }
                     }
+                    InputAction::RenameBranch { old_name } => {
+                        if !input.is_empty() && input != old_name {
+                            rename_branch(&self.repo_path, &old_name, &input)?;
+                            self.refresh(true)?;
+                            self.set_message(format!("Renamed '{}' -> '{}'", old_name, input));
+                        }
+                    }
+                    InputAction::BranchFromStash { index } => {
+                        if !input.is_empty() {
+                            stash_branch(&self.repo_path, &input, index)?;
+                            self.refresh(true)?;
+                            self.set_message(format!("Created branch '{}' from stash", input));
+                        }
+                    }
+                    InputAction::StashPush { scope } => {
+                        self.do_stash_push(scope, input.trim())?;
+                    }
                     InputAction::Search => {
                         self.jump_to_search_result();
                     }
@@ -140,6 +157,22 @@ impl App {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Push the working tree to a stash for the chosen scope, then clear the
+    /// commit-message editor and return focus to the graph.
+    fn do_stash_push(&mut self, scope: StashScope, message: &str) -> Result<()> {
+        match scope {
+            StashScope::Staged => stash_staged(&self.repo_path, message)?,
+            StashScope::All => stash_all(&self.repo_path, message, false)?,
+            StashScope::AllUntracked => stash_all(&self.repo_path, message, true)?,
+        }
+        self.commit_editor = crate::text_editor::TextEditor::new();
+        self.editing_commit_message = false;
+        self.refresh(true)?;
+        self.set_message("Stashed changes");
+        self.focused_panel = FocusedPanel::Graph;
         Ok(())
     }
 }
