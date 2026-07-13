@@ -47,12 +47,8 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Switch panels", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  ] / Tab    ", key_style),
-                Span::styled("Next branch", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  [ / S-Tab  ", key_style),
-                Span::styled("Previous branch", desc_style),
+                Span::styled("  Tab / S-Tab", key_style),
+                Span::styled("Switch panels (forward/back)", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  Ctrl+d/u   ", key_style),
@@ -72,7 +68,7 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  Esc        ", key_style),
-                Span::styled("Return to graph / stop editing", desc_style),
+                Span::styled("Return to graph / stop editing / quit (from graph)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Graph Panel", header_style)),
@@ -83,6 +79,10 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Space      ", key_style),
                 Span::styled("Open file select", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  ] / [      ", key_style),
+                Span::styled("Next / previous branch label", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  b          ", key_style),
@@ -107,6 +107,10 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  B          ", key_style),
                 Span::styled("Branch filter", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+f     ", key_style),
+                Span::styled("Filter commits (message/author/hash)", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  m          ", key_style),
@@ -167,6 +171,10 @@ impl<'a> Widget for HelpPopup<'a> {
         }
 
         lines.extend([
+            Line::from(vec![
+                Span::styled("  f          ", key_style),
+                Span::styled("Toggle folder grouping", desc_style),
+            ]),
             Line::from(vec![
                 Span::styled("  Ctrl+f     ", key_style),
                 Span::styled("Filter files", desc_style),
@@ -250,10 +258,6 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Ctrl+Q     ", key_style),
                 Span::styled("Quit (from anywhere)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  q          ", key_style),
-                Span::styled("Quit", desc_style),
             ]),
         ]);
 

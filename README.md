@@ -19,18 +19,23 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 
 ## Features
 
-- Unicode commit graph with per-branch colors
-- Commit list with branch labels, date, author, short hash, and message (some fields may be hidden on narrow terminals)
-- Commit detail panel with full message and changed file stats (+/-)
-- File diff view with syntax highlighting and word-level change emphasis
-- Git operations: checkout, create/delete branch, fetch
-- Branch search with dropdown UI
+- Unicode commit graph with per-branch colors; tags render as refs next to branch labels
+- Commit list with branch/tag labels, relative date, author, short hash, and message (some fields may be hidden on narrow terminals)
+- Commit detail panel with full message, changed file stats (+/-), and GPG signature status
+- File diff view with syntax highlighting, word-level change emphasis, and hunk-level stage/unstage/discard
+- Files pane: stage/unstage (file, folder, or all), gitignore, archive to `.archive/`, trash untracked files, undo, folder grouping, fuzzy filter, copy path, per-file history
+- Merge-conflict handling: accept ours/theirs, continue/abort a merge, rebase, cherry-pick, or revert
+- Git operations: checkout, create/rename/delete branch, merge, rebase, cherry-pick, revert, reset (soft/mixed/hard), tag add/delete/push, stash (apply/pop/drop, staged/all/all+untracked push, branch-from-stash)
+- Fetch/pull/push with multi-remote support, upstream tracking, and one-key publish
+- Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
+- Compare any two commits
+- Branch search with fuzzy dropdown UI; commit filter by message/author/hash
 
 ## Requirements
 
 - Run inside a Git repository (auto-discovery from current directory)
 - A terminal with Unicode line drawing support and color
-- `git` command in PATH (required for fetch)
+- `git` command in PATH — required for fetch/pull/push, hunk staging, stash, and most other mutating operations
 - Rust toolchain (for building from source)
 
 ## Installation
@@ -73,43 +78,60 @@ See [docs/configuration.md](docs/configuration.md) for configuration options.
 
 ## Keybindings
 
-### Navigation
+Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` or `Tab`/`Shift+Tab`. The status bar always shows keys valid in the current context; `?` opens the full in-app help popup.
+
+### Navigation (all panels)
 
 | Key | Action |
 | --- | --- |
-| `j` / `↓` | Move down |
-| `k` / `↑` | Move up |
-| `]` / `Tab` | Jump to next commit that has branch labels |
-| `[` / `Shift+Tab` | Jump to previous commit that has branch labels |
-| `h` / `←` | Select left branch (same commit) |
-| `l` / `→` | Select right branch (same commit) |
-| `Ctrl+d` | Page down |
-| `Ctrl+u` | Page up |
+| `↑` / `↓` | Move up/down |
+| `←` / `→` / `Tab` / `Shift+Tab` | Switch panels |
+| `Ctrl+d` / `PageDown` | Page down |
+| `Ctrl+u` / `PageUp` | Page up |
 | `g` / `Home` | Go to top |
 | `G` / `End` | Go to bottom |
-| `@` | Jump to HEAD (current branch) |
-| `Space` | Open file diff view |
+| `@` | Jump to HEAD |
+| `Esc` | Back to graph / stop editing / quit (from the graph panel) |
 
-### Git operations
+### Graph panel
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Checkout selected branch/commit |
+| `Enter` | Open the commit actions menu (see below) |
+| `Space` | Open file diff for the selected commit |
+| `]` / `[` | Jump to next/previous commit with a branch label |
 | `b` | Create branch at selected commit |
-| `d` | Delete branch (local, non-HEAD) |
-| `f` | Fetch from origin |
+| `d` | Delete branch (local or remote, behind confirm) |
+| `f` | Fetch (resolves the remote from upstream; prompts if ambiguous) |
+| `p` | Pull (fetch + integrate; honors `pull.rebase`) |
+| `Shift+P` | Push current branch (publishes with `-u` if it has no upstream) |
+| `Shift+B` | Branch filter — choose which branches' commits are shown |
+| `Ctrl+f` | Filter commits by message/author/hash |
+| `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
 
-### Search
+The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depending on context: checkout, create/rename/delete branch, merge into current, rebase current onto this, cherry-pick, revert, reset (soft/mixed/hard), add/delete/push tag, push, pull, prune remote-tracking refs, copy hash/message, mark/compare, and — on the uncommitted or a stash node — stash apply/pop/drop and branch-from-stash.
+
+### Files panel
 
 | Key | Action |
 | --- | --- |
-| `/` | Search branches (incremental fuzzy search) |
-| `↑` / `Ctrl+k` | Select previous result |
-| `↓` / `Ctrl+j` | Select next result |
-| `Enter` | Jump to selected branch |
-| `Esc` / `Backspace` on empty | Cancel search |
+| `s` | Stage/unstage selected file (or folder, in folder mode) |
+| `Shift+S` / `Shift+U` | Stage all / unstage all |
+| `i` | Add to `.gitignore` |
+| `v` | Archive to `.archive/` |
+| `r` | Restore file (discard changes) |
+| `Delete` | Trash untracked file (recycle bin) |
+| `Ctrl+z` | Undo last file operation |
+| `f` | Toggle folder grouping |
+| `Ctrl+f` | Filter files |
+| `Space` | Open with default app |
+| `y` | Copy file's repo-relative path |
+| `Enter` | Open file diff |
+| `h` | File history (commits touching this file) |
+| `o` / `t` | Accept ours / theirs (on a conflicted file) |
+| `c` / `Shift+A` | Continue / abort the in-progress merge/rebase/cherry-pick/revert |
 
-### File diff view
+### File diff viewer
 
 | Key | Action |
 | --- | --- |
@@ -121,7 +143,27 @@ See [docs/configuration.md](docs/configuration.md) for configuration options.
 | `0` | Scroll to line start |
 | `]` / `[` | Jump to next/previous hunk |
 | `n` / `N` | Jump to next/previous file |
+| `s` / `u` / `x` | Stage / unstage / discard hunk under cursor (uncommitted changes only) |
 | `Esc` / `q` | Back to file select / close |
+
+### Commit panel
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Start editing commit message, then commit (or save amend) |
+| `Ctrl+Enter` | Amend last commit |
+| `Ctrl+s` | Stash (staged / all / all + untracked, with optional message) |
+| `Esc` | Stop editing |
+
+### Search
+
+| Key | Action |
+| --- | --- |
+| `/` | Search branches (incremental fuzzy search) |
+| `↑` / `Ctrl+k` | Select previous result |
+| `↓` / `Ctrl+j` | Select next result |
+| `Enter` | Jump to selected branch |
+| `Esc` / `Backspace` on empty | Cancel search |
 
 ### Other
 
@@ -129,18 +171,19 @@ See [docs/configuration.md](docs/configuration.md) for configuration options.
 | --- | --- |
 | `R` | Refresh repository data |
 | `?` | Toggle help |
-| `q` / `Esc` | Quit |
+| `Ctrl+Q` | Quit from anywhere |
 
 ## Notes and limitations
 
-- The TUI loads up to 500 commits across all branches.
+- The TUI loads up to 500 commits, walked from the currently visible branch tips (HEAD is always included). Hiding branches in the branch filter shrinks this set rather than just hiding labels.
 - Merge commits are diffed against the first parent; the initial commit is diffed against an empty tree.
 - Changed files are capped at 50. Binary files are shown without line stats.
 - If there are staged, unstaged, or untracked changes, an "uncommitted changes" row appears at the top.
-- When multiple branches point to the same commit, the label is collapsed to a single name with a `+N` suffix (e.g., `main +2`). Use `h`/`l` or `←`/`→` to switch between them.
+- When multiple branches point to the same commit, the label is collapsed to a single name with a `+N` suffix (e.g., `main +2`).
 - Checking out `origin/xxx` creates or updates a local branch. Upstream is set only when creating a new branch. If the local branch exists but points to a different commit, it is force-updated to match the remote.
-- Remote branches are displayed, but delete operations only work with local branches.
-- Fetch requires the `origin` remote to be configured.
+- Remote branches can be deleted directly (`git push <remote> --delete`), behind a confirmation.
+- Fetch/pull/push resolve the remote from the branch's upstream, prompting only when several remotes exist and none can be inferred.
+- Hunk-level staging works on uncommitted changes only; a full 3-way merge editor is not implemented — conflicts are resolved via accept-ours/accept-theirs or your own editor.
 
 ## License
 

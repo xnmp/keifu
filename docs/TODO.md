@@ -139,3 +139,21 @@ diff-cache tests to observable contracts. Conflict-stranding behavior of
 merge/rebase/cherry-pick/revert pinned with "documents current behavior"
 tests (baseline for the merge-conflict feature work, see vscode-parity.md).
 Shared tests/common harness; removed 1.1s sleep (suite: 1.2s -> 0.2s).
+
+### [DONE] 2026-07-13 parity-gap implementation sweep
+Closed the top gaps from `docs/vscode-parity.md` across 6 feature branches,
+merged into `parity-gaps`: real branch filtering (hidden branches drop their
+exclusive commits, not just labels) + tags rendered as graph refs (43f4f8d);
+merge-conflict awareness with accept-ours/theirs and abort/continue
+(05c2242); hunk-level stage/unstage/discard plus stage-all/unstage-all
+(138ae73); branch rename, tag delete/push, stash-all and stash-branch, copy
+file path (9a9cc1c); pull, multi-remote resolution, upstream tracking and
+one-key publish (2e14a4c); compare-two-commits, per-file history, and commit
+signature status (3d707f1). Test suite: 439 -> 530 tests, clippy clean.
+Followed by a docs-coherence pass: audited `help_popup.rs` against
+`keybindings.rs` for every new action (fixed a stale Tab/`]`/`[` mislabel
+inherited from before the panel system, a "q quits" claim that was never
+true, a misleading in-progress-operation hint shown in status_bar.rs outside
+the files panel where the keys actually work, and added missing entries for
+folder-toggle and commit-filter); refreshed README.md/README_JA.md and
+vscode-parity.md to match current behavior.

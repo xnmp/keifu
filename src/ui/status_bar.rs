@@ -169,10 +169,14 @@ impl<'a> Widget for StatusBar<'a> {
                 format!(" {} ", self.op_state.label())
             };
             spans.push(Span::styled(label, op_style));
-            spans.push(Span::styled(" c ", key_style));
-            spans.push(Span::styled("continue ", desc_style));
-            spans.push(Span::styled(" A ", key_style));
-            spans.push(Span::styled("abort ", desc_style));
+            // c/A (and o/t for conflicts) are only wired up in the files pane,
+            // so only advertise them once that's actually where the hint applies.
+            if self.focused_panel == FocusedPanel::Files {
+                spans.push(Span::styled(" c ", key_style));
+                spans.push(Span::styled("continue ", desc_style));
+                spans.push(Span::styled(" A ", key_style));
+                spans.push(Span::styled("abort ", desc_style));
+            }
             spans.push(Span::raw("  "));
         }
 
@@ -279,6 +283,8 @@ impl<'a> Widget for StatusBar<'a> {
                                 spans.push(Span::styled("edit msg ", desc_style));
                                 spans.push(Span::styled(" Ctrl+Enter ", key_style));
                                 spans.push(Span::styled("amend ", desc_style));
+                                spans.push(Span::styled(" Ctrl+S ", key_style));
+                                spans.push(Span::styled("stash ", desc_style));
                             }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));

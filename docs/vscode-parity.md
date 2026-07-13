@@ -84,3 +84,22 @@ Archive to `.archive/` with auto-gitignore, trash-untracked to recycle bin
 (safer than `git clean`), single-slot undo for file ops, add-to-gitignore
 from UI, folder grouping + folder-level staging, open-in-default-app,
 fuzzy-filtered commit menu, SSH-friendly TUI.
+
+## Post-sweep status (2026-07-13)
+
+All 5 priority gaps plus the near-free S wins and viewer features above are
+DONE as of today's sweep (verified against `git/operations.rs`: `pull`,
+`fetch_remote`, `push_current`, `push_set_upstream`, `delete_remote_branch`,
+`prune_remote` all present and wired to the UI). Remaining known gaps:
+
+- **Full 3-way merge editor (XL)** — conflicts are resolved via accept-ours /
+  accept-theirs or an external editor, not an in-app 3-way merge view.
+  Deferred, see #1.
+- **Interactive rebase** — `rebase_branch` replays the current branch onto a
+  target; there's no reorder/squash/edit/drop UI (non-interactive rebase only).
+- **True line-level staging** — staging granularity is the hunk (`git apply
+  --cached` on a synthesized hunk patch), not arbitrary line ranges within one.
+- **Range-diff / multi-commit range view** — compare (`m`) diffs exactly two
+  commits' trees; there's no `git log oldref..newref`-style range view.
+
+Everything else in "Notable full-parity areas" above is unchanged.
