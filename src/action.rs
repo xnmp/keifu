@@ -36,6 +36,12 @@ pub enum Action {
     SelectAll,
     SelectNone,
 
+    // Commit comparison (graph)
+    MarkForCompare,
+
+    // Per-file history (files pane)
+    FileHistory,
+
     // Files
     OpenWithDefault,
     CopyPath,

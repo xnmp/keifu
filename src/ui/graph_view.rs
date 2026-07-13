@@ -119,10 +119,19 @@ impl<'a> GraphViewWidget<'a> {
             if is_selected {
                 selected_in_filtered = Some(filtered_pos);
             }
+            // A node is "marked" when it's the pending compare mark or one of the
+            // active comparison's two endpoints.
+            let is_marked = node.commit.as_ref().is_some_and(|c| {
+                app.compare_marked == Some(c.oid)
+                    || app
+                        .compare_range
+                        .is_some_and(|(old, new)| old == c.oid || new == c.oid)
+            });
             let line = render_graph_line(
                 node,
                 max_lane,
                 is_selected,
+                is_marked,
                 inner_width,
                 selected_branch_name,
                 theme,
@@ -423,10 +432,12 @@ fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(String, Style)>
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
 fn render_graph_line<'a>(
     node: &GraphNode,
     max_lane: usize,
     is_selected: bool,
+    is_marked: bool,
     total_width: usize,
     selected_branch_name: Option<&str>,
     theme: &Theme,
@@ -521,6 +532,17 @@ fn render_graph_line<'a>(
     // Separator between graph and commit info
     spans.push(Span::raw(" "));
     left_width += 1;
+
+    // Compare marker: flags commits that are marked or a comparison endpoint.
+    if is_marked {
+        spans.push(Span::styled(
+            "◆ ",
+            Style::default()
+                .fg(theme.search_cursor)
+                .add_modifier(Modifier::BOLD),
+        ));
+        left_width += 2;
+    }
 
     // Handle uncommitted changes row
     if node.is_uncommitted {

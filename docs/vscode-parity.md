@@ -48,6 +48,23 @@ message), create-branch-from-stash (stash-node menu "Branch from stash" →
 message" in the commit menu. (stage-all/unstage-all done earlier: `S`/`U` in the
 files pane.)
 
+## Viewer features (added 2026-07-13)
+
+- **Compare two arbitrary commits** — graph `m` marks the selected commit
+  (◆ marker + status message); `m` on a second commit opens the comparison.
+  The pair is ordered older → newer by commit time; the files pane and commit
+  detail show the tree-to-tree diff (direction noted in the detail pane).
+  Implemented by extending `DiffTarget` with `Range(old, new)`, so it reuses the
+  two-tier quick/full diff cache. Opening a file (Space) shows the file's
+  two-commit diff. `Esc` on the graph clears the comparison. Also reachable via
+  the commit menu ("Mark for compare" / "Compare with marked commit").
+- **Per-file history** — files pane `h` lists commits that touched the selected
+  path via `git log --follow` (rename-aware, capped at 200) in a picker; `Enter`
+  opens that commit's diff for the file, `Esc` returns.
+- **Signature status** — commit detail shows a `Sig:` line from `git log -1
+  --format=%G?`, memoized per OID (`sig_status_cache`). Unsigned commits render
+  subtly; valid/bad signatures stand out.
+
 ## Notable full-parity areas
 
 Graph with uncommitted row + remote branches, commit detail + syntax-highlit

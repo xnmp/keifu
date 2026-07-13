@@ -27,7 +27,7 @@ use self::{
     branch_filter::BranchFilterWidget,
     commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
     commit_menu::CommitMenuWidget,
-    dialog::{BranchPickerWidget, ConfirmDialog, InputDialog},
+    dialog::{BranchPickerWidget, ConfirmDialog, FileHistoryWidget, InputDialog},
     file_diff_view::FileDiffViewWidget,
     files_pane::{FilesPaneState, FilesPaneWidget},
     graph_view::GraphViewWidget,
@@ -310,6 +310,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
                 BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected, &theme),
+                popup_area,
+            );
+        }
+        AppMode::FileHistory {
+            path,
+            entries,
+            selected,
+        } => {
+            let popup_height = (entries.len() + 2).clamp(6, 24) as u16;
+            let popup_width = area.width.saturating_sub(6).clamp(30, 80);
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                FileHistoryWidget::new(entries, *selected, &theme, path),
                 popup_area,
             );
         }

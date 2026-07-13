@@ -22,9 +22,18 @@ pub struct DiffResult {
 pub enum DiffTarget {
     Commit(Oid),
     Uncommitted,
+    /// Comparison between two arbitrary commits, ordered `(old, new)` by commit
+    /// time so the diff reads older → newer.
+    Range(Oid, Oid),
 }
 
 pub type UncommittedDiffResult = (Result<CommitDiffInfo, String>, Option<WorkingTreeStatus>);
+
+/// Result of async range-diff computation, tagged with its `(old, new)` key.
+pub struct RangeDiffResult {
+    pub key: (Oid, Oid),
+    pub diff: Result<CommitDiffInfo, String>,
+}
 
 /// Delay before starting a diff load after selection changes.
 /// Prevents unnecessary computation during fast scrolling.
@@ -54,6 +63,12 @@ pub struct DiffCache {
     pub uncommitted_diff_loading: bool,
     pub uncommitted_diff_receiver: Option<Receiver<UncommittedDiffResult>>,
     pub uncommitted_cache_key: Option<WorkingTreeStatus>,
+    // Range (two-commit comparison) diff cache — mirrors the commit path but
+    // keyed on the (old, new) OID pair.
+    pub range_diff_cache: Option<CommitDiffInfo>,
+    pub range_diff_key: Option<(Oid, Oid)>,
+    pub range_diff_loading: Option<(Oid, Oid)>,
+    pub range_diff_receiver: Option<Receiver<RangeDiffResult>>,
     pub selected_diff_target: Option<DiffTarget>,
     pub selected_diff_target_changed_at: Instant,
 }
@@ -78,6 +93,10 @@ impl DiffCache {
             uncommitted_diff_loading: false,
             uncommitted_diff_receiver: None,
             uncommitted_cache_key: None,
+            range_diff_cache: None,
+            range_diff_key: None,
+            range_diff_loading: None,
+            range_diff_receiver: None,
             selected_diff_target: None,
             selected_diff_target_changed_at: Instant::now(),
         }
@@ -91,6 +110,10 @@ impl DiffCache {
         self.diff_cache_oid = None;
         self.diff_loading_oid = None;
         self.diff_receiver = None;
+        self.range_diff_cache = None;
+        self.range_diff_key = None;
+        self.range_diff_loading = None;
+        self.range_diff_receiver = None;
         self.clear_uncommitted();
     }
 
@@ -189,6 +212,9 @@ impl DiffCache {
                         DiffTarget::Uncommitted => {
                             CommitDiffInfo::quick_file_list_for_working_tree(repo).ok()
                         }
+                        DiffTarget::Range(old, new) => {
+                            CommitDiffInfo::quick_file_list_for_range(repo, old, new).ok()
+                        }
                     };
                 }
             }
@@ -250,6 +276,7 @@ impl DiffCache {
                 let has_key = self.uncommitted_cache_key.is_some();
                 has_key && (self.uncommitted_diff_cache.is_some() || self.uncommitted_diff_failed)
             }
+            DiffTarget::Range(old, new) => self.range_diff_key == Some((old, new)),
         }
     }
 
@@ -257,6 +284,7 @@ impl DiffCache {
         match target {
             DiffTarget::Commit(oid) => self.diff_loading_oid == Some(oid),
             DiffTarget::Uncommitted => self.uncommitted_diff_loading,
+            DiffTarget::Range(old, new) => self.range_diff_loading == Some((old, new)),
         }
     }
 
@@ -266,7 +294,9 @@ impl DiffCache {
     }
 
     fn has_in_flight_diff(&self) -> bool {
-        self.diff_loading_oid.is_some() || self.uncommitted_diff_loading
+        self.diff_loading_oid.is_some()
+            || self.uncommitted_diff_loading
+            || self.range_diff_loading.is_some()
     }
 
     /// Get cached diff info for a specific target.
@@ -275,6 +305,10 @@ impl DiffCache {
             DiffTarget::Commit(oid) if self.diff_cache_oid == Some(oid) => self.diff_cache.as_ref(),
             DiffTarget::Commit(_) => None,
             DiffTarget::Uncommitted => self.uncommitted_diff_cache.as_ref(),
+            DiffTarget::Range(old, new) if self.range_diff_key == Some((old, new)) => {
+                self.range_diff_cache.as_ref()
+            }
+            DiffTarget::Range(_, _) => None,
         }
     }
 
@@ -342,6 +376,35 @@ impl DiffCache {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.diff_loading_oid = None;
                     self.diff_receiver = None;
+                    events.diff_loaded = true;
+                    events.message = Some("Diff computation failed unexpectedly".to_string());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        // Pull in completed results for range (two-commit) diff
+        if let Some(ref receiver) = self.range_diff_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    match result.diff {
+                        Ok(diff) => {
+                            self.range_diff_cache = Some(diff);
+                            self.range_diff_key = Some(result.key);
+                        }
+                        Err(e) => {
+                            self.range_diff_cache = None;
+                            self.range_diff_key = Some(result.key);
+                            events.message = Some(format!("Failed to load diff: {e}"));
+                        }
+                    }
+                    self.range_diff_loading = None;
+                    self.range_diff_receiver = None;
+                    events.diff_loaded = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.range_diff_loading = None;
+                    self.range_diff_receiver = None;
                     events.diff_loaded = true;
                     events.message = Some("Diff computation failed unexpectedly".to_string());
                 }
@@ -439,6 +502,26 @@ impl DiffCache {
                         });
 
                     let _ = tx.send(DiffResult { oid, diff });
+                });
+            }
+            DiffTarget::Range(old, new) => {
+                let (tx, rx) = mpsc::channel();
+                let repo_path = repo_path.to_string();
+
+                self.range_diff_loading = Some((old, new));
+                self.range_diff_receiver = Some(rx);
+
+                thread::spawn(move || {
+                    let diff = git2::Repository::open(&repo_path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|repo| {
+                            CommitDiffInfo::from_range(&repo, old, new).map_err(|e| e.to_string())
+                        });
+
+                    let _ = tx.send(RangeDiffResult {
+                        key: (old, new),
+                        diff,
+                    });
                 });
             }
         }
@@ -1251,5 +1334,89 @@ mod tests {
 
         // effective_status (old) != working_tree_status (new), so no key set
         assert!(cache.uncommitted_cache_key.as_ref().is_none());
+    }
+
+    // ── Range (two-commit comparison) caching ───────────────────────
+
+    #[test]
+    fn range_has_cached_diff_checks_key() {
+        let mut cache = DiffCache::new();
+        cache.range_diff_cache = Some(empty_diff());
+        cache.range_diff_key = Some((oid1(), oid2()));
+
+        assert!(cache.has_cached_diff_for_target(DiffTarget::Range(oid1(), oid2())));
+        // A different pair (or reversed order) is a distinct target.
+        assert!(!cache.has_cached_diff_for_target(DiffTarget::Range(oid2(), oid1())));
+    }
+
+    #[test]
+    fn range_cached_diff_returns_only_on_matching_key() {
+        let mut cache = DiffCache::new();
+        let mut full = empty_diff();
+        full.total_files = 7;
+        cache.range_diff_cache = Some(full);
+        cache.range_diff_key = Some((oid1(), oid2()));
+
+        assert_eq!(
+            cache
+                .cached_diff(Some(DiffTarget::Range(oid1(), oid2())))
+                .unwrap()
+                .total_files,
+            7
+        );
+        assert!(cache.cached_diff(Some(DiffTarget::Range(oid2(), oid1()))).is_none());
+    }
+
+    #[test]
+    fn poll_receives_completed_range_diff() {
+        let mut cache = DiffCache::new();
+        let (tx, rx) = mpsc::channel();
+        cache.range_diff_receiver = Some(rx);
+        cache.range_diff_loading = Some((oid1(), oid2()));
+
+        tx.send(RangeDiffResult {
+            key: (oid1(), oid2()),
+            diff: Ok(empty_diff()),
+        })
+        .unwrap();
+
+        let events = cache.poll(None, "/dev/null", None);
+
+        assert!(cache.cached_diff(Some(DiffTarget::Range(oid1(), oid2()))).is_some());
+        assert_eq!(cache.range_diff_key, Some((oid1(), oid2())));
+        assert!(cache.range_diff_loading.is_none());
+        assert!(cache.range_diff_receiver.is_none());
+        assert!(events.diff_loaded);
+        assert!(events.message.is_none());
+    }
+
+    #[test]
+    fn range_in_flight_blocks_starting_other_loads() {
+        let mut cache = DiffCache::new();
+        // A range diff is in flight; a commit target must not start a second
+        // heavy load until it finishes.
+        cache.range_diff_loading = Some((oid1(), oid2()));
+        let (_tx, rx) = mpsc::channel();
+        cache.range_diff_receiver = Some(rx);
+        cache.selected_diff_target = Some(DiffTarget::Commit(oid1()));
+        cache.selected_diff_target_changed_at = Instant::now() - Duration::from_secs(10);
+
+        let _events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
+
+        assert!(cache.diff_loading_oid.is_none());
+    }
+
+    #[test]
+    fn clear_all_clears_range_cache() {
+        let mut cache = DiffCache::new();
+        cache.range_diff_cache = Some(empty_diff());
+        cache.range_diff_key = Some((oid1(), oid2()));
+        cache.range_diff_loading = Some((oid1(), oid2()));
+
+        cache.clear_all();
+
+        assert!(cache.cached_diff(Some(DiffTarget::Range(oid1(), oid2()))).is_none());
+        assert!(cache.range_diff_key.is_none());
+        assert!(cache.range_diff_loading.is_none());
     }
 }

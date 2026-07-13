@@ -108,6 +108,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  B          ", key_style),
                 Span::styled("Branch filter", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  m          ", key_style),
+                Span::styled("Mark / compare two commits (Esc clears)", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
         ];
@@ -178,6 +182,10 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  h          ", key_style),
+                Span::styled("File history (commits touching this file)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("File Diff Viewer", header_style)),

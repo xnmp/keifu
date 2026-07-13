@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::{App, FocusedPanel};
+use crate::git::signature_status_label;
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
@@ -29,6 +30,22 @@ pub fn compute_commit_detail_layout<'a>(
     commit_area: Rect,
     theme: &'a Theme,
 ) -> Vec<Line<'a>> {
+    // Preload (and memoize) the signature status for the selected commit so the
+    // detail lines can render it without shelling out on the render path.
+    if app.compare_range.is_none() {
+        let sel_oid = app
+            .graph_nav
+            .graph_list_state
+            .selected()
+            .and_then(|i| app.graph_layout.nodes.get(i))
+            .filter(|n| !n.is_uncommitted && !n.is_stash)
+            .and_then(|n| n.commit.as_ref())
+            .map(|c| c.oid);
+        if let Some(oid) = sel_oid {
+            app.load_signature_status(oid);
+        }
+    }
+
     let (commit_lines, raw_editor_offset) =
         CommitDetailWidget::build_commit_lines_with_offset(app, theme);
 
@@ -87,6 +104,41 @@ impl<'a> CommitDetailWidget<'a> {
     /// Build the commit detail lines. Returns `(lines, raw_editor_line_offset)`.
     /// The offset is `Some` when an editor section is present (uncommitted or amend).
     fn build_commit_lines_with_offset(app: &App, theme: &Theme) -> (Vec<Line<'a>>, Option<u16>) {
+        // An active comparison takes over the detail pane: show the two commits
+        // and the diff direction instead of a single commit's metadata.
+        if let Some((old, new)) = app.compare_range {
+            let (old_short, old_subj) = app.commit_short_and_subject(old);
+            let (new_short, new_subj) = app.commit_short_and_subject(new);
+            let label_style = Style::default().add_modifier(Modifier::BOLD);
+            let lines = vec![
+                Line::from(Span::styled(
+                    "Comparing commits",
+                    Style::default()
+                        .fg(theme.text_muted)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Older:  ", label_style),
+                    Span::styled(old_short, Style::default().fg(theme.hash_color)),
+                    Span::raw("  "),
+                    Span::raw(old_subj),
+                ]),
+                Line::from(vec![
+                    Span::styled("Newer:  ", label_style),
+                    Span::styled(new_short, Style::default().fg(theme.hash_color)),
+                    Span::raw("  "),
+                    Span::raw(new_subj),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Diff shown older → newer.  Esc to clear.",
+                    Style::default().fg(theme.text_muted),
+                )),
+            ];
+            return (lines, None);
+        }
+
         let Some(selected) = app.graph_nav.graph_list_state.selected() else {
             return (vec![Line::from(Span::styled(
                 "Select a commit",
@@ -205,6 +257,26 @@ impl<'a> CommitDetailWidget<'a> {
                 ),
             ]),
         ];
+
+        // Signature status line (from the memoized %G? cache). Stashes are
+        // never signed, so skip them. Unsigned commits render subtly (muted);
+        // a real signature stands out.
+        if !node.is_stash {
+            if let Some(&code) = app.sig_status_cache.get(&commit.oid) {
+                let (color, modifier) = match code {
+                    'N' => (theme.text_muted, Modifier::empty()),
+                    'G' | 'U' => (theme.author_color, Modifier::BOLD),
+                    _ => (theme.file_deleted, Modifier::BOLD),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Sig:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        signature_status_label(code).to_string(),
+                        Style::default().fg(color).add_modifier(modifier),
+                    ),
+                ]));
+            }
+        }
 
         lines.push(Line::from(""));
 

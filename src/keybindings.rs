@@ -54,6 +54,7 @@ pub fn map_key_to_action(
         | AppMode::RemotePicker { .. } => map_picker_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
+        AppMode::FileHistory { .. } => map_picker_mode(key),
     }
 }
 
@@ -130,6 +131,9 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
         // Enter opens commit menu (or goes to files for uncommitted)
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenCommitMenu),
+
+        // Mark / compare two commits
+        (KeyModifiers::NONE, KeyCode::Char('m')) => Some(Action::MarkForCompare),
 
         // Quick actions
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
@@ -213,6 +217,9 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
         // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),
+
+        // Per-file commit history
+        (KeyModifiers::NONE, KeyCode::Char('h')) => Some(Action::FileHistory),
 
         // Start filter mode
         (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartFilesFilter),
