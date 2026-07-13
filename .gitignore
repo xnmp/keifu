@@ -1,18 +1,4 @@
 /target/
 
-# Beads runtime files
-.beads/dolt-server.lock
-.beads/dolt-server.log
-.beads/dolt/.dolt/noms/LOCK
-.beads/dolt/.dolt/stats/.dolt/noms/LOCK
-
-# Dolt database files (added by bd init)
-.dolt/
-*.db
-
 # Claude Code agent worktrees
 .claude/worktrees/
-
-# beads runtime files
-.beads/*.pid
-.beads/*.activity

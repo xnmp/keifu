@@ -29,7 +29,7 @@ When implementing features or fixes:
 6. Merge the branch, mark the issue in `docs/TODO.md` as done
 7. Document architectural decisions or gotchas in `docs/`
 
-Use beads issue tracker — run `bd quickstart` for details.
+Use GitHub Issues for tracking — `gh issue list` / `gh issue create`.
 
 ## Architecture
 
