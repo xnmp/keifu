@@ -202,6 +202,26 @@ impl CommitDiffInfo {
         Self::build_info(Self::scan_diff(&diff)?, None)
     }
 
+    /// Get diff info between two arbitrary commits (older → newer).
+    ///
+    /// The caller is responsible for ordering `old_oid`/`new_oid` by commit
+    /// time so the diff reads in the natural older-to-newer direction. This is
+    /// a plain tree-to-tree diff, mirroring [`from_commit`](Self::from_commit)
+    /// but with an explicit "old" side instead of the first parent.
+    pub fn from_range(repo: &Repository, old_oid: Oid, new_oid: Oid) -> Result<Self> {
+        let old_tree = repo.find_commit(old_oid)?.tree()?;
+        let new_tree = repo.find_commit(new_oid)?.tree()?;
+
+        let mut opts = DiffOptions::new();
+        opts.minimal(false);
+        opts.ignore_submodules(true);
+        opts.context_lines(0);
+
+        let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut opts))?;
+
+        Self::build_info(Self::scan_diff(&diff)?, None)
+    }
+
     /// Quick file list for a commit - just paths and change kinds, no line stats.
     /// Much faster than full diff computation since it skips patch analysis.
     pub fn quick_file_list_for_commit(repo: &Repository, commit_oid: Oid) -> Result<Self> {
@@ -213,11 +233,31 @@ impl CommitDiffInfo {
             None
         };
 
+        Self::quick_file_list_from_trees(repo, old_tree.as_ref(), Some(&new_tree))
+    }
+
+    /// Quick file list between two arbitrary commits (older → newer).
+    pub fn quick_file_list_for_range(
+        repo: &Repository,
+        old_oid: Oid,
+        new_oid: Oid,
+    ) -> Result<Self> {
+        let old_tree = repo.find_commit(old_oid)?.tree()?;
+        let new_tree = repo.find_commit(new_oid)?.tree()?;
+        Self::quick_file_list_from_trees(repo, Some(&old_tree), Some(&new_tree))
+    }
+
+    /// Shared quick-file-list builder: names + change kinds only, no line stats.
+    fn quick_file_list_from_trees(
+        repo: &Repository,
+        old_tree: Option<&Tree<'_>>,
+        new_tree: Option<&Tree<'_>>,
+    ) -> Result<Self> {
         let mut opts = DiffOptions::new();
         opts.minimal(false);
         opts.ignore_submodules(true);
         opts.context_lines(0);
-        let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
+        let diff = repo.diff_tree_to_tree(old_tree, new_tree, Some(&mut opts))?;
 
         let mut files = Vec::new();
         for delta in diff.deltas() {
@@ -880,6 +920,29 @@ impl FileDiffContent {
         opts.disable_pathspec_match(true);
 
         let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
+
+        Self::from_diff(&diff, file_path)
+    }
+
+    /// Get full diff content for a single file between two arbitrary commits
+    /// (older → newer). Mirrors [`from_commit`](Self::from_commit) but diffs the
+    /// two commits' trees directly instead of commit-vs-parent.
+    pub fn from_range(
+        repo: &Repository,
+        old_oid: Oid,
+        new_oid: Oid,
+        file_path: &Path,
+    ) -> Result<Self> {
+        let old_tree = repo.find_commit(old_oid)?.tree()?;
+        let new_tree = repo.find_commit(new_oid)?.tree()?;
+
+        let mut opts = DiffOptions::new();
+        opts.ignore_submodules(true);
+        opts.context_lines(3);
+        opts.pathspec(file_path);
+        opts.disable_pathspec_match(true);
+
+        let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut opts))?;
 
         Self::from_diff(&diff, file_path)
     }

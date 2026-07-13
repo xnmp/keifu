@@ -117,6 +117,9 @@ fn make_base_app(
             dc.selected_diff_target_changed_at = Instant::now() - DIFF_LOAD_DEBOUNCE;
             dc
         },
+        compare_marked: None,
+        compare_range: None,
+        sig_status_cache: std::collections::HashMap::new(),
         should_quit: false,
         pending_refresh: false,
         diff_viewport_height: 40,

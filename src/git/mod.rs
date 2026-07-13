@@ -15,6 +15,7 @@ pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,
     FileDiffContent, FileDiffInfo, StageStatus,
 };
+pub use operations::{commit_signature_status, file_history, signature_status_label};
 pub use patch::{extract_hunk_from_working_tree, render_hunk_patch, HunkPatch, PatchLine, PatchLineKind};
 pub use extensions::configure_git_extensions;
 pub use graph::build_graph;

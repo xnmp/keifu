@@ -579,6 +579,7 @@ fn error_mode_dismiss() {
 #[test]
 fn file_diff_mode_scrolling() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {
@@ -625,6 +626,7 @@ fn file_diff_mode_scrolling() {
 #[test]
 fn file_diff_mode_file_navigation() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {
@@ -658,6 +660,7 @@ fn file_diff_mode_file_navigation() {
 #[test]
 fn file_diff_mode_hunk_staging_keys() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {
@@ -699,6 +702,7 @@ fn files_mode_stage_all_unstage_all_keys() {
 #[test]
 fn file_diff_mode_ctrl_f_b_page() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {

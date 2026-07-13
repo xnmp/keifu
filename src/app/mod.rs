@@ -48,6 +48,8 @@ mod branch_picker_actions;
 mod file_diff_actions;
 mod input_actions;
 mod confirm_actions;
+mod compare_actions;
+mod file_history_actions;
 
 /// Copy text to system clipboard using platform-specific commands
 fn copy_to_clipboard(text: &str) -> Result<()> {
@@ -139,6 +141,8 @@ pub enum CommitMenuItem {
     AddTag,
     Revert,
     CopyHash,
+    MarkForCompare,
+    CompareWithMarked,
     StashApply,
     StashPop,
     StashDrop,
@@ -161,6 +165,8 @@ impl CommitMenuItem {
             Self::AddTag => "Add tag",
             Self::Revert => "Revert this commit",
             Self::CopyHash => "Copy commit hash",
+            Self::MarkForCompare => "Mark for compare",
+            Self::CompareWithMarked => "Compare with marked commit",
             Self::StashApply => "Apply stash",
             Self::StashPop => "Pop stash (apply + drop)",
             Self::StashDrop => "Drop stash",
@@ -215,6 +221,11 @@ pub enum AppMode {
         selected: usize,
     },
     FileDiff {
+        /// Which diff this viewer was opened for. Navigation (next/prev file)
+        /// and reloads stay pinned to this target rather than re-deriving it
+        /// from the currently selected graph node, so a diff opened from file
+        /// history or a comparison keeps showing the right commit(s).
+        diff_target: DiffTarget,
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
         content: FileDiffContent,
@@ -225,6 +236,21 @@ pub enum AppMode {
         max_line_width: usize,
         total_lines: usize,
     },
+    /// Per-file commit history picker (commits that touched a path).
+    FileHistory {
+        path: std::path::PathBuf,
+        entries: Vec<FileHistoryEntry>,
+        selected: usize,
+    },
+}
+
+/// One entry in the per-file history list.
+#[derive(Debug, Clone)]
+pub struct FileHistoryEntry {
+    pub oid: Oid,
+    pub short_id: String,
+    pub date: String,
+    pub subject: String,
 }
 
 /// Input action kinds
@@ -366,6 +392,17 @@ pub struct App {
     // Diff caching subsystem
     pub diff_cache: DiffCache,
 
+    // Commit comparison ("mark for compare"). `compare_marked` holds the first
+    // pending commit; once a second commit is chosen, `compare_range` holds the
+    // active (old, new) pair (ordered older → newer by commit time) which
+    // overrides the diff target until cleared with Esc.
+    pub compare_marked: Option<Oid>,
+    pub compare_range: Option<(Oid, Oid)>,
+
+    // Per-OID GPG signature status cache (%G? code). Commits are immutable so
+    // this never needs invalidation; populated lazily on commit-detail render.
+    pub sig_status_cache: std::collections::HashMap<Oid, char>,
+
     // Flags
     pub should_quit: bool,
     pub pending_refresh: bool,
@@ -449,7 +486,7 @@ impl App {
     /// Sync the file list cache and display items from the current diff.
     pub fn sync_file_list_cache(&mut self) {
         let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
-        let is_uncommitted = self.is_uncommitted_selected();
+        let is_uncommitted = self.diff_target_is_uncommitted();
         self.files_pane.sync_file_list_cache(diff, is_uncommitted, &self.repo_path);
     }
 
@@ -466,7 +503,7 @@ impl App {
     /// Build a fresh set of files pane items (not cached).
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
         let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
-        let is_uncommitted = self.is_uncommitted_selected();
+        let is_uncommitted = self.diff_target_is_uncommitted();
         self.files_pane.build_files_pane_items(diff, is_uncommitted, &self.repo_path)
     }
 
@@ -534,6 +571,7 @@ impl App {
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
+            AppMode::FileHistory { .. } => self.handle_file_history_action(action)?,
         }
         Ok(())
     }

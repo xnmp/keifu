@@ -127,23 +127,39 @@ impl App {
                 }
             }
             Action::NextFile => {
-                let file_list_snapshot = if let AppMode::FileDiff { file_list, .. } = &self.mode {
-                    file_list.clone()
+                let snapshot = if let AppMode::FileDiff {
+                    file_list,
+                    diff_target,
+                    ..
+                } = &self.mode
+                {
+                    Some((file_list.clone(), *diff_target))
                 } else {
+                    None
+                };
+                let Some((file_list_snapshot, target)) = snapshot else {
                     return Ok(());
                 };
                 if !file_list_snapshot.is_empty() {
                     let new_index = (file_index + 1) % file_list_snapshot.len();
                     let path = file_list_snapshot[new_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(new_index, file_list_snapshot, &path) {
+                    if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
             }
             Action::PrevFile => {
-                let file_list_snapshot = if let AppMode::FileDiff { file_list, .. } = &self.mode {
-                    file_list.clone()
+                let snapshot = if let AppMode::FileDiff {
+                    file_list,
+                    diff_target,
+                    ..
+                } = &self.mode
+                {
+                    Some((file_list.clone(), *diff_target))
                 } else {
+                    None
+                };
+                let Some((file_list_snapshot, target)) = snapshot else {
                     return Ok(());
                 };
                 if !file_list_snapshot.is_empty() {
@@ -153,7 +169,7 @@ impl App {
                         file_index - 1
                     };
                     let path = file_list_snapshot[new_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(new_index, file_list_snapshot, &path) {
+                    if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
@@ -339,6 +355,10 @@ impl App {
         path: &std::path::Path,
         scroll_offset: usize,
     ) -> Result<()> {
+        let target = self
+            .active_file_diff_target()
+            .or_else(|| self.current_diff_target())
+            .unwrap_or(DiffTarget::Uncommitted);
         let new_file_list = self.files_pane.display_file_list();
         if new_file_list.is_empty() {
             self.mode = AppMode::Normal;
@@ -351,7 +371,7 @@ impl App {
             .position(|f| f.path == path)
             .unwrap_or(0);
         let new_path = new_file_list[new_index].path.clone();
-        self.enter_file_diff(new_index, new_file_list, &new_path)?;
+        self.enter_file_diff(target, new_index, new_file_list, &new_path)?;
         let viewport = self.diff_viewport_height as usize;
         if let AppMode::FileDiff {
             scroll_offset: so,
@@ -366,6 +386,7 @@ impl App {
 
     pub(crate) fn enter_file_diff(
         &mut self,
+        target: DiffTarget,
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
         file_path: &std::path::Path,
@@ -375,13 +396,14 @@ impl App {
         // NOTE: Runs synchronously on the UI thread. For very large diffs (e.g. generated
         // files, large refactors) this may briefly block input. If this becomes a problem,
         // consider moving to a background task with a loading state, similar to commit diff summaries.
-        let content = self.load_file_diff_content(file_path)?;
+        let content = self.load_file_diff_content(file_path, target)?;
         let ui_theme = self.theme();
         let (rendered_lines, hunk_positions) = build_highlighted_lines(&content, &ui_theme);
         let total_lines = rendered_lines.len();
         let max_line_width = rendered_lines.iter().map(|l| l.width()).max().unwrap_or(0);
 
         self.mode = AppMode::FileDiff {
+            diff_target: target,
             file_index,
             file_list,
             content,
@@ -395,12 +417,28 @@ impl App {
         Ok(())
     }
 
-    fn load_file_diff_content(&self, file_path: &std::path::Path) -> Result<FileDiffContent> {
-        let result = match self.current_diff_target() {
-            Some(DiffTarget::Commit(oid)) => {
+    /// The diff target the FileDiff viewer is currently pinned to, if any.
+    fn active_file_diff_target(&self) -> Option<DiffTarget> {
+        if let AppMode::FileDiff { diff_target, .. } = &self.mode {
+            Some(*diff_target)
+        } else {
+            None
+        }
+    }
+
+    fn load_file_diff_content(
+        &self,
+        file_path: &std::path::Path,
+        target: DiffTarget,
+    ) -> Result<FileDiffContent> {
+        let result = match target {
+            DiffTarget::Commit(oid) => {
                 FileDiffContent::from_commit(self.repo.repo(), oid, file_path)
             }
-            Some(DiffTarget::Uncommitted) | None => {
+            DiffTarget::Range(old, new) => {
+                FileDiffContent::from_range(self.repo.repo(), old, new, file_path)
+            }
+            DiffTarget::Uncommitted => {
                 FileDiffContent::from_working_tree(self.repo.repo(), file_path)
             }
         };
@@ -480,7 +518,10 @@ impl App {
     /// uncommitted diff cache.  Called right after `uncommitted_diff_cache` is
     /// updated so that navigation and display stay consistent.
     pub(crate) fn sync_file_list_with_uncommitted_diff(&mut self) {
-        if self.current_diff_target() != Some(DiffTarget::Uncommitted) {
+        // Only touch the viewer when it is actually showing the working tree —
+        // a diff opened from file history or a comparison must not be rewritten
+        // when a background uncommitted diff lands.
+        if self.active_file_diff_target() != Some(DiffTarget::Uncommitted) {
             return;
         }
 

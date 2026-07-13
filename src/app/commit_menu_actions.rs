@@ -57,6 +57,7 @@ impl App {
             return;
         }
 
+        let selected_oid = node.commit.as_ref().map(|c| c.oid);
         let has_branch = self.selected_branch().is_some();
         let mut items = Vec::new();
 
@@ -101,6 +102,15 @@ impl App {
             CommitMenuItem::Revert,
             CommitMenuItem::CopyHash,
         ]);
+
+        // Compare: offer "compare with marked" once a different commit is
+        // already marked, otherwise "mark for compare".
+        match self.compare_marked {
+            Some(marked) if Some(marked) != selected_oid => {
+                items.push(CommitMenuItem::CompareWithMarked)
+            }
+            _ => items.push(CommitMenuItem::MarkForCompare),
+        }
 
         self.mode = AppMode::CommitMenu {
             items,
@@ -338,6 +348,9 @@ impl App {
                         Err(e) => self.set_message(format!("Clipboard error: {}", e)),
                     }
                 }
+            }
+            CommitMenuItem::MarkForCompare | CommitMenuItem::CompareWithMarked => {
+                self.mark_or_compare_selected();
             }
             CommitMenuItem::Push => {
                 self.start_push();

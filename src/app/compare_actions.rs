@@ -1,0 +1,124 @@
+//! Two-commit comparison ("mark for compare") and commit signature status.
+
+use super::*;
+use crate::git::commit_signature_status;
+
+impl App {
+    /// The OID of the selected graph node's commit, if it has one (excludes the
+    /// uncommitted-changes row and connector-only rows).
+    fn selected_commit_oid(&self) -> Option<Oid> {
+        self.selected_commit_node()
+            .and_then(|node| node.commit.as_ref())
+            .map(|commit| commit.oid)
+    }
+
+    fn short(oid: Oid) -> String {
+        oid.to_string()[..7].to_string()
+    }
+
+    /// Committer time in seconds since epoch (0 if the commit can't be read).
+    fn commit_time(&self, oid: Oid) -> i64 {
+        self.repo
+            .repo()
+            .find_commit(oid)
+            .map(|c| c.time().seconds())
+            .unwrap_or(0)
+    }
+
+    /// Order two commits older → newer by commit time (stable on ties).
+    fn order_older_to_newer(&self, a: Oid, b: Oid) -> (Oid, Oid) {
+        if self.commit_time(a) <= self.commit_time(b) {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    }
+
+    /// Handle the "mark for compare" action (graph `m` / commit menu). First
+    /// invocation marks the selected commit; a second invocation on a different
+    /// commit opens the comparison. Invoking while a comparison is active starts
+    /// a fresh mark.
+    pub(crate) fn mark_or_compare_selected(&mut self) {
+        let Some(oid) = self.selected_commit_oid() else {
+            self.set_message("Select a commit to compare");
+            return;
+        };
+
+        // A comparison is already showing — begin a new selection.
+        if self.compare_range.is_some() {
+            self.compare_range = None;
+            self.compare_marked = Some(oid);
+            self.set_message(format!(
+                "Marked {} for compare (previous comparison cleared)",
+                Self::short(oid)
+            ));
+            return;
+        }
+
+        match self.compare_marked {
+            None => {
+                self.compare_marked = Some(oid);
+                self.set_message(format!(
+                    "Marked {} — select another commit and press m to compare",
+                    Self::short(oid)
+                ));
+            }
+            Some(marked) if marked == oid => {
+                self.compare_marked = None;
+                self.set_message("Unmarked comparison commit");
+            }
+            Some(marked) => {
+                let (old, new) = self.order_older_to_newer(marked, oid);
+                self.compare_marked = None;
+                self.compare_range = Some((old, new));
+                // Focus stays on the graph so a single Esc clears the
+                // comparison; the files pane and detail pane already reflect it.
+                self.commit_detail_scroll = 0;
+                self.set_message(format!(
+                    "Comparing {} → {} (older → newer). Space opens a file; Esc clears.",
+                    Self::short(old),
+                    Self::short(new)
+                ));
+            }
+        }
+    }
+
+    /// Clear any pending mark and/or active comparison. Returns whether there
+    /// was anything to clear (so Esc can consume the key instead of quitting).
+    pub(crate) fn clear_compare(&mut self) -> bool {
+        if self.compare_range.is_some() || self.compare_marked.is_some() {
+            self.compare_range = None;
+            self.compare_marked = None;
+            self.set_message("Cleared comparison");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Short id + subject line for a commit, for comparison display. Reuses a
+    /// loaded `CommitInfo` when present, else reads it from the repo.
+    pub(crate) fn commit_short_and_subject(&self, oid: Oid) -> (String, String) {
+        if let Some(commit) = self.commits.iter().find(|c| c.oid == oid) {
+            return (commit.short_id.clone(), commit.message.clone());
+        }
+        match self.repo.repo().find_commit(oid) {
+            Ok(commit) => {
+                let info = crate::git::CommitInfo::from_git2_commit(&commit);
+                (info.short_id, info.message)
+            }
+            Err(_) => (Self::short(oid), String::new()),
+        }
+    }
+
+    /// Memoized GPG signature status (`%G?` code) for a commit. Commits are
+    /// immutable, so a value is cached forever once computed.
+    pub(crate) fn load_signature_status(&mut self, oid: Oid) -> char {
+        if let Some(&code) = self.sig_status_cache.get(&oid) {
+            return code;
+        }
+        let code = commit_signature_status(&self.repo_path, oid).unwrap_or('N');
+        self.sig_status_cache.insert(oid, code);
+        code
+    }
+}

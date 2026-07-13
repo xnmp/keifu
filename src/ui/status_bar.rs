@@ -319,6 +319,14 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("close", desc_style));
             }
+            AppMode::FileHistory { .. } => {
+                spans.push(Span::styled(" ↑/↓ ", key_style));
+                spans.push(Span::styled("select ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("open diff ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("back", desc_style));
+            }
         }
 
         let line = Line::from(spans);
@@ -336,6 +344,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
+            AppMode::FileHistory { .. } => Some(" FILE HISTORY "),
         };
         if let Some(text) = mode_text {
             let mode_len = text.len() as u16;

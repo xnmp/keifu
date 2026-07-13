@@ -31,12 +31,18 @@ impl App {
             }
             Action::OpenFileDiff => {
                 if let Some(file) = self.selected_file().cloned() {
+                    let target = self
+                        .current_diff_target()
+                        .unwrap_or(DiffTarget::Uncommitted);
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
-                    if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
+                    if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
+            }
+            Action::FileHistory => {
+                self.open_file_history();
             }
             Action::OpenWithDefault => {
                 if let Some(file) = self.selected_file() {
