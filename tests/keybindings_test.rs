@@ -282,10 +282,16 @@ fn commit_detail_char_starts_editing() {
 }
 
 #[test]
-fn commit_detail_ctrl_enter_amends() {
+fn commit_detail_ctrl_shortcuts() {
+    // Commit-detail mode (not editing) routes Ctrl+Enter to amend and
+    // Ctrl+S to stashing the staged changes.
     assert_eq!(
         map_normal_detail(key_mod(KeyCode::Enter, KeyModifiers::CONTROL)),
         Some(Action::AmendCommit)
+    );
+    assert_eq!(
+        map_normal_detail(key_mod(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        Some(Action::StashStaged)
     );
 }
 
@@ -384,6 +390,48 @@ fn editor_text_start_end() {
     assert_eq!(
         map_editor(key_mod(KeyCode::End, KeyModifiers::CONTROL)),
         Some(Action::EditorTextEnd(false))
+    );
+}
+
+#[test]
+fn editor_ctrl_s_stashes_staged() {
+    assert_eq!(
+        map_editor(key_mod(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        Some(Action::StashStaged)
+    );
+}
+
+#[test]
+fn editor_emacs_word_shortcuts() {
+    // Alt+b / Alt+f / Alt+d are the emacs-style word navigation/deletion keys.
+    assert_eq!(
+        map_editor(key_mod(KeyCode::Char('b'), KeyModifiers::ALT)),
+        Some(Action::EditorWordLeft(false))
+    );
+    assert_eq!(
+        map_editor(key_mod(KeyCode::Char('f'), KeyModifiers::ALT)),
+        Some(Action::EditorWordRight(false))
+    );
+    assert_eq!(
+        map_editor(key_mod(KeyCode::Char('d'), KeyModifiers::ALT)),
+        Some(Action::EditorDeleteWord)
+    );
+}
+
+#[test]
+fn ctrl_u_kills_line_in_editor_but_clears_line_in_input() {
+    let k = key_mod(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    // The multi-line editor has a real cursor, so Ctrl+U kills to line start.
+    assert_eq!(map_editor(k), Some(Action::EditorKillLine));
+    // A simple single-line input field has no cursor, so Ctrl+U clears the whole line.
+    let input_mode = AppMode::Input {
+        title: String::new(),
+        input: String::new(),
+        action: InputAction::CreateBranch,
+    };
+    assert_eq!(
+        map_key_to_action(k, &input_mode, FocusedPanel::Graph, false, false, false),
+        Some(Action::InputClearLine)
     );
 }
 
@@ -605,6 +653,39 @@ fn file_diff_mode_file_navigation() {
     );
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
     assert_eq!(map(key(KeyCode::Char('q'))), Some(Action::Cancel));
+}
+
+#[test]
+fn file_diff_mode_ctrl_f_b_page() {
+    let mode = AppMode::FileDiff {
+        file_index: 0,
+        file_list: vec![],
+        content: keifu::git::FileDiffContent {
+            path: std::path::PathBuf::new(),
+            kind: keifu::git::FileChangeKind::Modified,
+            is_binary: false,
+            hunks: vec![],
+            total_additions: 0,
+            total_deletions: 0,
+        },
+        rendered_lines: vec![],
+        hunk_positions: vec![],
+        scroll_offset: 0,
+        horizontal_offset: 0,
+        max_line_width: 0,
+        total_lines: 0,
+    };
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
+
+    // Ctrl+F / Ctrl+B page through the diff (distinct from Ctrl+D/Ctrl+U half-page scroll).
+    assert_eq!(
+        map(key_mod(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        Some(Action::PageDown)
+    );
+    assert_eq!(
+        map(key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+        Some(Action::PageUp)
+    );
 }
 
 // ── Commit menu filter ─────────────────────────────────────────────

@@ -2,47 +2,22 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::Path;
-use std::thread;
-use std::time::Duration;
 
+use filetime::{set_file_mtime, FileTime};
 use git2::{Repository, Signature};
 use keifu::git::{CommitDiffInfo, FileChangeKind, GitRepository};
-use tempfile::TempDir;
 
-fn init_repo() -> (TempDir, Repository) {
-    let tempdir = tempfile::tempdir().unwrap();
-    let repo = Repository::init(tempdir.path()).unwrap();
-
-    fs::write(tempdir.path().join("tracked.txt"), "tracked\n").unwrap();
-
-    let mut index = repo.index().unwrap();
-    index.add_path(Path::new("tracked.txt")).unwrap();
-    index.write().unwrap();
-    let tree_id = index.write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-    let signature = Signature::now("Test User", "test@example.com").unwrap();
-
-    repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
-        .unwrap();
-
-    drop(tree);
-
-    (tempdir, repo)
-}
-
-fn init_unborn_repo() -> (TempDir, Repository) {
-    let tempdir = tempfile::tempdir().unwrap();
-    let repo = Repository::init(tempdir.path()).unwrap();
-    (tempdir, repo)
-}
+mod common;
+use common::{init_repo, Seed};
 
 #[test]
 fn from_working_tree_lists_root_untracked_file() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("new_file.txt"), "hello\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -57,11 +32,12 @@ fn from_working_tree_lists_root_untracked_file() {
 
 #[test]
 fn from_working_tree_lists_untracked_file_before_initial_commit() {
-    let (tempdir, repo) = init_unborn_repo();
+    let (tempdir, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("new_file.txt"), "hello\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -76,14 +52,15 @@ fn from_working_tree_lists_untracked_file_before_initial_commit() {
 
 #[test]
 fn from_working_tree_lists_mixed_tracked_and_untracked() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     // Modify tracked file (unstaged)
     fs::write(tempdir.path().join("tracked.txt"), "modified\n").unwrap();
     // Create untracked file
     fs::write(tempdir.path().join("untracked.txt"), "new\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 2);
 
@@ -104,7 +81,7 @@ fn from_working_tree_lists_mixed_tracked_and_untracked() {
 
 #[test]
 fn working_tree_status_detects_untracked_only() {
-    let (tempdir, _repo) = init_repo();
+    let (tempdir, _git_repo) = init_repo(Seed::TrackedFile);
 
     fs::write(tempdir.path().join("new_file.txt"), "hello\n").unwrap();
 
@@ -119,13 +96,14 @@ fn working_tree_status_detects_untracked_only() {
 
 #[test]
 fn from_working_tree_lists_nested_untracked_files() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
     let nested_path = tempdir.path().join("dir/sub/file.txt");
 
     fs::create_dir_all(nested_path.parent().unwrap()).unwrap();
     fs::write(&nested_path, "first line\nsecond line\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -141,7 +119,8 @@ fn from_working_tree_lists_nested_untracked_files() {
 #[cfg(unix)]
 #[test]
 fn from_working_tree_counts_untracked_symlink_as_link_itself() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("target.txt"), "one\ntwo\nthree\n").unwrap();
     let mut index = repo.index().unwrap();
@@ -164,7 +143,7 @@ fn from_working_tree_counts_untracked_symlink_as_link_itself() {
 
     symlink("target.txt", tempdir.path().join("link")).unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -181,7 +160,8 @@ fn from_working_tree_counts_untracked_symlink_as_link_itself() {
 #[cfg(unix)]
 #[test]
 fn from_working_tree_includes_untracked_symlink_to_directory() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::create_dir_all(tempdir.path().join("dir")).unwrap();
     fs::write(tempdir.path().join("dir/file.txt"), "nested\n").unwrap();
@@ -205,7 +185,7 @@ fn from_working_tree_includes_untracked_symlink_to_directory() {
 
     symlink("dir", tempdir.path().join("linkdir")).unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -221,7 +201,7 @@ fn from_working_tree_includes_untracked_symlink_to_directory() {
 
 #[test]
 fn working_tree_status_tracks_nested_untracked_file_changes() {
-    let (tempdir, _repo) = init_repo();
+    let (tempdir, _git_repo) = init_repo(Seed::TrackedFile);
     let nested_path = tempdir.path().join("dir/sub/file.txt");
 
     fs::create_dir_all(nested_path.parent().unwrap()).unwrap();
@@ -239,20 +219,24 @@ fn working_tree_status_tracks_nested_untracked_file_changes() {
     assert!(!initial_status.has_collapsed_untracked_dirs);
     assert!(initial_status.is_precise_cache_key());
 
-    thread::sleep(Duration::from_millis(1100));
-    fs::write(&nested_path, "second version\nwith more content\n").unwrap();
+    // Change ONLY the mtime (content is left identical) so the assertion
+    // isolates the mtime component of the cache key. A fixed, deterministic
+    // timestamp replaces a flaky wall-clock sleep.
+    set_file_mtime(&nested_path, FileTime::from_unix_time(1_000_000_000, 0)).unwrap();
 
     let updated_status = git_repo.get_working_tree_status().unwrap().unwrap();
 
     assert_eq!(updated_status.file_count(), 1);
     assert!(!updated_status.has_collapsed_untracked_dirs);
-    // mtime changed, so status differs from initial
+    // Same file set, but the mtime changed — so only the mtime hash should move.
+    assert_eq!(initial_status.file_paths, updated_status.file_paths);
     assert_ne!(initial_status.mtime_hash, updated_status.mtime_hash);
 }
 
 #[test]
 fn from_working_tree_merges_staged_and_unstaged_for_same_file() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     // Create a new file and stage it
     fs::write(tempdir.path().join("new.txt"), "line1\n").unwrap();
@@ -263,7 +247,7 @@ fn from_working_tree_merges_staged_and_unstaged_for_same_file() {
     // Further edit the same file (unstaged change)
     fs::write(tempdir.path().join("new.txt"), "line1\nline2\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 1);
     assert_eq!(diff.files.len(), 1);
@@ -279,7 +263,8 @@ fn from_working_tree_merges_staged_and_unstaged_for_same_file() {
 
 #[test]
 fn from_working_tree_recomputes_modified_stats_across_staged_and_unstaged() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("tracked.txt"), "staged change\n").unwrap();
 
@@ -289,7 +274,7 @@ fn from_working_tree_recomputes_modified_stats_across_staged_and_unstaged() {
 
     fs::write(tempdir.path().join("tracked.txt"), "final change\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -305,7 +290,8 @@ fn from_working_tree_recomputes_modified_stats_across_staged_and_unstaged() {
 
 #[test]
 fn from_working_tree_staged_binary_then_rewritten_as_text_uses_worktree_classification() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(
         tempdir.path().join("new.txt"),
@@ -319,7 +305,7 @@ fn from_working_tree_staged_binary_then_rewritten_as_text_uses_worktree_classifi
 
     fs::write(tempdir.path().join("new.txt"), "hello\nworld\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -337,7 +323,8 @@ fn from_working_tree_staged_binary_then_rewritten_as_text_uses_worktree_classifi
 
 #[test]
 fn from_working_tree_staged_text_then_rewritten_as_binary_recomputes_stats() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("new.txt"), "hello\nworld\n").unwrap();
 
@@ -357,7 +344,7 @@ fn from_working_tree_staged_text_then_rewritten_as_binary_recomputes_stats() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -374,7 +361,8 @@ fn from_working_tree_staged_text_then_rewritten_as_binary_recomputes_stats() {
 
 #[test]
 fn from_working_tree_staged_added_file_marked_binary_keeps_binary_classification() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::create_dir_all(tempdir.path().join(".git/info")).unwrap();
     fs::write(
@@ -388,7 +376,7 @@ fn from_working_tree_staged_added_file_marked_binary_keeps_binary_classification
     index.add_path(Path::new("new.dat")).unwrap();
     index.write().unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -406,7 +394,8 @@ fn from_working_tree_staged_added_file_marked_binary_keeps_binary_classification
 
 #[test]
 fn from_working_tree_keeps_staged_add_removed_in_worktree() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("new.txt"), "line1\n").unwrap();
 
@@ -420,7 +409,7 @@ fn from_working_tree_keeps_staged_add_removed_in_worktree() {
     // visible to stay consistent with get_working_tree_status() counts.
     // Stats should reflect only the staged (HEAD→index) change, not the
     // index→workdir deletion that reverts it.
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 1);
     let file = diff
@@ -436,7 +425,8 @@ fn from_working_tree_keeps_staged_add_removed_in_worktree() {
 
 #[test]
 fn from_working_tree_keeps_staged_change_reverted_in_worktree() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("tracked.txt"), "staged change\n").unwrap();
 
@@ -451,7 +441,7 @@ fn from_working_tree_keeps_staged_change_reverted_in_worktree() {
     // file count reported by get_working_tree_status().
     // Stats should reflect only the staged (HEAD→index) change, not the
     // sum of both directions.
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 1);
     let file = diff
@@ -470,7 +460,8 @@ fn from_working_tree_keeps_staged_change_reverted_in_worktree() {
 
 #[test]
 fn from_working_tree_deleted_then_recreated_shows_modified() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     // Stage deletion of tracked file (git rm)
     let mut index = repo.index().unwrap();
@@ -479,7 +470,7 @@ fn from_working_tree_deleted_then_recreated_shows_modified() {
     // Recreate the same file on disk (now untracked)
     fs::write(tempdir.path().join("tracked.txt"), "new content\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     let file = diff
         .files
@@ -494,7 +485,8 @@ fn from_working_tree_deleted_then_recreated_shows_modified() {
 
 #[test]
 fn from_working_tree_deleted_then_recreated_recomputes_overlapping_text_stats() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("tracked.txt"), "a\nb\n").unwrap();
 
@@ -522,7 +514,7 @@ fn from_working_tree_deleted_then_recreated_recomputes_overlapping_text_stats() 
 
     fs::write(tempdir.path().join("tracked.txt"), "a\nc\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -539,7 +531,8 @@ fn from_working_tree_deleted_then_recreated_recomputes_overlapping_text_stats() 
 
 #[test]
 fn from_working_tree_deleted_binary_then_recreated_text_uses_text_stats() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(
         tempdir.path().join("tracked.txt"),
@@ -574,7 +567,7 @@ fn from_working_tree_deleted_binary_then_recreated_text_uses_text_stats() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -589,7 +582,8 @@ fn from_working_tree_deleted_binary_then_recreated_text_uses_text_stats() {
 
 #[test]
 fn from_working_tree_binary_to_text_modified_recomputes_line_stats() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(
         tempdir.path().join("tracked.txt"),
@@ -607,7 +601,7 @@ fn from_working_tree_binary_to_text_modified_recomputes_line_stats() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -624,7 +618,8 @@ fn from_working_tree_binary_to_text_modified_recomputes_line_stats() {
 
 #[test]
 fn from_working_tree_total_files_not_capped_by_display_limit() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     // Create 55 untracked files (exceeds MAX_FILES_TO_DISPLAY of 50)
     for i in 0..55 {
@@ -635,7 +630,7 @@ fn from_working_tree_total_files_not_capped_by_display_limit() {
         .unwrap();
     }
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 55);
     assert_eq!(diff.total_insertions, 55);
@@ -648,7 +643,8 @@ fn from_working_tree_total_files_not_capped_by_display_limit() {
 
 #[test]
 fn from_working_tree_refreshes_totals_beyond_display_limit() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     for i in 0..55 {
         fs::write(
@@ -669,7 +665,7 @@ fn from_working_tree_refreshes_totals_beyond_display_limit() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 56);
     assert_eq!(diff.total_insertions, 57);
@@ -680,7 +676,8 @@ fn from_working_tree_refreshes_totals_beyond_display_limit() {
 
 #[test]
 fn from_working_tree_includes_untracked_binary_files_without_line_stats() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(
         tempdir.path().join("image.png"),
@@ -688,7 +685,7 @@ fn from_working_tree_includes_untracked_binary_files_without_line_stats() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 1);
     assert_eq!(diff.total_insertions, 0);
@@ -702,7 +699,8 @@ fn from_working_tree_includes_untracked_binary_files_without_line_stats() {
 
 #[test]
 fn from_working_tree_marks_untracked_file_binary_from_attributes() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::create_dir_all(tempdir.path().join(".git/info")).unwrap();
     fs::write(
@@ -712,7 +710,7 @@ fn from_working_tree_marks_untracked_file_binary_from_attributes() {
     .unwrap();
     fs::write(tempdir.path().join("new.dat"), "hello\nworld\n").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -730,11 +728,12 @@ fn from_working_tree_marks_untracked_file_binary_from_attributes() {
 
 #[test]
 fn from_working_tree_skips_untracked_directories() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     Repository::init(tempdir.path().join("child")).unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 0);
     assert_eq!(diff.total_insertions, 0);
@@ -744,7 +743,8 @@ fn from_working_tree_skips_untracked_directories() {
 
 #[test]
 fn from_commit_includes_binary_files_without_line_stats() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(
         tempdir.path().join("image.png"),
@@ -771,7 +771,7 @@ fn from_commit_includes_binary_files_without_line_stats() {
         )
         .unwrap();
 
-    let diff = CommitDiffInfo::from_commit(&repo, oid).unwrap();
+    let diff = CommitDiffInfo::from_commit(repo, oid).unwrap();
 
     assert_eq!(diff.total_files, 1);
     assert_eq!(diff.total_insertions, 0);
@@ -784,11 +784,12 @@ fn from_commit_includes_binary_files_without_line_stats() {
 
 #[test]
 fn from_working_tree_empty_untracked_file_has_zero_insertions() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(tempdir.path().join("empty.txt"), "").unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     assert_eq!(diff.total_files, 1);
     let file = diff
@@ -803,7 +804,8 @@ fn from_working_tree_empty_untracked_file_has_zero_insertions() {
 
 #[test]
 fn from_working_tree_no_trailing_newline_counts_correctly() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::write(
         tempdir.path().join("no_newline.txt"),
@@ -811,7 +813,7 @@ fn from_working_tree_no_trailing_newline_counts_correctly() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()
@@ -823,7 +825,7 @@ fn from_working_tree_no_trailing_newline_counts_correctly() {
 
 #[test]
 fn working_tree_status_includes_untracked_binary_files() {
-    let (tempdir, _repo) = init_repo();
+    let (tempdir, _git_repo) = init_repo(Seed::TrackedFile);
 
     fs::write(
         tempdir.path().join("image.png"),
@@ -842,7 +844,7 @@ fn working_tree_status_includes_untracked_binary_files() {
 
 #[test]
 fn working_tree_status_skips_untracked_directories() {
-    let (tempdir, _repo) = init_repo();
+    let (tempdir, _git_repo) = init_repo(Seed::TrackedFile);
 
     Repository::init(tempdir.path().join("child")).unwrap();
 
@@ -855,7 +857,8 @@ fn working_tree_status_skips_untracked_directories() {
 #[cfg(unix)]
 #[test]
 fn working_tree_status_includes_untracked_symlink_to_directory() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     fs::create_dir_all(tempdir.path().join("dir")).unwrap();
     fs::write(tempdir.path().join("dir/file.txt"), "nested\n").unwrap();
@@ -890,7 +893,8 @@ fn working_tree_status_includes_untracked_symlink_to_directory() {
 
 #[test]
 fn from_working_tree_includes_both_staged_reverted_and_untracked() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     // Stage additions that are then removed from the worktree (AD status)
     for i in 0..3 {
@@ -911,7 +915,7 @@ fn from_working_tree_includes_both_staged_reverted_and_untracked() {
         .unwrap();
     }
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
 
     // All 6 files should be present: 3 AD (index-only) + 3 untracked
     assert_eq!(diff.total_files, 6);
@@ -936,7 +940,8 @@ fn from_working_tree_includes_both_staged_reverted_and_untracked() {
 
 #[test]
 fn from_working_tree_deleted_text_then_recreated_binary_shows_zero_lines() {
-    let (tempdir, repo) = init_repo();
+    let (tempdir, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
 
     // tracked.txt already has "tracked\n" (1 line) from init_repo
     let mut index = repo.index().unwrap();
@@ -950,7 +955,7 @@ fn from_working_tree_deleted_text_then_recreated_binary_shows_zero_lines() {
     )
     .unwrap();
 
-    let diff = CommitDiffInfo::from_working_tree(&repo).unwrap();
+    let diff = CommitDiffInfo::from_working_tree(repo).unwrap();
     let file = diff
         .files
         .iter()

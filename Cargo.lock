@@ -847,6 +847,7 @@ dependencies = [
  "clap",
  "crossterm 0.28.1",
  "dirs",
+ "filetime",
  "fuzzy-matcher",
  "git2",
  "notify",

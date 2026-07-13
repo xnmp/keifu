@@ -652,3 +652,143 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
         *state.offset_mut() = *filtered_state.offset_mut();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    /// `now` minus `secs_ago` seconds. Duration arithmetic on `DateTime<Tz>`
+    /// operates on the underlying instant, so this is exact regardless of
+    /// DST — safe to use with `Local::now()` as the anchor.
+    fn ago(now: DateTime<Local>, secs_ago: i64) -> DateTime<Local> {
+        now - Duration::seconds(secs_ago)
+    }
+
+    // ── format_date_field ────────────────────────────────────────────
+
+    #[test]
+    fn future_timestamp_shows_absolute_date() {
+        let now = Local::now();
+        let future = now + Duration::seconds(60);
+        let result = format_date_field(future, now);
+        assert_eq!(result.trim_end(), future.format("%Y-%m-%d").to_string());
+    }
+
+    #[test]
+    fn seven_days_or_more_shows_absolute_date() {
+        let now = Local::now();
+        let old = ago(now, 7 * 24 * 3600);
+        let result = format_date_field(old, now);
+        assert_eq!(result.trim_end(), old.format("%Y-%m-%d").to_string());
+    }
+
+    #[test]
+    fn under_a_minute_is_just_now() {
+        let now = Local::now();
+        let recent = ago(now, 30);
+        assert_eq!(format_date_field(recent, now).trim_end(), "just now");
+    }
+
+    #[test]
+    fn fifty_nine_seconds_is_still_just_now() {
+        let now = Local::now();
+        let recent = ago(now, 59);
+        assert_eq!(format_date_field(recent, now).trim_end(), "just now");
+    }
+
+    #[test]
+    fn sixty_seconds_is_one_minute_ago() {
+        let now = Local::now();
+        let recent = ago(now, 60);
+        assert_eq!(format_date_field(recent, now).trim_end(), "1 minute ago");
+    }
+
+    #[test]
+    fn singular_minute() {
+        let now = Local::now();
+        let t = ago(now, 90); // num_minutes() truncates to 1
+        assert_eq!(format_date_field(t, now).trim_end(), "1 minute ago");
+    }
+
+    #[test]
+    fn plural_minutes() {
+        let now = Local::now();
+        let t = ago(now, 5 * 60);
+        assert_eq!(format_date_field(t, now).trim_end(), "5 minutes ago");
+    }
+
+    #[test]
+    fn singular_hour() {
+        let now = Local::now();
+        let t = ago(now, 3600);
+        assert_eq!(format_date_field(t, now).trim_end(), "1 hour ago");
+    }
+
+    #[test]
+    fn plural_hours() {
+        let now = Local::now();
+        let t = ago(now, 3 * 3600);
+        assert_eq!(format_date_field(t, now).trim_end(), "3 hours ago");
+    }
+
+    #[test]
+    fn singular_day() {
+        let now = Local::now();
+        let t = ago(now, 24 * 3600);
+        assert_eq!(format_date_field(t, now).trim_end(), "1 day ago");
+    }
+
+    #[test]
+    fn plural_days() {
+        let now = Local::now();
+        let t = ago(now, 3 * 24 * 3600);
+        assert_eq!(format_date_field(t, now).trim_end(), "3 days ago");
+    }
+
+    #[test]
+    fn six_days_twenty_three_hours_is_still_relative() {
+        let now = Local::now();
+        let t = ago(now, 6 * 24 * 3600 + 23 * 3600);
+        assert_eq!(format_date_field(t, now).trim_end(), "6 days ago");
+    }
+
+    #[test]
+    fn result_is_padded_to_fixed_width() {
+        let now = Local::now();
+        let recent = ago(now, 5);
+        assert_eq!(format_date_field(recent, now).len(), DATE_FIELD_WIDTH);
+    }
+
+    // ── display_width ────────────────────────────────────────────────
+
+    #[test]
+    fn ascii_string_width_equals_byte_len() {
+        let s = "hello world";
+        assert_eq!(display_width(s), s.len());
+    }
+
+    #[test]
+    fn cjk_wide_chars_count_as_two() {
+        assert_eq!(display_width("中文"), 4);
+    }
+
+    #[test]
+    fn vs16_emoji_sequence_counts_as_two() {
+        // U+2764 HEAVY BLACK HEART + U+FE0F VS16 => emoji presentation, width 2.
+        let heart_emoji = "\u{2764}\u{FE0F}";
+        assert_eq!(display_width(heart_emoji), 2);
+    }
+
+    #[test]
+    fn combining_mark_contributes_no_width() {
+        // 'e' + combining acute accent (U+0301): the accent is zero-width.
+        let combining_e = "e\u{0301}";
+        assert_eq!(display_width(combining_e), 1);
+    }
+
+    #[test]
+    fn empty_string_has_zero_width() {
+        assert_eq!(display_width(""), 0);
+    }
+}

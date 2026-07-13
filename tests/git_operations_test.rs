@@ -1,67 +1,24 @@
 //! Integration tests for git operations (branch, checkout, stage, commit, tag,
-//! restore, reset, merge, cherry-pick, revert).
+//! restore, reset, merge, rebase, stash, cherry-pick, revert).
 
 use std::fs;
 use std::path::Path;
 
-use git2::{Oid, Repository, Signature};
-use tempfile::TempDir;
+use git2::Oid;
 
 use keifu::git::operations::*;
-use keifu::git::GitRepository;
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
-fn init_repo() -> (TempDir, GitRepository) {
-    let tempdir = tempfile::tempdir().unwrap();
-    Repository::init(tempdir.path()).unwrap();
-
-    // git operations that shell out need user.name / user.email configured
-    // in the repo so commits don't fail.
-    {
-        let repo = Repository::open(tempdir.path()).unwrap();
-        let mut config = repo.config().unwrap();
-        config.set_str("user.name", "Test User").unwrap();
-        config.set_str("user.email", "test@example.com").unwrap();
-    }
-
-    let repo = GitRepository::open(tempdir.path()).unwrap();
-    (tempdir, repo)
-}
-
-fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> Oid {
-    let workdir = repo.workdir().unwrap();
-    let full_path = workdir.join(path);
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    fs::write(&full_path, contents).unwrap();
-
-    let mut index = repo.index().unwrap();
-    index.add_path(Path::new(path)).unwrap();
-    index.write().unwrap();
-    let tree_id = index.write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-    let signature = Signature::now("Test User", "test@example.com").unwrap();
-    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-    let parents: Vec<&git2::Commit> = parent.iter().collect();
-    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-        .unwrap()
-}
-
-fn repo_path(git_repo: &GitRepository) -> &str {
-    &git_repo.path
-}
-
-fn head_oid(repo: &Repository) -> Oid {
-    repo.head().unwrap().peel_to_commit().unwrap().id()
-}
+mod common;
+use common::{
+    add_bare_origin, commit_file, git_cli, head_oid, init_repo, repo_path, stash_count,
+    stash_list, Seed,
+};
 
 // ── Branch Operations ───────────────────────────────────────────────
 
 #[test]
 fn create_branch_creates_new_branch_at_oid() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -74,7 +31,7 @@ fn create_branch_creates_new_branch_at_oid() {
 
 #[test]
 fn create_branch_fails_for_duplicate_name() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -85,7 +42,7 @@ fn create_branch_fails_for_duplicate_name() {
 
 #[test]
 fn delete_branch_removes_branch() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -98,7 +55,7 @@ fn delete_branch_removes_branch() {
 
 #[test]
 fn delete_branch_fails_on_head_branch() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
 
@@ -116,7 +73,7 @@ fn delete_branch_fails_on_head_branch() {
 
 #[test]
 fn delete_branch_fails_for_nonexistent() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
 
@@ -128,7 +85,7 @@ fn delete_branch_fails_for_nonexistent() {
 
 #[test]
 fn checkout_branch_switches_head() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -144,7 +101,7 @@ fn checkout_branch_switches_head() {
 
 #[test]
 fn checkout_commit_enters_detached_head() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let first_oid = commit_file(repo, "a.txt", "a", "first");
     commit_file(repo, "b.txt", "b", "second");
@@ -157,7 +114,7 @@ fn checkout_commit_enters_detached_head() {
 
 #[test]
 fn checkout_nonexistent_branch_fails() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
 
@@ -169,7 +126,7 @@ fn checkout_nonexistent_branch_fails() {
 
 #[test]
 fn stage_file_adds_to_index() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -186,7 +143,7 @@ fn stage_file_adds_to_index() {
 
 #[test]
 fn unstage_file_removes_from_index() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -207,7 +164,7 @@ fn unstage_file_removes_from_index() {
 
 #[test]
 fn stage_then_unstage_roundtrip() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -238,7 +195,7 @@ fn stage_then_unstage_roundtrip() {
 
 #[test]
 fn stage_untracked_file() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -257,7 +214,7 @@ fn stage_untracked_file() {
 
 #[test]
 fn commit_with_message_creates_commit() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -274,7 +231,7 @@ fn commit_with_message_creates_commit() {
 
 #[test]
 fn get_last_commit_message_returns_head_message() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -289,7 +246,7 @@ fn get_last_commit_message_returns_head_message() {
 
 #[test]
 fn commit_amend_changes_message() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "original message");
     let path = repo_path(&git_repo);
@@ -306,7 +263,7 @@ fn commit_amend_changes_message() {
 
 #[test]
 fn commit_amend_no_edit_preserves_message() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "keep this message");
     let path = repo_path(&git_repo);
@@ -317,13 +274,36 @@ fn commit_amend_no_edit_preserves_message() {
 
     commit_amend_no_edit(path).unwrap();
 
+    // Message is preserved.
     let msg = get_last_commit_message(path).unwrap();
     assert_eq!(msg, "keep this message");
+
+    // The amend folded the staged change into HEAD's tree.
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let tree = head.tree().unwrap();
+    let entry = tree.get_name("a.txt").unwrap();
+    let blob = repo.find_blob(entry.id()).unwrap();
+    assert_eq!(
+        blob.content(),
+        b"changed",
+        "amended commit's tree should contain the staged content"
+    );
+
+    // The amend *replaced* the commit rather than appending a new one: HEAD is
+    // still the root commit (no parent) and history holds exactly one commit.
+    assert_eq!(head.parent_count(), 0);
+    let mut revwalk = repo.revwalk().unwrap();
+    revwalk.push_head().unwrap();
+    assert_eq!(
+        revwalk.count(),
+        1,
+        "amend must not append a second commit"
+    );
 }
 
 #[test]
 fn commit_with_no_staged_changes_fails() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let path = repo_path(&git_repo);
@@ -336,26 +316,25 @@ fn commit_with_no_staged_changes_fails() {
 
 #[test]
 fn add_tag_creates_tag_at_commit() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
     add_tag(repo, "v1.0", oid).unwrap();
 
-    // Verify the tag exists and points to the correct commit
-    let tag_names: Vec<String> = repo
-        .tag_names(None)
+    // The tag must resolve (peel) to the exact commit it was created at, not
+    // merely exist by name.
+    let resolved = repo
+        .revparse_single("v1.0")
         .unwrap()
-        .iter()
-        .flatten()
-        .map(|s| s.to_string())
-        .collect();
-    assert!(tag_names.contains(&"v1.0".to_string()));
+        .peel_to_commit()
+        .unwrap();
+    assert_eq!(resolved.id(), oid);
 }
 
 #[test]
 fn add_duplicate_tag_fails() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -368,7 +347,7 @@ fn add_duplicate_tag_fails() {
 
 #[test]
 fn restore_files_discards_tracked_changes() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "original", "initial");
     let path = repo_path(&git_repo);
@@ -384,7 +363,7 @@ fn restore_files_discards_tracked_changes() {
 
 #[test]
 fn restore_files_multiple_files() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a-orig", "first");
     commit_file(repo, "b.txt", "b-orig", "second");
@@ -409,7 +388,7 @@ fn restore_files_multiple_files() {
 
 #[test]
 fn reset_soft_keeps_changes_staged() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let first_oid = commit_file(repo, "a.txt", "a", "first");
     commit_file(repo, "b.txt", "b", "second");
@@ -427,7 +406,7 @@ fn reset_soft_keeps_changes_staged() {
 
 #[test]
 fn reset_mixed_keeps_changes_unstaged() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let first_oid = commit_file(repo, "a.txt", "a", "first");
     commit_file(repo, "b.txt", "b", "second");
@@ -453,7 +432,7 @@ fn reset_mixed_keeps_changes_unstaged() {
 
 #[test]
 fn reset_hard_discards_all_changes() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let first_oid = commit_file(repo, "a.txt", "a", "first");
     commit_file(repo, "b.txt", "b", "second");
@@ -475,7 +454,7 @@ fn reset_hard_discards_all_changes() {
 
 #[test]
 fn merge_fast_forward() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let initial_oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -495,7 +474,7 @@ fn merge_fast_forward() {
 
 #[test]
 fn merge_creates_merge_commit_on_diverged_branches() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let initial_oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -524,7 +503,7 @@ fn merge_creates_merge_commit_on_diverged_branches() {
 
 #[test]
 fn merge_up_to_date_is_noop() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -539,7 +518,7 @@ fn merge_up_to_date_is_noop() {
 
 #[test]
 fn cherry_pick_applies_single_commit() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let initial_oid = commit_file(repo, "a.txt", "a", "initial");
 
@@ -565,7 +544,7 @@ fn cherry_pick_applies_single_commit() {
 
 #[test]
 fn revert_commit_creates_revert() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let to_revert = commit_file(repo, "b.txt", "b", "add b");
@@ -587,7 +566,7 @@ fn revert_commit_creates_revert() {
 
 #[test]
 fn revert_creates_new_commit_not_removes_old() {
-    let (_td, git_repo) = init_repo();
+    let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     commit_file(repo, "a.txt", "a", "initial");
     let to_revert = commit_file(repo, "b.txt", "b", "add b");
@@ -600,4 +579,529 @@ fn revert_creates_new_commit_not_removes_old() {
     let head = repo.head().unwrap().peel_to_commit().unwrap();
     assert_eq!(head.parent_count(), 1);
     assert_eq!(head.parent_id(0).unwrap(), before_oid);
+}
+
+// ── Rebase ──────────────────────────────────────────────────────────
+
+#[test]
+fn rebase_branch_replays_commits_onto_advanced_base() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let base1 = commit_file(repo, "a.txt", "a", "base 1");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+
+    // feature branches off base1 with two commits
+    create_branch(repo, "feature", base1).unwrap();
+    checkout_branch(repo, "feature").unwrap();
+    commit_file(repo, "f1.txt", "f1", "feature 1");
+    let old_tip = commit_file(repo, "f2.txt", "f2", "feature 2");
+
+    // base advances with an independent commit
+    checkout_branch(repo, &default).unwrap();
+    let base2 = commit_file(repo, "b2.txt", "b2", "base 2");
+
+    // rebase feature onto the advanced base
+    checkout_branch(repo, "feature").unwrap();
+    rebase_branch(repo, &default).unwrap();
+
+    // The branch ref moved to a brand-new tip (commits were replayed).
+    let new_tip = repo
+        .find_branch("feature", git2::BranchType::Local)
+        .unwrap()
+        .get()
+        .peel_to_commit()
+        .unwrap();
+    assert_ne!(new_tip.id(), old_tip, "feature tip should be rewritten");
+
+    // Parent chain: f2' -> f1' -> base2 (rebased onto the advanced base).
+    assert_eq!(new_tip.parent_count(), 1);
+    let f1_prime = new_tip.parent(0).unwrap();
+    assert_eq!(f1_prime.parent(0).unwrap().id(), base2);
+
+    // Replayed commits keep their messages...
+    assert_eq!(new_tip.message().unwrap().trim(), "feature 2");
+    assert_eq!(f1_prime.message().unwrap().trim(), "feature 1");
+
+    // ...and the final tree carries both the base and feature changes.
+    let tree = new_tip.tree().unwrap();
+    for name in ["a.txt", "b2.txt", "f1.txt", "f2.txt"] {
+        assert!(
+            tree.get_name(name).is_some(),
+            "rebased tree should contain {name}"
+        );
+    }
+
+    // HEAD followed the branch to its new tip.
+    assert_eq!(head_oid(repo), new_tip.id());
+}
+
+#[test]
+fn rebase_branch_conflict_errors_and_leaves_rebase_in_progress() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+
+    create_branch(repo, "feature", base).unwrap();
+    checkout_branch(repo, "feature").unwrap();
+    commit_file(repo, "f.txt", "feature\n", "feature edit");
+
+    checkout_branch(repo, &default).unwrap();
+    commit_file(repo, "f.txt", "main\n", "main edit");
+
+    checkout_branch(repo, "feature").unwrap();
+    let result = rebase_branch(repo, &default);
+    assert!(result.is_err(), "conflicting rebase should error");
+
+    // documents current behavior: rebase_branch does not abort on conflict —
+    // there is no cleanup/abort in operations.rs, so the repo is left in a
+    // mid-rebase state.
+    assert_ne!(
+        repo.state(),
+        git2::RepositoryState::Clean,
+        "conflicting rebase leaves an in-progress rebase state"
+    );
+}
+
+// ── Stash ───────────────────────────────────────────────────────────
+
+/// Stage a modification of `a.txt` to `contents` so a subsequent stash has
+/// staged content to capture.
+fn stage_change(repo: &git2::Repository, path: &str, contents: &str) {
+    fs::write(repo.workdir().unwrap().join("a.txt"), contents).unwrap();
+    stage_file(path, "a.txt").unwrap();
+}
+
+#[test]
+fn stash_staged_clears_index_and_creates_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    commit_file(repo, "a.txt", "committed\n", "initial");
+    let path = repo_path(&git_repo);
+
+    stage_change(repo, path, "staged change\n");
+
+    // empty message -> exercises the `stash push --staged` (no -m) branch
+    stash_staged(path, "").unwrap();
+
+    // Working tree + index reverted to the committed state...
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "committed\n"
+    );
+    assert!(
+        repo.statuses(None).unwrap().is_empty(),
+        "index and working tree should be clean after stashing"
+    );
+    // ...and exactly one stash was created.
+    assert_eq!(stash_count(path), 1);
+}
+
+#[test]
+fn stash_staged_records_custom_message() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    commit_file(repo, "a.txt", "committed\n", "initial");
+    let path = repo_path(&git_repo);
+
+    stage_change(repo, path, "staged change\n");
+    stash_staged(path, "my stash message").unwrap();
+
+    let list = stash_list(path);
+    assert_eq!(list.len(), 1);
+    assert!(
+        list[0].contains("my stash message"),
+        "stash entry should carry the custom message: {}",
+        list[0]
+    );
+}
+
+#[test]
+fn stash_apply_restores_changes_and_retains_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    commit_file(repo, "a.txt", "committed\n", "initial");
+    let path = repo_path(&git_repo);
+
+    stage_change(repo, path, "staged change\n");
+    stash_staged(path, "wip").unwrap();
+
+    stash_apply(path, 0).unwrap();
+
+    // The stashed change is back in the working tree...
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "staged change\n"
+    );
+    // ...and apply keeps the stash around.
+    assert_eq!(stash_count(path), 1);
+}
+
+#[test]
+fn stash_pop_restores_changes_and_drops_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    commit_file(repo, "a.txt", "committed\n", "initial");
+    let path = repo_path(&git_repo);
+
+    stage_change(repo, path, "staged change\n");
+    stash_staged(path, "wip").unwrap();
+
+    stash_pop(path, 0).unwrap();
+
+    // The change is restored...
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "staged change\n"
+    );
+    // ...and the stash is gone.
+    assert_eq!(stash_count(path), 0);
+}
+
+#[test]
+fn stash_drop_removes_only_the_targeted_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    commit_file(repo, "a.txt", "committed\n", "initial");
+    let path = repo_path(&git_repo);
+
+    // Two stashes: "first" (older, ends up at stash@{1}), "second" (newer, @{0}).
+    stage_change(repo, path, "v1\n");
+    stash_staged(path, "first").unwrap();
+    stage_change(repo, path, "v2\n");
+    stash_staged(path, "second").unwrap();
+    assert_eq!(stash_count(path), 2);
+
+    // Drop the newest; the older "first" must remain.
+    stash_drop(path, 0).unwrap();
+
+    let list = stash_list(path);
+    assert_eq!(list.len(), 1);
+    assert!(
+        list[0].contains("first"),
+        "the older stash should be the survivor: {}",
+        list[0]
+    );
+    assert!(
+        !list[0].contains("second"),
+        "the dropped stash must not remain: {}",
+        list[0]
+    );
+}
+
+#[test]
+fn stash_apply_without_stash_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(stash_apply(repo_path(&git_repo), 0).is_err());
+}
+
+#[test]
+fn stash_pop_without_stash_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(stash_pop(repo_path(&git_repo), 0).is_err());
+}
+
+#[test]
+fn stash_drop_without_stash_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(stash_drop(repo_path(&git_repo), 0).is_err());
+}
+
+// ── Remote checkout / fetch / push ──────────────────────────────────
+
+#[test]
+fn checkout_remote_branch_checks_out_matching_local_branch() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let c1 = commit_file(repo, "a.txt", "a", "initial");
+
+    // Local branch "same" and origin/same both point at c1.
+    create_branch(repo, "same", c1).unwrap();
+    let _origin = add_bare_origin(path);
+    git_cli(path, &["push", "origin", "same"]);
+    git_cli(path, &["fetch", "origin"]);
+
+    checkout_remote_branch(repo, "origin/same").unwrap();
+
+    // Since local and remote agree, it simply checks out the existing branch.
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "same");
+    assert_eq!(head_oid(repo), c1);
+}
+
+#[test]
+fn checkout_remote_branch_creates_tracking_branch() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let c1 = commit_file(repo, "a.txt", "a", "initial");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+    let _origin = add_bare_origin(path);
+
+    // Build a commit and publish it to origin as "feature", leaving no local
+    // branch of that name.
+    create_branch(repo, "feat_src", c1).unwrap();
+    checkout_branch(repo, "feat_src").unwrap();
+    let c2 = commit_file(repo, "feat.txt", "feat", "feature work");
+    git_cli(path, &["push", "origin", "feat_src:feature"]);
+    checkout_branch(repo, &default).unwrap();
+    delete_branch(repo, "feat_src").unwrap();
+    git_cli(path, &["fetch", "origin"]);
+    assert!(
+        repo.find_branch("feature", git2::BranchType::Local).is_err(),
+        "precondition: no local 'feature' branch yet"
+    );
+
+    checkout_remote_branch(repo, "origin/feature").unwrap();
+
+    // A local tracking branch was created, pointing at the remote commit...
+    let branch = repo
+        .find_branch("feature", git2::BranchType::Local)
+        .unwrap();
+    assert_eq!(branch.get().peel_to_commit().unwrap().id(), c2);
+    // ...with its upstream configured to origin/feature...
+    let upstream = branch.upstream().unwrap();
+    assert_eq!(upstream.name().unwrap().unwrap(), "origin/feature");
+    // ...and HEAD moved onto it.
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+    assert_eq!(head_oid(repo), c2);
+}
+
+#[test]
+fn checkout_remote_branch_force_updates_diverged_local_branch() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let c1 = commit_file(repo, "a.txt", "a", "initial");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+    let _origin = add_bare_origin(path);
+
+    // Local "div" stays at c1; origin/div is advanced to a different commit q.
+    create_branch(repo, "div", c1).unwrap();
+    create_branch(repo, "div_src", c1).unwrap();
+    checkout_branch(repo, "div_src").unwrap();
+    let q = commit_file(repo, "b.txt", "b", "remote work");
+    git_cli(path, &["push", "origin", "div_src:div"]);
+    checkout_branch(repo, &default).unwrap();
+    git_cli(path, &["fetch", "origin"]);
+
+    // Precondition: local and remote diverged.
+    assert_eq!(
+        repo.find_branch("div", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id(),
+        c1
+    );
+
+    checkout_remote_branch(repo, "origin/div").unwrap();
+
+    // The local branch was force-moved to the remote OID and checked out.
+    assert_eq!(
+        repo.find_branch("div", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id(),
+        q
+    );
+    assert_eq!(head_oid(repo), q);
+}
+
+#[test]
+fn fetch_origin_without_remote_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(fetch_origin(repo_path(&git_repo)).is_err());
+}
+
+#[test]
+fn push_to_origin_without_remote_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(push_to_origin(repo_path(&git_repo)).is_err());
+}
+
+// ── Merge conflict ──────────────────────────────────────────────────
+
+#[test]
+fn merge_branch_conflict_errors_and_leaves_repo_mid_merge() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+
+    // Two branches edit the same line differently -> guaranteed conflict.
+    create_branch(repo, "feature", base).unwrap();
+    commit_file(repo, "f.txt", "main\n", "main edit");
+    checkout_branch(repo, "feature").unwrap();
+    commit_file(repo, "f.txt", "feature\n", "feature edit");
+    checkout_branch(repo, &default).unwrap();
+
+    let err = merge_branch(repo, "feature").unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("conflict"),
+        "error should mention the conflict: {err}"
+    );
+
+    // documents current behavior: merge_branch bails *after* repo.merge() has
+    // already written conflicts, leaving the repo mid-merge (index conflicts +
+    // MERGE_HEAD). This is a known product gap; the test pins current behavior.
+    assert!(
+        repo.index().unwrap().has_conflicts(),
+        "conflicted index is left behind"
+    );
+    assert_eq!(repo.state(), git2::RepositoryState::Merge);
+}
+
+// ── Cherry-pick / revert conflicts ──────────────────────────────────
+
+#[test]
+fn cherry_pick_conflict_errors_and_leaves_cherry_pick_head() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+
+    create_branch(repo, "feature", base).unwrap();
+    checkout_branch(repo, "feature").unwrap();
+    let pick = commit_file(repo, "f.txt", "feature\n", "feature edit");
+    checkout_branch(repo, &default).unwrap();
+    commit_file(repo, "f.txt", "main\n", "main edit");
+
+    let result = cherry_pick(path, pick);
+    assert!(result.is_err(), "conflicting cherry-pick should error");
+
+    // documents current behavior: the failed shell-out leaves git's mid-
+    // cherry-pick state (CHERRY_PICK_HEAD) in place.
+    assert!(
+        Path::new(path).join(".git/CHERRY_PICK_HEAD").exists(),
+        "CHERRY_PICK_HEAD is left behind after a conflicting cherry-pick"
+    );
+}
+
+#[test]
+fn revert_commit_conflict_errors_and_leaves_revert_head() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "f.txt", "line1\n", "c1");
+    let to_revert = commit_file(repo, "f.txt", "line2\n", "c2");
+    commit_file(repo, "f.txt", "line3\n", "c3");
+
+    // Reverting c2 (line1->line2) conflicts with c3's line3.
+    let result = revert_commit(path, to_revert);
+    assert!(result.is_err(), "conflicting revert should error");
+
+    // documents current behavior: the failed shell-out leaves git's mid-revert
+    // state (REVERT_HEAD) in place.
+    assert!(
+        Path::new(path).join(".git/REVERT_HEAD").exists(),
+        "REVERT_HEAD is left behind after a conflicting revert"
+    );
+}
+
+// ── Reset / restore / amend / checkout edge cases ───────────────────
+
+#[test]
+fn reset_to_nonexistent_commit_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    let bogus = Oid::from_str("0000000000000000000000000000000000000001").unwrap();
+    assert!(reset_to_commit(repo_path(&git_repo), bogus, ResetMode::Hard).is_err());
+}
+
+#[test]
+fn restore_files_trashes_untracked_file() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "a", "initial");
+
+    let junk = repo.workdir().unwrap().join("junk.txt");
+    fs::write(&junk, "junk").unwrap();
+
+    // trash::delete may be unavailable in a headless environment; assert the
+    // observable side effect for whichever outcome actually occurs.
+    match restore_files(path, &["junk.txt".to_string()]) {
+        Ok(()) => assert!(
+            !junk.exists(),
+            "untracked file should be removed from the working tree (trashed)"
+        ),
+        Err(_) => assert!(
+            junk.exists(),
+            "trash unavailable here; file is left in place (documents current behavior)"
+        ),
+    }
+}
+
+#[test]
+fn commit_amend_on_unborn_head_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    assert!(commit_amend(repo_path(&git_repo), "nope").is_err());
+}
+
+#[test]
+fn commit_amend_no_edit_on_unborn_head_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    assert!(commit_amend_no_edit(repo_path(&git_repo)).is_err());
+}
+
+#[test]
+fn checkout_commit_nonexistent_oid_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    commit_file(repo, "a.txt", "a", "initial");
+    let bogus = Oid::from_str("0000000000000000000000000000000000000001").unwrap();
+    assert!(checkout_commit(repo, bogus).is_err());
+}
+
+// ── friendly_commit_error mappings ──────────────────────────────────
+
+#[test]
+fn commit_with_empty_message_maps_to_friendly_error() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "a", "initial");
+
+    // Stage a real change so the failure is the empty message, not "nothing to
+    // commit".
+    fs::write(repo.workdir().unwrap().join("a.txt"), "changed").unwrap();
+    stage_file(path, "a.txt").unwrap();
+
+    let err = commit_with_message(path, "").unwrap_err();
+    assert!(
+        err.to_string().contains("Commit message cannot be empty"),
+        "empty message should map to a friendly error, got: {err}"
+    );
+}
+
+#[test]
+fn commit_without_configured_user_maps_to_friendly_error() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "a", "initial");
+
+    // Blank the identity so git refuses to author a commit ("Please tell me who
+    // you are"). Empty local values override any global identity.
+    git_cli(path, &["config", "user.name", ""]);
+    git_cli(path, &["config", "user.email", ""]);
+
+    fs::write(repo.workdir().unwrap().join("a.txt"), "changed").unwrap();
+    stage_file(path, "a.txt").unwrap();
+
+    let err = commit_with_message(path, "a message").unwrap_err();
+    assert!(
+        err.to_string().contains("Git user not configured"),
+        "unconfigured identity should map to a friendly error, got: {err}"
+    );
 }

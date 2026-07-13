@@ -2,7 +2,7 @@
 
 use chrono::Local;
 use git2::Oid;
-use keifu::git::{build_graph, graph::CellType, BranchInfo, CommitInfo};
+use keifu::git::{build_graph, graph::CellType, BranchInfo, CommitInfo, StashInfo};
 
 fn make_oid(id: &str) -> Oid {
     // Convert id into a 40-char hex hash
@@ -181,14 +181,75 @@ fn test_multiple_merges() {
         );
     }
 
-    // Expected output:
-    // C7 lane=0 -> '○─╭ '  (merge: C6 is 0, C5 is 1)
-    // C6 lane=0 -> '○ │ '  (main continues, feature stays on 1)
-    // C5 lane=1 -> '│─○ '  (feature, main pipe)
-    // C4 lane=0 -> '○─╭ '  (merge: C3 is 0, C2 is 1)
-    // C3 lane=0 -> '○ │ '  (main continues)
-    // C2 lane=1 -> '│─○ '  (develop)
-    // C1 lane=0 -> '○   '  (root)
+    // Actual topology (verified via render_cells):
+    // c7 lane=0 -> '○─╮ '   (merge: c6 stays lane 0, c5 branches to lane 1)
+    // c6 lane=0 -> '○ │ '   (main continues, c5's lane still active)
+    // c5 lane=1 -> '│ ○ '
+    // (connector) lane=0 -> '├─╯ '  (c4 is a fork point: c6 and c5 both point to it)
+    // c4 lane=0 -> '○─╮ '   (merge: c3 stays lane 0, c2 branches to lane 1)
+    // c3 lane=0 -> '○ │ '
+    // c2 lane=1 -> '│ ○ '
+    // (connector) lane=0 -> '├─╯ '  (c1 is a fork point: c3 and c2 both point to it)
+    // c1 lane=0 -> '○   '   (root)
+    let by_id = |id: &str| -> &keifu::git::graph::GraphNode {
+        layout
+            .nodes
+            .iter()
+            .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some(id))
+            .unwrap_or_else(|| panic!("{id} not found"))
+    };
+
+    let c7 = by_id("c7");
+    let c6 = by_id("c6");
+    let c5 = by_id("c5");
+    let c4 = by_id("c4");
+    let c3 = by_id("c3");
+    let c2 = by_id("c2");
+    let c1 = by_id("c1");
+
+    // c6 (first parent) stays on the merge's lane; c5 (second parent) branches off
+    assert_eq!(c7.lane, 0);
+    assert_eq!(c6.lane, 0);
+    assert_eq!(c5.lane, 1);
+    assert!(matches!(c7.cells[0], CellType::Commit(_)));
+    assert!(
+        matches!(c7.cells[2], CellType::BranchLeft(_)),
+        "c7 should branch off to c5's lane: {:?}",
+        c7.cells
+    );
+
+    // Same shape repeats one level down for c4/c3/c2
+    assert_eq!(c4.lane, 0);
+    assert_eq!(c3.lane, 0);
+    assert_eq!(c2.lane, 1);
+    assert!(matches!(c4.cells[0], CellType::Commit(_)));
+    assert!(
+        matches!(c4.cells[2], CellType::BranchLeft(_)),
+        "c4 should branch off to c2's lane: {:?}",
+        c4.cells
+    );
+
+    // c4 and c1 are fork points (2 children each), so each is preceded by a
+    // connector row that merges lane 1 back into lane 0.
+    let c4_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, c4)).unwrap();
+    let c1_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, c1)).unwrap();
+    assert!(c4_idx > 0, "expected a connector row before c4");
+    assert!(c1_idx > 0, "expected a connector row before c1");
+    let connector_before_c4 = &layout.nodes[c4_idx - 1];
+    let connector_before_c1 = &layout.nodes[c1_idx - 1];
+    assert!(connector_before_c4.commit.is_none());
+    assert!(connector_before_c1.commit.is_none());
+    assert!(matches!(connector_before_c4.cells[0], CellType::TeeRight(_)));
+    assert!(matches!(connector_before_c4.cells[2], CellType::MergeLeft(_)));
+    assert!(matches!(connector_before_c1.cells[0], CellType::TeeRight(_)));
+    assert!(matches!(connector_before_c1.cells[2], CellType::MergeLeft(_)));
+
+    // c1 is the root: no parents, no outgoing connectors
+    assert_eq!(c1.lane, 0);
+    assert!(matches!(c1.cells[0], CellType::Commit(_)));
+    assert!(c1.cells[1..].iter().all(|c| *c == CellType::Empty));
+
+    assert_eq!(layout.max_lane, 1);
 }
 
 #[test]
@@ -254,6 +315,85 @@ fn test_octopus_merge() {
             render_cells(&node.cells)
         );
     }
+
+    // Verified topology:
+    // M lane=0 -> '○─╮─╮ '  (fans out: A stays lane 0, B branches to lane 1, C to lane 2)
+    // A lane=0 -> '○ │ │ '
+    // B lane=1 -> '│ ○ │ '
+    // C lane=2 -> '│ │ ○ '
+    // (connector) lane=0 -> '├─┴─╯ '  (R is a fork point: A, B, C all point to it)
+    // R lane=0 -> '○     '
+
+    let m = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("M"))
+        .expect("M not found");
+    let a = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("A"))
+        .expect("A not found");
+    let b = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("B"))
+        .expect("B not found");
+    let c = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("C"))
+        .expect("C not found");
+    let r = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("R"))
+        .expect("R not found");
+
+    // The merge commit's three parents fan out to three distinct lanes
+    assert_eq!(m.lane, 0);
+    assert_eq!(a.lane, 0);
+    assert_eq!(b.lane, 1);
+    assert_eq!(c.lane, 2);
+    assert_eq!(
+        layout.max_lane, 2,
+        "octopus merge with 3 parents should occupy 3 lanes (0,1,2)"
+    );
+
+    // M's row: commit on lane 0, then a branch-off connector to lane 1 (B) and lane 2 (C)
+    assert!(matches!(m.cells[0], CellType::Commit(_)));
+    assert!(
+        matches!(m.cells[2], CellType::BranchLeft(_)),
+        "M should branch to B's lane: {:?}",
+        m.cells
+    );
+    assert!(
+        matches!(m.cells[4], CellType::BranchLeft(_)),
+        "M should branch to C's lane: {:?}",
+        m.cells
+    );
+
+    // R is a fork point (A, B, C all point to it) so a connector row precedes it,
+    // fanning all three lanes back into lane 0.
+    let r_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, r)).unwrap();
+    assert!(r_idx > 0, "expected a connector row before R");
+    let connector = &layout.nodes[r_idx - 1];
+    assert!(connector.commit.is_none());
+    assert!(matches!(connector.cells[0], CellType::TeeRight(_)));
+    assert!(
+        matches!(connector.cells[2], CellType::TeeUp(_)),
+        "middle merging lane (B) should be a T-up junction: {:?}",
+        connector.cells
+    );
+    assert!(
+        matches!(connector.cells[4], CellType::MergeLeft(_)),
+        "rightmost merging lane (C) should close with MergeLeft: {:?}",
+        connector.cells
+    );
+
+    // R terminates the graph: no parents, no outgoing connectors
+    assert!(matches!(r.cells[0], CellType::Commit(_)));
+    assert!(r.cells[1..].iter().all(|cell| *cell == CellType::Empty));
 }
 
 #[test]
@@ -290,6 +430,99 @@ fn test_parallel_branches() {
             render_cells(&node.cells)
         );
     }
+
+    // Verified topology:
+    // M2 lane=0 -> '○─╮ '
+    // A2 lane=0 -> '○ │ '
+    // B2 lane=1 -> '│ ○ '
+    // A1 lane=0 -> '○ │ '
+    // B1 lane=1 -> '│ ○ '
+    // (connector) lane=0 -> '├─╯ '  (M1 is a fork point: A1, B1 both point to it)
+    // M1 lane=0 -> '○─╮ '
+    // X  lane=1 -> '│ ○ '
+    // (connector) lane=0 -> '├─╯ '  (R is a fork point: M1, X both point to it)
+    // R  lane=0 -> '○   '
+
+    let by_id = |id: &str| -> &keifu::git::graph::GraphNode {
+        layout
+            .nodes
+            .iter()
+            .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some(id))
+            .unwrap_or_else(|| panic!("{id} not found"))
+    };
+
+    let m2 = by_id("M2");
+    let a2 = by_id("A2");
+    let b2 = by_id("B2");
+    let a1 = by_id("A1");
+    let b1 = by_id("B1");
+    let m1 = by_id("M1");
+    let x = by_id("X");
+    let r = by_id("R");
+
+    // The A-chain (main line: M2, A2, A1) stays on lane 0 throughout
+    assert_eq!(m2.lane, 0);
+    assert_eq!(a2.lane, 0);
+    assert_eq!(a1.lane, 0);
+
+    // The B-chain (parallel branch: B2, B1) occupies a distinct lane (1),
+    // separate from the A-chain, for its entire length
+    assert_eq!(b2.lane, 1);
+    assert_eq!(b1.lane, 1);
+    assert_ne!(
+        a2.lane, b2.lane,
+        "the two parallel branches must occupy distinct lanes"
+    );
+
+    // Both chains are continuous: the lane holding the "other" branch shows
+    // an unbroken line (Pipe, or the branch's own Commit row) between the two
+    // visible commits on the A-chain - no gaps (Empty).
+    let a2_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, a2)).unwrap();
+    let a1_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, a1)).unwrap();
+    let b_cell_idx = b2.lane * 2;
+    for node in &layout.nodes[(a2_idx + 1)..a1_idx] {
+        assert!(
+            matches!(
+                node.cells.get(b_cell_idx),
+                Some(CellType::Pipe(_)) | Some(CellType::Commit(_))
+            ),
+            "expected continuous line on B's lane between A2 and A1, got {:?}",
+            node.cells
+        );
+    }
+
+    // M1 is a fork point (A1 and B1 both point to it), so a connector row
+    // merges B1's lane back into the main lane right before M1.
+    let m1_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, m1)).unwrap();
+    assert!(m1_idx > 0);
+    let connector1 = &layout.nodes[m1_idx - 1];
+    assert!(connector1.commit.is_none());
+    assert!(matches!(connector1.cells[0], CellType::TeeRight(_)));
+    assert!(matches!(connector1.cells[2], CellType::MergeLeft(_)));
+
+    // M1 is itself a merge (parents R, X): fans back out to a second lane
+    assert_eq!(m1.lane, 0);
+    assert_eq!(x.lane, 1);
+    assert!(matches!(m1.cells[0], CellType::Commit(_)));
+    assert!(
+        matches!(m1.cells[2], CellType::BranchLeft(_)),
+        "M1 should branch out to X's lane: {:?}",
+        m1.cells
+    );
+
+    // R is a fork point (M1, X both point to it): another connector row merges
+    // X's lane back into the main lane before R, which terminates the graph.
+    let r_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, r)).unwrap();
+    assert!(r_idx > 0);
+    let connector2 = &layout.nodes[r_idx - 1];
+    assert!(connector2.commit.is_none());
+    assert!(matches!(connector2.cells[0], CellType::TeeRight(_)));
+    assert!(matches!(connector2.cells[2], CellType::MergeLeft(_)));
+    assert_eq!(r.lane, 0);
+    assert!(matches!(r.cells[0], CellType::Commit(_)));
+    assert!(r.cells[1..].iter().all(|cell| *cell == CellType::Empty));
+
+    assert_eq!(layout.max_lane, 1);
 }
 
 #[test]
@@ -516,4 +749,385 @@ fn test_hotfix_merged_into_multiple_branches() {
         has_continuous_line,
         "Expected continuous Pipe line from main-merge to hotfix"
     );
+}
+
+#[test]
+fn test_stash_node_renders_with_base_connection() {
+    // A stash is a commit-like node whose base commit is also in the graph.
+    // Real stash commits have 2-3 parents (base + index tree + untracked
+    // tree) but `GitRepository::get_commits` truncates `parent_oids` to just
+    // the base before this ever reaches `build_graph` - so from build_graph's
+    // point of view a stash always has a single parent.
+    //
+    // main2 -> base   (main branch continues)
+    // stash1 -> base  (stash, single-parent after truncation)
+    // base -> root
+    // root (root)
+    //
+    // `base` has two children (main2, stash1) so it's a fork point: the
+    // stash gets its own lane, and a connector row merges it back into
+    // main's lane right before `base` is rendered.
+    let commits = vec![
+        make_commit("main2", vec!["base"]),
+        make_commit("stash1", vec!["base"]),
+        make_commit("base", vec!["root"]),
+        make_commit("root", vec![]),
+    ];
+    let branches = vec![make_branch("main", "main2", true)];
+    let stashes = vec![StashInfo {
+        index: 0,
+        message: "WIP on main: test stash".to_string(),
+        oid: make_oid("stash1"),
+        base_oid: make_oid("base"),
+    }];
+
+    let layout = build_graph(&commits, &branches, &stashes, None, None);
+
+    println!("\nStash node:");
+    for node in &layout.nodes {
+        println!(
+            "  {} lane={} is_stash={} label={:?} -> '{}'",
+            get_short_id(node),
+            node.lane,
+            node.is_stash,
+            node.stash_label,
+            render_cells(&node.cells)
+        );
+    }
+
+    let stash_node = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("stash1"))
+        .expect("stash1 not found");
+
+    // is_stash and stash_label are set correctly
+    assert!(stash_node.is_stash);
+    assert_eq!(stash_node.stash_label, Some("stash@{0}".to_string()));
+
+    // Single-parent rendering: only one parent, so the stash's row itself
+    // doesn't draw any branch/merge glyph (the parent connection is drawn on
+    // the *base's* row via a connector, not on the stash's own row).
+    assert_eq!(
+        stash_node
+            .commit
+            .as_ref()
+            .map(|c| c.parent_oids.len())
+            .unwrap(),
+        1
+    );
+    assert!(
+        !stash_node
+            .cells
+            .iter()
+            .any(|c| matches!(
+                c,
+                CellType::BranchLeft(_)
+                    | CellType::BranchRight(_)
+                    | CellType::MergeLeft(_)
+                    | CellType::MergeRight(_)
+            )),
+        "stash's own row should have no branch/merge glyphs: {:?}",
+        stash_node.cells
+    );
+
+    // The non-stash commit nodes should never be marked as stash
+    let main2 = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("main2"))
+        .expect("main2 not found");
+    assert!(!main2.is_stash);
+    assert_eq!(main2.stash_label, None);
+
+    // Connection to the base commit: `base` is a fork point (main2 and
+    // stash1 both point to it), so a connector row precedes it that merges
+    // the stash's lane back into main's lane.
+    let base_node = layout
+        .nodes
+        .iter()
+        .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some("base"))
+        .expect("base not found");
+    assert_ne!(
+        stash_node.lane, base_node.lane,
+        "stash should get its own lane distinct from main"
+    );
+
+    let base_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, base_node))
+        .unwrap();
+    assert!(base_idx > 0, "expected a connector row before base");
+    let connector = &layout.nodes[base_idx - 1];
+    assert!(
+        connector.commit.is_none(),
+        "expected a connector row merging the stash lane into base's lane"
+    );
+    assert!(matches!(connector.cells[base_node.lane * 2], CellType::TeeRight(_)));
+    assert!(matches!(
+        connector.cells[stash_node.lane * 2],
+        CellType::MergeLeft(_)
+    ));
+}
+
+#[test]
+fn test_uncommitted_node_connects_to_head_on_lane_zero() {
+    // HEAD is on the only branch (lane 0). The uncommitted node should be
+    // inserted at the top, on the same lane as HEAD, with no horizontal
+    // connector needed since the lanes already match.
+    let commits = vec![make_commit("c2", vec!["c1"]), make_commit("c1", vec![])];
+    let branches = vec![make_branch("main", "c2", true)];
+
+    let layout = build_graph(&commits, &branches, &[], Some(Some(3)), Some(make_oid("c2")));
+
+    println!("\nUncommitted, HEAD on lane 0:");
+    for node in &layout.nodes {
+        println!(
+            "  {} lane={} is_uncommitted={} -> '{}'",
+            get_short_id(node),
+            node.lane,
+            node.is_uncommitted,
+            render_cells(&node.cells)
+        );
+    }
+
+    // Uncommitted node is inserted at the top
+    assert!(layout.nodes[0].is_uncommitted);
+    assert_eq!(layout.nodes[0].uncommitted_count, Some(3));
+    assert_eq!(layout.nodes[0].lane, 0);
+
+    // HEAD commit (c2) is on lane 0, matching the uncommitted node's lane
+    let head_node = &layout.nodes[1];
+    assert_eq!(head_node.commit.as_ref().unwrap().short_id, "c2");
+    assert!(head_node.is_head);
+    assert_eq!(head_node.lane, 0);
+    assert_eq!(head_node.lane, layout.nodes[0].lane);
+
+    // Same lane => no horizontal connector glyphs on HEAD's row
+    assert!(
+        !head_node
+            .cells
+            .iter()
+            .any(|c| matches!(c, CellType::MergeLeft(_) | CellType::MergeRight(_))),
+        "expected no horizontal connector when uncommitted shares HEAD's lane: {:?}",
+        head_node.cells
+    );
+}
+
+#[test]
+fn test_uncommitted_node_connects_to_head_on_nonzero_lane() {
+    // HEAD (f1) is the second parent of a fork commit `m`, so it starts life
+    // on lane 1. `m`'s own row already occupies lane 1's column (with a
+    // BranchLeft glyph), so by the time the uncommitted-changes placement
+    // logic runs, lane 1 is *not* available for every row above HEAD - it
+    // must pick a fresh lane (2) and draw a horizontal connector back to
+    // HEAD's lane.
+    //
+    // m -> main_child, f1   (fork: main_child lane 0, f1 lane 1)
+    // main_child (root)
+    // f1 (root, HEAD)
+    let commits = vec![
+        make_commit("m", vec!["main_child", "f1"]),
+        make_commit("main_child", vec![]),
+        make_commit("f1", vec![]),
+    ];
+    let branches = vec![make_branch("feature", "f1", true)];
+
+    let layout = build_graph(
+        &commits,
+        &branches,
+        &[],
+        Some(Some(2)),
+        Some(make_oid("f1")),
+    );
+
+    println!("\nUncommitted, HEAD on non-zero lane:");
+    for node in &layout.nodes {
+        println!(
+            "  {} lane={} is_uncommitted={} is_head={} -> '{}'",
+            get_short_id(node),
+            node.lane,
+            node.is_uncommitted,
+            node.is_head,
+            render_cells(&node.cells)
+        );
+    }
+
+    // Uncommitted node inserted at the top
+    assert!(layout.nodes[0].is_uncommitted);
+    assert_eq!(layout.nodes[0].uncommitted_count, Some(2));
+
+    let head_node = layout
+        .nodes
+        .iter()
+        .find(|n| n.is_head)
+        .expect("HEAD node not found");
+    assert_eq!(head_node.commit.as_ref().unwrap().short_id, "f1");
+    assert_eq!(head_node.lane, 1, "HEAD (f1) starts on lane 1 (fork sibling)");
+
+    let uncommitted_lane = layout.nodes[0].lane;
+    assert_ne!(
+        uncommitted_lane, head_node.lane,
+        "lane 1 should be blocked by m's own row, forcing a different lane"
+    );
+
+    // A horizontal connector (MergeLeft, since the uncommitted lane is to
+    // the right of HEAD's lane) must appear on HEAD's row to visually join
+    // the uncommitted lane back to HEAD's lane.
+    assert!(
+        head_node
+            .cells
+            .iter()
+            .any(|c| matches!(c, CellType::MergeLeft(_) | CellType::MergeRight(_))),
+        "expected a horizontal connector (MergeLeft/MergeRight) on HEAD's row: {:?}",
+        head_node.cells
+    );
+
+    // Every row strictly above HEAD carries a Pipe in the uncommitted lane,
+    // continuing the line down to HEAD's row.
+    let head_idx = layout.nodes.iter().position(|n| n.is_head).unwrap();
+    let uncommitted_cell_idx = uncommitted_lane * 2;
+    for node in &layout.nodes[0..head_idx] {
+        assert!(
+            matches!(
+                node.cells.get(uncommitted_cell_idx),
+                Some(CellType::Pipe(_)) | Some(CellType::Commit(_))
+            ),
+            "expected a continuous line down to HEAD in the uncommitted lane: {:?}",
+            node.cells
+        );
+    }
+}
+
+#[test]
+fn test_uncommitted_node_dropped_when_head_oid_not_in_graph() {
+    // documents current behavior: if head_commit_oid doesn't match any node
+    // in the graph (e.g. stale/unknown HEAD), build_graph silently drops the
+    // uncommitted-changes node entirely rather than falling back to a
+    // default lane. A future fix might change this, but today it's silent.
+    let commits = vec![make_commit("c2", vec!["c1"]), make_commit("c1", vec![])];
+    let branches = vec![make_branch("main", "c2", true)];
+
+    let layout = build_graph(
+        &commits,
+        &branches,
+        &[],
+        Some(Some(1)),
+        Some(make_oid("does-not-exist")),
+    );
+
+    assert!(
+        layout.nodes.iter().all(|n| !n.is_uncommitted),
+        "documents current behavior: an unmatched head_commit_oid causes the \
+         uncommitted node to be silently dropped"
+    );
+    assert_eq!(layout.nodes.len(), commits.len());
+}
+
+#[test]
+fn test_empty_graph_no_commits_no_uncommitted() {
+    // No commits, no branches, no uncommitted changes => empty layout, no panic.
+    let layout = build_graph(&[], &[], &[], None, None);
+
+    assert_eq!(layout.nodes.len(), 0);
+    assert_eq!(layout.max_lane, 0);
+}
+
+#[test]
+fn test_orphan_disconnected_roots() {
+    // Two root commits with no common ancestor, each with its own branch.
+    // They should render on separate lanes and each chain should terminate
+    // cleanly (no dangling connectors) at its root.
+    //
+    // a2 -> a1 (root)   [branch-a]
+    // b2 -> b1 (root)   [branch-b]
+    let commits = vec![
+        make_commit("a2", vec!["a1"]),
+        make_commit("b2", vec!["b1"]),
+        make_commit("a1", vec![]),
+        make_commit("b1", vec![]),
+    ];
+    let branches = vec![
+        make_branch("branch-a", "a2", true),
+        make_branch("branch-b", "b2", false),
+    ];
+
+    let layout = build_graph(&commits, &branches, &[], None, None);
+
+    println!("\nOrphan disconnected roots:");
+    for node in &layout.nodes {
+        println!(
+            "  {} lane={} -> '{}'",
+            get_short_id(node),
+            node.lane,
+            render_cells(&node.cells)
+        );
+    }
+
+    let by_id = |id: &str| -> &keifu::git::graph::GraphNode {
+        layout
+            .nodes
+            .iter()
+            .find(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some(id))
+            .unwrap_or_else(|| panic!("{id} not found"))
+    };
+
+    let a2 = by_id("a2");
+    let a1 = by_id("a1");
+    let b2 = by_id("b2");
+    let b1 = by_id("b1");
+
+    // Each chain stays internally on one lane
+    assert_eq!(a2.lane, a1.lane);
+    assert_eq!(b2.lane, b1.lane);
+    // The two disconnected chains occupy distinct lanes
+    assert_ne!(
+        a2.lane, b2.lane,
+        "disconnected root chains must render on separate lanes"
+    );
+    assert!(layout.max_lane >= 1);
+
+    // Both roots terminate cleanly: their own commit cell is set, and they
+    // draw no outgoing parent connectors (no parents to connect to).
+    for root in [a1, b1] {
+        let own_cell_idx = root.lane * 2;
+        assert!(matches!(root.cells[own_cell_idx], CellType::Commit(_)));
+        assert!(
+            !root
+                .cells
+                .iter()
+                .any(|c| matches!(
+                    c,
+                    CellType::BranchLeft(_)
+                        | CellType::BranchRight(_)
+                        | CellType::MergeLeft(_)
+                        | CellType::MergeRight(_)
+                        | CellType::TeeUp(_)
+                )),
+            "root commit should have no outgoing parent connectors: {:?}",
+            root.cells
+        );
+    }
+}
+
+#[test]
+fn test_single_root_commit() {
+    // A single commit with no parents and no history beyond it.
+    let commits = vec![make_commit("only", vec![])];
+    let branches = vec![make_branch("main", "only", true)];
+
+    let layout = build_graph(&commits, &branches, &[], None, None);
+
+    assert_eq!(layout.nodes.len(), 1);
+    assert_eq!(layout.max_lane, 0);
+
+    let node = &layout.nodes[0];
+    assert_eq!(node.commit.as_ref().unwrap().short_id, "only");
+    assert_eq!(node.lane, 0);
+    assert!(node.is_head);
+    assert!(!node.is_uncommitted);
+    assert!(!node.is_stash);
+    assert!(matches!(node.cells[0], CellType::Commit(_)));
+    assert!(node.cells[1..].iter().all(|c| *c == CellType::Empty));
 }
