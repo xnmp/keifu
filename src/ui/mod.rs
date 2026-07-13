@@ -27,7 +27,7 @@ use self::{
     branch_filter::BranchFilterWidget,
     commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
     commit_menu::CommitMenuWidget,
-    dialog::{BranchPickerWidget, ConfirmDialog, InputDialog},
+    dialog::{BranchPickerWidget, ConfirmDialog, FileHistoryWidget, InputDialog},
     file_diff_view::FileDiffViewWidget,
     files_pane::{FilesPaneState, FilesPaneWidget},
     graph_view::GraphViewWidget,
@@ -260,6 +260,40 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
         }
+        AppMode::TagPicker {
+            tags,
+            selected,
+            action,
+        } => {
+            let max_name_len = tags.iter().map(|t| t.len()).max().unwrap_or(10);
+            let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
+            let popup_height = (tags.len() + 2).min(12) as u16;
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            let title = match action {
+                crate::app::TagAction::Delete => " Delete Tag ",
+                crate::app::TagAction::Push => " Push Tag ",
+            };
+            frame.render_widget(
+                BranchPickerWidget::with_title(tags, *selected, &theme, title),
+                popup_area,
+            );
+        }
+        AppMode::RemotePicker { remotes, selected, op } => {
+            let title = match op {
+                crate::app::RemoteOp::Fetch => " Fetch from remote ",
+                crate::app::RemoteOp::Pull => " Pull from remote ",
+                crate::app::RemoteOp::Push => " Push to remote ",
+                crate::app::RemoteOp::Prune => " Prune remote ",
+            };
+            let max_name_len = remotes.iter().map(|b| b.len()).max().unwrap_or(10);
+            let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
+            let popup_height = (remotes.len() + 2).min(12) as u16;
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                BranchPickerWidget::with_title(remotes, *selected, &theme, title),
+                popup_area,
+            );
+        }
         AppMode::BranchFilter {
             filter,
             selected,
@@ -276,6 +310,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
                 BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected, &theme),
+                popup_area,
+            );
+        }
+        AppMode::FileHistory {
+            path,
+            entries,
+            selected,
+        } => {
+            let popup_height = (entries.len() + 2).clamp(6, 24) as u16;
+            let popup_width = area.width.saturating_sub(6).clamp(30, 80);
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                FileHistoryWidget::new(entries, *selected, &theme, path),
                 popup_area,
             );
         }

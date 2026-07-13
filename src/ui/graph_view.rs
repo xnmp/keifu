@@ -119,10 +119,19 @@ impl<'a> GraphViewWidget<'a> {
             if is_selected {
                 selected_in_filtered = Some(filtered_pos);
             }
+            // A node is "marked" when it's the pending compare mark or one of the
+            // active comparison's two endpoints.
+            let is_marked = node.commit.as_ref().is_some_and(|c| {
+                app.compare_marked == Some(c.oid)
+                    || app
+                        .compare_range
+                        .is_some_and(|(old, new)| old == c.oid || new == c.oid)
+            });
             let line = render_graph_line(
                 node,
                 max_lane,
                 is_selected,
+                is_marked,
                 inner_width,
                 selected_branch_name,
                 theme,
@@ -399,10 +408,36 @@ fn abbreviate_branch_label(name: &str, max_width: usize, extra_count: usize) -> 
     format!("[{}{}{}{}]{}", prefix, head, ELLIPSIS, tail, suffix)
 }
 
+/// Format tag labels for a node. Tags render as `<name>` in the tag color,
+/// visually distinct from `[branch]` and `{stash}` labels. Long tag names are
+/// truncated with an ellipsis so a single tag can't dominate the row.
+fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(String, Style)> {
+    // Total label width including the enclosing `<` `>` delimiters.
+    const MAX_TAG_LABEL_WIDTH: usize = 24;
+    let style = Style::default()
+        .fg(theme.tag_label)
+        .add_modifier(Modifier::BOLD);
+    tag_names
+        .iter()
+        .map(|name| {
+            let label = if display_width(name) + 2 <= MAX_TAG_LABEL_WIDTH {
+                format!("<{}>", name)
+            } else {
+                // -3: two delimiters plus one ellipsis character.
+                let head = truncate_to_width(name, MAX_TAG_LABEL_WIDTH - 3);
+                format!("<{}…>", head)
+            };
+            (label, style)
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
 fn render_graph_line<'a>(
     node: &GraphNode,
     max_lane: usize,
     is_selected: bool,
+    is_marked: bool,
     total_width: usize,
     selected_branch_name: Option<&str>,
     theme: &Theme,
@@ -498,6 +533,17 @@ fn render_graph_line<'a>(
     spans.push(Span::raw(" "));
     left_width += 1;
 
+    // Compare marker: flags commits that are marked or a comparison endpoint.
+    if is_marked {
+        spans.push(Span::styled(
+            "◆ ",
+            Style::default()
+                .fg(theme.search_cursor)
+                .add_modifier(Modifier::BOLD),
+        ));
+        left_width += 2;
+    }
+
     // Handle uncommitted changes row
     if node.is_uncommitted {
         let text = match node.uncommitted_count {
@@ -536,6 +582,9 @@ fn render_graph_line<'a>(
         theme,
     );
 
+    // Tag labels render after branch labels with a distinct color.
+    let tag_display = build_tag_labels(&node.tag_names, theme);
+
     // === Right-aligned: date author hash (fixed width) ===
     let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
     let author = truncate_to_width(&commit.author_name, 8);
@@ -550,6 +599,12 @@ fn render_graph_line<'a>(
         .map(|(i, (label, _))| display_width(label) + if i > 0 { 1 } else { 0 })
         .sum::<usize>()
         + if !branch_display.is_empty() { 1 } else { 0 };
+
+    // Each tag label carries a trailing space (see rendering below).
+    let tag_width: usize = tag_display
+        .iter()
+        .map(|(label, _)| display_width(label) + 1)
+        .sum();
 
     // Calculate remaining space for branch + message + right info
     let graph_width = left_width;
@@ -573,6 +628,13 @@ fn render_graph_line<'a>(
         left_width += 1;
     }
 
+    // Render tag labels (after branches, before the stash label)
+    for (label, style) in &tag_display {
+        left_width += display_width(label) + 1;
+        spans.push(Span::styled(label.clone(), *style));
+        spans.push(Span::raw(" "));
+    }
+
     // Render stash label
     let stash_width = if let Some(stash_label) = &node.stash_label {
         let label = format!("{{{}}}", stash_label);
@@ -591,6 +653,7 @@ fn render_graph_line<'a>(
     // Compute max message width (remaining space after branch, stash label, and right side)
     let available_for_message = remaining_for_content
         .saturating_sub(branch_width)
+        .saturating_sub(tag_width)
         .saturating_sub(stash_width)
         .saturating_sub(right_width);
     let message = truncate_to_width(&commit.message, available_for_message);
@@ -790,5 +853,43 @@ mod tests {
     #[test]
     fn empty_string_has_zero_width() {
         assert_eq!(display_width(""), 0);
+    }
+
+    // ── build_tag_labels ─────────────────────────────────────────────
+
+    #[test]
+    fn no_tags_produces_no_labels() {
+        let theme = Theme::dark();
+        assert!(build_tag_labels(&[], &theme).is_empty());
+    }
+
+    #[test]
+    fn short_tag_is_wrapped_in_angle_brackets() {
+        let theme = Theme::dark();
+        let labels = build_tag_labels(&["v1.0".to_string()], &theme);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].0, "<v1.0>");
+        // Distinct from branch labels: rendered in the tag color.
+        assert_eq!(labels[0].1.fg, Some(theme.tag_label));
+    }
+
+    #[test]
+    fn each_tag_gets_its_own_label() {
+        let theme = Theme::dark();
+        let labels = build_tag_labels(&["v1.0".to_string(), "release".to_string()], &theme);
+        let rendered: Vec<&str> = labels.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(rendered, vec!["<v1.0>", "<release>"]);
+    }
+
+    #[test]
+    fn overlong_tag_is_truncated_within_the_width_budget() {
+        let theme = Theme::dark();
+        let long = "an-extremely-long-tag-name-that-will-not-fit-on-one-line".to_string();
+        let labels = build_tag_labels(&[long], &theme);
+        let label = &labels[0].0;
+        // Never exceeds the label budget, stays bracketed, and is elided.
+        assert!(display_width(label) <= 24, "label too wide: {label:?}");
+        assert!(label.starts_with('<') && label.ends_with('>'));
+        assert!(label.contains('…'), "expected an ellipsis: {label:?}");
     }
 }

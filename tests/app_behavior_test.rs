@@ -13,7 +13,9 @@ use git2::{Oid, Repository, Signature, Status};
 use tempfile::TempDir;
 
 use keifu::action::Action;
-use keifu::app::{App, AppMode, CommitMenuItem, ConfirmAction, FilesPaneItem, FocusedPanel};
+use keifu::app::{
+    App, AppMode, CommitMenuItem, ConfirmAction, FilesPaneItem, FocusedPanel, InputAction,
+};
 use keifu::git::GitRepository;
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -1378,11 +1380,158 @@ fn commit_menu_stash_node_shows_stash_items() {
             &vec![
                 CommitMenuItem::StashApply,
                 CommitMenuItem::StashPop,
+                CommitMenuItem::BranchFromStash,
                 CommitMenuItem::StashDrop,
             ],
         ),
         other => panic!("expected a stash CommitMenu, got {:?}", other),
     }
+}
+
+#[test]
+fn commit_menu_tagged_commit_includes_tag_ops() {
+    let (_td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "first");
+    // Lightweight tag on the single commit.
+    repo.repo()
+        .tag_lightweight("v1.0", &repo.repo().find_object(c1, None).unwrap(), false)
+        .unwrap();
+    let mut app = make_app(repo);
+
+    // Selection starts on the tagged commit node.
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            assert!(
+                items.contains(&CommitMenuItem::DeleteTag),
+                "menu should offer Delete tag, got {:?}",
+                items
+            );
+            assert!(
+                items.contains(&CommitMenuItem::PushTag),
+                "menu should offer Push tag, got {:?}",
+                items
+            );
+        }
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn commit_menu_untagged_commit_omits_tag_ops() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            assert!(!items.contains(&CommitMenuItem::DeleteTag));
+            assert!(!items.contains(&CommitMenuItem::PushTag));
+        }
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn commit_menu_branch_tip_includes_rename() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => assert!(
+            items.contains(&CommitMenuItem::RenameBranch),
+            "branch tip menu should offer Rename branch, got {:?}",
+            items
+        ),
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+// ── Rename / stash / branch-from-stash input wiring ─────────────────
+
+#[test]
+fn rename_branch_via_input_renames_current_branch() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    let old = app.head_name.clone().expect("HEAD is on a branch");
+
+    // The rename input is launched prefilled with the current name; the user
+    // replaces it and confirms.
+    app.mode = AppMode::Input {
+        title: format!("Rename '{}' to", old),
+        input: "renamed-branch".to_string(),
+        action: InputAction::RenameBranch {
+            old_name: old.clone(),
+        },
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert!(matches!(app.mode, AppMode::Normal));
+    let r = Repository::open(td.path()).unwrap();
+    assert_eq!(r.head().unwrap().shorthand().unwrap(), "renamed-branch");
+    assert!(r.find_branch(&old, git2::BranchType::Local).is_err());
+}
+
+#[test]
+fn ctrl_s_opens_stash_options_menu_on_uncommitted_node() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    fs::write(td.path().join("a.txt"), "changed").unwrap();
+    let mut app = make_app(repo);
+    assert!(app.is_uncommitted_selected());
+    app.focused_panel = FocusedPanel::CommitDetail;
+
+    app.handle_action(Action::StashStaged).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => assert_eq!(
+            items,
+            &vec![
+                CommitMenuItem::StashPushStaged,
+                CommitMenuItem::StashPushAll,
+                CommitMenuItem::StashPushUntracked,
+            ],
+        ),
+        other => panic!("expected a stash options CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn branch_from_stash_via_input_creates_branch_and_drops_stash() {
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "original", "root");
+    fs::write(td.path().join("a.txt"), "changed").unwrap();
+    {
+        let mut r = Repository::open(td.path()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        r.stash_save(&sig, "wip", None).unwrap();
+    }
+    let mut app = make_app(repo);
+    let stash_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.is_stash)
+        .expect("a stash node is present");
+    app.graph_nav.graph_list_state.select(Some(stash_idx));
+
+    app.mode = AppMode::Input {
+        title: "Branch from stash".to_string(),
+        input: "stash-work".to_string(),
+        action: InputAction::BranchFromStash { index: 0 },
+    };
+    app.handle_action(Action::Confirm).unwrap();
+
+    assert!(matches!(app.mode, AppMode::Normal));
+    let r = Repository::open(td.path()).unwrap();
+    assert!(
+        r.find_branch("stash-work", git2::BranchType::Local).is_ok(),
+        "a branch was created from the stash"
+    );
+    assert_eq!(stash_count(td.path()), 0, "the stash was consumed");
 }
 
 #[test]
@@ -1614,5 +1763,115 @@ fn archive_moves_file_and_gitignores_archive_dir() {
     assert!(
         contents.lines().any(|l| l.trim() == ".archive"),
         "the archive dir is gitignored, was: {contents:?}"
+    );
+}
+
+// ── Branch filtering: hiding a branch removes its commits ────────────
+
+/// A repo where `feature` branches off a shared root (`c1`) and adds one
+/// exclusive commit (`f1`), while HEAD stays on `main` at `c2`.
+/// Returns (tempdir, app, shared_c1, feature_f1, main_c2).
+fn repo_with_feature_branch() -> (TempDir, App, Oid, Oid, Oid) {
+    let (td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "shared root");
+    let c2 = commit_file(repo.repo(), "b.txt", "b", "main work"); // HEAD = main @ c2
+    // Branch `feature` off the shared root, then add a commit reachable only
+    // through `feature` (HEAD and the working tree are left untouched).
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    let f1 = commit_to_ref(repo.repo(), "refs/heads/feature", "f.txt", "f", "feature work");
+    let app = make_app(repo);
+    (td, app, c1, f1, c2)
+}
+
+fn commit_oids(app: &App) -> Vec<Oid> {
+    app.commits.iter().map(|c| c.oid).collect()
+}
+
+#[test]
+fn hiding_a_branch_removes_exclusive_commits_but_keeps_shared_ancestors() {
+    let (_td, mut app, c1, f1, c2) = repo_with_feature_branch();
+
+    // Baseline: the exclusive commit is present before hiding.
+    assert!(commit_oids(&app).contains(&f1));
+
+    app.hidden_branches.insert("feature".to_string());
+    app.refresh(true).unwrap();
+
+    let oids = commit_oids(&app);
+    assert!(!oids.contains(&f1), "feature's exclusive commit must vanish");
+    assert!(oids.contains(&c1), "shared ancestor must remain");
+    assert!(oids.contains(&c2), "main's own commit must remain");
+    // The hidden commit is gone from the rendered graph nodes too.
+    assert!(
+        app.graph_layout
+            .nodes
+            .iter()
+            .all(|n| n.commit.as_ref().map(|c| c.oid) != Some(f1)),
+        "hidden commit must not appear as a graph node"
+    );
+}
+
+#[test]
+fn unhiding_a_branch_brings_its_commits_back() {
+    let (_td, mut app, _c1, f1, _c2) = repo_with_feature_branch();
+
+    app.hidden_branches.insert("feature".to_string());
+    app.refresh(true).unwrap();
+    assert!(!commit_oids(&app).contains(&f1));
+
+    app.hidden_branches.remove("feature");
+    app.refresh(true).unwrap();
+    assert!(
+        commit_oids(&app).contains(&f1),
+        "unhiding the branch restores its commits"
+    );
+}
+
+#[test]
+fn hiding_all_branches_still_shows_head_history() {
+    let (_td, mut app, c1, f1, c2) = repo_with_feature_branch();
+
+    // Hide literally every branch.
+    let all: Vec<String> = app.branches.iter().map(|b| b.name.clone()).collect();
+    for name in all {
+        app.hidden_branches.insert(name);
+    }
+    app.refresh(true).unwrap();
+
+    let oids = commit_oids(&app);
+    // HEAD (main @ c2) and its ancestor are still walked via the HEAD push.
+    assert!(oids.contains(&c2), "HEAD commit must remain");
+    assert!(oids.contains(&c1), "HEAD's ancestor must remain");
+    // feature is hidden and its exclusive commit is unreachable from HEAD.
+    assert!(!oids.contains(&f1));
+    // No panic / empty-crash: the graph still has nodes.
+    assert!(!app.graph_layout.nodes.is_empty());
+}
+
+#[test]
+fn selection_survives_branch_hide_refresh() {
+    let (_td, mut app, _c1, _f1, c2) = repo_with_feature_branch();
+
+    // Select the HEAD/main commit node (c2), which stays visible.
+    let c2_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(c2))
+        .unwrap();
+    app.graph_nav.graph_list_state.select(Some(c2_idx));
+
+    app.hidden_branches.insert("feature".to_string());
+    app.refresh(true).unwrap();
+
+    // Selection stays in bounds and still points at the same commit.
+    let sel = app.graph_nav.graph_list_state.selected().unwrap();
+    assert!(sel < app.graph_layout.nodes.len(), "selection stays in bounds");
+    assert_eq!(
+        app.graph_layout.nodes[sel].commit.as_ref().map(|c| c.oid),
+        Some(c2),
+        "the selected commit is preserved across the shrinking refresh"
     );
 }

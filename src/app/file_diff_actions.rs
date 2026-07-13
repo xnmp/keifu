@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// Snapshot of the FileDiff viewer state needed to run a hunk operation.
+struct HunkOpTarget {
+    path: std::path::PathBuf,
+    is_binary: bool,
+    has_hunks: bool,
+    /// Index of the hunk under the cursor, into both `content.hunks` and the
+    /// git2 patch built with the same diff options.
+    hunk_index: usize,
+    scroll_offset: usize,
+    is_untracked: bool,
+}
+
 impl App {
     pub(crate) fn handle_file_diff_action(&mut self, action: Action) -> Result<()> {
         let AppMode::FileDiff {
@@ -115,23 +127,39 @@ impl App {
                 }
             }
             Action::NextFile => {
-                let file_list_snapshot = if let AppMode::FileDiff { file_list, .. } = &self.mode {
-                    file_list.clone()
+                let snapshot = if let AppMode::FileDiff {
+                    file_list,
+                    diff_target,
+                    ..
+                } = &self.mode
+                {
+                    Some((file_list.clone(), *diff_target))
                 } else {
+                    None
+                };
+                let Some((file_list_snapshot, target)) = snapshot else {
                     return Ok(());
                 };
                 if !file_list_snapshot.is_empty() {
                     let new_index = (file_index + 1) % file_list_snapshot.len();
                     let path = file_list_snapshot[new_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(new_index, file_list_snapshot, &path) {
+                    if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
             }
             Action::PrevFile => {
-                let file_list_snapshot = if let AppMode::FileDiff { file_list, .. } = &self.mode {
-                    file_list.clone()
+                let snapshot = if let AppMode::FileDiff {
+                    file_list,
+                    diff_target,
+                    ..
+                } = &self.mode
+                {
+                    Some((file_list.clone(), *diff_target))
                 } else {
+                    None
+                };
+                let Some((file_list_snapshot, target)) = snapshot else {
                     return Ok(());
                 };
                 if !file_list_snapshot.is_empty() {
@@ -141,11 +169,14 @@ impl App {
                         file_index - 1
                     };
                     let path = file_list_snapshot[new_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(new_index, file_list_snapshot, &path) {
+                    if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
             }
+            Action::StageHunk => self.stage_hunk_under_cursor()?,
+            Action::UnstageHunk => self.unstage_hunk_under_cursor()?,
+            Action::DiscardHunk => self.prompt_discard_hunk_under_cursor()?,
             Action::Cancel | Action::Quit => {
                 // Return to normal with files panel focused, preserving file index
                 let flat_index = if let AppMode::FileDiff { file_index, .. } = &self.mode {
@@ -165,8 +196,197 @@ impl App {
         Ok(())
     }
 
+    /// Snapshot the info needed to run a hunk operation against the FileDiff
+    /// viewer. The hunk under the cursor is the last hunk whose header sits at
+    /// or above the current scroll position (VSCode stages the hunk the cursor
+    /// is in). Returns None when not in FileDiff mode.
+    fn hunk_op_target(&self) -> Option<HunkOpTarget> {
+        let AppMode::FileDiff {
+            content,
+            hunk_positions,
+            scroll_offset,
+            file_index,
+            file_list,
+            ..
+        } = &self.mode
+        else {
+            return None;
+        };
+        let hunk_index = hunk_positions
+            .iter()
+            .rposition(|&pos| pos <= *scroll_offset)
+            .unwrap_or(0);
+        let is_untracked = file_list.get(*file_index).and_then(|f| f.stage_status)
+            == Some(StageStatus::Untracked);
+        Some(HunkOpTarget {
+            path: content.path.clone(),
+            is_binary: content.is_binary,
+            has_hunks: !content.hunks.is_empty(),
+            hunk_index,
+            scroll_offset: *scroll_offset,
+            is_untracked,
+        })
+    }
+
+    /// Validate the common preconditions for a hunk operation. Emits a status
+    /// message and returns None when the operation is unavailable.
+    fn resolve_hunk_op(&mut self) -> Option<HunkOpTarget> {
+        let target = self.hunk_op_target()?;
+        if self.current_diff_target() != Some(DiffTarget::Uncommitted) {
+            self.set_message("Hunk staging is only available for uncommitted changes");
+            return None;
+        }
+        if target.is_binary {
+            self.set_message("Cannot stage a hunk of a binary file");
+            return None;
+        }
+        if !target.has_hunks {
+            self.set_message("No hunk under the cursor");
+            return None;
+        }
+        Some(target)
+    }
+
+    fn stage_hunk_under_cursor(&mut self) -> Result<()> {
+        let Some(target) = self.resolve_hunk_op() else {
+            return Ok(());
+        };
+        // Untracked files have no HEAD/index entry: the combined diff shows one
+        // all-additions hunk that IS the whole file, so "stage the hunk" is
+        // exactly `git add <file>` — no /dev/null new-file patch needed.
+        if target.is_untracked {
+            let path_str = target.path.to_string_lossy().to_string();
+            stage_file(&self.repo_path, &path_str)?;
+            self.set_message(format!("Staged {}", target.path.display()));
+            return self.reload_file_diff_for_path(&target.path, target.scroll_offset);
+        }
+        let Some(hunk) =
+            extract_hunk_from_working_tree(self.repo.repo(), &target.path, target.hunk_index)?
+        else {
+            self.set_message("Hunk is no longer present");
+            return Ok(());
+        };
+        let path_str = target.path.to_string_lossy();
+        let patch = render_hunk_patch(&path_str, &hunk);
+        match apply_patch_cached(&self.repo_path, &patch) {
+            Ok(()) => {
+                self.set_message("Staged hunk");
+                self.reload_file_diff_for_path(&target.path, target.scroll_offset)?;
+            }
+            Err(e) => self.set_message(format!("Stage hunk failed: {e}")),
+        }
+        Ok(())
+    }
+
+    fn unstage_hunk_under_cursor(&mut self) -> Result<()> {
+        let Some(target) = self.resolve_hunk_op() else {
+            return Ok(());
+        };
+        if target.is_untracked {
+            self.set_message("Untracked file has nothing staged to unstage");
+            return Ok(());
+        }
+        let Some(hunk) =
+            extract_hunk_from_working_tree(self.repo.repo(), &target.path, target.hunk_index)?
+        else {
+            self.set_message("Hunk is no longer present");
+            return Ok(());
+        };
+        let path_str = target.path.to_string_lossy();
+        let patch = render_hunk_patch(&path_str, &hunk);
+        match apply_patch_cached_reverse(&self.repo_path, &patch) {
+            Ok(()) => {
+                self.set_message("Unstaged hunk");
+                self.reload_file_diff_for_path(&target.path, target.scroll_offset)?;
+            }
+            Err(e) => self.set_message(format!("Unstage hunk failed: {e}")),
+        }
+        Ok(())
+    }
+
+    fn prompt_discard_hunk_under_cursor(&mut self) -> Result<()> {
+        let Some(target) = self.resolve_hunk_op() else {
+            return Ok(());
+        };
+        if target.is_untracked {
+            self.set_message("Untracked file — use the files pane (Delete) to remove it");
+            return Ok(());
+        }
+        let Some(hunk) =
+            extract_hunk_from_working_tree(self.repo.repo(), &target.path, target.hunk_index)?
+        else {
+            self.set_message("Hunk is no longer present");
+            return Ok(());
+        };
+        let path_str = target.path.to_string_lossy();
+        let patch = render_hunk_patch(&path_str, &hunk);
+        // Destructive: route through the shared Confirm mode. The patch and the
+        // scroll position are captured now so the viewer can be reopened at the
+        // same spot after confirmation.
+        self.mode = AppMode::Confirm {
+            message: "Discard this hunk? Working-tree changes will be lost.".to_string(),
+            action: ConfirmAction::DiscardHunk {
+                patch,
+                file_path: target.path.clone(),
+                scroll_offset: target.scroll_offset,
+            },
+        };
+        Ok(())
+    }
+
+    /// Reopen the FileDiff viewer for `path` after a hunk operation, refreshing
+    /// app diff state and restoring the scroll position where possible. Falls
+    /// back to the first changed file when `path` no longer differs, or exits to
+    /// Normal (files panel focused) when nothing remains.
+    pub(crate) fn reload_file_diff_for_path(
+        &mut self,
+        path: &std::path::Path,
+        scroll_offset: usize,
+    ) -> Result<()> {
+        self.refresh_after_file_op()?;
+        self.reopen_file_diff_for_path(path, scroll_offset)
+    }
+
+    /// Reopen the FileDiff viewer for `path` from the *current* diff cache
+    /// (no git refresh), restoring the scroll position. Used when returning to
+    /// the viewer after dismissing a modal launched from it.
+    pub(crate) fn reopen_file_diff_for_path(
+        &mut self,
+        path: &std::path::Path,
+        scroll_offset: usize,
+    ) -> Result<()> {
+        let target = self
+            .active_file_diff_target()
+            .or_else(|| self.current_diff_target())
+            .unwrap_or(DiffTarget::Uncommitted);
+        let new_file_list = self.files_pane.display_file_list();
+        if new_file_list.is_empty() {
+            self.mode = AppMode::Normal;
+            self.focused_panel = FocusedPanel::Files;
+            self.set_message("No changes remaining");
+            return Ok(());
+        }
+        let new_index = new_file_list
+            .iter()
+            .position(|f| f.path == path)
+            .unwrap_or(0);
+        let new_path = new_file_list[new_index].path.clone();
+        self.enter_file_diff(target, new_index, new_file_list, &new_path)?;
+        let viewport = self.diff_viewport_height as usize;
+        if let AppMode::FileDiff {
+            scroll_offset: so,
+            total_lines,
+            ..
+        } = &mut self.mode
+        {
+            *so = scroll_offset.min(total_lines.saturating_sub(viewport));
+        }
+        Ok(())
+    }
+
     pub(crate) fn enter_file_diff(
         &mut self,
+        target: DiffTarget,
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
         file_path: &std::path::Path,
@@ -176,13 +396,14 @@ impl App {
         // NOTE: Runs synchronously on the UI thread. For very large diffs (e.g. generated
         // files, large refactors) this may briefly block input. If this becomes a problem,
         // consider moving to a background task with a loading state, similar to commit diff summaries.
-        let content = self.load_file_diff_content(file_path)?;
+        let content = self.load_file_diff_content(file_path, target)?;
         let ui_theme = self.theme();
         let (rendered_lines, hunk_positions) = build_highlighted_lines(&content, &ui_theme);
         let total_lines = rendered_lines.len();
         let max_line_width = rendered_lines.iter().map(|l| l.width()).max().unwrap_or(0);
 
         self.mode = AppMode::FileDiff {
+            diff_target: target,
             file_index,
             file_list,
             content,
@@ -196,12 +417,28 @@ impl App {
         Ok(())
     }
 
-    fn load_file_diff_content(&self, file_path: &std::path::Path) -> Result<FileDiffContent> {
-        let result = match self.current_diff_target() {
-            Some(DiffTarget::Commit(oid)) => {
+    /// The diff target the FileDiff viewer is currently pinned to, if any.
+    fn active_file_diff_target(&self) -> Option<DiffTarget> {
+        if let AppMode::FileDiff { diff_target, .. } = &self.mode {
+            Some(*diff_target)
+        } else {
+            None
+        }
+    }
+
+    fn load_file_diff_content(
+        &self,
+        file_path: &std::path::Path,
+        target: DiffTarget,
+    ) -> Result<FileDiffContent> {
+        let result = match target {
+            DiffTarget::Commit(oid) => {
                 FileDiffContent::from_commit(self.repo.repo(), oid, file_path)
             }
-            Some(DiffTarget::Uncommitted) | None => {
+            DiffTarget::Range(old, new) => {
+                FileDiffContent::from_range(self.repo.repo(), old, new, file_path)
+            }
+            DiffTarget::Uncommitted => {
                 FileDiffContent::from_working_tree(self.repo.repo(), file_path)
             }
         };
@@ -281,7 +518,10 @@ impl App {
     /// uncommitted diff cache.  Called right after `uncommitted_diff_cache` is
     /// updated so that navigation and display stay consistent.
     pub(crate) fn sync_file_list_with_uncommitted_diff(&mut self) {
-        if self.current_diff_target() != Some(DiffTarget::Uncommitted) {
+        // Only touch the viewer when it is actually showing the working tree —
+        // a diff opened from file history or a comparison must not be rewritten
+        // when a background uncommitted diff lands.
+        if self.active_file_diff_target() != Some(DiffTarget::Uncommitted) {
             return;
         }
 

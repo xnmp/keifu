@@ -63,7 +63,14 @@ impl App {
         }
         match action {
             Action::Quit => {
-                self.should_quit = true;
+                // Esc first clears a pending mark / active comparison; only quit
+                // when there's nothing to dismiss.
+                if !self.clear_compare() {
+                    self.should_quit = true;
+                }
+            }
+            Action::MarkForCompare => {
+                self.mark_or_compare_selected();
             }
             Action::MoveUp => {
                 self.move_selection(-1);
@@ -100,9 +107,13 @@ impl App {
                 self.reset_timers();
             }
             Action::Fetch => {
-                if !self.is_fetching() {
-                    self.start_fetch(true, false);
-                }
+                self.initiate_fetch();
+            }
+            Action::Pull => {
+                self.initiate_pull();
+            }
+            Action::Push => {
+                self.initiate_push();
             }
             Action::OpenCommitMenu => {
                 self.open_commit_menu();
@@ -131,9 +142,12 @@ impl App {
             Action::OpenFileDiff => {
                 self.sync_file_list_cache();
                 if let Some(file) = self.selected_file().cloned() {
+                    let target = self
+                        .current_diff_target()
+                        .unwrap_or(DiffTarget::Uncommitted);
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
-                    if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
+                    if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 } else if self.is_diff_loading() {

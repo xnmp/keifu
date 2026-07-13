@@ -4,6 +4,13 @@ use super::*;
 
 impl App {
     pub(crate) fn handle_commit_detail_action(&mut self, action: Action) -> Result<()> {
+        // Ctrl+S opens the stash options menu whether or not the commit-message
+        // editor is active; any typed message is carried through as the default.
+        if matches!(action, Action::StashStaged) {
+            self.open_stash_menu();
+            return Ok(());
+        }
+
         if self.editing_commit_message {
             return self.handle_editor_action(action);
         }
@@ -138,18 +145,6 @@ impl App {
                     self.set_message("Commit amended");
                     self.focused_panel = FocusedPanel::Graph;
                 }
-            }
-            Action::StashStaged => {
-                if !self.is_uncommitted_selected() {
-                    return Ok(());
-                }
-                let msg = self.commit_editor.text.trim().to_string();
-                stash_staged(&self.repo_path, &msg)?;
-                self.commit_editor = crate::text_editor::TextEditor::new();
-                self.editing_commit_message = false;
-                self.refresh(true)?;
-                self.set_message("Staged changes stashed");
-                self.focused_panel = FocusedPanel::Graph;
             }
             Action::EditorChar(c) => self.commit_editor.insert_char(c),
             Action::EditorNewline => self.commit_editor.insert_newline(),

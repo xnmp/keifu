@@ -1,17 +1,29 @@
-//! Async network operations: fetch, push with background threading.
+//! Async network operations: fetch, pull, push with background threading.
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Instant;
 
 use crate::config::RefreshConfig;
-use crate::git::operations::{fetch_origin, push_to_origin};
+use crate::git::operations::{
+    fetch_remote, pull, push_current, push_set_upstream, OpOutcome,
+};
 
-/// Manages async fetch/push operations and auto-refresh timers.
+/// What a background push should do.
+#[derive(Debug, Clone)]
+pub enum PushSpec {
+    /// Push the current branch to its configured upstream (`git push`).
+    Current,
+    /// Publish `branch` to `remote`, setting upstream (`git push -u`).
+    Publish { remote: String, branch: String },
+}
+
+/// Manages async fetch/pull/push operations and auto-refresh timers.
 pub struct NetworkManager {
     fetch_receiver: Option<Receiver<Result<(), String>>>,
     fetch_silent: bool,
     push_receiver: Option<Receiver<Result<(), String>>>,
+    pull_receiver: Option<Receiver<Result<OpOutcome, String>>>,
     last_refresh_time: Instant,
     last_fetch_time: Instant,
 }
@@ -46,6 +58,7 @@ impl NetworkManager {
             fetch_receiver: None,
             fetch_silent: false,
             push_receiver: None,
+            pull_receiver: None,
             last_refresh_time: now,
             last_fetch_time: now,
         }
@@ -59,37 +72,84 @@ impl NetworkManager {
         self.push_receiver.is_some()
     }
 
-    pub fn is_busy(&self) -> bool {
-        self.is_fetching() || self.is_pushing()
+    pub fn is_pulling(&self) -> bool {
+        self.pull_receiver.is_some()
     }
 
-    /// Start a background fetch.
-    pub fn start_fetch(&mut self, repo_path: &str, show_message: bool, silent: bool) -> Option<String> {
+    pub fn is_busy(&self) -> bool {
+        self.is_fetching() || self.is_pushing() || self.is_pulling()
+    }
+
+    /// Start a background fetch from `remote`.
+    pub fn start_fetch(
+        &mut self,
+        repo_path: &str,
+        remote: &str,
+        show_message: bool,
+        silent: bool,
+    ) -> Option<String> {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
+        let remote_owned = remote.to_string();
         thread::spawn(move || {
-            let result = fetch_origin(&path).map_err(|e| e.to_string());
+            let result = fetch_remote(&path, &remote_owned).map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.fetch_receiver = Some(rx);
         self.fetch_silent = silent;
         if show_message {
-            Some("Fetching from origin...".to_string())
+            Some(format!("Fetching from {remote}..."))
         } else {
             None
         }
     }
 
-    /// Start a background push.
-    pub fn start_push(&mut self, repo_path: &str) -> String {
+    /// Start a background push per `spec`.
+    pub fn start_push(&mut self, repo_path: &str, spec: PushSpec) -> String {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
+        let message = match &spec {
+            PushSpec::Current => "Pushing...".to_string(),
+            PushSpec::Publish { remote, branch } => {
+                format!("Publishing {branch} to {remote}...")
+            }
+        };
         thread::spawn(move || {
-            let result = push_to_origin(&path).map_err(|e| e.to_string());
+            let result = match spec {
+                PushSpec::Current => push_current(&path),
+                PushSpec::Publish { remote, branch } => {
+                    push_set_upstream(&path, &remote, &branch)
+                }
+            }
+            .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.push_receiver = Some(rx);
-        "Pushing to origin...".to_string()
+        message
+    }
+
+    /// Start a background pull. `remote`/`branch` = `None` runs a bare
+    /// `git pull` (using the configured upstream); an explicit remote runs
+    /// `git pull <remote> <branch>`.
+    pub fn start_pull(
+        &mut self,
+        repo_path: &str,
+        remote: Option<String>,
+        branch: Option<String>,
+    ) -> String {
+        let (tx, rx) = mpsc::channel();
+        let path = repo_path.to_string();
+        let message = match &remote {
+            Some(r) => format!("Pulling from {r}..."),
+            None => "Pulling...".to_string(),
+        };
+        thread::spawn(move || {
+            let result = pull(&path, remote.as_deref(), branch.as_deref())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+        self.pull_receiver = Some(rx);
+        message
     }
 
     /// Poll fetch receiver for completion.
@@ -124,6 +184,18 @@ impl NetworkManager {
         Some(result)
     }
 
+    /// Poll pull receiver for completion.
+    pub fn poll_pull(&mut self) -> Option<Result<OpOutcome, String>> {
+        let rx = self.pull_receiver.as_ref()?;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err("pull worker exited unexpectedly".to_string()),
+        };
+        self.pull_receiver = None;
+        Some(result)
+    }
+
     /// Reset both timers (call after manual refresh/fetch).
     pub fn reset_timers(&mut self) {
         let now = Instant::now();
@@ -134,7 +206,7 @@ impl NetworkManager {
     /// Check if auto-refresh or auto-fetch should trigger.
     pub fn check_auto_timers(&self, config: &RefreshConfig) -> NetworkEvents {
         let mut events = NetworkEvents::default();
-        if self.is_fetching() {
+        if self.is_busy() {
             return events;
         }
 

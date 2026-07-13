@@ -10,6 +10,10 @@ pub struct BranchInfo {
     pub is_remote: bool,
     pub upstream: Option<String>,
     pub tip_oid: Oid,
+    /// Commits this branch is ahead of its upstream (0 when no upstream).
+    pub ahead: usize,
+    /// Commits this branch is behind its upstream (0 when no upstream).
+    pub behind: usize,
 }
 
 impl BranchInfo {
@@ -32,10 +36,17 @@ impl BranchInfo {
                             .and_then(|h| h.shorthand().map(|s| s == name))
                             .unwrap_or(false);
 
-                    let upstream = branch
-                        .upstream()
-                        .ok()
+                    let upstream_branch = branch.upstream().ok();
+                    let upstream = upstream_branch
+                        .as_ref()
                         .and_then(|u| u.name().ok().flatten().map(|s| s.to_string()));
+
+                    // Ahead/behind vs the upstream tip, when tracking one.
+                    let (ahead, behind) = upstream_branch
+                        .as_ref()
+                        .and_then(|u| u.get().target())
+                        .and_then(|up_oid| repo.graph_ahead_behind(oid, up_oid).ok())
+                        .unwrap_or((0, 0));
 
                     branches.push(BranchInfo {
                         name: name.to_string(),
@@ -43,6 +54,8 @@ impl BranchInfo {
                         is_remote: false,
                         upstream,
                         tip_oid: oid,
+                        ahead,
+                        behind,
                     });
                 }
             }
@@ -60,6 +73,8 @@ impl BranchInfo {
                         is_remote: true,
                         upstream: None,
                         tip_oid: oid,
+                        ahead: 0,
+                        behind: 0,
                     });
                 }
             }

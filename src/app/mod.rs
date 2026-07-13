@@ -12,19 +12,24 @@ use crate::{
     diff_cache::{DiffCache, DiffTarget},
     files_pane_state::{FilesPaneState, section_of},
     graph_nav::GraphNav,
-    network::NetworkManager,
+    network::{NetworkManager, PushSpec},
     git::{
         build_graph,
         graph::GraphLayout,
         operations::{
-            add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
-            commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
-            delete_branch, get_last_commit_message, merge_branch,
-            rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
-            stash_apply, stash_drop, stash_pop, stash_staged, unstage_file, ResetMode,
+            abort_operation, accept_ours, accept_theirs, add_tag, apply_patch_cached,
+            apply_patch_cached_reverse, apply_patch_worktree_reverse, cherry_pick,
+            checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
+            commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
+            delete_branch, delete_remote_branch, delete_tag, get_last_commit_message,
+            merge_branch, prune_remote, push_tag, rebase_branch, rename_branch,
+            reset_to_commit, restore_files, revert_commit, stage_all, stage_file,
+            stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
+            unstage_all, unstage_file, OpOutcome, ResetMode,
         },
+        extract_hunk_from_working_tree, render_hunk_patch,
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
-        GitRepository, StageStatus, WorkingTreeStatus,
+        GitRepository, OperationState, StageStatus, WorkingTreeStatus,
     },
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
@@ -32,7 +37,9 @@ use crate::{
 
 mod init;
 mod refresh;
+mod conflict_actions;
 mod network_ops;
+mod remote_ops;
 mod status_message;
 mod search_ops;
 mod graph_actions;
@@ -43,6 +50,8 @@ mod branch_picker_actions;
 mod file_diff_actions;
 mod input_actions;
 mod confirm_actions;
+mod compare_actions;
+mod file_history_actions;
 
 /// Copy text to system clipboard using platform-specific commands
 fn copy_to_clipboard(text: &str) -> Result<()> {
@@ -117,48 +126,82 @@ pub enum FocusedPanel {
     CommitDetail,
 }
 
+/// Which network operation a remote picker runs once a remote is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteOp {
+    Fetch,
+    Pull,
+    Push,
+    Prune,
+}
+
 /// Items in the commit context menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitMenuItem {
     Push,
+    Pull,
     Checkout,
     CreateBranch,
     DeleteBranch,
     MergeIntoCurrent,
     CherryPick,
     Rebase,
+    RenameBranch,
     Reset,
     ResetSoft,
     ResetMixed,
     ResetHard,
     AddTag,
+    DeleteTag,
+    PushTag,
     Revert,
+    Prune,
     CopyHash,
+    CopyMessage,
+    MarkForCompare,
+    CompareWithMarked,
     StashApply,
     StashPop,
     StashDrop,
+    BranchFromStash,
+    /// Stash options (shown in the stash menu on the uncommitted node).
+    StashPushStaged,
+    StashPushAll,
+    StashPushUntracked,
 }
 
 impl CommitMenuItem {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Push => "Push to origin",
+            Self::Push => "Push",
+            Self::Pull => "Pull",
             Self::Checkout => "Checkout",
             Self::CreateBranch => "Create branch here",
             Self::DeleteBranch => "Delete branch",
             Self::MergeIntoCurrent => "Merge into current branch",
             Self::CherryPick => "Cherry-pick",
             Self::Rebase => "Rebase current branch onto this",
+            Self::RenameBranch => "Rename branch",
             Self::Reset => "Reset to this commit...",
             Self::ResetSoft => "Soft (keep changes staged)",
             Self::ResetMixed => "Mixed (keep changes unstaged)",
             Self::ResetHard => "Hard (discard all changes)",
             Self::AddTag => "Add tag",
+            Self::DeleteTag => "Delete tag",
+            Self::PushTag => "Push tag",
             Self::Revert => "Revert this commit",
+            Self::Prune => "Prune remote-tracking refs",
             Self::CopyHash => "Copy commit hash",
+            Self::CopyMessage => "Copy commit message",
+            Self::MarkForCompare => "Mark for compare",
+            Self::CompareWithMarked => "Compare with marked commit",
             Self::StashApply => "Apply stash",
             Self::StashPop => "Pop stash (apply + drop)",
             Self::StashDrop => "Drop stash",
+            Self::BranchFromStash => "Branch from stash",
+            Self::StashPushStaged => "Stash staged changes",
+            Self::StashPushAll => "Stash all changes",
+            Self::StashPushUntracked => "Stash all + untracked",
         }
     }
 }
@@ -209,7 +252,26 @@ pub enum AppMode {
         branches: Vec<String>,
         selected: usize,
     },
+    /// Pick which tag to act on when a commit carries more than one.
+    TagPicker {
+        tags: Vec<String>,
+        selected: usize,
+        action: TagAction,
+    },
+    /// Pick which remote a network op (fetch/pull/push/prune) targets, shown
+    /// only when the repo has multiple remotes and the branch's upstream can't
+    /// disambiguate.
+    RemotePicker {
+        remotes: Vec<String>,
+        selected: usize,
+        op: RemoteOp,
+    },
     FileDiff {
+        /// Which diff this viewer was opened for. Navigation (next/prev file)
+        /// and reloads stay pinned to this target rather than re-deriving it
+        /// from the currently selected graph node, so a diff opened from file
+        /// history or a comparison keeps showing the right commit(s).
+        diff_target: DiffTarget,
         file_index: usize,
         file_list: Vec<FileDiffInfo>,
         content: FileDiffContent,
@@ -220,6 +282,39 @@ pub enum AppMode {
         max_line_width: usize,
         total_lines: usize,
     },
+    /// Per-file commit history picker (commits that touched a path).
+    FileHistory {
+        path: std::path::PathBuf,
+        entries: Vec<FileHistoryEntry>,
+        selected: usize,
+    },
+}
+
+/// One entry in the per-file history list.
+#[derive(Debug, Clone)]
+pub struct FileHistoryEntry {
+    pub oid: Oid,
+    pub short_id: String,
+    pub date: String,
+    pub subject: String,
+}
+
+/// Which tag operation a [`AppMode::TagPicker`] resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagAction {
+    Delete,
+    Push,
+}
+
+/// Scope of a `git stash push`, chosen from the stash options menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StashScope {
+    /// Only staged changes (`git stash push --staged`).
+    Staged,
+    /// All tracked working-tree changes (`git stash push`).
+    All,
+    /// All changes including untracked files (`git stash push -u`).
+    AllUntracked,
 }
 
 /// Input action kinds
@@ -228,6 +323,12 @@ pub enum InputAction {
     CreateBranch,
     AddTag,
     Search,
+    /// Rename the local branch `old_name` to the typed name.
+    RenameBranch { old_name: String },
+    /// Create a branch from `stash@{index}` with the typed name.
+    BranchFromStash { index: usize },
+    /// Stash the working tree with the typed (optional) message.
+    StashPush { scope: StashScope },
 }
 
 /// Confirmation action kinds
@@ -242,9 +343,22 @@ pub enum ConfirmAction {
     ResetMixed(Oid),
     ResetHard(Oid),
     Push,
+    /// Delete a branch on a remote (`git push <remote> --delete <branch>`).
+    DeleteRemoteBranch { remote: String, branch: String },
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
     StashDrop(usize),
+    DeleteTag(String),
+    /// Abort the in-progress merge/rebase/cherry-pick/revert.
+    AbortOperation(OperationState),
+    /// Discard a single hunk in the working tree (reverse-apply). Carries the
+    /// pre-rendered patch plus the FileDiff viewer state needed to reopen the
+    /// diff at the same file/scroll after the confirmation.
+    DiscardHunk {
+        patch: String,
+        file_path: std::path::PathBuf,
+        scroll_offset: usize,
+    },
 }
 
 /// Search state for branch search feature
@@ -342,8 +456,25 @@ pub struct App {
     // Latest working tree status snapshot
     pub working_tree_status: Option<WorkingTreeStatus>,
 
+    // In-progress operation (merge/rebase/cherry-pick/revert) and its conflict
+    // count, refreshed alongside the working tree. Drives the status-bar
+    // indicator and the conflict-resolution keybindings.
+    pub op_state: OperationState,
+    pub conflict_count: usize,
+
     // Diff caching subsystem
     pub diff_cache: DiffCache,
+
+    // Commit comparison ("mark for compare"). `compare_marked` holds the first
+    // pending commit; once a second commit is chosen, `compare_range` holds the
+    // active (old, new) pair (ordered older → newer by commit time) which
+    // overrides the diff target until cleared with Esc.
+    pub compare_marked: Option<Oid>,
+    pub compare_range: Option<(Oid, Oid)>,
+
+    // Per-OID GPG signature status cache (%G? code). Commits are immutable so
+    // this never needs invalidation; populated lazily on commit-detail render.
+    pub sig_status_cache: std::collections::HashMap<Oid, char>,
 
     // Flags
     pub should_quit: bool,
@@ -428,7 +559,7 @@ impl App {
     /// Sync the file list cache and display items from the current diff.
     pub fn sync_file_list_cache(&mut self) {
         let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
-        let is_uncommitted = self.is_uncommitted_selected();
+        let is_uncommitted = self.diff_target_is_uncommitted();
         self.files_pane.sync_file_list_cache(diff, is_uncommitted, &self.repo_path);
     }
 
@@ -445,7 +576,7 @@ impl App {
     /// Build a fresh set of files pane items (not cached).
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
         let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
-        let is_uncommitted = self.is_uncommitted_selected();
+        let is_uncommitted = self.diff_target_is_uncommitted();
         self.files_pane.build_files_pane_items(diff, is_uncommitted, &self.repo_path)
     }
 
@@ -511,8 +642,11 @@ impl App {
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
+            AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,
+            AppMode::RemotePicker { .. } => self.handle_remote_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
+            AppMode::FileHistory { .. } => self.handle_file_history_action(action)?,
         }
         Ok(())
     }

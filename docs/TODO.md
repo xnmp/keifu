@@ -13,7 +13,10 @@ Enter on a commit opens a full options menu with: checkout, create branch, merge
 ### [DONE] Branch Select/Deselect with Filter
 Shift+B in graph pane opens branch filter popup. Space toggles branches, `a` selects all, `n` deselects all, typing filters by name. Hidden branches excluded from graph on refresh.
 
-**Note:** Currently hides branch labels only. Full commit filtering (hiding commits not reachable from any visible branch) would require changing `get_commits()` to accept branch tips — left as future enhancement.
+**Update:** Now performs *real* commit filtering — `get_commits()` accepts the visible branch set and only walks from those tips (HEAD is always pushed too), so hiding a branch removes its exclusive commits from the graph, not just the labels. Commits reachable from a visible branch stay. Hiding every branch still shows HEAD's history.
+
+### [DONE] Tags Rendered as Graph Refs
+Lightweight and annotated tags (peeled to their target commit) are loaded via `repository.get_tags()`, threaded through `build_graph` onto `GraphNode.tag_names`, and rendered next to branch labels as `<tag>` in a distinct tag color (`theme.tag_label`).
 
 ---
 
@@ -21,6 +24,9 @@ Shift+B in graph pane opens branch filter popup. Space toggles branches, `a` sel
 
 ### [DONE] Stage/Unstage with `s` Key
 When the uncommitted files node is selected and user is in FileSelect mode, pressing `s` stages/unstages the selected file. Files are divided by staged/unstaged sections.
+
+### [DONE] Hunk-Level Stage/Unstage/Discard + Stage-All/Unstage-All (2026-07-13)
+In the FileDiff viewer on an uncommitted file: `s` stages, `u` unstages, and `x` discards (via Confirm) the hunk under the cursor. Patches are synthesised from the combined `git diff HEAD` view (`git/patch.rs`) and applied with `git apply --cached` / `--cached -R` / `-R`. Guards: binary files and committed diffs are disabled with a message; untracked files fall back to whole-file `git add`. In the files pane, `S` stages all (`git add -A`) and `U` unstages all (`git reset`). See `docs/architecture.md` → "Hunk-Level Staging Model".
 
 ### [DONE] Instant File Display
 Files and their M/A/D status show instantly via a synchronous quick scan. Line numbers (+X/-Y) show "..." while the full diff loads asynchronously.
@@ -133,3 +139,21 @@ diff-cache tests to observable contracts. Conflict-stranding behavior of
 merge/rebase/cherry-pick/revert pinned with "documents current behavior"
 tests (baseline for the merge-conflict feature work, see vscode-parity.md).
 Shared tests/common harness; removed 1.1s sleep (suite: 1.2s -> 0.2s).
+
+### [DONE] 2026-07-13 parity-gap implementation sweep
+Closed the top gaps from `docs/vscode-parity.md` across 6 feature branches,
+merged into `parity-gaps`: real branch filtering (hidden branches drop their
+exclusive commits, not just labels) + tags rendered as graph refs (43f4f8d);
+merge-conflict awareness with accept-ours/theirs and abort/continue
+(05c2242); hunk-level stage/unstage/discard plus stage-all/unstage-all
+(138ae73); branch rename, tag delete/push, stash-all and stash-branch, copy
+file path (9a9cc1c); pull, multi-remote resolution, upstream tracking and
+one-key publish (2e14a4c); compare-two-commits, per-file history, and commit
+signature status (3d707f1). Test suite: 439 -> 530 tests, clippy clean.
+Followed by a docs-coherence pass: audited `help_popup.rs` against
+`keybindings.rs` for every new action (fixed a stale Tab/`]`/`[` mislabel
+inherited from before the panel system, a "q quits" claim that was never
+true, a misleading in-progress-operation hint shown in status_bar.rs outside
+the files panel where the keys actually work, and added missing entries for
+folder-toggle and commit-filter); refreshed README.md/README_JA.md and
+vscode-parity.md to match current behavior.

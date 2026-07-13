@@ -9,3 +9,10 @@
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+
+# Claude Code agent worktrees
+.claude/worktrees/
+
+# beads runtime files
+.beads/*.pid
+.beads/*.activity

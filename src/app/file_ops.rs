@@ -31,12 +31,18 @@ impl App {
             }
             Action::OpenFileDiff => {
                 if let Some(file) = self.selected_file().cloned() {
+                    let target = self
+                        .current_diff_target()
+                        .unwrap_or(DiffTarget::Uncommitted);
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
-                    if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
+                    if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
                     }
                 }
+            }
+            Action::FileHistory => {
+                self.open_file_history();
             }
             Action::OpenWithDefault => {
                 if let Some(file) = self.selected_file() {
@@ -63,8 +69,17 @@ impl App {
                     self.open_with_default(&full_path, &path);
                 }
             }
+            Action::CopyPath => {
+                self.copy_selected_file_path();
+            }
             Action::ToggleStage => {
                 self.toggle_stage_selected_file()?;
+            }
+            Action::StageAll => {
+                self.stage_all_files()?;
+            }
+            Action::UnstageAll => {
+                self.unstage_all_files()?;
             }
             Action::AddToGitignore => {
                 self.add_selected_to_gitignore()?;
@@ -81,6 +96,18 @@ impl App {
             }
             Action::RestoreFile => {
                 self.restore_selected_file()?;
+            }
+            Action::AcceptOurs => {
+                self.accept_conflict_side(true)?;
+            }
+            Action::AcceptTheirs => {
+                self.accept_conflict_side(false)?;
+            }
+            Action::ContinueOperation => {
+                self.continue_in_progress_operation()?;
+            }
+            Action::AbortOperation => {
+                self.prompt_abort_operation();
             }
             Action::UndoLastFileOp => {
                 self.undo_last_file_op()?;
@@ -171,6 +198,26 @@ impl App {
             });
         }
 
+        self.refresh_after_file_op()?;
+        Ok(())
+    }
+
+    fn stage_all_files(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+        stage_all(&self.repo_path)?;
+        self.set_message("Staged all changes");
+        self.refresh_after_file_op()?;
+        Ok(())
+    }
+
+    fn unstage_all_files(&mut self) -> Result<()> {
+        if !self.is_uncommitted_selected() {
+            return Ok(());
+        }
+        unstage_all(&self.repo_path)?;
+        self.set_message("Unstaged all changes");
         self.refresh_after_file_op()?;
         Ok(())
     }
@@ -346,6 +393,24 @@ impl App {
 
         self.refresh_after_file_op()?;
         Ok(())
+    }
+
+    /// Repo-relative path of the currently selected file in the files pane.
+    pub fn selected_file_repo_path(&self) -> Option<String> {
+        self.selected_file()
+            .map(|f| f.path.to_string_lossy().to_string())
+    }
+
+    /// Copy the selected file's repo-relative path to the clipboard, reporting
+    /// the outcome in the status line.
+    fn copy_selected_file_path(&mut self) {
+        let Some(path) = self.selected_file_repo_path() else {
+            return;
+        };
+        match copy_to_clipboard(&path) {
+            Ok(()) => self.set_message(format!("Copied path '{}'", path)),
+            Err(e) => self.set_message(format!("Clipboard error: {}", e)),
+        }
     }
 
     pub(crate) fn selected_stash_index(&self) -> Option<usize> {

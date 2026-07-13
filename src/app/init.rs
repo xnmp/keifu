@@ -35,15 +35,20 @@ impl App {
         let head_detached = repo.is_head_detached();
 
         let stashes = repo.get_stashes();
-        let commits = repo.get_commits(500, &stashes)?;
+        // No branches are hidden at startup, so all branches are visible.
         let branches = repo.get_branches()?;
+        let tags = repo.get_tags();
+        let commits = repo.get_commits(500, &branches, &stashes)?;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
+        let op_state = repo.operation_state();
+        let conflict_count = repo.conflicted_count();
         let uncommitted_count = working_tree_status
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, &stashes, uncommitted_count, head_commit_oid);
+        let graph_layout =
+            build_graph(&commits, &branches, &tags, &stashes, uncommitted_count, head_commit_oid);
 
         let mut graph_nav = GraphNav::new();
         graph_nav.rebuild_branch_positions(&graph_layout);
@@ -84,7 +89,12 @@ impl App {
             visible_commit_indices: Vec::new(),
             search_state: SearchState::default(),
             working_tree_status,
+            op_state,
+            conflict_count,
             diff_cache: DiffCache::new(),
+            compare_marked: None,
+            compare_range: None,
+            sig_status_cache: std::collections::HashMap::new(),
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,

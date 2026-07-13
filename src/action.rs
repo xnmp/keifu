@@ -24,6 +24,8 @@ pub enum Action {
     CreateBranch,
     DeleteBranch,
     Fetch,
+    Pull,
+    Push,
     Merge,
     Rebase,
 
@@ -34,12 +36,21 @@ pub enum Action {
     SelectAll,
     SelectNone,
 
+    // Commit comparison (graph)
+    MarkForCompare,
+
+    // Per-file history (files pane)
+    FileHistory,
+
     // Files
     OpenWithDefault,
+    CopyPath,
 
     // File operations
     RestoreFile,
     ToggleStage,
+    StageAll,
+    UnstageAll,
     AddToGitignore,
     ArchiveFile,
     TrashFile,
@@ -48,6 +59,12 @@ pub enum Action {
     StartFilesFilter,
     FilesFilterChar(char),
     FilesFilterBackspace,
+
+    // Merge-conflict resolution (files pane, when an operation is in progress)
+    AcceptOurs,
+    AcceptTheirs,
+    ContinueOperation,
+    AbortOperation,
 
     // Commit filter (graph panel)
     StartCommitFilter,
@@ -119,4 +136,7 @@ pub enum Action {
     PrevFile,
     NextHunk,
     PrevHunk,
+    StageHunk,
+    UnstageHunk,
+    DiscardHunk,
 }

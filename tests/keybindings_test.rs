@@ -233,6 +233,10 @@ fn files_mode_operations() {
         Some(Action::OpenWithDefault)
     );
     assert_eq!(
+        map_normal_files(key(KeyCode::Char('y'))),
+        Some(Action::CopyPath)
+    );
+    assert_eq!(
         map_normal_files(key(KeyCode::Enter)),
         Some(Action::OpenFileDiff)
     );
@@ -579,6 +583,7 @@ fn error_mode_dismiss() {
 #[test]
 fn file_diff_mode_scrolling() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {
@@ -625,6 +630,7 @@ fn file_diff_mode_scrolling() {
 #[test]
 fn file_diff_mode_file_navigation() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {
@@ -656,8 +662,51 @@ fn file_diff_mode_file_navigation() {
 }
 
 #[test]
+fn file_diff_mode_hunk_staging_keys() {
+    let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
+        file_index: 0,
+        file_list: vec![],
+        content: keifu::git::FileDiffContent {
+            path: std::path::PathBuf::new(),
+            kind: keifu::git::FileChangeKind::Modified,
+            is_binary: false,
+            hunks: vec![],
+            total_additions: 0,
+            total_deletions: 0,
+        },
+        rendered_lines: vec![],
+        hunk_positions: vec![],
+        scroll_offset: 0,
+        horizontal_offset: 0,
+        max_line_width: 0,
+        total_lines: 0,
+    };
+    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
+
+    assert_eq!(map(key(KeyCode::Char('s'))), Some(Action::StageHunk));
+    assert_eq!(map(key(KeyCode::Char('u'))), Some(Action::UnstageHunk));
+    assert_eq!(map(key(KeyCode::Char('x'))), Some(Action::DiscardHunk));
+}
+
+#[test]
+fn files_mode_stage_all_unstage_all_keys() {
+    assert_eq!(
+        map_normal_files(key_mod(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+        Some(Action::StageAll)
+    );
+    assert_eq!(
+        map_normal_files(key_mod(KeyCode::Char('U'), KeyModifiers::SHIFT)),
+        Some(Action::UnstageAll)
+    );
+    // Lowercase s stays whole-file stage/unstage.
+    assert_eq!(map_normal_files(key(KeyCode::Char('s'))), Some(Action::ToggleStage));
+}
+
+#[test]
 fn file_diff_mode_ctrl_f_b_page() {
     let mode = AppMode::FileDiff {
+        diff_target: keifu::diff_cache::DiffTarget::Uncommitted,
         file_index: 0,
         file_list: vec![],
         content: keifu::git::FileDiffContent {

@@ -10,6 +10,7 @@ use ratatui::{
 
 use super::theme::Theme;
 use crate::app::{App, AppMode, FocusedPanel, InputAction};
+use crate::git::OperationState;
 
 pub struct StatusBar<'a> {
     mode: &'a AppMode,
@@ -17,6 +18,8 @@ pub struct StatusBar<'a> {
     repo_path: &'a str,
     head_name: Option<&'a str>,
     head_detached: bool,
+    /// (ahead, behind) of the HEAD branch vs its upstream, when tracking one.
+    head_ahead_behind: Option<(usize, usize)>,
     error_message: Option<&'a str>,
     message: Option<&'a str>,
     is_busy: bool,
@@ -25,6 +28,8 @@ pub struct StatusBar<'a> {
     editing_commit: bool,
     amending_commit: bool,
     search_info: Option<String>,
+    op_state: OperationState,
+    conflict_count: usize,
     theme: &'a Theme,
 }
 
@@ -57,6 +62,11 @@ impl<'a> StatusBar<'a> {
             repo_path: &app.repo_path,
             head_name: app.head_name.as_deref(),
             head_detached: app.head_detached,
+            head_ahead_behind: app
+                .branches
+                .iter()
+                .find(|b| b.is_head && b.upstream.is_some())
+                .map(|b| (b.ahead, b.behind)),
             error_message,
             message: app.get_message(),
             is_busy: app.is_network_busy(),
@@ -65,6 +75,8 @@ impl<'a> StatusBar<'a> {
             editing_commit: app.editing_commit_message,
             amending_commit: app.amending_commit,
             search_info,
+            op_state: app.op_state,
+            conflict_count: app.conflict_count,
             theme,
         }
     }
@@ -113,6 +125,59 @@ impl<'a> Widget for StatusBar<'a> {
                 ));
             }
             spans.push(Span::raw(" "));
+
+            // Ahead/behind vs upstream (e.g. "↑2 ↓1"), when tracking one and
+            // diverged.
+            if let Some((ahead, behind)) = self.head_ahead_behind {
+                if ahead > 0 || behind > 0 {
+                    let mut label = String::new();
+                    if ahead > 0 {
+                        label.push_str(&format!("↑{ahead}"));
+                    }
+                    if behind > 0 {
+                        if !label.is_empty() {
+                            label.push(' ');
+                        }
+                        label.push_str(&format!("↓{behind}"));
+                    }
+                    spans.push(Span::styled(
+                        format!(" {label} "),
+                        Style::default()
+                            .fg(self.theme.text_primary)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::raw(" "));
+                }
+            }
+        }
+
+        // In-progress operation indicator (merge/rebase/…): prominent, shown in
+        // Normal mode regardless of message/hints so conflicts stay visible.
+        if matches!(self.mode, AppMode::Normal) && self.op_state.is_in_progress() {
+            let op_style = Style::default()
+                .fg(self.theme.status_error_fg)
+                .bg(self.theme.status_error_bg)
+                .add_modifier(Modifier::BOLD);
+            let label = if self.conflict_count > 0 {
+                format!(
+                    " {} ({} conflict{}) ",
+                    self.op_state.label(),
+                    self.conflict_count,
+                    if self.conflict_count == 1 { "" } else { "s" }
+                )
+            } else {
+                format!(" {} ", self.op_state.label())
+            };
+            spans.push(Span::styled(label, op_style));
+            // c/A (and o/t for conflicts) are only wired up in the files pane,
+            // so only advertise them once that's actually where the hint applies.
+            if self.focused_panel == FocusedPanel::Files {
+                spans.push(Span::styled(" c ", key_style));
+                spans.push(Span::styled("continue ", desc_style));
+                spans.push(Span::styled(" A ", key_style));
+                spans.push(Span::styled("abort ", desc_style));
+            }
+            spans.push(Span::raw("  "));
         }
 
         // Key hints (vary by mode)
@@ -218,6 +283,8 @@ impl<'a> Widget for StatusBar<'a> {
                                 spans.push(Span::styled("edit msg ", desc_style));
                                 spans.push(Span::styled(" Ctrl+Enter ", key_style));
                                 spans.push(Span::styled("amend ", desc_style));
+                                spans.push(Span::styled(" Ctrl+S ", key_style));
+                                spans.push(Span::styled("stash ", desc_style));
                             }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
@@ -271,7 +338,9 @@ impl<'a> Widget for StatusBar<'a> {
             }
             AppMode::CommitMenu { .. }
             | AppMode::BranchPicker { .. }
-            | AppMode::BranchDeletePicker { .. } => {
+            | AppMode::BranchDeletePicker { .. }
+            | AppMode::TagPicker { .. }
+            | AppMode::RemotePicker { .. } => {
                 spans.push(Span::styled(" ↑/↓ ", key_style));
                 spans.push(Span::styled("select ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
@@ -289,6 +358,14 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("close", desc_style));
             }
+            AppMode::FileHistory { .. } => {
+                spans.push(Span::styled(" ↑/↓ ", key_style));
+                spans.push(Span::styled("select ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("open diff ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("back", desc_style));
+            }
         }
 
         let line = Line::from(spans);
@@ -304,8 +381,11 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
+            AppMode::TagPicker { .. } => Some(" TAG "),
+            AppMode::RemotePicker { .. } => Some(" REMOTE "),
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
+            AppMode::FileHistory { .. } => Some(" FILE HISTORY "),
         };
         if let Some(text) = mode_text {
             let mode_len = text.len() as u16;

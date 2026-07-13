@@ -18,6 +18,75 @@ pub struct StashInfo {
     pub base_oid: Oid,
 }
 
+/// A tag pointing at a commit. Annotated tags are peeled to the commit they
+/// ultimately reference, so `target_oid` is always a commit OID.
+#[derive(Debug, Clone)]
+pub struct TagInfo {
+    pub name: String,
+    pub target_oid: Oid,
+}
+
+/// The in-progress git operation the repository is currently mid-way through,
+/// derived from `git2::RepositoryState`. Drives conflict-recovery UI
+/// (abort/continue) and the status-bar indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationState {
+    Clean,
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl OperationState {
+    /// Map a libgit2 repository state to the coarse operation it represents.
+    /// States outside the four resolvable operations (bisect, mailbox, …) are
+    /// treated as `Clean` — the conflict-recovery UI doesn't cover them.
+    pub fn from_repo_state(state: git2::RepositoryState) -> Self {
+        use git2::RepositoryState as S;
+        match state {
+            S::Merge => Self::Merge,
+            S::Revert | S::RevertSequence => Self::Revert,
+            S::CherryPick | S::CherryPickSequence => Self::CherryPick,
+            S::Rebase | S::RebaseInteractive | S::RebaseMerge => Self::Rebase,
+            _ => Self::Clean,
+        }
+    }
+
+    /// Whether an operation is in progress (i.e. not `Clean`).
+    pub fn is_in_progress(self) -> bool {
+        !matches!(self, Self::Clean)
+    }
+
+    /// Uppercase label for the status bar (e.g. "MERGING").
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clean => "",
+            Self::Merge => "MERGING",
+            Self::Rebase => "REBASING",
+            Self::CherryPick => "CHERRY-PICKING",
+            Self::Revert => "REVERTING",
+        }
+    }
+
+    /// Lowercase verb for user-facing messages (e.g. "merge").
+    pub fn verb(self) -> &'static str {
+        self.git_subcommand().unwrap_or("operation")
+    }
+
+    /// The `git` subcommand used for `--abort` / `--continue`, or `None` when
+    /// clean.
+    pub fn git_subcommand(self) -> Option<&'static str> {
+        match self {
+            Self::Clean => None,
+            Self::Merge => Some("merge"),
+            Self::Rebase => Some("rebase"),
+            Self::CherryPick => Some("cherry-pick"),
+            Self::Revert => Some("revert"),
+        }
+    }
+}
+
 pub struct GitRepository {
     repo: Repository,
     pub path: String,
@@ -56,26 +125,30 @@ impl GitRepository {
         })
     }
 
-    /// Get commit history (newest first)
+    /// Get commit history (newest first).
+    ///
+    /// Walks from the tips of the supplied `branches` — the caller decides
+    /// which branches are visible (e.g. by excluding hidden ones), so hiding a
+    /// branch removes its exclusive commits from the graph. HEAD and stash
+    /// commits are always pushed as well.
     pub fn get_commits(
         &self,
         max_count: usize,
+        branches: &[BranchInfo],
         stashes: &[StashInfo],
     ) -> Result<Vec<CommitInfo>> {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
 
-        // Include all branches
-        for branch_result in self.repo.branches(None)? {
-            let (branch, _) = branch_result?;
-            if let Some(oid) = branch.get().target() {
-                revwalk.push(oid)?;
-            }
+        // Walk from the tips of the requested (visible) branches.
+        for branch in branches {
+            let _ = revwalk.push(branch.tip_oid);
         }
 
-        // Include HEAD itself: a detached HEAD on a commit not reachable
-        // from any branch tip would otherwise vanish from the graph
-        // (taking the uncommitted-changes node with it).
+        // Include HEAD itself: a detached HEAD on a commit not reachable from
+        // any branch tip — or a HEAD whose own branch is hidden — would
+        // otherwise vanish from the graph (taking the uncommitted-changes node
+        // with it).
         if let Some(oid) = self.repo.head().ok().and_then(|h| h.target()) {
             let _ = revwalk.push(oid);
         }
@@ -145,6 +218,47 @@ impl GitRepository {
         BranchInfo::list_all(&self.repo)
     }
 
+    /// Load all tags as (name -> target commit OID). Both lightweight and
+    /// annotated tags are resolved to the commit they point at (annotated tags
+    /// are peeled through their tag object). Malformed tags are skipped rather
+    /// than failing the whole load.
+    pub fn get_tags(&self) -> Vec<TagInfo> {
+        let mut tags = Vec::new();
+        let Ok(names) = self.repo.tag_names(None) else {
+            return tags;
+        };
+        for name in names.iter().flatten() {
+            if let Ok(reference) = self.repo.find_reference(&format!("refs/tags/{name}")) {
+                // peel_to_commit follows annotated tag objects to the commit.
+                if let Ok(commit) = reference.peel_to_commit() {
+                    tags.push(TagInfo {
+                        name: name.to_string(),
+                        target_oid: commit.id(),
+                    });
+                }
+            }
+        }
+        tags
+    }
+
+    /// Names of the configured remotes (e.g. `["origin", "upstream"]`).
+    pub fn remotes(&self) -> Vec<String> {
+        self.repo
+            .remotes()
+            .map(|arr| arr.iter().flatten().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The remote configured for the current branch's upstream, if any
+    /// (`branch.<name>.remote`). `None` for a detached HEAD or an
+    /// upstream-less branch.
+    pub fn head_upstream_remote(&self) -> Option<String> {
+        let head = self.repo.head().ok()?;
+        let refname = head.name()?;
+        let buf = self.repo.branch_upstream_remote(refname).ok()?;
+        buf.as_str().map(|s| s.to_string())
+    }
+
     /// Get the current HEAD name
     pub fn head_name(&self) -> Option<String> {
         self.repo
@@ -165,6 +279,24 @@ impl GitRepository {
             .ok()
             .and_then(|h| h.peel_to_commit().ok())
             .map(|c| c.id())
+    }
+
+    /// The in-progress git operation (merge/rebase/cherry-pick/revert), if any.
+    pub fn operation_state(&self) -> OperationState {
+        OperationState::from_repo_state(self.repo.state())
+    }
+
+    /// Number of paths currently in a conflicted (unmerged) state.
+    pub fn conflicted_count(&self) -> usize {
+        self.repo
+            .statuses(None)
+            .map(|statuses| {
+                statuses
+                    .iter()
+                    .filter(|e| e.status().contains(Status::CONFLICTED))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     /// Get working tree status (staged + unstaged + untracked changes)
@@ -209,7 +341,12 @@ impl GitRepository {
                     | git2::Status::WT_TYPECHANGE,
             );
 
-            if is_staged || has_worktree_changes {
+            // Conflicted (unmerged) paths report only CONFLICTED — without this
+            // a merge whose sole change is the conflicted file would leave the
+            // uncommitted node (and its Merge Changes section) invisible.
+            let is_conflicted = status.contains(Status::CONFLICTED);
+
+            if is_staged || has_worktree_changes || is_conflicted {
                 let path = super::path_from_bytes(entry.path_bytes());
                 if status.intersects(Status::WT_NEW) {
                     let full_path = workdir.join(&path);

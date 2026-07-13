@@ -5,6 +5,8 @@
 
 [English README](../README.md)
 
+> **Note:** This translation lags behind the English README (recent additions like conflict handling, pull/multi-remote, hunk staging, tags, stash variants, compare, and file history aren't reflected yet). See [../README.md](../README.md) for the current feature set and keybindings.
+
 keifu (系譜, /keːɸɯ/) は、ターミナル上で Git のコミットグラフを可視化する TUI ツールです。カラー付きのグラフ、コミット詳細、変更ファイルの要約を表示し、基本的なブランチ操作も行えます。
 
 ![スクリーンショット](win_terminal.png)

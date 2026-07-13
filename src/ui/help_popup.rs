@@ -47,12 +47,8 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Switch panels", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  ] / Tab    ", key_style),
-                Span::styled("Next branch", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  [ / S-Tab  ", key_style),
-                Span::styled("Previous branch", desc_style),
+                Span::styled("  Tab / S-Tab", key_style),
+                Span::styled("Switch panels (forward/back)", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  Ctrl+d/u   ", key_style),
@@ -72,7 +68,7 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  Esc        ", key_style),
-                Span::styled("Return to graph / stop editing", desc_style),
+                Span::styled("Return to graph / stop editing / quit (from graph)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Graph Panel", header_style)),
@@ -85,6 +81,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Open file select", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  ] / [      ", key_style),
+                Span::styled("Next / previous branch label", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  b          ", key_style),
                 Span::styled("Create new branch", desc_style),
             ]),
@@ -94,11 +94,27 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  f          ", key_style),
-                Span::styled("Fetch from origin", desc_style),
+                Span::styled("Fetch from remote", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  p          ", key_style),
+                Span::styled("Pull (fetch + integrate)", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  P          ", key_style),
+                Span::styled("Push current branch (publishes if no upstream)", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  B          ", key_style),
                 Span::styled("Branch filter", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+f     ", key_style),
+                Span::styled("Filter commits (message/author/hash)", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  m          ", key_style),
+                Span::styled("Mark / compare two commits (Esc clears)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
@@ -109,6 +125,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Line::from(vec![
                     Span::styled("  s          ", key_style),
                     Span::styled("Stage/unstage file", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  S / U      ", key_style),
+                    Span::styled("Stage all / unstage all", desc_style),
                 ]),
                 Line::from(vec![
                     Span::styled("  i          ", key_style),
@@ -130,10 +150,31 @@ impl<'a> Widget for HelpPopup<'a> {
                     Span::styled("  Ctrl+z     ", key_style),
                     Span::styled("Undo last file operation", desc_style),
                 ]),
+                Line::from(Span::styled("  Merge conflicts", header_style)),
+                Line::from(vec![
+                    Span::styled("  o          ", key_style),
+                    Span::styled("Accept ours (on conflicted file)", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  t          ", key_style),
+                    Span::styled("Accept theirs (on conflicted file)", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  c          ", key_style),
+                    Span::styled("Continue merge/rebase/cherry-pick/revert", desc_style),
+                ]),
+                Line::from(vec![
+                    Span::styled("  A          ", key_style),
+                    Span::styled("Abort the in-progress operation", desc_style),
+                ]),
             ]);
         }
 
         lines.extend([
+            Line::from(vec![
+                Span::styled("  f          ", key_style),
+                Span::styled("Toggle folder grouping", desc_style),
+            ]),
             Line::from(vec![
                 Span::styled("  Ctrl+f     ", key_style),
                 Span::styled("Filter files", desc_style),
@@ -143,8 +184,38 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Open file with default app", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  y          ", key_style),
+                Span::styled("Copy file path", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  Enter      ", key_style),
                 Span::styled("Open file diff", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  h          ", key_style),
+                Span::styled("File history (commits touching this file)", desc_style),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("File Diff Viewer", header_style)),
+            Line::from(vec![
+                Span::styled("  [ / ]      ", key_style),
+                Span::styled("Previous / next hunk", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  n / N      ", key_style),
+                Span::styled("Next / previous file", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  s          ", key_style),
+                Span::styled("Stage hunk under cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  u          ", key_style),
+                Span::styled("Unstage hunk under cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  x          ", key_style),
+                Span::styled("Discard hunk (working tree)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Commit Panel", header_style)),
@@ -163,6 +234,10 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Ctrl+Enter   ", key_style),
                 Span::styled("Amend last commit", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+S       ", key_style),
+                Span::styled("Stash changes (staged / all / +untracked)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("Search", header_style)),
@@ -183,10 +258,6 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(vec![
                 Span::styled("  Ctrl+Q     ", key_style),
                 Span::styled("Quit (from anywhere)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  q          ", key_style),
-                Span::styled("Quit", desc_style),
             ]),
         ]);
 

@@ -347,6 +347,11 @@ impl FilesPaneState {
     }
 
     fn build_staged_unstaged_items(files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
+        let conflicted: Vec<_> = files
+            .iter()
+            .filter(|f| matches!(f.stage_status, Some(StageStatus::Conflicted)))
+            .cloned()
+            .collect();
         let staged: Vec<_> = files
             .iter()
             .filter(|f| matches!(f.stage_status, Some(StageStatus::Staged)))
@@ -354,11 +359,21 @@ impl FilesPaneState {
             .collect();
         let unstaged: Vec<_> = files
             .iter()
-            .filter(|f| !matches!(f.stage_status, Some(StageStatus::Staged)))
+            .filter(|f| {
+                !matches!(
+                    f.stage_status,
+                    Some(StageStatus::Staged) | Some(StageStatus::Conflicted)
+                )
+            })
             .cloned()
             .collect();
 
         let mut items = Vec::new();
+        // Merge Changes first: it needs the most attention.
+        if !conflicted.is_empty() {
+            items.push(FilesPaneItem::SectionHeader("Merge Changes".to_string()));
+            items.extend(conflicted.into_iter().map(FilesPaneItem::File));
+        }
         if !staged.is_empty() {
             items.push(FilesPaneItem::SectionHeader("Staged Changes".to_string()));
             items.extend(staged.into_iter().map(FilesPaneItem::File));
@@ -376,6 +391,11 @@ impl FilesPaneState {
 
     /// Staged/unstaged sections with folder grouping within each section.
     fn build_staged_unstaged_folder_items(files: &[FileDiffInfo]) -> Vec<FilesPaneItem> {
+        let conflicted: Vec<_> = files
+            .iter()
+            .filter(|f| matches!(f.stage_status, Some(StageStatus::Conflicted)))
+            .cloned()
+            .collect();
         let staged: Vec<_> = files
             .iter()
             .filter(|f| matches!(f.stage_status, Some(StageStatus::Staged)))
@@ -383,11 +403,20 @@ impl FilesPaneState {
             .collect();
         let unstaged: Vec<_> = files
             .iter()
-            .filter(|f| !matches!(f.stage_status, Some(StageStatus::Staged)))
+            .filter(|f| {
+                !matches!(
+                    f.stage_status,
+                    Some(StageStatus::Staged) | Some(StageStatus::Conflicted)
+                )
+            })
             .cloned()
             .collect();
 
         let mut items = Vec::new();
+        if !conflicted.is_empty() {
+            items.push(FilesPaneItem::SectionHeader("Merge Changes".to_string()));
+            items.extend(Self::folder_group(&conflicted));
+        }
         if !staged.is_empty() {
             items.push(FilesPaneItem::SectionHeader("Staged Changes".to_string()));
             items.extend(Self::folder_group(&staged));

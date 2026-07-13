@@ -33,6 +33,9 @@ pub enum StageStatus {
     Staged,
     Unstaged,
     Untracked,
+    /// Unmerged path from an in-progress merge/rebase/cherry-pick/revert.
+    /// Grouped into the files pane's "Merge Changes" section.
+    Conflicted,
 }
 
 /// Per-file diff info
@@ -115,11 +118,21 @@ impl CommitDiffInfo {
         let workdir = repo.workdir().unwrap_or_else(|| repo.path());
         let mut staged_result = Self::scan_diff(&staged_diff)?;
         for file in &mut staged_result.files {
-            file.stage_status = Some(StageStatus::Staged);
+            if file.stage_status != Some(StageStatus::Conflicted) {
+                file.stage_status = Some(StageStatus::Staged);
+            }
         }
+        // An unmerged path surfaces in BOTH the HEAD→index and index→workdir
+        // diffs as Delta::Conflicted. Drop it from the staged side so it renders
+        // once, in the Merge Changes section, rather than duplicated.
+        staged_result
+            .files
+            .retain(|f| f.stage_status != Some(StageStatus::Conflicted));
         let mut unstaged_result = Self::scan_diff(&unstaged_diff)?;
         for file in &mut unstaged_result.files {
-            file.stage_status = Some(StageStatus::Unstaged);
+            if file.stage_status != Some(StageStatus::Conflicted) {
+                file.stage_status = Some(StageStatus::Unstaged);
+            }
         }
         let refresh_paths: HashSet<PathBuf> = staged_result
             .all_paths
@@ -189,6 +202,26 @@ impl CommitDiffInfo {
         Self::build_info(Self::scan_diff(&diff)?, None)
     }
 
+    /// Get diff info between two arbitrary commits (older → newer).
+    ///
+    /// The caller is responsible for ordering `old_oid`/`new_oid` by commit
+    /// time so the diff reads in the natural older-to-newer direction. This is
+    /// a plain tree-to-tree diff, mirroring [`from_commit`](Self::from_commit)
+    /// but with an explicit "old" side instead of the first parent.
+    pub fn from_range(repo: &Repository, old_oid: Oid, new_oid: Oid) -> Result<Self> {
+        let old_tree = repo.find_commit(old_oid)?.tree()?;
+        let new_tree = repo.find_commit(new_oid)?.tree()?;
+
+        let mut opts = DiffOptions::new();
+        opts.minimal(false);
+        opts.ignore_submodules(true);
+        opts.context_lines(0);
+
+        let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut opts))?;
+
+        Self::build_info(Self::scan_diff(&diff)?, None)
+    }
+
     /// Quick file list for a commit - just paths and change kinds, no line stats.
     /// Much faster than full diff computation since it skips patch analysis.
     pub fn quick_file_list_for_commit(repo: &Repository, commit_oid: Oid) -> Result<Self> {
@@ -200,11 +233,31 @@ impl CommitDiffInfo {
             None
         };
 
+        Self::quick_file_list_from_trees(repo, old_tree.as_ref(), Some(&new_tree))
+    }
+
+    /// Quick file list between two arbitrary commits (older → newer).
+    pub fn quick_file_list_for_range(
+        repo: &Repository,
+        old_oid: Oid,
+        new_oid: Oid,
+    ) -> Result<Self> {
+        let old_tree = repo.find_commit(old_oid)?.tree()?;
+        let new_tree = repo.find_commit(new_oid)?.tree()?;
+        Self::quick_file_list_from_trees(repo, Some(&old_tree), Some(&new_tree))
+    }
+
+    /// Shared quick-file-list builder: names + change kinds only, no line stats.
+    fn quick_file_list_from_trees(
+        repo: &Repository,
+        old_tree: Option<&Tree<'_>>,
+        new_tree: Option<&Tree<'_>>,
+    ) -> Result<Self> {
         let mut opts = DiffOptions::new();
         opts.minimal(false);
         opts.ignore_submodules(true);
         opts.context_lines(0);
-        let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
+        let diff = repo.diff_tree_to_tree(old_tree, new_tree, Some(&mut opts))?;
 
         let mut files = Vec::new();
         for delta in diff.deltas() {
@@ -259,6 +312,11 @@ impl CommitDiffInfo {
 
         let mut staged_files = Vec::new();
         for delta in staged_diff.deltas() {
+            // Conflicts appear in both diffs; keep them only on the unstaged
+            // side so the Merge Changes section shows each once.
+            if delta.status() == Delta::Conflicted {
+                continue;
+            }
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
@@ -275,13 +333,16 @@ impl CommitDiffInfo {
         let mut unstaged_files = Vec::new();
         for delta in unstaged_diff.deltas() {
             let is_untracked = delta.status() == git2::Delta::Untracked;
+            let is_conflicted = delta.status() == Delta::Conflicted;
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
             if is_untracked && Self::is_plain_directory(&workdir.join(path)) {
                 continue;
             }
-            let status = if is_untracked {
+            let status = if is_conflicted {
+                StageStatus::Conflicted
+            } else if is_untracked {
                 StageStatus::Untracked
             } else {
                 StageStatus::Unstaged
@@ -296,9 +357,13 @@ impl CommitDiffInfo {
             });
         }
 
-        // Sort unstaged: tracked modifications first, then untracked
-        // (matches the order produced by the full diff's separate scans)
-        unstaged_files.sort_by_key(|f| matches!(f.stage_status, Some(StageStatus::Untracked)));
+        // Sort: conflicts first (Merge Changes), then tracked modifications,
+        // then untracked — matching the full diff's separate-scan ordering.
+        unstaged_files.sort_by_key(|f| match f.stage_status {
+            Some(StageStatus::Conflicted) => 0,
+            Some(StageStatus::Untracked) => 2,
+            _ => 1,
+        });
 
         // Merge for the flat files list
         let mut all_files = staged_files.clone();
@@ -322,6 +387,7 @@ impl CommitDiffInfo {
         let mut all_paths = HashSet::new();
 
         for (delta_idx, delta) in diff.deltas().enumerate() {
+            let is_conflicted = delta.status() == Delta::Conflicted;
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
             };
@@ -340,7 +406,10 @@ impl CommitDiffInfo {
                 is_binary,
                 insertions,
                 deletions,
-                stage_status: None,
+                // Preserve conflict classification so working-tree callers can
+                // route it into the Merge Changes section; commit diffs never
+                // carry conflicts, so this stays None there.
+                stage_status: is_conflicted.then_some(StageStatus::Conflicted),
             });
         }
 
@@ -851,6 +920,29 @@ impl FileDiffContent {
         opts.disable_pathspec_match(true);
 
         let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))?;
+
+        Self::from_diff(&diff, file_path)
+    }
+
+    /// Get full diff content for a single file between two arbitrary commits
+    /// (older → newer). Mirrors [`from_commit`](Self::from_commit) but diffs the
+    /// two commits' trees directly instead of commit-vs-parent.
+    pub fn from_range(
+        repo: &Repository,
+        old_oid: Oid,
+        new_oid: Oid,
+        file_path: &Path,
+    ) -> Result<Self> {
+        let old_tree = repo.find_commit(old_oid)?.tree()?;
+        let new_tree = repo.find_commit(new_oid)?.tree()?;
+
+        let mut opts = DiffOptions::new();
+        opts.ignore_submodules(true);
+        opts.context_lines(3);
+        opts.pathspec(file_path);
+        opts.disable_pathspec_match(true);
+
+        let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut opts))?;
 
         Self::from_diff(&diff, file_path)
     }

@@ -7,6 +7,7 @@ use std::path::Path;
 use git2::Oid;
 
 use keifu::git::operations::*;
+use keifu::git::OperationState;
 
 mod common;
 use common::{
@@ -343,6 +344,29 @@ fn add_duplicate_tag_fails() {
     assert!(result.is_err());
 }
 
+#[test]
+fn get_tags_resolves_lightweight_and_annotated_tags() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let c1 = commit_file(repo, "a.txt", "a", "first");
+    let c2 = commit_file(repo, "b.txt", "b", "second");
+
+    // Lightweight tag on c1; annotated tag (its own tag object) on c2.
+    add_tag(repo, "light", c1).unwrap();
+    git_cli(
+        repo_path(&git_repo),
+        &["tag", "-a", "annot", "-m", "release", &c2.to_string()],
+    );
+
+    let tags = git_repo.get_tags();
+    let target = |name: &str| tags.iter().find(|t| t.name == name).map(|t| t.target_oid);
+
+    // The annotated tag must be peeled through its tag object to the commit
+    // it references (c2), not report the tag object's own oid.
+    assert_eq!(target("light"), Some(c1));
+    assert_eq!(target("annot"), Some(c2));
+}
+
 // ── Restore ─────────────────────────────────────────────────────────
 
 #[test]
@@ -636,7 +660,7 @@ fn rebase_branch_replays_commits_onto_advanced_base() {
 }
 
 #[test]
-fn rebase_branch_conflict_errors_and_leaves_rebase_in_progress() {
+fn rebase_branch_conflict_returns_conflicts_and_leaves_rebase_in_progress() {
     let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let base = commit_file(repo, "f.txt", "base\n", "base");
@@ -650,17 +674,22 @@ fn rebase_branch_conflict_errors_and_leaves_rebase_in_progress() {
     commit_file(repo, "f.txt", "main\n", "main edit");
 
     checkout_branch(repo, "feature").unwrap();
-    let result = rebase_branch(repo, &default);
-    assert!(result.is_err(), "conflicting rebase should error");
 
-    // documents current behavior: rebase_branch does not abort on conflict —
-    // there is no cleanup/abort in operations.rs, so the repo is left in a
-    // mid-rebase state.
-    assert_ne!(
-        repo.state(),
-        git2::RepositoryState::Clean,
-        "conflicting rebase leaves an in-progress rebase state"
+    // New contract: a conflict is a typed outcome, not an Err.
+    let outcome = rebase_branch(repo, &default).expect("conflict is not an error");
+    assert!(
+        matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
+        "conflicting rebase returns Conflicts, got {outcome:?}"
     );
+
+    // The rebase is deliberately left in progress for resolve/continue/abort,
+    // and maps to the Rebase operation that drives the recovery UI.
+    assert_ne!(repo.state(), git2::RepositoryState::Clean);
+    assert_eq!(
+        OperationState::from_repo_state(repo.state()),
+        OperationState::Rebase
+    );
+    assert!(repo.index().unwrap().has_conflicts());
 }
 
 // ── Stash ───────────────────────────────────────────────────────────
@@ -931,7 +960,7 @@ fn push_to_origin_without_remote_errors() {
 // ── Merge conflict ──────────────────────────────────────────────────
 
 #[test]
-fn merge_branch_conflict_errors_and_leaves_repo_mid_merge() {
+fn merge_branch_conflict_returns_conflicts_and_leaves_repo_mid_merge() {
     let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let base = commit_file(repo, "f.txt", "base\n", "base");
@@ -944,18 +973,18 @@ fn merge_branch_conflict_errors_and_leaves_repo_mid_merge() {
     commit_file(repo, "f.txt", "feature\n", "feature edit");
     checkout_branch(repo, &default).unwrap();
 
-    let err = merge_branch(repo, "feature").unwrap_err();
+    // New contract: a conflicting merge is a typed outcome, not an error.
+    let outcome = merge_branch(repo, "feature").expect("conflict is not an error");
     assert!(
-        err.to_string().to_lowercase().contains("conflict"),
-        "error should mention the conflict: {err}"
+        matches!(outcome, OpOutcome::Conflicts { count } if count == 1),
+        "conflicting merge returns Conflicts with the conflict count, got {outcome:?}"
     );
 
-    // documents current behavior: merge_branch bails *after* repo.merge() has
-    // already written conflicts, leaving the repo mid-merge (index conflicts +
-    // MERGE_HEAD). This is a known product gap; the test pins current behavior.
+    // The repo is intentionally left mid-merge (conflicted index + MERGE_HEAD)
+    // so the user can resolve then continue, or abort.
     assert!(
         repo.index().unwrap().has_conflicts(),
-        "conflicted index is left behind"
+        "conflicted index is left behind for resolution"
     );
     assert_eq!(repo.state(), git2::RepositoryState::Merge);
 }
@@ -963,7 +992,7 @@ fn merge_branch_conflict_errors_and_leaves_repo_mid_merge() {
 // ── Cherry-pick / revert conflicts ──────────────────────────────────
 
 #[test]
-fn cherry_pick_conflict_errors_and_leaves_cherry_pick_head() {
+fn cherry_pick_conflict_returns_conflicts_and_leaves_cherry_pick_head() {
     let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let path = repo_path(&git_repo);
@@ -976,19 +1005,26 @@ fn cherry_pick_conflict_errors_and_leaves_cherry_pick_head() {
     checkout_branch(repo, &default).unwrap();
     commit_file(repo, "f.txt", "main\n", "main edit");
 
-    let result = cherry_pick(path, pick);
-    assert!(result.is_err(), "conflicting cherry-pick should error");
+    // New contract: a conflicting cherry-pick is a typed outcome, not an error.
+    let outcome = cherry_pick(path, pick).expect("conflict is not an error");
+    assert!(
+        matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
+        "conflicting cherry-pick returns Conflicts, got {outcome:?}"
+    );
 
-    // documents current behavior: the failed shell-out leaves git's mid-
-    // cherry-pick state (CHERRY_PICK_HEAD) in place.
+    // Left mid-cherry-pick (CHERRY_PICK_HEAD) for resolve/continue/abort.
     assert!(
         Path::new(path).join(".git/CHERRY_PICK_HEAD").exists(),
-        "CHERRY_PICK_HEAD is left behind after a conflicting cherry-pick"
+        "CHERRY_PICK_HEAD is left behind for resolution"
+    );
+    assert_eq!(
+        OperationState::from_repo_state(repo.state()),
+        OperationState::CherryPick
     );
 }
 
 #[test]
-fn revert_commit_conflict_errors_and_leaves_revert_head() {
+fn revert_commit_conflict_returns_conflicts_and_leaves_revert_head() {
     let (_td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let path = repo_path(&git_repo);
@@ -997,15 +1033,251 @@ fn revert_commit_conflict_errors_and_leaves_revert_head() {
     commit_file(repo, "f.txt", "line3\n", "c3");
 
     // Reverting c2 (line1->line2) conflicts with c3's line3.
-    let result = revert_commit(path, to_revert);
-    assert!(result.is_err(), "conflicting revert should error");
+    // New contract: the conflict is a typed outcome, not an error.
+    let outcome = revert_commit(path, to_revert).expect("conflict is not an error");
+    assert!(
+        matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
+        "conflicting revert returns Conflicts, got {outcome:?}"
+    );
 
-    // documents current behavior: the failed shell-out leaves git's mid-revert
-    // state (REVERT_HEAD) in place.
+    // Left mid-revert (REVERT_HEAD) for resolve/continue/abort.
     assert!(
         Path::new(path).join(".git/REVERT_HEAD").exists(),
-        "REVERT_HEAD is left behind after a conflicting revert"
+        "REVERT_HEAD is left behind for resolution"
     );
+    assert_eq!(
+        OperationState::from_repo_state(repo.state()),
+        OperationState::Revert
+    );
+}
+
+// ── Conflict resolution: accept ours/theirs, abort, continue ────────
+
+/// Reload the on-disk index and report whether conflicts remain. A long-lived
+/// git2 handle caches its index, so external `git` CLI mutations (accept
+/// ours/theirs, abort) aren't visible without an explicit reload.
+fn has_conflicts_fresh(repo: &git2::Repository) -> bool {
+    let mut index = repo.index().unwrap();
+    index.read(true).unwrap();
+    index.has_conflicts()
+}
+
+/// Set up a guaranteed single-file merge conflict on the default branch and
+/// return (default branch name, main-edit HEAD oid). After this the repo is
+/// mid-merge with `f.txt` conflicted.
+fn start_conflicting_merge(repo: &git2::Repository) -> (String, Oid) {
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+    create_branch(repo, "feature", base).unwrap();
+    let main_head = commit_file(repo, "f.txt", "main\n", "main edit");
+    checkout_branch(repo, "feature").unwrap();
+    commit_file(repo, "f.txt", "feature\n", "feature edit");
+    checkout_branch(repo, &default).unwrap();
+    let outcome = merge_branch(repo, "feature").unwrap();
+    assert!(matches!(outcome, OpOutcome::Conflicts { .. }));
+    (default, main_head)
+}
+
+#[test]
+fn accept_ours_resolves_conflicted_file_with_our_content() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    start_conflicting_merge(repo);
+
+    accept_ours(path, "f.txt").unwrap();
+
+    // Working tree now holds our (main) side...
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("f.txt")).unwrap(),
+        "main\n"
+    );
+    // ...and the file left the conflicted set (staged as resolved).
+    assert!(!has_conflicts_fresh(repo));
+    assert_eq!(git_repo.conflicted_count(), 0);
+}
+
+#[test]
+fn accept_theirs_resolves_conflicted_file_with_their_content() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    start_conflicting_merge(repo);
+
+    accept_theirs(path, "f.txt").unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("f.txt")).unwrap(),
+        "feature\n"
+    );
+    assert!(!has_conflicts_fresh(repo));
+}
+
+#[test]
+fn abort_merge_returns_repo_to_clean_at_original_head() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let (_default, main_head) = start_conflicting_merge(repo);
+
+    abort_operation(path, OperationState::Merge).unwrap();
+
+    // Repo is clean again, HEAD is the pre-merge commit, ours content restored.
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    assert_eq!(head_oid(repo), main_head);
+    assert!(!has_conflicts_fresh(repo));
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("f.txt")).unwrap(),
+        "main\n"
+    );
+}
+
+#[test]
+fn continue_merge_after_resolving_all_creates_merge_commit() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let (_default, main_head) = start_conflicting_merge(repo);
+
+    // Resolve the only conflict, then continue.
+    accept_ours(path, "f.txt").unwrap();
+    let outcome = continue_operation(path, OperationState::Merge).unwrap();
+    assert_eq!(outcome, OpOutcome::Completed);
+
+    // A two-parent merge commit now sits at HEAD, back to a clean state.
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(head.parent_id(0).unwrap(), main_head);
+}
+
+#[test]
+fn continue_merge_with_unresolved_conflicts_reports_conflicts() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    start_conflicting_merge(repo);
+
+    // Continue without resolving: git refuses; we surface it as Conflicts.
+    let outcome = continue_operation(path, OperationState::Merge).unwrap();
+    assert!(matches!(outcome, OpOutcome::Conflicts { count } if count >= 1));
+    assert_eq!(repo.state(), git2::RepositoryState::Merge);
+}
+
+#[test]
+fn abort_cherry_pick_returns_to_clean_at_original_head() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+    create_branch(repo, "feature", base).unwrap();
+    checkout_branch(repo, "feature").unwrap();
+    let pick = commit_file(repo, "f.txt", "feature\n", "feature edit");
+    checkout_branch(repo, &default).unwrap();
+    let main_head = commit_file(repo, "f.txt", "main\n", "main edit");
+
+    assert!(matches!(
+        cherry_pick(path, pick).unwrap(),
+        OpOutcome::Conflicts { .. }
+    ));
+
+    abort_operation(path, OperationState::CherryPick).unwrap();
+
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    assert_eq!(head_oid(repo), main_head);
+    assert!(!has_conflicts_fresh(repo));
+}
+
+#[test]
+fn continue_cherry_pick_after_resolving_completes() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+    create_branch(repo, "feature", base).unwrap();
+    checkout_branch(repo, "feature").unwrap();
+    let pick = commit_file(repo, "f.txt", "feature\n", "feature edit");
+    checkout_branch(repo, &default).unwrap();
+    let main_head = commit_file(repo, "f.txt", "main\n", "main edit");
+
+    assert!(matches!(
+        cherry_pick(path, pick).unwrap(),
+        OpOutcome::Conflicts { .. }
+    ));
+
+    accept_theirs(path, "f.txt").unwrap();
+    let outcome = continue_operation(path, OperationState::CherryPick).unwrap();
+    assert_eq!(outcome, OpOutcome::Completed);
+
+    // A new commit sits on top of the pre-cherry-pick HEAD, repo is clean.
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(head.parent_id(0).unwrap(), main_head);
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("f.txt")).unwrap(),
+        "feature\n"
+    );
+}
+
+/// Set up a guaranteed single-file rebase conflict; leaves the repo mid-rebase
+/// on `feature`. Returns the feature tip before the rebase.
+fn start_conflicting_rebase(repo: &git2::Repository) -> Oid {
+    let base = commit_file(repo, "f.txt", "base\n", "base");
+    let default = repo.head().unwrap().shorthand().unwrap().to_string();
+    create_branch(repo, "feature", base).unwrap();
+    checkout_branch(repo, "feature").unwrap();
+    let feature_tip = commit_file(repo, "f.txt", "feature\n", "feature edit");
+    checkout_branch(repo, &default).unwrap();
+    commit_file(repo, "f.txt", "main\n", "main edit");
+    checkout_branch(repo, "feature").unwrap();
+    assert!(matches!(
+        rebase_branch(repo, &default).unwrap(),
+        OpOutcome::Conflicts { .. }
+    ));
+    feature_tip
+}
+
+#[test]
+fn abort_rebase_returns_to_clean_at_original_feature_tip() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let feature_tip = start_conflicting_rebase(repo);
+
+    abort_operation(path, OperationState::Rebase).unwrap();
+
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    // feature is back at its pre-rebase tip.
+    assert_eq!(head_oid(repo), feature_tip);
+    assert_eq!(
+        repo.find_branch("feature", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id(),
+        feature_tip
+    );
+}
+
+#[test]
+fn continue_rebase_after_resolving_completes() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let feature_tip = start_conflicting_rebase(repo);
+
+    // Resolve and continue; the rebase should finish and clean up.
+    accept_theirs(path, "f.txt").unwrap();
+    let outcome = continue_operation(path, OperationState::Rebase).unwrap();
+    assert_eq!(outcome, OpOutcome::Completed);
+
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    // The feature branch tip was rewritten by the rebase.
+    assert_ne!(head_oid(repo), feature_tip);
+    assert!(!has_conflicts_fresh(repo));
 }
 
 // ── Reset / restore / amend / checkout edge cases ───────────────────
@@ -1104,4 +1376,194 @@ fn commit_without_configured_user_maps_to_friendly_error() {
         err.to_string().contains("Git user not configured"),
         "unconfigured identity should map to a friendly error, got: {err}"
     );
+}
+
+// ── Branch rename ───────────────────────────────────────────────────
+
+#[test]
+fn rename_branch_renames_local_branch() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    create_branch(repo, "feature", oid).unwrap();
+
+    rename_branch(path, "feature", "feature-2").unwrap();
+
+    // Old name gone, new name present at the same commit.
+    assert!(repo.find_branch("feature", git2::BranchType::Local).is_err());
+    let renamed = repo
+        .find_branch("feature-2", git2::BranchType::Local)
+        .unwrap();
+    assert_eq!(renamed.get().peel_to_commit().unwrap().id(), oid);
+}
+
+#[test]
+fn rename_branch_renames_current_branch_and_moves_head() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let path = repo_path(&git_repo);
+    let old = git_repo
+        .repo()
+        .head()
+        .unwrap()
+        .shorthand()
+        .unwrap()
+        .to_string();
+
+    rename_branch(path, &old, "trunk").unwrap();
+
+    // HEAD follows the rename; the old branch no longer exists.
+    let repo = git2::Repository::open(path).unwrap();
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "trunk");
+    assert!(repo.find_branch(&old, git2::BranchType::Local).is_err());
+}
+
+#[test]
+fn rename_branch_collision_errors_and_preserves_both() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    create_branch(repo, "one", oid).unwrap();
+    create_branch(repo, "two", oid).unwrap();
+
+    // Renaming onto an existing name must fail (no -M force) ...
+    assert!(rename_branch(path, "one", "two").is_err());
+    // ... and leave both branches intact.
+    assert!(repo.find_branch("one", git2::BranchType::Local).is_ok());
+    assert!(repo.find_branch("two", git2::BranchType::Local).is_ok());
+}
+
+// ── Tag delete / push ───────────────────────────────────────────────
+
+#[test]
+fn delete_tag_removes_tag() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    add_tag(repo, "v1.0", oid).unwrap();
+    assert!(repo.revparse_single("v1.0").is_ok(), "precondition: tag exists");
+
+    delete_tag(path, "v1.0").unwrap();
+
+    // A fresh handle confirms the tag ref is gone from the refdb.
+    let repo = git2::Repository::open(path).unwrap();
+    assert!(repo.revparse_single("v1.0").is_err());
+}
+
+#[test]
+fn delete_tag_nonexistent_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    commit_file(git_repo.repo(), "a.txt", "a", "initial");
+    assert!(delete_tag(repo_path(&git_repo), "nope").is_err());
+}
+
+#[test]
+fn push_tag_publishes_tag_to_remote() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    add_tag(repo, "v1.0", oid).unwrap();
+    let origin = add_bare_origin(path);
+
+    push_tag(path, "origin", "v1.0").unwrap();
+
+    // The tag is now listed in the bare remote.
+    let remote_tags = git_cli(origin.path().to_str().unwrap(), &["tag", "-l"]);
+    assert!(
+        remote_tags.contains("v1.0"),
+        "tag should be visible on the remote, got: {remote_tags:?}"
+    );
+}
+
+#[test]
+fn push_tag_without_remote_errors() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let oid = commit_file(repo, "a.txt", "a", "initial");
+    add_tag(repo, "v1.0", oid).unwrap();
+    assert!(push_tag(repo_path(&git_repo), "origin", "v1.0").is_err());
+}
+
+// ── Stash all / stash branch ────────────────────────────────────────
+
+#[test]
+fn stash_all_stashes_staged_and_unstaged() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "base\n", "add a");
+    commit_file(repo, "b.txt", "base\n", "add b");
+
+    // a.txt: staged change; b.txt: unstaged change.
+    fs::write(repo.workdir().unwrap().join("a.txt"), "staged\n").unwrap();
+    stage_file(path, "a.txt").unwrap();
+    fs::write(repo.workdir().unwrap().join("b.txt"), "unstaged\n").unwrap();
+
+    stash_all(path, "", false).unwrap();
+
+    // Both files revert to committed content and the tree is clean.
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "base\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("b.txt")).unwrap(),
+        "base\n"
+    );
+    assert!(
+        repo.statuses(None).unwrap().is_empty(),
+        "working tree should be clean after stash-all"
+    );
+    assert_eq!(stash_count(path), 1);
+}
+
+#[test]
+fn stash_all_untracked_includes_untracked_files() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "base\n", "initial");
+
+    let untracked = repo.workdir().unwrap().join("new.txt");
+    fs::write(&untracked, "brand new\n").unwrap();
+
+    stash_all(path, "wip", true).unwrap();
+
+    // -u sweeps the untracked file into the stash, leaving the tree clean.
+    assert!(!untracked.exists(), "untracked file should be stashed with -u");
+    assert_eq!(stash_count(path), 1);
+
+    // Popping restores it.
+    stash_pop(path, 0).unwrap();
+    assert!(untracked.exists(), "untracked file should return after pop");
+}
+
+#[test]
+fn stash_branch_creates_branch_with_changes_and_drops_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    let base = commit_file(repo, "a.txt", "base\n", "initial");
+
+    // Stash a staged change.
+    fs::write(repo.workdir().unwrap().join("a.txt"), "changed\n").unwrap();
+    stage_file(path, "a.txt").unwrap();
+    stash_staged(path, "wip").unwrap();
+    assert_eq!(stash_count(path), 1);
+
+    stash_branch(path, "from-stash", 0).unwrap();
+
+    // New branch checked out at the stash's base commit, with the stashed
+    // change applied, and the stash dropped (git's stash-branch behaviour).
+    let repo = git2::Repository::open(path).unwrap();
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "from-stash");
+    assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), base);
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("a.txt")).unwrap(),
+        "changed\n"
+    );
+    assert_eq!(stash_count(path), 0);
 }

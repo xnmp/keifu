@@ -48,9 +48,13 @@ pub fn map_key_to_action(
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
-        AppMode::BranchPicker { .. } | AppMode::BranchDeletePicker { .. } => map_picker_mode(key),
+        AppMode::BranchPicker { .. }
+        | AppMode::BranchDeletePicker { .. }
+        | AppMode::TagPicker { .. }
+        | AppMode::RemotePicker { .. } => map_picker_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
+        AppMode::FileHistory { .. } => map_picker_mode(key),
     }
 }
 
@@ -128,10 +132,16 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Enter opens commit menu (or goes to files for uncommitted)
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenCommitMenu),
 
+        // Mark / compare two commits
+        (KeyModifiers::NONE, KeyCode::Char('m')) => Some(Action::MarkForCompare),
+
         // Quick actions
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
+        // Pull / push pairing: lowercase pull, Shift+P push.
+        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Pull),
+        (KeyModifiers::SHIFT, KeyCode::Char('P')) => Some(Action::Push),
 
         // Space opens file diff for quick access
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenFileDiff),
@@ -171,6 +181,10 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::ToggleStage)
         }
 
+        // Stage-all / unstage-all
+        (KeyModifiers::SHIFT, KeyCode::Char('S')) => Some(Action::StageAll),
+        (KeyModifiers::SHIFT, KeyCode::Char('U')) => Some(Action::UnstageAll),
+
         // Add to .gitignore
         (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::AddToGitignore),
 
@@ -189,11 +203,23 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Restore all changes (discard)
         (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RestoreFile),
 
+        // Merge-conflict resolution (active only when an operation is in progress)
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::AcceptOurs),
+        (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::AcceptTheirs),
+        (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::ContinueOperation),
+        (KeyModifiers::SHIFT, KeyCode::Char('A')) => Some(Action::AbortOperation),
+
         // Open file with default app
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenWithDefault),
 
+        // Copy the selected file's repo-relative path
+        (KeyModifiers::NONE, KeyCode::Char('y')) => Some(Action::CopyPath),
+
         // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),
+
+        // Per-file commit history
+        (KeyModifiers::NONE, KeyCode::Char('h')) => Some(Action::FileHistory),
 
         // Start filter mode
         (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartFilesFilter),
@@ -530,6 +556,10 @@ fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('[')) => Some(Action::PrevHunk),
         (KeyModifiers::NONE, KeyCode::Char('n')) => Some(Action::NextFile),
         (KeyModifiers::SHIFT, KeyCode::Char('N')) => Some(Action::PrevFile),
+        // Hunk-level staging (uncommitted diffs only; guarded in the handler)
+        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::StageHunk),
+        (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::UnstageHunk),
+        (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::DiscardHunk),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }

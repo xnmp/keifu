@@ -8,6 +8,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
+use crate::app::FileHistoryEntry;
+
 use super::theme::Theme;
 
 /// Input dialog
@@ -175,6 +177,75 @@ impl<'a> Widget for BranchPickerWidget<'a> {
             };
 
             buf.set_string(inner.x, y, &display, style);
+        }
+    }
+}
+
+/// Per-file history picker: commits that touched a path.
+pub struct FileHistoryWidget<'a> {
+    entries: &'a [FileHistoryEntry],
+    selected: usize,
+    theme: &'a Theme,
+    title: String,
+}
+
+impl<'a> FileHistoryWidget<'a> {
+    pub fn new(
+        entries: &'a [FileHistoryEntry],
+        selected: usize,
+        theme: &'a Theme,
+        path: &std::path::Path,
+    ) -> Self {
+        Self {
+            entries,
+            selected,
+            theme,
+            title: format!(" History: {} ", path.display()),
+        }
+    }
+}
+
+impl<'a> Widget for FileHistoryWidget<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+
+        let block = Block::default()
+            .title(self.title.clone())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(self.theme.author_color))
+            .style(Style::default().bg(self.theme.popup_bg));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // Keep the selected row visible with a simple windowed scroll.
+        let height = inner.height as usize;
+        let first = if height == 0 {
+            0
+        } else {
+            self.selected.saturating_sub(height.saturating_sub(1))
+        };
+
+        for (row, entry) in self.entries.iter().enumerate().skip(first).take(height) {
+            let y = inner.y + (row - first) as u16;
+            let is_selected = row == self.selected;
+            let base_style = if is_selected {
+                Style::default()
+                    .fg(self.theme.list_selection_fg)
+                    .bg(self.theme.author_color)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.theme.text_primary)
+            };
+
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let line = format!(
+                "{}{}  {}  {}",
+                prefix, entry.short_id, entry.date, entry.subject
+            );
+            let max_width = inner.width as usize;
+            let truncated: String = line.chars().take(max_width).collect();
+            buf.set_string(inner.x, y, &truncated, base_style);
         }
     }
 }

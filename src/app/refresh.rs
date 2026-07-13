@@ -75,6 +75,13 @@ impl App {
     }
 
     pub(crate) fn current_diff_target(&self) -> Option<DiffTarget> {
+        // An active two-commit comparison overrides the selected node's diff
+        // until it's cleared (Esc), so the files pane / detail keep showing the
+        // comparison regardless of where the cursor roams in the graph.
+        if let Some((old, new)) = self.compare_range {
+            return Some(DiffTarget::Range(old, new));
+        }
+
         let node = self
             .graph_nav.graph_list_state
             .selected()
@@ -87,6 +94,13 @@ impl App {
                 .as_ref()
                 .map(|commit| DiffTarget::Commit(commit.oid))
         }
+    }
+
+    /// Whether the current diff target is the working tree. Used by the files
+    /// pane to decide staged/unstaged sectioning — a range/commit diff has no
+    /// staging concept even when the selected node happens to be uncommitted.
+    pub(crate) fn diff_target_is_uncommitted(&self) -> bool {
+        self.current_diff_target() == Some(DiffTarget::Uncommitted)
     }
 
     /// Returns the new target and whether it changed since the last sync.
@@ -127,19 +141,28 @@ impl App {
             .map(|s| s.accurate_file_count());
         self.working_tree_status = working_tree_status;
 
+        // Refresh in-progress operation state (merge/rebase/…) and conflict
+        // count so the status bar and conflict keybindings stay accurate.
+        self.op_state = self.repo.operation_state();
+        self.conflict_count = self.repo.conflicted_count();
+
         let stashes = self.repo.get_stashes();
-        self.commits = self.repo.get_commits(500, &stashes)?;
         self.branches = self.repo.get_branches()?;
+        // Hidden branches are excluded from the revwalk, so their exclusive
+        // commits are removed from the graph — not merely their labels.
         let visible_branches: Vec<BranchInfo> = self
             .branches
             .iter()
             .filter(|b| !self.hidden_branches.contains(&b.name))
             .cloned()
             .collect();
+        self.commits = self.repo.get_commits(500, &visible_branches, &stashes)?;
+        let tags = self.repo.get_tags();
         let head_commit_oid = self.repo.head_oid();
         self.graph_layout = build_graph(
             &self.commits,
             &visible_branches,
+            &tags,
             &stashes,
             uncommitted_count,
             head_commit_oid,
