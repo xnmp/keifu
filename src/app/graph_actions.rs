@@ -100,9 +100,13 @@ impl App {
                 self.reset_timers();
             }
             Action::Fetch => {
-                if !self.is_fetching() {
-                    self.start_fetch(true, false);
-                }
+                self.initiate_fetch();
+            }
+            Action::Pull => {
+                self.initiate_pull();
+            }
+            Action::Push => {
+                self.initiate_push();
             }
             Action::OpenCommitMenu => {
                 self.open_commit_menu();

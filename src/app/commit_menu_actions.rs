@@ -4,25 +4,23 @@ use super::*;
 
 impl App {
     pub(crate) fn open_delete_branch_picker(&mut self) {
+        // Deletable = every branch on this node except the current HEAD (which
+        // can't be deleted). This includes remote-tracking branches
+        // ("origin/foo"), which are deleted on the remote when chosen.
         let deletable: Vec<String> = self
             .selected_node_branches()
             .iter()
             .filter(|name| {
                 self.branches
                     .iter()
-                    .any(|b| b.name == **name && !b.is_head && !b.is_remote)
+                    .any(|b| b.name == **name && !b.is_head)
             })
             .map(|s| s.to_string())
             .collect();
 
         match deletable.len() {
             0 => {}
-            1 => {
-                self.mode = AppMode::Confirm {
-                    message: format!("Delete branch '{}'?", deletable[0]),
-                    action: ConfirmAction::DeleteBranch(deletable[0].clone()),
-                };
-            }
+            1 => self.confirm_delete_branch(deletable[0].clone()),
             _ => {
                 self.mode = AppMode::BranchDeletePicker {
                     branches: deletable,
@@ -30,6 +28,29 @@ impl App {
                 };
             }
         }
+    }
+
+    /// Open the destructive Confirm for deleting `name` — routing to a remote
+    /// delete (`git push <remote> --delete`) when `name` is a remote-tracking
+    /// ref, or a local branch delete otherwise.
+    pub(crate) fn confirm_delete_branch(&mut self, name: String) {
+        let is_remote = self
+            .branches
+            .iter()
+            .any(|b| b.name == name && b.is_remote);
+        if is_remote {
+            if let Some((remote, branch)) = self.split_remote_ref(&name) {
+                self.mode = AppMode::Confirm {
+                    message: format!("Delete remote branch '{name}'? This cannot be undone."),
+                    action: ConfirmAction::DeleteRemoteBranch { remote, branch },
+                };
+                return;
+            }
+        }
+        self.mode = AppMode::Confirm {
+            message: format!("Delete branch '{}'?", name),
+            action: ConfirmAction::DeleteBranch(name),
+        };
     }
 
     pub(crate) fn open_commit_menu(&mut self) {
@@ -58,20 +79,27 @@ impl App {
         }
 
         let has_branch = self.selected_branch().is_some();
+        let is_head_branch = self.selected_branch().map(|b| b.is_head).unwrap_or(false);
         let mut items = Vec::new();
 
-        // Push at top if available
+        // Push/pull pairing at top: push on any branch tip, pull on the HEAD
+        // branch (which is what a bare `git pull` integrates into).
         if has_branch {
             items.push(CommitMenuItem::Push);
+            if is_head_branch {
+                items.push(CommitMenuItem::Pull);
+            }
         }
 
         items.push(CommitMenuItem::Checkout);
         items.push(CommitMenuItem::CreateBranch);
 
+        // Deletable = any branch on this node bar the current HEAD; remote
+        // branches are always deletable (on their remote).
         let has_deletable_branch = self.selected_node_branches().iter().any(|name| {
             self.branches
                 .iter()
-                .any(|b| b.name == *name && !b.is_head && !b.is_remote)
+                .any(|b| b.name == *name && !b.is_head)
         });
         if has_deletable_branch {
             items.push(CommitMenuItem::DeleteBranch);
@@ -99,8 +127,15 @@ impl App {
             CommitMenuItem::Reset,
             CommitMenuItem::AddTag,
             CommitMenuItem::Revert,
-            CommitMenuItem::CopyHash,
         ]);
+
+        // Prune stale remote-tracking refs — repo-level, offered when remotes
+        // exist.
+        if !self.repo.remotes().is_empty() {
+            items.push(CommitMenuItem::Prune);
+        }
+
+        items.push(CommitMenuItem::CopyHash);
 
         self.mode = AppMode::CommitMenu {
             items,
@@ -340,7 +375,13 @@ impl App {
                 }
             }
             CommitMenuItem::Push => {
-                self.start_push();
+                self.initiate_push();
+            }
+            CommitMenuItem::Pull => {
+                self.initiate_pull();
+            }
+            CommitMenuItem::Prune => {
+                self.initiate_prune();
             }
             CommitMenuItem::StashApply => {
                 if let Some(index) = self.selected_stash_index() {

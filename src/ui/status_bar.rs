@@ -18,6 +18,8 @@ pub struct StatusBar<'a> {
     repo_path: &'a str,
     head_name: Option<&'a str>,
     head_detached: bool,
+    /// (ahead, behind) of the HEAD branch vs its upstream, when tracking one.
+    head_ahead_behind: Option<(usize, usize)>,
     error_message: Option<&'a str>,
     message: Option<&'a str>,
     is_busy: bool,
@@ -60,6 +62,11 @@ impl<'a> StatusBar<'a> {
             repo_path: &app.repo_path,
             head_name: app.head_name.as_deref(),
             head_detached: app.head_detached,
+            head_ahead_behind: app
+                .branches
+                .iter()
+                .find(|b| b.is_head && b.upstream.is_some())
+                .map(|b| (b.ahead, b.behind)),
             error_message,
             message: app.get_message(),
             is_busy: app.is_network_busy(),
@@ -118,6 +125,30 @@ impl<'a> Widget for StatusBar<'a> {
                 ));
             }
             spans.push(Span::raw(" "));
+
+            // Ahead/behind vs upstream (e.g. "↑2 ↓1"), when tracking one and
+            // diverged.
+            if let Some((ahead, behind)) = self.head_ahead_behind {
+                if ahead > 0 || behind > 0 {
+                    let mut label = String::new();
+                    if ahead > 0 {
+                        label.push_str(&format!("↑{ahead}"));
+                    }
+                    if behind > 0 {
+                        if !label.is_empty() {
+                            label.push(' ');
+                        }
+                        label.push_str(&format!("↓{behind}"));
+                    }
+                    spans.push(Span::styled(
+                        format!(" {label} "),
+                        Style::default()
+                            .fg(self.theme.text_primary)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::raw(" "));
+                }
+            }
         }
 
         // In-progress operation indicator (merge/rebase/…): prominent, shown in
@@ -301,7 +332,8 @@ impl<'a> Widget for StatusBar<'a> {
             }
             AppMode::CommitMenu { .. }
             | AppMode::BranchPicker { .. }
-            | AppMode::BranchDeletePicker { .. } => {
+            | AppMode::BranchDeletePicker { .. }
+            | AppMode::RemotePicker { .. } => {
                 spans.push(Span::styled(" ↑/↓ ", key_style));
                 spans.push(Span::styled("select ", desc_style));
                 spans.push(Span::styled(" Enter ", key_style));
@@ -334,6 +366,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
+            AppMode::RemotePicker { .. } => Some(" REMOTE "),
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
         };

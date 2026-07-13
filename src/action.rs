@@ -24,6 +24,8 @@ pub enum Action {
     CreateBranch,
     DeleteBranch,
     Fetch,
+    Pull,
+    Push,
     Merge,
     Rebase,
 

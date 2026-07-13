@@ -58,10 +58,7 @@ impl App {
             }
             Action::MenuSelect | Action::Confirm => {
                 if let Some(branch_name) = branches.get(selected) {
-                    self.mode = AppMode::Confirm {
-                        message: format!("Delete branch '{}'?", branch_name),
-                        action: ConfirmAction::DeleteBranch(branch_name.clone()),
-                    };
+                    self.confirm_delete_branch(branch_name.clone());
                 }
             }
             Action::Cancel | Action::Quit => {

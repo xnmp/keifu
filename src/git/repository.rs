@@ -241,6 +241,24 @@ impl GitRepository {
         tags
     }
 
+    /// Names of the configured remotes (e.g. `["origin", "upstream"]`).
+    pub fn remotes(&self) -> Vec<String> {
+        self.repo
+            .remotes()
+            .map(|arr| arr.iter().flatten().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The remote configured for the current branch's upstream, if any
+    /// (`branch.<name>.remote`). `None` for a detached HEAD or an
+    /// upstream-less branch.
+    pub fn head_upstream_remote(&self) -> Option<String> {
+        let head = self.repo.head().ok()?;
+        let refname = head.name()?;
+        let buf = self.repo.branch_upstream_remote(refname).ok()?;
+        buf.as_str().map(|s| s.to_string())
+    }
+
     /// Get the current HEAD name
     pub fn head_name(&self) -> Option<String> {
         self.repo

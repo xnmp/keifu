@@ -94,7 +94,15 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  f          ", key_style),
-                Span::styled("Fetch from origin", desc_style),
+                Span::styled("Fetch from remote", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  p          ", key_style),
+                Span::styled("Pull (fetch + integrate)", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  P          ", key_style),
+                Span::styled("Push current branch (publishes if no upstream)", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  B          ", key_style),

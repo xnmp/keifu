@@ -1,4 +1,4 @@
-//! Network operations: fetch/push, auto-refresh, fs-watcher polling.
+//! Network operations: fetch/pull/push, auto-refresh, fs-watcher polling.
 
 use super::*;
 
@@ -38,9 +38,36 @@ impl App {
         };
         match result {
             Ok(()) => {
-                self.set_message("Pushed to origin");
+                self.set_message("Pushed");
                 if let Err(e) = self.refresh(true) {
                     self.show_error(format!("Refresh failed: {e}"));
+                }
+            }
+            Err(e) => self.show_error(e),
+        }
+        true
+    }
+
+    /// Poll the background pull. On success, refresh and either confirm or (on
+    /// conflict) route into the guided resolve flow — op-state detection picks
+    /// up the MERGE/REBASE the pull left behind during refresh.
+    pub fn update_pull_status(&mut self) -> bool {
+        let Some(result) = self.network.poll_pull() else {
+            return false;
+        };
+        match result {
+            Ok(outcome) => {
+                self.network.reset_timers();
+                if let Err(e) = self.refresh(true) {
+                    self.show_error(format!("Refresh failed: {e}"));
+                    return true;
+                }
+                match outcome {
+                    OpOutcome::Completed => self.set_message("Pulled"),
+                    OpOutcome::Conflicts { count } => {
+                        self.focus_conflict_files();
+                        self.set_message(Self::conflict_guidance(count));
+                    }
                 }
             }
             Err(e) => self.show_error(e),
@@ -56,6 +83,10 @@ impl App {
         self.network.is_pushing()
     }
 
+    pub fn is_pulling(&self) -> bool {
+        self.network.is_pulling()
+    }
+
     pub fn is_network_busy(&self) -> bool {
         self.network.is_busy()
     }
@@ -66,8 +97,14 @@ impl App {
         }
         let events = self.network.check_auto_timers(&self.config.refresh);
         if events.should_auto_fetch {
-            self.start_fetch(false, true);
-            true
+            if let Some(remote) = self.auto_fetch_remote() {
+                self.start_fetch_remote(remote, false, true);
+                true
+            } else {
+                // No remote to fetch — reset the timer so we don't spin.
+                self.network.reset_timers();
+                false
+            }
         } else if events.should_auto_refresh {
             if let Err(e) = self.refresh(false) {
                 self.set_message(format!("Auto-refresh failed: {e}"));
@@ -112,14 +149,38 @@ impl App {
         }
     }
 
-    pub(crate) fn start_fetch(&mut self, show_message: bool, silent: bool) {
-        if let Some(msg) = self.network.start_fetch(&self.repo_path, show_message, silent) {
+    // ── Thin wrappers over NetworkManager ──────────────────────────────
+
+    pub(crate) fn start_fetch_remote(&mut self, remote: String, show_message: bool, silent: bool) {
+        if let Some(msg) = self
+            .network
+            .start_fetch(&self.repo_path, &remote, show_message, silent)
+        {
             self.set_message(msg);
         }
     }
 
-    pub(crate) fn start_push(&mut self) {
-        let msg = self.network.start_push(&self.repo_path);
+    pub(crate) fn start_push_current(&mut self) {
+        let msg = self.network.start_push(&self.repo_path, PushSpec::Current);
+        self.set_message(msg);
+    }
+
+    pub(crate) fn start_publish(&mut self, remote: String, branch: String) {
+        let msg = self
+            .network
+            .start_push(&self.repo_path, PushSpec::Publish { remote, branch });
+        self.set_message(msg);
+    }
+
+    /// Start a pull. `remote = None` uses the branch's configured upstream; an
+    /// explicit remote pulls `<remote> <current-branch>`.
+    pub(crate) fn start_pull_remote(&mut self, remote: Option<String>) {
+        let branch = if remote.is_some() {
+            self.head_branch_info().map(|b| b.name.clone())
+        } else {
+            None
+        };
+        let msg = self.network.start_pull(&self.repo_path, remote, branch);
         self.set_message(msg);
     }
 
