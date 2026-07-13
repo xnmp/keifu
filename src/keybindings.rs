@@ -171,6 +171,10 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::ToggleStage)
         }
 
+        // Stage-all / unstage-all
+        (KeyModifiers::SHIFT, KeyCode::Char('S')) => Some(Action::StageAll),
+        (KeyModifiers::SHIFT, KeyCode::Char('U')) => Some(Action::UnstageAll),
+
         // Add to .gitignore
         (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::AddToGitignore),
 
@@ -530,6 +534,10 @@ fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
         (_, KeyCode::Char('[')) => Some(Action::PrevHunk),
         (KeyModifiers::NONE, KeyCode::Char('n')) => Some(Action::NextFile),
         (KeyModifiers::SHIFT, KeyCode::Char('N')) => Some(Action::PrevFile),
+        // Hunk-level staging (uncommitted diffs only; guarded in the handler)
+        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::StageHunk),
+        (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::UnstageHunk),
+        (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::DiscardHunk),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }

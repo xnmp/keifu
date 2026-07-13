@@ -21,9 +21,10 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
    Full 3-way merge editor is XL and deferred.
 2. **Pull (M)** — no fetch+integrate orchestration; both halves exist.
    Needs #1 for the conflict path.
-3. **Hunk / line-level staging (L)** — signature SCM feature. Hunks are
-   parsed; work is patch synthesis → `git apply --cached` (and reverse-apply
-   for partial discard).
+3. ~~**Hunk / line-level staging (L)**~~ — **DONE (2026-07-13).** In the
+   FileDiff viewer for uncommitted changes: `s` stage hunk, `u` unstage hunk,
+   `x` discard hunk (via Confirm). Patch synthesis in `git/patch.rs` →
+   `git apply --cached` / `--cached -R` / `-R`. See architecture.md.
 4. **Real branch filtering (M)** — Shift+B only removes labels; commits from
    hidden branches still walk into the graph. Fix: pass visible branch tips
    into `get_commits()` (already flagged in TODO.md).
@@ -32,7 +33,8 @@ CLI (`run_git()` in `git/operations.rs`), so most missing mutations are
 
 Near-free S wins to bundle: branch rename, tag delete/list/push (tags aren't
 even shown as graph refs — S-M), stash-all (`git stash push [-u]`; today only
-`--staged`), create-branch-from-stash, stage-all/unstage-all, copy file path.
+`--staged`), create-branch-from-stash, copy file path. (stage-all/unstage-all
+done 2026-07-13: `S`/`U` in the files pane.)
 
 ## Notable full-parity areas
 

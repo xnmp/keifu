@@ -17,12 +17,14 @@ use crate::{
         build_graph,
         graph::GraphLayout,
         operations::{
-            add_tag, cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
+            add_tag, apply_patch_cached, apply_patch_cached_reverse, apply_patch_worktree_reverse,
+            cherry_pick, checkout_branch, checkout_commit, checkout_remote_branch,
             commit_amend, commit_amend_no_edit, commit_with_message, create_branch,
             delete_branch, get_last_commit_message, merge_branch,
-            rebase_branch, reset_to_commit, restore_files, revert_commit, stage_file,
-            stash_apply, stash_drop, stash_pop, stash_staged, unstage_file, ResetMode,
+            rebase_branch, reset_to_commit, restore_files, revert_commit, stage_all, stage_file,
+            stash_apply, stash_drop, stash_pop, stash_staged, unstage_all, unstage_file, ResetMode,
         },
+        extract_hunk_from_working_tree, render_hunk_patch,
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
         GitRepository, StageStatus, WorkingTreeStatus,
     },
@@ -245,6 +247,14 @@ pub enum ConfirmAction {
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
     StashDrop(usize),
+    /// Discard a single hunk in the working tree (reverse-apply). Carries the
+    /// pre-rendered patch plus the FileDiff viewer state needed to reopen the
+    /// diff at the same file/scroll after the confirmation.
+    DiscardHunk {
+        patch: String,
+        file_path: std::path::PathBuf,
+        scroll_offset: usize,
+    },
 }
 
 /// Search state for branch search feature
