@@ -12,10 +12,6 @@ use crate::app::{App, FocusedPanel};
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
-/// Width threshold for switching to vertical layout
-/// When panel width would be <= 28 chars, use vertical layout
-const VERTICAL_LAYOUT_THRESHOLD: u16 = 56;
-
 pub struct CommitDetailWidget<'a> {
     commit_lines: Vec<Line<'a>>,
     is_focused: bool,
@@ -25,12 +21,16 @@ pub struct CommitDetailWidget<'a> {
 
 /// Pre-render layout metrics for the commit detail panel.
 /// Call this before constructing `CommitDetailWidget` to update App scroll state.
-/// Pre-render layout metrics for the commit detail panel.
 /// `commit_area` is the area for the commit detail block only (not the files pane).
-pub fn compute_commit_detail_layout(app: &mut App, commit_area: Rect) {
-    let theme = app.theme();
+/// Returns the built lines so the caller can hand them to `CommitDetailWidget::new`
+/// without rebuilding them.
+pub fn compute_commit_detail_layout<'a>(
+    app: &mut App,
+    commit_area: Rect,
+    theme: &'a Theme,
+) -> Vec<Line<'a>> {
     let (commit_lines, raw_editor_offset) =
-        CommitDetailWidget::build_commit_lines_with_offset(app, &theme);
+        CommitDetailWidget::build_commit_lines_with_offset(app, theme);
 
     if let Some(offset) = raw_editor_offset {
         app.commit_editor_line_offset = offset;
@@ -41,11 +41,16 @@ pub fn compute_commit_detail_layout(app: &mut App, commit_area: Rect) {
     app.commit_detail_visible_rows = commit_visible as u16;
 
     // Use Ratatui's own line_count to match its actual wrapping behaviour.
-    let commit_wrapped_total = if commit_inner_width > 0 {
+    // Word-wrap never splits a line whose total width already fits within
+    // the available width, so when every line fits, the wrapped count is
+    // just the line count — skip building (and cloning into) a Paragraph.
+    let commit_wrapped_total = if commit_inner_width == 0
+        || commit_lines.iter().all(|l| l.width() <= commit_inner_width)
+    {
+        commit_lines.len()
+    } else {
         let p = Paragraph::new(commit_lines.clone()).wrap(Wrap { trim: false });
         p.line_count(commit_inner_width as u16)
-    } else {
-        commit_lines.len()
     };
 
     // Recompute editor line offset using wrapped line counts so the cursor
@@ -65,20 +70,18 @@ pub fn compute_commit_detail_layout(app: &mut App, commit_area: Rect) {
     app.commit_detail_scroll = app
         .commit_detail_scroll
         .min(app.commit_detail_max_scroll);
+
+    commit_lines
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &App, _commit_area: Rect, theme: &'a Theme) -> Self {
+    pub fn new(app: &App, _commit_area: Rect, theme: &'a Theme, commit_lines: Vec<Line<'a>>) -> Self {
         Self {
-            commit_lines: Self::build_commit_lines(app, theme),
+            commit_lines,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             commit_scroll: app.commit_detail_scroll,
             theme,
         }
-    }
-
-    fn build_commit_lines(app: &App, theme: &Theme) -> Vec<Line<'a>> {
-        Self::build_commit_lines_with_offset(app, theme).0
     }
 
     /// Build the commit detail lines. Returns `(lines, raw_editor_line_offset)`.

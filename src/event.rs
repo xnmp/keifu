@@ -14,11 +14,6 @@ pub fn poll_event_with_timeout(timeout: Duration) -> Result<Option<Event>> {
     }
 }
 
-/// Poll for events (33ms timeout — ~30fps tick rate)
-pub fn poll_event() -> Result<Option<Event>> {
-    poll_event_with_timeout(Duration::from_millis(33))
-}
-
 /// Extract key event
 pub fn get_key_event(event: &Event) -> Option<KeyEvent> {
     if let Event::Key(key) = event {

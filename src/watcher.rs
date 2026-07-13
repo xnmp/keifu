@@ -22,7 +22,39 @@ pub struct FsWatcher {
     git_dir: PathBuf,
 }
 
+/// A watcher still being constructed on a background thread.
+///
+/// Registering recursive inotify watches walks every directory in the
+/// working tree, which takes hundreds of milliseconds on large repos —
+/// far too slow for the pre-first-frame path.
+pub struct PendingFsWatcher {
+    rx: Receiver<Option<FsWatcher>>,
+}
+
+impl PendingFsWatcher {
+    /// Returns `Some` once construction has finished (`Some(None)` when
+    /// watching is unavailable); `None` while the thread is still working.
+    pub fn try_take(&mut self) -> Option<Option<FsWatcher>> {
+        match self.rx.try_recv() {
+            Ok(watcher) => Some(watcher),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(None),
+        }
+    }
+}
+
 impl FsWatcher {
+    /// Construct a watcher on a background thread; poll the returned
+    /// handle with `try_take` to install it once ready.
+    pub fn spawn(repo_path: &Path) -> PendingFsWatcher {
+        let path = repo_path.to_path_buf();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(FsWatcher::new(&path));
+        });
+        PendingFsWatcher { rx }
+    }
+
     pub fn new(repo_path: &Path) -> Option<Self> {
         let (tx, rx) = mpsc::channel();
         let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok()?;

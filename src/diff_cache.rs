@@ -516,10 +516,10 @@ mod tests {
         let mut cache = DiffCache::new();
         set_diff(&mut cache, oid1(), empty_diff());
         set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
-        cache.uncommitted_cache_key = (Some(precise_status()));
-        cache.uncommitted_diff_loading = (true);
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.uncommitted_diff_cache = Some(empty_diff());
+        cache.uncommitted_cache_key = Some(precise_status());
+        cache.uncommitted_diff_loading = true;
+        cache.diff_loading_oid = Some(oid1());
 
         cache.clear_all();
 
@@ -537,10 +537,10 @@ mod tests {
     fn clear_uncommitted_only_clears_uncommitted_state() {
         let mut cache = DiffCache::new();
         set_diff(&mut cache, oid1(), empty_diff());
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
-        cache.uncommitted_cache_key = (Some(precise_status()));
-        cache.uncommitted_diff_loading = (true);
-        cache.uncommitted_diff_failed = (true);
+        cache.uncommitted_diff_cache = Some(empty_diff());
+        cache.uncommitted_cache_key = Some(precise_status());
+        cache.uncommitted_diff_loading = true;
+        cache.uncommitted_diff_failed = true;
 
         cache.clear_uncommitted();
 
@@ -557,9 +557,9 @@ mod tests {
     #[test]
     fn clear_uncommitted_data_only_clears_diff_not_loading_state() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
-        cache.uncommitted_diff_loading = (true);
-        cache.uncommitted_cache_key = (Some(precise_status()));
+        cache.uncommitted_diff_cache = Some(empty_diff());
+        cache.uncommitted_diff_loading = true;
+        cache.uncommitted_cache_key = Some(precise_status());
 
         cache.clear_uncommitted_data();
 
@@ -572,9 +572,9 @@ mod tests {
     #[test]
     fn invalidate_uncommitted_clears_key_but_keeps_data() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
-        cache.uncommitted_cache_key = (Some(precise_status()));
-        cache.uncommitted_diff_failed = (true);
+        cache.uncommitted_diff_cache = Some(empty_diff());
+        cache.uncommitted_cache_key = Some(precise_status());
+        cache.uncommitted_diff_failed = true;
 
         cache.invalidate_uncommitted();
 
@@ -590,8 +590,8 @@ mod tests {
     fn invalidate_uncommitted_keeps_receiver_when_loading() {
         let mut cache = DiffCache::new();
         let (_tx, rx) = mpsc::channel::<UncommittedDiffResult>();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
 
         cache.invalidate_uncommitted();
 
@@ -602,8 +602,8 @@ mod tests {
     fn invalidate_uncommitted_clears_receiver_when_not_loading() {
         let mut cache = DiffCache::new();
         let (_tx, rx) = mpsc::channel::<UncommittedDiffResult>();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (false);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = false;
 
         cache.invalidate_uncommitted();
 
@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn can_reuse_returns_false_when_no_current_status() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_cache_key = (Some(precise_status()));
+        cache.uncommitted_cache_key = Some(precise_status());
         assert!(!cache.can_reuse_uncommitted_cache(true, true, None));
     }
 
@@ -630,7 +630,7 @@ mod tests {
     fn can_reuse_returns_false_when_not_uncommitted_selected() {
         let mut cache = DiffCache::new();
         let status = precise_status();
-        cache.uncommitted_cache_key = (Some(status.clone()));
+        cache.uncommitted_cache_key = Some(status.clone());
         assert!(!cache.can_reuse_uncommitted_cache(false, true, Some(&status)));
     }
 
@@ -638,7 +638,7 @@ mod tests {
     fn can_reuse_returns_false_when_no_uncommitted_node() {
         let mut cache = DiffCache::new();
         let status = precise_status();
-        cache.uncommitted_cache_key = (Some(status.clone()));
+        cache.uncommitted_cache_key = Some(status.clone());
         assert!(!cache.can_reuse_uncommitted_cache(true, false, Some(&status)));
     }
 
@@ -646,14 +646,14 @@ mod tests {
     fn can_reuse_returns_true_when_all_conditions_met() {
         let mut cache = DiffCache::new();
         let status = precise_status();
-        cache.uncommitted_cache_key = (Some(status.clone()));
+        cache.uncommitted_cache_key = Some(status.clone());
         assert!(cache.can_reuse_uncommitted_cache(true, true, Some(&status)));
     }
 
     #[test]
     fn can_reuse_returns_false_when_statuses_differ() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_cache_key = (Some(precise_status()));
+        cache.uncommitted_cache_key = Some(precise_status());
         let different = precise_status_different();
         assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&different)));
     }
@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn can_reuse_returns_false_when_cache_key_imprecise() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_cache_key = (Some(imprecise_status()));
+        cache.uncommitted_cache_key = Some(imprecise_status());
         let status = imprecise_status();
         assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&status)));
     }
@@ -670,7 +670,7 @@ mod tests {
     fn can_reuse_returns_false_when_current_status_imprecise() {
         let mut cache = DiffCache::new();
         let precise = precise_status();
-        cache.uncommitted_cache_key = (Some(precise));
+        cache.uncommitted_cache_key = Some(precise);
         let imprecise = imprecise_status();
         assert!(!cache.can_reuse_uncommitted_cache(true, true, Some(&imprecise)));
     }
@@ -712,8 +712,8 @@ mod tests {
     #[test]
     fn auto_refresh_invalidates_uncommitted_when_cache_not_reusable() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_cache_key = (Some(precise_status()));
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
+        cache.uncommitted_cache_key = Some(precise_status());
+        cache.uncommitted_diff_cache = Some(empty_diff());
 
         // not uncommitted selected => can't reuse
         cache.invalidate_for_auto_refresh(None, false, true, Some(&precise_status()));
@@ -727,8 +727,8 @@ mod tests {
     fn auto_refresh_keeps_uncommitted_when_reusable() {
         let mut cache = DiffCache::new();
         let status = precise_status();
-        cache.uncommitted_cache_key = (Some(status.clone()));
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
+        cache.uncommitted_cache_key = Some(status.clone());
+        cache.uncommitted_diff_cache = Some(empty_diff());
 
         cache.invalidate_for_auto_refresh(None, true, true, Some(&status));
 
@@ -754,16 +754,16 @@ mod tests {
         assert!(!cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
 
         // Key but no data or failed
-        cache.uncommitted_cache_key = (Some(precise_status()));
+        cache.uncommitted_cache_key = Some(precise_status());
         assert!(!cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
 
         // Key + data
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
+        cache.uncommitted_diff_cache = Some(empty_diff());
         assert!(cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
 
         // Key + failed (no data)
-        cache.uncommitted_diff_cache = (None);
-        cache.uncommitted_diff_failed = (true);
+        cache.uncommitted_diff_cache = None;
+        cache.uncommitted_diff_failed = true;
         assert!(cache.has_cached_diff_for_target(DiffTarget::Uncommitted));
     }
 
@@ -783,7 +783,7 @@ mod tests {
     #[test]
     fn is_diff_loading_returns_true_when_loading() {
         let mut cache = DiffCache::new();
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.diff_loading_oid = Some(oid1());
         assert!(cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
     }
 
@@ -791,22 +791,22 @@ mod tests {
     fn is_diff_loading_returns_true_when_in_flight_diff_exists() {
         let mut cache = DiffCache::new();
         // Loading oid2 but asking about oid1 — in-flight blocks
-        cache.diff_loading_oid = (Some(oid2()));
+        cache.diff_loading_oid = Some(oid2());
         assert!(cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
     }
 
     #[test]
     fn is_diff_loading_returns_true_when_debouncing() {
         let mut cache = DiffCache::new();
-        cache.selected_diff_target = (Some(DiffTarget::Commit(oid1())));
-        cache.selected_diff_target_changed_at = (Instant::now());
+        cache.selected_diff_target = Some(DiffTarget::Commit(oid1()));
+        cache.selected_diff_target_changed_at = Instant::now();
         assert!(cache.is_diff_loading(Some(DiffTarget::Commit(oid1()))));
     }
 
     #[test]
     fn is_diff_loading_uncommitted_when_loading() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_loading = true;
         assert!(cache.is_diff_loading(Some(DiffTarget::Uncommitted)));
     }
 
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn cached_diff_uncommitted_returns_cache() {
         let mut cache = DiffCache::new();
-        cache.uncommitted_diff_cache = (Some(empty_diff()));
+        cache.uncommitted_diff_cache = Some(empty_diff());
         assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_some());
     }
 
@@ -934,8 +934,8 @@ mod tests {
     fn poll_receives_completed_commit_diff() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel();
-        cache.diff_receiver = (Some(rx));
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.diff_receiver = Some(rx);
+        cache.diff_loading_oid = Some(oid1());
 
         tx.send(DiffResult {
             oid: oid1(),
@@ -956,8 +956,8 @@ mod tests {
     fn poll_receives_failed_commit_diff() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel();
-        cache.diff_receiver = (Some(rx));
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.diff_receiver = Some(rx);
+        cache.diff_loading_oid = Some(oid1());
 
         tx.send(DiffResult {
             oid: oid1(),
@@ -977,8 +977,8 @@ mod tests {
     fn poll_receives_completed_uncommitted_diff() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
 
         let status = precise_status();
         tx.send((Ok(empty_diff()), Some(status.clone()))).unwrap();
@@ -996,8 +996,8 @@ mod tests {
     fn poll_receives_failed_uncommitted_diff() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
 
         tx.send((Err("fail".to_string()), None)).unwrap();
 
@@ -1012,8 +1012,8 @@ mod tests {
     #[test]
     fn poll_does_not_start_load_when_debouncing() {
         let mut cache = DiffCache::new();
-        cache.selected_diff_target = (Some(DiffTarget::Commit(oid1())));
-        cache.selected_diff_target_changed_at = (Instant::now());
+        cache.selected_diff_target = Some(DiffTarget::Commit(oid1()));
+        cache.selected_diff_target_changed_at = Instant::now();
 
         // Target wants to load oid1 but debounce hasn't elapsed
         let events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
@@ -1026,9 +1026,9 @@ mod tests {
     #[test]
     fn poll_does_not_start_load_when_already_loading_for_target() {
         let mut cache = DiffCache::new();
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.diff_loading_oid = Some(oid1());
         let (_tx, rx) = mpsc::channel();
-        cache.diff_receiver = (Some(rx));
+        cache.diff_receiver = Some(rx);
 
         let _events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
 
@@ -1040,12 +1040,12 @@ mod tests {
     fn poll_does_not_start_second_load_when_one_in_flight() {
         let mut cache = DiffCache::new();
         // Commit diff is in flight for oid1
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.diff_loading_oid = Some(oid1());
         let (_tx, rx) = mpsc::channel();
-        cache.diff_receiver = (Some(rx));
+        cache.diff_receiver = Some(rx);
         // Set debounce far in the past so it wouldn't block
-        cache.selected_diff_target = (Some(DiffTarget::Uncommitted));
-        cache.selected_diff_target_changed_at = (Instant::now() - Duration::from_secs(10));
+        cache.selected_diff_target = Some(DiffTarget::Uncommitted);
+        cache.selected_diff_target_changed_at = Instant::now() - Duration::from_secs(10);
 
         let _events = cache.poll(Some(DiffTarget::Uncommitted), "/dev/null", None);
 
@@ -1057,8 +1057,8 @@ mod tests {
     fn poll_handles_disconnected_commit_receiver() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel::<DiffResult>();
-        cache.diff_receiver = (Some(rx));
-        cache.diff_loading_oid = (Some(oid1()));
+        cache.diff_receiver = Some(rx);
+        cache.diff_loading_oid = Some(oid1());
         drop(tx);
 
         let events = cache.poll(None, "/dev/null", None);
@@ -1073,8 +1073,8 @@ mod tests {
     fn poll_handles_disconnected_uncommitted_receiver() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel::<UncommittedDiffResult>();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
         drop(tx);
 
         let status = precise_status();
@@ -1094,8 +1094,8 @@ mod tests {
         let mut cache = DiffCache::new();
         set_diff(&mut cache, oid1(), empty_diff());
         // Debounce far in the past
-        cache.selected_diff_target = (Some(DiffTarget::Commit(oid1())));
-        cache.selected_diff_target_changed_at = (Instant::now() - Duration::from_secs(10));
+        cache.selected_diff_target = Some(DiffTarget::Commit(oid1()));
+        cache.selected_diff_target_changed_at = Instant::now() - Duration::from_secs(10);
 
         let _events = cache.poll(Some(DiffTarget::Commit(oid1())), "/dev/null", None);
 
@@ -1107,8 +1107,8 @@ mod tests {
     fn poll_uncommitted_diff_sets_cache_key_when_status_matches() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
 
         let status = precise_status();
         // Thread sends back the same status
@@ -1123,8 +1123,8 @@ mod tests {
     fn poll_uncommitted_diff_no_cache_key_when_status_diverged() {
         let mut cache = DiffCache::new();
         let (tx, rx) = mpsc::channel();
-        cache.uncommitted_diff_receiver = (Some(rx));
-        cache.uncommitted_diff_loading = (true);
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.uncommitted_diff_loading = true;
 
         let old_status = precise_status();
         let new_status = precise_status_different();

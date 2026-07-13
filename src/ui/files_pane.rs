@@ -24,7 +24,7 @@ pub struct FilesPaneWidget<'a> {
 impl<'a> FilesPaneWidget<'a> {
     pub fn new(app: &App, theme: &'a Theme) -> Self {
         Self {
-            items: app.files_pane_items(),
+            items: app.display_items().to_vec(),
             is_focused: app.focused_panel == FocusedPanel::Files,
             is_uncommitted: app.is_uncommitted_selected(),
             is_loading: app.is_diff_loading(),
@@ -141,14 +141,11 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
 
                     // Show stage status indicator for uncommitted files
                     if let Some(status) = file.stage_status {
-                        match status {
-                            StageStatus::Untracked => {
-                                spans.push(Span::styled(
-                                    " (untracked)",
-                                    Style::default().fg(self.theme.text_muted),
-                                ));
-                            }
-                            _ => {}
+                        if status == StageStatus::Untracked {
+                            spans.push(Span::styled(
+                                " (untracked)",
+                                Style::default().fg(self.theme.text_muted),
+                            ));
                         }
                     }
 

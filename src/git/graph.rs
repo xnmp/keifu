@@ -167,7 +167,7 @@ pub fn build_graph(
     // Lane -> color index mapping (keep colors during forks)
     let mut lane_color_index: HashMap<usize, usize> = HashMap::new();
 
-    for commit in commits {
+    for (row_idx, commit) in commits.iter().enumerate() {
         // Start processing a new row
         color_assigner.advance_row();
 
@@ -305,10 +305,14 @@ pub fn build_graph(
                 .iter()
                 .position(|l| l.map(|oid| oid == *parent_oid).unwrap_or(false));
 
-            // Check if parent commit has already been shown
-            let parent_already_shown = nodes
-                .iter()
-                .any(|n| n.commit.as_ref().map(|c| c.oid) == Some(*parent_oid));
+            // Check if parent commit has already been shown. Each commit in
+            // `commits` produces exactly one node (at the row matching its
+            // index), so "shown" is equivalent to "already processed" i.e.
+            // its row index precedes the current one.
+            let parent_already_shown = oid_to_row
+                .get(parent_oid)
+                .map(|&r| r < row_idx)
+                .unwrap_or(false);
 
             let (parent_lane, was_existing, parent_color) = if let Some(pl) = existing_parent_lane {
                 // If parent is a fork point, treat as fork sibling
@@ -435,9 +439,10 @@ pub fn build_graph(
             let ending_lane_oid = lanes.get(ending_lane).and_then(|o| *o);
             let ending_oid_already_shown = ending_lane_oid
                 .map(|oid| {
-                    nodes
-                        .iter()
-                        .any(|n| n.commit.as_ref().map(|c| c.oid) == Some(oid))
+                    oid_to_row
+                        .get(&oid)
+                        .map(|&r| r < row_idx)
+                        .unwrap_or(true)
                 })
                 .unwrap_or(true);
 

@@ -315,6 +315,9 @@ pub struct App {
 
     // Filesystem watcher
     pub watcher: Option<crate::watcher::FsWatcher>,
+    // Watcher still being built on a background thread; installed into
+    // `watcher` by poll_fs_watcher once ready.
+    pub pending_watcher: Option<crate::watcher::PendingFsWatcher>,
 
     // Undo
     pub last_undoable_op: Option<UndoableOperation>,
@@ -345,96 +348,24 @@ impl App {
     }
 
     /// Create an App from a given repository (for testing and embedding)
-    pub fn from_repo(mut repo: GitRepository) -> Result<Self> {
-        let config = Config::default();
-        let now = Instant::now();
+    pub fn from_repo(repo: GitRepository) -> Result<Self> {
         let repo_path = repo.path.clone();
         let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
-        let head_name = repo.head_name();
-        let head_detached = repo.is_head_detached();
-
-        let stashes = repo.get_stashes();
-        let commits = repo.get_commits(500, &stashes)?;
-        let branches = repo.get_branches()?;
-        let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
-        let initial_message_time = initial_message.as_ref().map(|_| now);
-        let uncommitted_count = working_tree_status
-            .as_ref()
-            .map(|s| s.accurate_file_count());
-        let head_commit_oid = repo.head_oid();
-        let graph_layout = build_graph(&commits, &branches, &stashes, uncommitted_count, head_commit_oid);
-
-        let mut graph_nav = GraphNav::new();
-        graph_nav.rebuild_branch_positions(&graph_layout);
-        let has_uncommitted_node = graph_layout
-            .nodes
-            .first()
-            .is_some_and(|node| node.is_uncommitted);
-        if !has_uncommitted_node && !graph_nav.branch_positions.is_empty() {
-            graph_nav.selected_branch_position = Some(0);
-        }
-
-        Ok(Self {
-            mode: AppMode::Normal,
-            repo,
-            repo_path,
-            head_name,
-            head_detached,
-            commits,
-            branches,
-            graph_layout,
-            graph_nav,
-            focused_panel: FocusedPanel::Graph,
-            files_pane: FilesPaneState::new(),
-            hidden_branches: std::collections::HashSet::new(),
-            commit_editor: crate::text_editor::TextEditor::new(),
-            editing_commit_message: false,
-            amending_commit: false,
-            commit_detail_scroll: 0,
-            commit_detail_max_scroll: 0,
-            commit_editor_line_offset: 0,
-            commit_detail_visible_rows: 20,
-            commit_filter: String::new(),
-            commit_filter_active: false,
-            visible_commit_indices: Vec::new(),
-            search_state: SearchState::default(),
-            working_tree_status,
-            diff_cache: DiffCache::new(),
-            should_quit: false,
-            pending_refresh: false,
-            diff_viewport_height: 40,
-            diff_viewport_width: 80,
-            message: initial_message,
-            message_time: initial_message_time,
-            network: NetworkManager::new(),
-            watcher: fs_watcher,
-            last_undoable_op: None,
-            side_panel_layout: false,
-            debug_keys: false,
-            config,
-            // No terminal to query in the embedded/test path.
-            terminal_bg: None,
-        })
+        // No terminal to query in the embedded/test path.
+        Self::build(repo, Config::default(), UiState::default(), fs_watcher, None, None)
     }
 
-    /// Detect the terminal's background color once, as (r, g, b).
-    /// Returns `None` if the terminal doesn't support the query.
-    fn detect_terminal_bg() -> Option<(u8, u8, u8)> {
-        terminal_light::background_color()
-            .ok()
-            .map(|c| c.rgb())
-            .map(|rgb| (rgb.r, rgb.g, rgb.b))
-    }
-
-    /// Create a new application
-    pub fn new() -> Result<Self> {
-        let config = Config::load();
-        let ui_state = UiState::load();
+    /// Shared constructor: loads repo data and assembles the App.
+    fn build(
+        mut repo: GitRepository,
+        config: Config,
+        ui_state: UiState,
+        watcher: Option<crate::watcher::FsWatcher>,
+        pending_watcher: Option<crate::watcher::PendingFsWatcher>,
+        terminal_bg: Option<(u8, u8, u8)>,
+    ) -> Result<Self> {
         let now = Instant::now();
-
-        let mut repo = GitRepository::discover()?;
         let repo_path = repo.path.clone();
-        let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
@@ -496,13 +427,50 @@ impl App {
             message: initial_message,
             message_time: initial_message_time,
             network: NetworkManager::new(),
-            watcher: fs_watcher,
+            watcher,
+            pending_watcher,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             debug_keys: false,
             config,
-            terminal_bg: Self::detect_terminal_bg(),
+            terminal_bg,
         })
+    }
+
+    /// Detect the terminal's background color once, as (r, g, b).
+    /// Returns `None` if the terminal doesn't support the query.
+    fn detect_terminal_bg() -> Option<(u8, u8, u8)> {
+        terminal_light::background_color()
+            .ok()
+            .map(|c| c.rgb())
+            .map(|rgb| (rgb.r, rgb.g, rgb.b))
+    }
+
+    /// Create a new application
+    pub fn new() -> Result<Self> {
+        // The OSC-11 background-color query blocks on the terminal reply
+        // (typically 5-15ms, worst case 100ms); overlap it with repository
+        // loading. Joined below even on the error path, so the query's
+        // temporary raw-mode toggle can't outlive main.
+        let bg_query = std::thread::spawn(Self::detect_terminal_bg);
+
+        let load = || -> Result<Self> {
+            let config = Config::load();
+            let ui_state = UiState::load();
+            let repo = GitRepository::discover()?;
+            // Registering recursive inotify watches walks the whole working
+            // tree (hundreds of ms on large repos) — build off-thread and
+            // install from the event loop once ready.
+            let pending_watcher =
+                crate::watcher::FsWatcher::spawn(std::path::Path::new(&repo.path));
+            Self::build(repo, config, ui_state, None, Some(pending_watcher), None)
+        };
+        let result = load();
+        let terminal_bg = bg_query.join().ok().flatten();
+
+        let mut app = result?;
+        app.terminal_bg = terminal_bg;
+        Ok(app)
     }
 
     /// Refresh after a file operation (stage/unstage/gitignore/archive/trash).
@@ -516,8 +484,13 @@ impl App {
         let old_idx = self.files_pane.file_selected_index_in(&old_items);
         let old_section = section_of(&old_items, old_idx);
 
-        // Next files in same section (forward until next header)
-        let next_in_section: Vec<std::path::PathBuf> = old_items[old_idx + 1..]
+        // Next files in same section (forward until next header).
+        // `old_items` may be empty (e.g. undo invoked from a node with no
+        // file changes) — the resolved index is 0 even then, so slice
+        // defensively.
+        let next_in_section: Vec<std::path::PathBuf> = old_items
+            .get(old_idx + 1..)
+            .unwrap_or_default()
             .iter()
             .take_while(|item| matches!(item, FilesPaneItem::File(_)))
             .filter_map(|item| match item {
@@ -861,6 +834,12 @@ impl App {
     }
 
     pub fn poll_fs_watcher(&mut self) -> bool {
+        if let Some(pending) = self.pending_watcher.as_mut() {
+            if let Some(watcher) = pending.try_take() {
+                self.watcher = watcher;
+                self.pending_watcher = None;
+            }
+        }
         if !self.config.refresh.auto_refresh {
             return false;
         }
@@ -1320,7 +1299,7 @@ impl App {
             Action::OpenFileDiff => {
                 self.sync_file_list_cache();
                 if let Some(file) = self.selected_file().cloned() {
-                    let file_list = self.files_pane.file_list_cache.clone();
+                    let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));
@@ -1398,7 +1377,7 @@ impl App {
             }
             Action::OpenFileDiff => {
                 if let Some(file) = self.selected_file().cloned() {
-                    let file_list = self.files_pane.file_list_cache.clone();
+                    let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(flat_idx, file_list, &file.path) {
                         self.set_message(format!("Cannot open diff: {e}"));

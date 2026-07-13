@@ -59,7 +59,8 @@ impl<'a> Widget for CommitMenuWidget<'a> {
         let has_filter = !self.filter.is_empty();
 
         // Compute ordered items (matching first by score, then non-matching)
-        let ordered: Vec<(CommitMenuItem, Option<(i64, Vec<usize>)>)> = if has_filter {
+        type FuzzyMatch = Option<(i64, Vec<usize>)>;
+        let ordered: Vec<(CommitMenuItem, FuzzyMatch)> = if has_filter {
             let mut scored: Vec<_> = self
                 .items
                 .iter()

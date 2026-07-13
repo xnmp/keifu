@@ -150,7 +150,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let commit_area = detail_chunks[1];
 
     // Pre-render pass: compute layout metrics that update App scroll state
-    compute_commit_detail_layout(app, commit_area);
+    let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
 
     // Render widgets
     frame.render_stateful_widget(
@@ -166,7 +166,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             offset: 0,
         },
     );
-    frame.render_widget(CommitDetailWidget::new(app, commit_area, &theme), commit_area);
+    frame.render_widget(
+        CommitDetailWidget::new(app, commit_area, &theme, commit_lines),
+        commit_area,
+    );
     frame.render_widget(StatusBar::new(app, &theme), status_area);
 
     // Show cursor when editing commit message

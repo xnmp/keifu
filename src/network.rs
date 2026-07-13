@@ -1,6 +1,6 @@
 //! Async network operations: fetch, push with background threading.
 
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Instant;
 
@@ -95,7 +95,13 @@ impl NetworkManager {
     /// Poll fetch receiver for completion.
     pub fn poll_fetch(&mut self) -> Option<Result<(), String>> {
         let rx = self.fetch_receiver.as_ref()?;
-        let result = rx.try_recv().ok()?;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            // Worker died without reporting; clear state so fetching
+            // doesn't stay stuck "in progress" forever.
+            Err(TryRecvError::Disconnected) => Err("fetch worker exited unexpectedly".to_string()),
+        };
         let silent = self.fetch_silent;
         self.fetch_receiver = None;
         self.fetch_silent = false;
@@ -109,7 +115,11 @@ impl NetworkManager {
     /// Poll push receiver for completion.
     pub fn poll_push(&mut self) -> Option<Result<(), String>> {
         let rx = self.push_receiver.as_ref()?;
-        let result = rx.try_recv().ok()?;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err("push worker exited unexpectedly".to_string()),
+        };
         self.push_receiver = None;
         Some(result)
     }
