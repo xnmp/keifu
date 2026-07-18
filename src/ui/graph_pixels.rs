@@ -352,6 +352,54 @@ fn fill_disc(c: &mut Canvas, cx: f32, cy: f32, r: f32, color: [u8; 3]) {
     }
 }
 
+/// Gold used for the HEAD star, matching the ⭐ of the Unicode renderer.
+const HEAD_STAR_COLOR: [u8; 3] = [255, 200, 50];
+
+/// Fill a five-pointed star (one point up) via 4x4 supersampled coverage.
+fn fill_star(c: &mut Canvas, cx: f32, cy: f32, r_outer: f32, color: [u8; 3]) {
+    let r_inner = r_outer * 0.42;
+    let verts: Vec<(f32, f32)> = (0..10)
+        .map(|k| {
+            let r = if k % 2 == 0 { r_outer } else { r_inner };
+            let a = -std::f32::consts::FRAC_PI_2 + k as f32 * std::f32::consts::PI / 5.0;
+            (cx + r * a.cos(), cy + r * a.sin())
+        })
+        .collect();
+    let inside = |x: f32, y: f32| -> bool {
+        let mut inside = false;
+        let mut j = verts.len() - 1;
+        for i in 0..verts.len() {
+            let (xi, yi) = verts[i];
+            let (xj, yj) = verts[j];
+            if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+                inside = !inside;
+            }
+            j = i;
+        }
+        inside
+    };
+    let minx = (cx - r_outer - 1.0).floor() as i64;
+    let maxx = (cx + r_outer + 1.0).ceil() as i64;
+    let miny = (cy - r_outer - 1.0).floor() as i64;
+    let maxy = (cy + r_outer + 1.0).ceil() as i64;
+    const SS: u32 = 4;
+    for y in miny..=maxy {
+        for x in minx..=maxx {
+            let mut hits = 0u32;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let px = x as f32 + (sx as f32 + 0.5) / SS as f32;
+                    let py = y as f32 + (sy as f32 + 0.5) / SS as f32;
+                    if inside(px, py) {
+                        hits += 1;
+                    }
+                }
+            }
+            c.blend(x, y, color, hits as f32 / (SS * SS) as f32);
+        }
+    }
+}
+
 /// Stroke a circle of radius `r` with half-width `half`.
 fn stroke_circle(c: &mut Canvas, cx: f32, cy: f32, r: f32, half: f32, color: [u8; 3]) {
     let outer = r + half + 1.0;
@@ -378,6 +426,9 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     let half = (cell_h as f32 / 10.0).max(2.0) / 2.0;
     let cw = cell_w as f32;
     let ch = cell_h as f32;
+    // HEAD stars are deferred and drawn after every cell so they sit on top of
+    // horizontal strokes from neighbouring connector columns.
+    let mut stars: Vec<(f32, f32, f32)> = Vec::new();
 
     for (i, cell) in spec.cells.iter().enumerate() {
         let ox = i as f32 * cw;
@@ -427,13 +478,14 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
                 if connect_down {
                     draw_segment(&mut canvas, cx, cy, cx, ch, half, color);
                 }
+                // Dots may spill slightly into the adjacent connector column;
+                // lanes are two columns wide, so the overlap is harmless.
                 let base = cw.min(ch * 2.0 / 5.0).max(3.0);
-                let r = (base * 0.45).min(cw / 2.0 - 0.5);
+                let r = (base * 0.6).min(cw * 0.65);
                 match style {
                     CommitStyle::Normal => fill_disc(&mut canvas, cx, cy, r, color),
                     CommitStyle::Head => {
-                        stroke_circle(&mut canvas, cx, cy, r, half, color);
-                        fill_disc(&mut canvas, cx, cy, r * 0.4, color);
+                        stars.push((cx, cy, (r * 1.7).min(ch / 2.0 - 0.5)));
                     }
                     CommitStyle::Uncommitted => {
                         stroke_circle(&mut canvas, cx, cy, r, half, color);
@@ -441,6 +493,10 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
                 }
             }
         }
+    }
+
+    for (cx, cy, r) in stars {
+        fill_star(&mut canvas, cx, cy, r, HEAD_STAR_COLOR);
     }
 
     canvas.img
@@ -570,6 +626,34 @@ mod tests {
         assert!(
             alpha(&img, cx + 3, mid) > 0,
             "dot should be wider than the line"
+        );
+    }
+
+    #[test]
+    fn head_commit_rasterizes_a_gold_star_bigger_than_the_dot() {
+        // No connectors, so every opaque pixel belongs to the star itself.
+        let img = rasterize_row(
+            &spec(vec![commit(false, false, CommitStyle::Head, [0, 255, 0])]),
+            CW,
+            CH,
+        );
+        let cx = CW / 2;
+        let mid = CH / 2;
+        // Centre is solid gold (not the green lane color).
+        let centre = img.get_pixel(cx, mid);
+        assert!(centre[3] > 200, "star centre should be opaque");
+        assert!(
+            centre[0] > 230 && centre[2] < 90,
+            "star centre should be gold, got {:?}",
+            centre
+        );
+        // The top spike reaches beyond a normal dot's radius.
+        let base = (CW as f32).min(CH as f32 * 2.0 / 5.0).max(3.0);
+        let dot_r = (base * 0.6).min(CW as f32 * 0.65);
+        let probe_y = mid - dot_r.ceil() as u32 - 1;
+        assert!(
+            alpha(&img, cx, probe_y) > 0,
+            "star should extend above the normal dot radius"
         );
     }
 

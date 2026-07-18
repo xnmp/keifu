@@ -127,6 +127,7 @@ impl<'a> GraphViewWidget<'a> {
         let has_filter = !app.commit_filter.is_empty();
         let current_selected = app.graph_nav.graph_list_state.selected();
         let now = Local::now();
+        let remotes = app.repo.remotes();
 
         let node_iter: Vec<(usize, &crate::git::graph::GraphNode)> = if has_filter {
             app.visible_commit_indices
@@ -163,6 +164,7 @@ impl<'a> GraphViewWidget<'a> {
                 theme,
                 now,
                 pixel_mode,
+                &remotes,
             );
             items.push(ListItem::new(line));
         }
@@ -185,8 +187,24 @@ impl<'a> GraphViewWidget<'a> {
     }
 }
 
+/// Strip a real remote prefix (e.g. "origin/", "upstream/") from a ref,
+/// returning the bare branch name. Local branches that merely contain a slash
+/// ("feature/foo") are not remote refs.
+fn strip_remote<'n>(name: &'n str, remotes: &[String]) -> Option<&'n str> {
+    remotes.iter().find_map(|r| {
+        name.strip_prefix(r.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+    })
+}
+
+/// Nerd Font cloud glyph marking a branch that only exists on a remote.
+const REMOTE_ONLY_ICON: &str = "\u{f0c2}"; //
+/// Marks a local branch whose remote counterpart points at the same commit.
+const SYNCED_ICON: &str = "↔";
+
 /// Optimize branch name display
-/// - If a local branch matches its origin/xxx, show "xxx <-> origin"
+/// - A lone remote ref gets a cloud icon; a local+remote pair collapses to one ↔ label
+/// - If a local branch matches its origin/xxx among other branches, show "xxx <-> origin"
 /// - Otherwise, show each name separately
 /// - Render in bold with the graph color, wrapped in brackets
 /// - Selected branch is shown with inverted colors
@@ -196,6 +214,7 @@ fn optimize_branch_display(
     color_index: usize,
     selected_branch_name: Option<&str>,
     theme: &Theme,
+    remotes: &[String],
 ) -> Vec<(String, Style)> {
     use std::collections::HashSet;
 
@@ -241,12 +260,19 @@ fn optimize_branch_display(
         }
     };
 
-    // Helper to create label with optional abbreviation
-    let make_label = |name: &str, suffix: Option<&str>| -> String {
+    // Helper to create label with optional icon prefix and abbreviation
+    let make_label = |prefix: &str, name: &str, suffix: Option<&str>| -> String {
+        let prefix_width = display_width(prefix);
         let (label, abbrev_width) = if let Some(s) = suffix {
-            (format!("[{} {}]", name, s), MAX_LABEL_WIDTH - s.len() - 3)
+            (
+                format!("[{}{} {}]", prefix, name, s),
+                MAX_LABEL_WIDTH.saturating_sub(s.len() + 3 + prefix_width),
+            )
         } else {
-            (format!("[{}]", name), MAX_LABEL_WIDTH)
+            (
+                format!("[{}{}]", prefix, name),
+                MAX_LABEL_WIDTH.saturating_sub(prefix_width),
+            )
         };
 
         if display_width(&label) <= MAX_LABEL_WIDTH {
@@ -254,12 +280,40 @@ fn optimize_branch_display(
         }
 
         let abbrev = abbreviate_branch_label(name, abbrev_width, 0);
+        let abbrev = if prefix.is_empty() {
+            abbrev
+        } else {
+            abbrev.replacen('[', &format!("[{}", prefix), 1)
+        };
         if let Some(s) = suffix {
             abbrev.replace(']', &format!(" {}]", s))
         } else {
             abbrev
         }
     };
+
+    // Single-branch icon labels (VSCode Git Graph style): a lone remote ref
+    // gets a cloud icon; a local ref whose remote counterpart sits on the same
+    // commit collapses into one ↔-prefixed label. Commits carrying more than
+    // one distinct branch keep the standard rendering below.
+    if branch_names.len() == 1 {
+        let name = &branch_names[0];
+        if strip_remote(name, remotes).is_some() {
+            let prefix = format!("{} ", REMOTE_ONLY_ICON);
+            return vec![(make_label(&prefix, name, None), make_style(name))];
+        }
+    } else if branch_names.len() == 2 {
+        let synced_local = branch_names.iter().find(|name| {
+            strip_remote(name, remotes).is_none()
+                && branch_names
+                    .iter()
+                    .any(|other| strip_remote(other, remotes) == Some(name.as_str()))
+        });
+        if let Some(local) = synced_local {
+            let prefix = format!("{} ", SYNCED_ICON);
+            return vec![(make_label(&prefix, local, None), make_style(local))];
+        }
+    }
 
     // Process branches in original order (matches tab order from filter_remote_duplicates)
     let mut result: Vec<(String, Style)> = Vec::new();
@@ -269,7 +323,7 @@ fn optimize_branch_display(
             if local_branches.contains(local_name) {
                 continue;
             }
-            result.push((make_label(name, None), make_style(name)));
+            result.push((make_label("", name, None), make_style(name)));
         } else {
             // Local branch: check for matching remote
             let remote_name = format!("origin/{}", name);
@@ -278,7 +332,7 @@ fn optimize_branch_display(
             } else {
                 None
             };
-            result.push((make_label(name, suffix), make_style(name)));
+            result.push((make_label("", name, suffix), make_style(name)));
         }
     }
 
@@ -470,6 +524,7 @@ fn render_graph_line<'a>(
     theme: &Theme,
     now: DateTime<Local>,
     pixel_mode: bool,
+    remotes: &[String],
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -508,6 +563,7 @@ fn render_graph_line<'a>(
         selected_branch_name,
         theme,
         now,
+        remotes,
     )
 }
 
@@ -606,6 +662,7 @@ fn render_graph_line_tail<'a>(
     selected_branch_name: Option<&str>,
     theme: &Theme,
     now: DateTime<Local>,
+    remotes: &[String],
 ) -> Line<'a> {
     // Separator between graph and commit info
     spans.push(Span::raw(" "));
@@ -658,6 +715,7 @@ fn render_graph_line_tail<'a>(
         node.color_index,
         selected_branch_name,
         theme,
+        remotes,
     );
 
     // Tag labels render after branch labels with a distinct color.
@@ -899,6 +957,76 @@ mod tests {
         let now = Local::now();
         let recent = ago(now, 5);
         assert_eq!(format_date_field(recent, now).len(), DATE_FIELD_WIDTH);
+    }
+
+    // ── optimize_branch_display icons ────────────────────────────────
+
+    fn labels(branch_names: &[&str], remotes: &[&str]) -> Vec<String> {
+        let names: Vec<String> = branch_names.iter().map(|s| s.to_string()).collect();
+        let remotes: Vec<String> = remotes.iter().map(|s| s.to_string()).collect();
+        let theme = Theme::dark();
+        optimize_branch_display(&names, false, 0, None, &theme, &remotes)
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect()
+    }
+
+    #[test]
+    fn lone_remote_ref_gets_a_cloud_icon() {
+        let out = labels(&["origin/feature"], &["origin"]);
+        assert_eq!(out, vec![format!("[{} origin/feature]", REMOTE_ONLY_ICON)]);
+    }
+
+    #[test]
+    fn lone_remote_ref_respects_non_origin_remotes() {
+        let out = labels(&["upstream/main"], &["origin", "upstream"]);
+        assert_eq!(out, vec![format!("[{} upstream/main]", REMOTE_ONLY_ICON)]);
+    }
+
+    #[test]
+    fn synced_local_and_remote_collapse_to_one_sync_label() {
+        let out = labels(&["main", "origin/main"], &["origin"]);
+        assert_eq!(out, vec![format!("[{} main]", SYNCED_ICON)]);
+    }
+
+    #[test]
+    fn synced_pair_order_does_not_matter() {
+        let out = labels(&["origin/main", "main"], &["origin"]);
+        assert_eq!(out, vec![format!("[{} main]", SYNCED_ICON)]);
+    }
+
+    #[test]
+    fn slashed_local_branch_is_not_mistaken_for_a_remote_ref() {
+        let out = labels(&["feature/foo"], &["origin"]);
+        assert_eq!(out, vec!["[feature/foo]".to_string()]);
+    }
+
+    #[test]
+    fn multiple_distinct_branches_get_no_icons() {
+        let out = labels(&["main", "dev"], &["origin"]);
+        for label in &out {
+            assert!(!label.contains(REMOTE_ONLY_ICON), "no cloud icon: {label}");
+            assert!(!label.contains(SYNCED_ICON), "no sync icon: {label}");
+        }
+    }
+
+    #[test]
+    fn two_unrelated_refs_do_not_collapse() {
+        let out = labels(&["main", "origin/dev"], &["origin"]);
+        assert!(
+            !out.iter()
+                .any(|l| l.contains(SYNCED_ICON) || l.contains(REMOTE_ONLY_ICON)),
+            "unrelated local+remote must not be treated as synced: {out:?}"
+        );
+    }
+
+    #[test]
+    fn long_remote_ref_with_icon_stays_within_label_budget() {
+        let long = format!("origin/{}", "x".repeat(60));
+        let out = labels(&[&long], &["origin"]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].starts_with(&format!("[{} ", REMOTE_ONLY_ICON)));
+        assert!(display_width(&out[0]) <= 40, "label too wide: {}", out[0]);
     }
 
     // ── display_width ────────────────────────────────────────────────
