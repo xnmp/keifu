@@ -300,8 +300,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         AppMode::MetadataMenu { selected } => {
             use self::metadata_menu::MetadataMenuWidget;
-            // 3 rows + top/bottom border.
-            let popup_area = centered_rect_fixed(24, 5, area);
+            // 4 rows + top/bottom border.
+            let popup_area = centered_rect_fixed(24, 6, area);
             frame.render_widget(
                 MetadataMenuWidget::new(app.metadata_columns, *selected, &theme),
                 popup_area,
@@ -351,10 +351,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         AppMode::RemotePicker { remotes, selected, op } => {
             let title = match op {
-                crate::app::RemoteOp::Fetch => " Fetch from remote ",
-                crate::app::RemoteOp::Pull => " Pull from remote ",
-                crate::app::RemoteOp::Push => " Push to remote ",
-                crate::app::RemoteOp::Prune => " Prune remote ",
+                crate::app::RemoteOp::Fetch => " Fetch From Remote ",
+                crate::app::RemoteOp::Pull => " Pull From Remote ",
+                crate::app::RemoteOp::Push => " Push To Remote ",
+                crate::app::RemoteOp::Prune => " Prune Remote ",
             };
             let max_name_len = remotes.iter().map(|b| b.len()).max().unwrap_or(10);
             let popup_width = (max_name_len + 6).clamp(30, 60) as u16;

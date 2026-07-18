@@ -35,6 +35,22 @@ pub struct GraphNode {
     pub cells: Vec<CellType>,
 }
 
+impl GraphNode {
+    /// A merge commit (2+ parents). Stash commits are excluded — their extra
+    /// parents are truncated to one at load time, so they never count as merges.
+    pub fn is_merge(&self) -> bool {
+        self.commit
+            .as_ref()
+            .is_some_and(|c| c.parent_oids.len() >= 2)
+    }
+
+    /// A pure connector row: a fork/merge join line carrying no commit and not
+    /// the uncommitted-changes row. These are de-emphasized in the graph.
+    pub fn is_connector(&self) -> bool {
+        self.commit.is_none() && !self.is_uncommitted
+    }
+}
+
 /// Cell types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CellType {
@@ -793,4 +809,57 @@ fn build_fork_connector_cells(
     }
 
     cells
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit_with_parents(n: usize) -> CommitInfo {
+        CommitInfo {
+            oid: Oid::zero(),
+            short_id: "0000000".to_string(),
+            author_name: "a".to_string(),
+            author_email: "a@b".to_string(),
+            timestamp: chrono::Local::now(),
+            message: "m".to_string(),
+            full_message: "m".to_string(),
+            parent_oids: vec![Oid::zero(); n],
+        }
+    }
+
+    fn node(commit: Option<CommitInfo>, is_uncommitted: bool) -> GraphNode {
+        GraphNode {
+            commit,
+            lane: 0,
+            color_index: 0,
+            branch_names: Vec::new(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn is_merge_needs_two_or_more_parents() {
+        assert!(node(Some(commit_with_parents(2)), false).is_merge());
+        assert!(node(Some(commit_with_parents(3)), false).is_merge());
+        assert!(!node(Some(commit_with_parents(1)), false).is_merge());
+        assert!(!node(Some(commit_with_parents(0)), false).is_merge());
+        // A connector row (no commit) is never a merge.
+        assert!(!node(None, false).is_merge());
+    }
+
+    #[test]
+    fn is_connector_only_for_commitless_non_uncommitted_rows() {
+        assert!(node(None, false).is_connector());
+        // The uncommitted-changes row also has no commit but is not a connector.
+        assert!(!node(None, true).is_connector());
+        // A real commit row is not a connector.
+        assert!(!node(Some(commit_with_parents(1)), false).is_connector());
+    }
 }

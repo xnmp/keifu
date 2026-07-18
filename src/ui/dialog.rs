@@ -126,7 +126,7 @@ impl<'a> Widget for PullDivergenceDialog<'a> {
         Clear.render(area, buf);
 
         let block = Block::default()
-            .title(" Branches diverged ")
+            .title(" Branches Diverged ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(self.theme.confirm_border))
             .style(Style::default().bg(self.theme.popup_bg));
@@ -200,7 +200,7 @@ impl<'a> Widget for BranchPickerWidget<'a> {
         let block = Block::default()
             .title(self.title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.author_color))
+            .border_style(Style::default().fg(self.theme.popup_border))
             .style(Style::default().bg(self.theme.popup_bg));
 
         let inner = block.inner(area);
@@ -214,18 +214,15 @@ impl<'a> Widget for BranchPickerWidget<'a> {
             let y = inner.y + i as u16;
             let is_selected = i == self.selected;
             let style = if is_selected {
-                Style::default()
-                    .fg(self.theme.list_selection_fg)
-                    .bg(self.theme.author_color)
-                    .add_modifier(Modifier::BOLD)
+                self.theme.list_selection_style()
             } else {
                 Style::default().fg(self.theme.text_primary)
             };
 
-            let prefix = if is_selected { "▶ " } else { "  " };
+            let prefix = if is_selected { " > " } else { "   " };
             let max_width = inner.width as usize;
-            let display = if branch.len() + 2 > max_width {
-                format!("{}{}...", prefix, &branch[..max_width.saturating_sub(5)])
+            let display = if branch.len() + 3 > max_width {
+                format!("{}{}...", prefix, &branch[..max_width.saturating_sub(6)])
             } else {
                 format!("{}{}", prefix, branch)
             };
@@ -266,7 +263,7 @@ impl<'a> Widget for FileHistoryWidget<'a> {
         let block = Block::default()
             .title(self.title.clone())
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.author_color))
+            .border_style(Style::default().fg(self.theme.popup_border))
             .style(Style::default().bg(self.theme.popup_bg));
 
         let inner = block.inner(area);
@@ -284,15 +281,12 @@ impl<'a> Widget for FileHistoryWidget<'a> {
             let y = inner.y + (row - first) as u16;
             let is_selected = row == self.selected;
             let base_style = if is_selected {
-                Style::default()
-                    .fg(self.theme.list_selection_fg)
-                    .bg(self.theme.author_color)
-                    .add_modifier(Modifier::BOLD)
+                self.theme.list_selection_style()
             } else {
                 Style::default().fg(self.theme.text_primary)
             };
 
-            let prefix = if is_selected { "▶ " } else { "  " };
+            let prefix = if is_selected { " > " } else { "   " };
             let line = format!(
                 "{}{}  {}  {}",
                 prefix, entry.short_id, entry.date, entry.subject

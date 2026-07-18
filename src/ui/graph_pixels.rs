@@ -52,12 +52,16 @@ pub enum CellShape {
 
 /// A fully-resolved cell: shape plus concrete RGB colors. `secondary` is only
 /// meaningful for `HorizontalPipe` (the horizontal stroke color); elsewhere it
-/// equals `color`.
+/// equals `color`. `dim` de-emphasizes the cell (muted merge dot / connector
+/// row) by drawing it translucent — theme-agnostic since the transparent
+/// background shows through. It's part of the hash, so the protocol cache keys
+/// on it automatically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PixelCell {
     pub shape: CellShape,
     pub color: [u8; 3],
     pub secondary: [u8; 3],
+    pub dim: bool,
 }
 
 /// A fully-resolved, hashable description of one row's pixel content. Two rows
@@ -168,16 +172,19 @@ fn indexed_to_rgb(i: u8) -> [u8; 3] {
 }
 
 /// Build a simple cell whose primary and secondary colors match.
-fn solid(shape: CellShape, rgb: [u8; 3]) -> PixelCell {
+fn solid(shape: CellShape, rgb: [u8; 3], dim: bool) -> PixelCell {
     PixelCell {
         shape,
         color: rgb,
         secondary: rgb,
+        dim,
     }
 }
 
 /// Resolve one `CellType` into a `PixelCell`, computing commit connectivity
-/// from the adjacent (visible) rows.
+/// from the adjacent (visible) rows. `dim` de-emphasizes the cell; `head_rgb`
+/// is the gold used for a HEAD commit dot (drawn as a star).
+#[allow(clippy::too_many_arguments)] // cohesive per-cell resolution params
 fn cell_to_pixel(
     cell: &CellType,
     col: usize,
@@ -185,23 +192,26 @@ fn cell_to_pixel(
     next: Option<&GraphNode>,
     style: CommitStyle,
     theme: &Theme,
+    dim: bool,
+    head_rgb: [u8; 3],
 ) -> PixelCell {
     let rgb = |ci: usize| color_to_rgb(theme.lane_color(ci));
     match *cell {
-        CellType::Empty => solid(CellShape::Empty, [0, 0, 0]),
-        CellType::Pipe(ci) => solid(CellShape::Pipe, rgb(ci)),
-        CellType::Horizontal(ci) => solid(CellShape::Horizontal, rgb(ci)),
-        CellType::BranchRight(ci) => solid(CellShape::BranchRight, rgb(ci)),
-        CellType::BranchLeft(ci) => solid(CellShape::BranchLeft, rgb(ci)),
-        CellType::MergeRight(ci) => solid(CellShape::MergeRight, rgb(ci)),
-        CellType::MergeLeft(ci) => solid(CellShape::MergeLeft, rgb(ci)),
-        CellType::TeeRight(ci) => solid(CellShape::TeeRight, rgb(ci)),
-        CellType::TeeLeft(ci) => solid(CellShape::TeeLeft, rgb(ci)),
-        CellType::TeeUp(ci) => solid(CellShape::TeeUp, rgb(ci)),
+        CellType::Empty => solid(CellShape::Empty, [0, 0, 0], dim),
+        CellType::Pipe(ci) => solid(CellShape::Pipe, rgb(ci), dim),
+        CellType::Horizontal(ci) => solid(CellShape::Horizontal, rgb(ci), dim),
+        CellType::BranchRight(ci) => solid(CellShape::BranchRight, rgb(ci), dim),
+        CellType::BranchLeft(ci) => solid(CellShape::BranchLeft, rgb(ci), dim),
+        CellType::MergeRight(ci) => solid(CellShape::MergeRight, rgb(ci), dim),
+        CellType::MergeLeft(ci) => solid(CellShape::MergeLeft, rgb(ci), dim),
+        CellType::TeeRight(ci) => solid(CellShape::TeeRight, rgb(ci), dim),
+        CellType::TeeLeft(ci) => solid(CellShape::TeeLeft, rgb(ci), dim),
+        CellType::TeeUp(ci) => solid(CellShape::TeeUp, rgb(ci), dim),
         CellType::HorizontalPipe(h, p) => PixelCell {
             shape: CellShape::HorizontalPipe,
             color: rgb(p),
             secondary: rgb(h),
+            dim,
         },
         CellType::Commit(ci) => {
             let connect_up = prev
@@ -210,25 +220,29 @@ fn cell_to_pixel(
             let connect_down = next
                 .and_then(|n| n.cells.get(col))
                 .is_some_and(cell_touches_top);
+            // HEAD dots render as a gold star; other dots keep the lane color.
+            let color = if style == CommitStyle::Head { head_rgb } else { rgb(ci) };
             solid(
                 CellShape::Commit {
                     connect_up,
                     connect_down,
                     style,
                 },
-                rgb(ci),
+                color,
+                dim,
             )
         }
     }
 }
 
 /// Build the `RowSpec` for `node`, using its adjacent visible neighbours to
-/// resolve commit-dot connectivity.
+/// resolve commit-dot connectivity. `mute_merges` dims merge-commit dots.
 pub fn build_row_spec(
     prev: Option<&GraphNode>,
     node: &GraphNode,
     next: Option<&GraphNode>,
     theme: &Theme,
+    mute_merges: bool,
 ) -> RowSpec {
     let style = if node.is_uncommitted {
         CommitStyle::Uncommitted
@@ -237,21 +251,35 @@ pub fn build_row_spec(
     } else {
         CommitStyle::Normal
     };
+    let head_rgb = color_to_rgb(theme.head_star);
+    // Connector rows dim entirely; a muted merge dims only its dot (never HEAD).
+    let row_dim = node.is_connector();
+    let mute_dot = mute_merges && node.is_merge() && !node.is_head;
     let cells = node
         .cells
         .iter()
         .enumerate()
-        .map(|(col, cell)| cell_to_pixel(cell, col, prev, next, style, theme))
+        .map(|(col, cell)| {
+            let dim = row_dim || (mute_dot && matches!(cell, CellType::Commit(_)));
+            cell_to_pixel(cell, col, prev, next, style, theme, dim, head_rgb)
+        })
         .collect();
     RowSpec { cells }
 }
 
+/// Fraction of full opacity used for dimmed (muted/connector) cells. Below 1.0
+/// the stroke is translucent so the terminal background shows through, reading
+/// as "muted" on both dark and light themes.
+const DIM_ALPHA: f32 = 0.4;
+
 /// A minimal RGBA canvas with source-over compositing and coverage-based
-/// anti-aliasing.
+/// anti-aliasing. `alpha_scale` (set per cell) scales every stroke's opacity so
+/// dimmed cells render translucent.
 struct Canvas {
     img: RgbaImage,
     w: u32,
     h: u32,
+    alpha_scale: f32,
 }
 
 impl Canvas {
@@ -260,6 +288,7 @@ impl Canvas {
             img: RgbaImage::new(w, h),
             w,
             h,
+            alpha_scale: 1.0,
         }
     }
 
@@ -267,7 +296,7 @@ impl Canvas {
         if coverage <= 0.0 || x < 0 || y < 0 || x as u32 >= self.w || y as u32 >= self.h {
             return;
         }
-        let sa = coverage.clamp(0.0, 1.0);
+        let sa = (coverage * self.alpha_scale).clamp(0.0, 1.0);
         let px = self.img.get_pixel_mut(x as u32, y as u32);
         let da = px[3] as f32 / 255.0;
         let out_a = sa + da * (1.0 - sa);
@@ -352,9 +381,6 @@ fn fill_disc(c: &mut Canvas, cx: f32, cy: f32, r: f32, color: [u8; 3]) {
     }
 }
 
-/// Gold used for the HEAD star, matching the ⭐ of the Unicode renderer.
-const HEAD_STAR_COLOR: [u8; 3] = [255, 200, 50];
-
 /// Fill a five-pointed star (one point up) via 4x4 supersampled coverage.
 fn fill_star(c: &mut Canvas, cx: f32, cy: f32, r_outer: f32, color: [u8; 3]) {
     let r_inner = r_outer * 0.42;
@@ -427,14 +453,16 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     let cw = cell_w as f32;
     let ch = cell_h as f32;
     // HEAD stars are deferred and drawn after every cell so they sit on top of
-    // horizontal strokes from neighbouring connector columns.
-    let mut stars: Vec<(f32, f32, f32)> = Vec::new();
+    // horizontal strokes from neighbouring connector columns. Each carries its
+    // gold fill color.
+    let mut stars: Vec<(f32, f32, f32, [u8; 3])> = Vec::new();
 
     for (i, cell) in spec.cells.iter().enumerate() {
         let ox = i as f32 * cw;
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
         let color = cell.color;
+        canvas.alpha_scale = if cell.dim { DIM_ALPHA } else { 1.0 };
         match cell.shape {
             CellShape::Empty => {}
             CellShape::Pipe => draw_segment(&mut canvas, cx, 0.0, cx, ch, half, color),
@@ -485,7 +513,7 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
                 match style {
                     CommitStyle::Normal => fill_disc(&mut canvas, cx, cy, r, color),
                     CommitStyle::Head => {
-                        stars.push((cx, cy, (r * 1.7).min(ch / 2.0 - 0.5)));
+                        stars.push((cx, cy, (r * 1.7).min(ch / 2.0 - 0.5), color));
                     }
                     CommitStyle::Uncommitted => {
                         stroke_circle(&mut canvas, cx, cy, r, half, color);
@@ -495,8 +523,10 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
         }
     }
 
-    for (cx, cy, r) in stars {
-        fill_star(&mut canvas, cx, cy, r, HEAD_STAR_COLOR);
+    // HEAD stars always draw at full opacity — the marker stays prominent.
+    canvas.alpha_scale = 1.0;
+    for (cx, cy, r, color) in stars {
+        fill_star(&mut canvas, cx, cy, r, color);
     }
 
     canvas.img
@@ -639,7 +669,7 @@ mod tests {
     }
 
     fn pipe(color: [u8; 3]) -> PixelCell {
-        solid(CellShape::Pipe, color)
+        solid(CellShape::Pipe, color, false)
     }
 
     fn commit(up: bool, down: bool, style: CommitStyle, color: [u8; 3]) -> PixelCell {
@@ -650,6 +680,7 @@ mod tests {
                 style,
             },
             color,
+            false,
         )
     }
 
@@ -688,16 +719,19 @@ mod tests {
     }
 
     #[test]
-    fn head_commit_rasterizes_a_gold_star_bigger_than_the_dot() {
-        // No connectors, so every opaque pixel belongs to the star itself.
+    fn head_commit_rasterizes_a_star_in_its_cell_color_bigger_than_the_dot() {
+        // build_row_spec sets the HEAD cell's color to the theme gold; the
+        // rasterizer draws the star in that color. No connectors, so every
+        // opaque pixel belongs to the star itself.
+        let gold = [255, 200, 50];
         let img = rasterize_row(
-            &spec(vec![commit(false, false, CommitStyle::Head, [0, 255, 0])]),
+            &spec(vec![commit(false, false, CommitStyle::Head, gold)]),
             CW,
             CH,
         );
         let cx = CW / 2;
         let mid = CH / 2;
-        // Centre is solid gold (not the green lane color).
+        // Centre is the solid gold cell color (not a lane color).
         let centre = img.get_pixel(cx, mid);
         assert!(centre[3] > 200, "star centre should be opaque");
         assert!(
@@ -718,7 +752,7 @@ mod tests {
     #[test]
     fn branch_right_touches_right_and_bottom_edges() {
         let img = rasterize_row(
-            &spec(vec![solid(CellShape::BranchRight, [0, 0, 255])]),
+            &spec(vec![solid(CellShape::BranchRight, [0, 0, 255], false)]),
             CW,
             CH,
         );
@@ -734,7 +768,7 @@ mod tests {
     #[test]
     fn branch_right_leaves_the_far_corner_transparent() {
         let img = rasterize_row(
-            &spec(vec![solid(CellShape::BranchRight, [0, 0, 255])]),
+            &spec(vec![solid(CellShape::BranchRight, [0, 0, 255], false)]),
             CW,
             CH,
         );
@@ -760,6 +794,13 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(hash(&a), hash(&b));
         assert_ne!(a, c, "differing connect bits must not compare equal");
+
+        // The `dim` flag is part of the spec's identity, so the protocol cache
+        // (keyed by RowSpec) re-rasterizes when a cell's dim state changes.
+        let mut dimmed = a.clone();
+        dimmed.cells[0].dim = true;
+        assert_ne!(a, dimmed, "dim flag must change spec identity");
+        assert_ne!(hash(&a), hash(&dimmed));
     }
 
     #[test]
@@ -788,7 +829,7 @@ mod tests {
         let pipe_below = make(vec![CellType::Pipe(0)]);
         let tee_up_above = make(vec![CellType::TeeUp(0)]); // touches top, not bottom
 
-        let s = build_row_spec(Some(&pipe_above), &node, Some(&pipe_below), &theme);
+        let s = build_row_spec(Some(&pipe_above), &node, Some(&pipe_below), &theme, false);
         assert_eq!(
             s.cells[0].shape,
             CellShape::Commit {
@@ -800,7 +841,7 @@ mod tests {
 
         // A merge glyph above touches its own top, not its bottom, so the
         // commit below must NOT connect up into it.
-        let s2 = build_row_spec(Some(&merge_above), &node, None, &theme);
+        let s2 = build_row_spec(Some(&merge_above), &node, None, &theme, false);
         assert_eq!(
             s2.cells[0].shape,
             CellShape::Commit {
@@ -811,7 +852,7 @@ mod tests {
         );
 
         // TeeUp above likewise doesn't reach down.
-        let s3 = build_row_spec(Some(&tee_up_above), &node, None, &theme);
+        let s3 = build_row_spec(Some(&tee_up_above), &node, None, &theme, false);
         assert_eq!(
             s3.cells[0].shape,
             CellShape::Commit {
@@ -820,6 +861,33 @@ mod tests {
                 style: CommitStyle::Normal,
             }
         );
+    }
+
+    #[test]
+    fn build_row_spec_dims_connector_rows_and_colors_head_gold() {
+        let theme = Theme::dark();
+        let mut n = GraphNode {
+            commit: None, // connector-only row
+            lane: 0,
+            color_index: 0,
+            branch_names: Vec::new(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells: vec![CellType::Pipe(0), CellType::MergeRight(0)],
+        };
+        // Connector rows are dimmed in full.
+        let s = build_row_spec(None, &n, None, &theme, true);
+        assert!(s.cells.iter().all(|c| c.dim), "connector cells all dim");
+
+        // A HEAD commit's dot cell takes the theme gold (drawn as the star).
+        n.is_head = true;
+        n.cells = vec![CellType::Commit(0)];
+        let head = build_row_spec(None, &n, None, &theme, false);
+        assert_eq!(head.cells[0].color, color_to_rgb(theme.head_star));
     }
 
     #[test]

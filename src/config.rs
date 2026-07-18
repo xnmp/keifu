@@ -109,14 +109,17 @@ impl Config {
     }
 }
 
-/// Which right-aligned metadata columns are shown on each commit row. A hidden
-/// column's width flows to the commit message. Defaults to all visible.
+/// Toggleable per-row display options shown in the Shift+M menu: which
+/// right-aligned metadata columns render (a hidden column's width flows to the
+/// message), plus whether merge commits are visually muted. Defaults to all on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetadataColumns {
     pub author: bool,
     pub hash: bool,
     pub date: bool,
+    /// Dim the dot and message of merge commits (VSCode Git Graph style).
+    pub mute_merges: bool,
 }
 
 impl Default for MetadataColumns {
@@ -125,26 +128,29 @@ impl Default for MetadataColumns {
             author: true,
             hash: true,
             date: true,
+            mute_merges: true,
         }
     }
 }
 
-/// A single toggleable metadata column. `ALL` is also the menu display order.
+/// A single toggleable display option. `ALL` is also the menu display order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataColumn {
     Author,
     Hash,
     Date,
+    MuteMerges,
 }
 
 impl MetadataColumn {
-    pub const ALL: [MetadataColumn; 3] = [Self::Author, Self::Hash, Self::Date];
+    pub const ALL: [MetadataColumn; 4] = [Self::Author, Self::Hash, Self::Date, Self::MuteMerges];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Author => "Author",
             Self::Hash => "Hash",
             Self::Date => "Date",
+            Self::MuteMerges => "Mute merges",
         }
     }
 }
@@ -155,6 +161,7 @@ impl MetadataColumns {
             MetadataColumn::Author => self.author,
             MetadataColumn::Hash => self.hash,
             MetadataColumn::Date => self.date,
+            MetadataColumn::MuteMerges => self.mute_merges,
         }
     }
 
@@ -163,6 +170,7 @@ impl MetadataColumns {
             MetadataColumn::Author => self.author = !self.author,
             MetadataColumn::Hash => self.hash = !self.hash,
             MetadataColumn::Date => self.date = !self.date,
+            MetadataColumn::MuteMerges => self.mute_merges = !self.mute_merges,
         }
     }
 }
@@ -385,6 +393,7 @@ mod tests {
                 author: true,
                 hash: false,
                 date: false,
+                mute_merges: false,
             },
         };
         let serialized = toml::to_string(&state).unwrap();
@@ -394,6 +403,21 @@ mod tests {
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
+        assert!(!restored.metadata_columns.mute_merges);
+    }
+
+    #[test]
+    fn mute_merges_defaults_on_and_round_trips() {
+        // Default is ON; an older state.toml (no mute_merges key) keeps it ON.
+        assert!(MetadataColumns::default().mute_merges);
+        let older: UiState =
+            toml::from_str("[metadata_columns]\nauthor = true\nhash = true\ndate = true\n").unwrap();
+        assert!(older.metadata_columns.mute_merges, "missing key defaults ON");
+
+        let mut cols = MetadataColumns::default();
+        cols.toggle(MetadataColumn::MuteMerges);
+        assert!(!cols.mute_merges);
+        assert!(!cols.is_visible(MetadataColumn::MuteMerges));
     }
 
     #[test]

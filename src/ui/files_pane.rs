@@ -48,12 +48,6 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
             return;
         }
 
-        let border_color = if self.is_focused {
-            self.theme.border_focused
-        } else {
-            self.theme.border_unfocused
-        };
-
         let title = if self.is_uncommitted {
             " Changed Files (s: stage/unstage) "
         } else {
@@ -63,7 +57,7 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
+            .border_style(self.theme.border_style(self.is_focused))
             .border_type(self.theme.border_type(self.is_focused));
 
         let inner = block.inner(area);

@@ -19,31 +19,33 @@ use crate::{
     pr::PrInfo,
 };
 
-/// Fixed display width for the date field (fits "59 minutes ago").
-const DATE_FIELD_WIDTH: usize = 14;
+/// Fixed display width for the compact date field (fits "11mo", "now", "59m").
+/// The full absolute date lives in the commit detail panel.
+const DATE_FIELD_WIDTH: usize = 4;
 
-/// Format a commit timestamp. Within the past week, show a relative string
-/// ("just now", "5 minutes ago", "3 days ago"); otherwise the absolute date.
-/// Result is right-padded to `DATE_FIELD_WIDTH` so columns stay aligned.
+/// Compact relative age of a commit: "now", "59m", "23h", "6d", "3w", "11mo",
+/// "2y". Left-padded to `DATE_FIELD_WIDTH` so the column stays aligned.
 /// `now` is passed in so it's computed once per render, not once per row.
 fn format_date_field(timestamp: DateTime<Local>, now: DateTime<Local>) -> String {
     let delta = now.signed_duration_since(timestamp);
     let secs = delta.num_seconds();
+    let days = delta.num_days();
 
-    // Future timestamps or older than a week fall back to the absolute date.
-    let label = if secs < 0 || delta.num_days() >= 7 {
-        timestamp.format("%Y-%m-%d").to_string()
-    } else if secs < 60 {
-        "just now".to_string()
+    let label = if secs < 60 {
+        // Includes future timestamps (clock skew) — shown as "now".
+        "now".to_string()
     } else if delta.num_minutes() < 60 {
-        let m = delta.num_minutes();
-        format!("{} minute{} ago", m, if m == 1 { "" } else { "s" })
+        format!("{}m", delta.num_minutes())
     } else if delta.num_hours() < 24 {
-        let h = delta.num_hours();
-        format!("{} hour{} ago", h, if h == 1 { "" } else { "s" })
+        format!("{}h", delta.num_hours())
+    } else if days < 7 {
+        format!("{}d", days)
+    } else if days < 30 {
+        format!("{}w", days / 7)
+    } else if days < 365 {
+        format!("{}mo", days / 30)
     } else {
-        let d = delta.num_days();
-        format!("{} day{} ago", d, if d == 1 { "" } else { "s" })
+        format!("{}y", days / 365)
     };
 
     format!("{:<width$}", label, width = DATE_FIELD_WIDTH)
@@ -195,12 +197,13 @@ pub fn build_pixel_row_specs(
     panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
+    let mute_merges = app.metadata_columns.mute_merges;
     let nodes: Vec<&GraphNode> = visible_nodes(app).into_iter().map(|(_, n)| n).collect();
     (0..nodes.len())
         .map(|i| {
             let prev = i.checked_sub(1).map(|p| nodes[p]);
             let next = nodes.get(i + 1).copied();
-            let mut spec = build_row_spec(prev, nodes[i], next, theme);
+            let mut spec = build_row_spec(prev, nodes[i], next, theme, mute_merges);
             spec.cells
                 .truncate(pixel_row_cells(nodes[i].cells.len(), graph_width, panel_available));
             spec
@@ -460,16 +463,18 @@ fn optimize_branch_display(
                 result.push((make_label("", name, None), make_style(name)));
             }
         } else {
-            // Local branch: show "↔ <remote>" when a remote ref points at the
-            // same bare name (not just origin — any configured remote).
-            let sync_remote = branch_names.iter().find_map(|other| {
-                match strip_remote(other, remotes) {
-                    Some(bare) if bare == name => other.strip_suffix(bare)?.strip_suffix('/'),
-                    _ => None,
-                }
-            });
-            let suffix = sync_remote.map(|r| format!("↔ {}", r));
-            result.push((make_label("", name, suffix.as_deref()), make_style(name)));
+            // Local branch: mark with the ↔ icon (same convention as the
+            // single-branch synced chip) when a remote ref points at the same
+            // bare name — dropping the redundant "↔ <remote>" text suffix.
+            let has_synced_remote = branch_names
+                .iter()
+                .any(|other| strip_remote(other, remotes) == Some(name.as_str()));
+            let prefix = if has_synced_remote {
+                format!("{} ", SYNCED_ICON)
+            } else {
+                String::new()
+            };
+            result.push((make_label(&prefix, name, None), make_style(name)));
         }
     }
 
@@ -563,8 +568,8 @@ fn compute_right_side_visibility(
     cols: MetadataColumns,
 ) -> (bool, bool, bool, usize) {
     // Rendered width of each element incl. its leading separator (see the
-    // right-block rendering below): date " "+14, author "  "+8, hash "  "+7.
-    const DATE_W: usize = 15;
+    // right-block rendering below): date " "+4, author "  "+8, hash "  "+7.
+    const DATE_W: usize = 5;
     const AUTHOR_W: usize = 10;
     const HASH_W: usize = 9;
     const TRAILING_W: usize = 1; // single trailing space when anything shows
@@ -720,7 +725,12 @@ fn render_graph_line<'a>(
             left_width += 1;
         }
     } else {
-        left_width = render_cells_unicode(&mut spans, node, theme, left_width, graph_width);
+        // Connector rows dim entirely; a muted merge dims only its dot (never
+        // HEAD). Matches the pixel renderer's per-cell dimming.
+        let row_dim = node.is_connector();
+        let mute_dot = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
+        left_width =
+            render_cells_unicode(&mut spans, node, theme, left_width, graph_width, row_dim, mute_dot);
     }
 
     // Padding to align to the (capped) graph width. Reclaimed width flows to the
@@ -752,13 +762,24 @@ fn render_graph_line<'a>(
 /// Render the Unicode box-drawing glyphs for a row's cells into `spans`, capped
 /// at `cap` graph columns, returning the updated `left_width`. When the row
 /// overflows the cap, the last column becomes a dim `…`.
+#[allow(clippy::too_many_arguments)] // cohesive per-row render params
 fn render_cells_unicode(
     spans: &mut Vec<Span<'_>>,
     node: &GraphNode,
     theme: &Theme,
     mut left_width: usize,
     cap: usize,
+    row_dim: bool,
+    mute_dot: bool,
 ) -> usize {
+    // Extra style modifier applied to graph glyphs: DIM for de-emphasized rows.
+    let dim_mod = |base: Style, dim: bool| -> Style {
+        if dim {
+            base.remove_modifier(Modifier::BOLD).add_modifier(Modifier::DIM)
+        } else {
+            base
+        }
+    };
     // `budget` graph columns are available for glyphs; when truncating, one more
     // column holds the `…`.
     let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
@@ -778,14 +799,12 @@ fn render_cells_unicode(
 
         // Special-case the HEAD commit star (may consume the next cell).
         if node.is_head {
-            if let CellType::Commit(color_idx) = cell {
-                let is_main = *color_idx == crate::graph::colors::MAIN_BRANCH_COLOR;
-                let color = if !is_main {
-                    theme.branch_head
-                } else {
-                    theme.lane_color(*color_idx)
-                };
-                let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+            if let CellType::Commit(_) = cell {
+                // The ◉ fallback uses the HEAD-star gold, matching the ⭐ / the
+                // pixel renderer's star.
+                let style = Style::default()
+                    .fg(theme.head_star)
+                    .add_modifier(Modifier::BOLD);
 
                 let right_is_clear = matches!(
                     node.cells.get(idx + 1),
@@ -832,8 +851,10 @@ fn render_cells_unicode(
             CellType::TeeUp(color_idx) => ('┴', theme.lane_color(*color_idx)),
         };
 
-        // Draw all line glyphs in bold
-        let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        // Draw all line glyphs in bold, dimmed when de-emphasized (whole
+        // connector row, or just the dot of a muted merge).
+        let cell_dim = row_dim || (mute_dot && matches!(cell, CellType::Commit(_)));
+        let style = dim_mod(Style::default().fg(color).add_modifier(Modifier::BOLD), cell_dim);
 
         let ch_str = ch.to_string();
         let ch_width = display_width(&ch_str);
@@ -910,7 +931,12 @@ fn render_graph_line_tail<'a>(
     let hash_style = Style::default().fg(theme.hash_color);
     let author_style = Style::default().fg(theme.author_color);
     let date_style = Style::default().fg(theme.date_color);
-    let msg_style = if is_selected {
+    // Muted merge: dim the message (dot is dimmed in the graph column). HEAD is
+    // never muted so its message stays legible.
+    let muted_merge = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
+    let msg_style = if muted_merge {
+        Style::default().add_modifier(Modifier::DIM)
+    } else if is_selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -1091,99 +1117,50 @@ mod tests {
         now - Duration::seconds(secs_ago)
     }
 
-    // ── format_date_field ────────────────────────────────────────────
+    // ── format_date_field (compact relative age) ─────────────────────
+
+    fn age(secs_ago: i64) -> String {
+        let now = Local::now();
+        format_date_field(ago(now, secs_ago), now).trim_end().to_string()
+    }
+
+    const MIN: i64 = 60;
+    const HOUR: i64 = 3600;
+    const DAY: i64 = 24 * HOUR;
 
     #[test]
-    fn future_timestamp_shows_absolute_date() {
-        let now = Local::now();
-        let future = now + Duration::seconds(60);
-        let result = format_date_field(future, now);
-        assert_eq!(result.trim_end(), future.format("%Y-%m-%d").to_string());
+    fn compact_date_covers_all_ranges() {
+        assert_eq!(age(5), "now"); // just now
+        assert_eq!(age(59), "now"); // still under a minute
+        assert_eq!(age(60), "1m");
+        assert_eq!(age(59 * MIN), "59m"); // 59 minutes
+        assert_eq!(age(HOUR), "1h");
+        assert_eq!(age(23 * HOUR), "23h"); // 23 hours
+        assert_eq!(age(DAY), "1d");
+        assert_eq!(age(6 * DAY), "6d");
+        assert_eq!(age(7 * DAY), "1w"); // weeks start at 7d
+        assert_eq!(age(21 * DAY), "3w"); // 3 weeks
+        assert_eq!(age(30 * DAY), "1mo"); // months start at 30d
+        assert_eq!(age(330 * DAY), "11mo"); // 11 months
+        assert_eq!(age(365 * DAY), "1y"); // years start at 365d
+        assert_eq!(age(2 * 365 * DAY), "2y");
     }
 
     #[test]
-    fn seven_days_or_more_shows_absolute_date() {
+    fn future_timestamp_shows_now() {
         let now = Local::now();
-        let old = ago(now, 7 * 24 * 3600);
-        let result = format_date_field(old, now);
-        assert_eq!(result.trim_end(), old.format("%Y-%m-%d").to_string());
-    }
-
-    #[test]
-    fn under_a_minute_is_just_now() {
-        let now = Local::now();
-        let recent = ago(now, 30);
-        assert_eq!(format_date_field(recent, now).trim_end(), "just now");
-    }
-
-    #[test]
-    fn fifty_nine_seconds_is_still_just_now() {
-        let now = Local::now();
-        let recent = ago(now, 59);
-        assert_eq!(format_date_field(recent, now).trim_end(), "just now");
-    }
-
-    #[test]
-    fn sixty_seconds_is_one_minute_ago() {
-        let now = Local::now();
-        let recent = ago(now, 60);
-        assert_eq!(format_date_field(recent, now).trim_end(), "1 minute ago");
-    }
-
-    #[test]
-    fn singular_minute() {
-        let now = Local::now();
-        let t = ago(now, 90); // num_minutes() truncates to 1
-        assert_eq!(format_date_field(t, now).trim_end(), "1 minute ago");
-    }
-
-    #[test]
-    fn plural_minutes() {
-        let now = Local::now();
-        let t = ago(now, 5 * 60);
-        assert_eq!(format_date_field(t, now).trim_end(), "5 minutes ago");
-    }
-
-    #[test]
-    fn singular_hour() {
-        let now = Local::now();
-        let t = ago(now, 3600);
-        assert_eq!(format_date_field(t, now).trim_end(), "1 hour ago");
-    }
-
-    #[test]
-    fn plural_hours() {
-        let now = Local::now();
-        let t = ago(now, 3 * 3600);
-        assert_eq!(format_date_field(t, now).trim_end(), "3 hours ago");
-    }
-
-    #[test]
-    fn singular_day() {
-        let now = Local::now();
-        let t = ago(now, 24 * 3600);
-        assert_eq!(format_date_field(t, now).trim_end(), "1 day ago");
-    }
-
-    #[test]
-    fn plural_days() {
-        let now = Local::now();
-        let t = ago(now, 3 * 24 * 3600);
-        assert_eq!(format_date_field(t, now).trim_end(), "3 days ago");
-    }
-
-    #[test]
-    fn six_days_twenty_three_hours_is_still_relative() {
-        let now = Local::now();
-        let t = ago(now, 6 * 24 * 3600 + 23 * 3600);
-        assert_eq!(format_date_field(t, now).trim_end(), "6 days ago");
+        let future = now + Duration::seconds(300);
+        assert_eq!(format_date_field(future, now).trim_end(), "now");
     }
 
     #[test]
     fn result_is_padded_to_fixed_width() {
         let now = Local::now();
         let recent = ago(now, 5);
+        // "now" padded to DATE_FIELD_WIDTH; longer labels ("11mo") fill it exactly.
         assert_eq!(format_date_field(recent, now).len(), DATE_FIELD_WIDTH);
+        let months = ago(now, 330 * DAY);
+        assert_eq!(display_width(&format_date_field(months, now)), DATE_FIELD_WIDTH);
     }
 
     // ── optimize_branch_display icons ────────────────────────────────
@@ -1451,55 +1428,63 @@ mod tests {
     // ── metadata column visibility / width budget ────────────────────
 
     fn cols(author: bool, hash: bool, date: bool) -> MetadataColumns {
-        MetadataColumns { author, hash, date }
+        MetadataColumns {
+            author,
+            hash,
+            date,
+            mute_merges: true,
+        }
     }
 
     #[test]
     fn all_columns_shown_when_enabled_and_wide() {
-        // Reproduces the original 35-wide breakpoint with everything on.
+        // Compact date (4) + separators: date 5 + author 10 + hash 9 + trailing 1 = 25.
         assert_eq!(
             compute_right_side_visibility(200, cols(true, true, true)),
-            (true, true, true, 35)
+            (true, true, true, 25)
         );
     }
 
     #[test]
     fn disabled_column_is_never_shown_and_reclaims_its_width() {
-        // Hash off: only date+author, width drops from 35 to 26 (9 reclaimed).
+        // Hash off: only date+author, width drops from 25 to 16 (9 reclaimed).
         assert_eq!(
             compute_right_side_visibility(200, cols(true, false, true)),
-            (true, true, false, 26)
+            (true, true, false, 16)
         );
         // Everything off: no right block at all.
         assert_eq!(
             compute_right_side_visibility(200, cols(false, false, false)),
             (false, false, false, 0)
         );
-        // Only date enabled: date " "+14 = 15, +1 trailing = 16.
+        // Only date enabled: date " "+4 = 5, +1 trailing = 6.
         assert_eq!(
             compute_right_side_visibility(200, cols(false, false, true)),
-            (true, false, false, 16)
+            (true, false, false, 6)
         );
     }
 
     #[test]
     fn enabled_columns_still_drop_by_priority_when_narrow() {
-        // available = remaining - 50. Hash drops first, then date, author last —
-        // matching the pre-existing cascade for the all-enabled case.
+        // available = remaining - 50. Hash drops first, then date, author last.
+        // all (25): avail >= 25 → remaining >= 75.
         assert_eq!(
-            compute_right_side_visibility(85, cols(true, true, true)),
-            (true, true, true, 35)
+            compute_right_side_visibility(75, cols(true, true, true)),
+            (true, true, true, 25)
         );
+        // date+author (16): 16 <= avail < 25 → remaining 66..74.
         assert_eq!(
-            compute_right_side_visibility(84, cols(true, true, true)),
-            (true, true, false, 26)
+            compute_right_side_visibility(74, cols(true, true, true)),
+            (true, true, false, 16)
         );
+        // author only (11): 11 <= avail < 16 → remaining 61..65.
         assert_eq!(
-            compute_right_side_visibility(61, cols(true, true, true)),
+            compute_right_side_visibility(65, cols(true, true, true)),
             (false, true, false, 11)
         );
+        // none (0): avail < 11 → remaining < 61.
         assert_eq!(
-            compute_right_side_visibility(55, cols(true, true, true)),
+            compute_right_side_visibility(60, cols(true, true, true)),
             (false, false, false, 0)
         );
     }
@@ -1695,7 +1680,7 @@ mod tests {
     fn render_cells(node: &GraphNode, cap: usize) -> String {
         let theme = Theme::dark();
         let mut spans: Vec<Span> = Vec::new();
-        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap);
+        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, false, false);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         // left_width is columns emitted (started at 0); it must equal the text's
         // display width.
