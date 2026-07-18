@@ -506,128 +506,161 @@ pub fn build_graph(
 
     // Insert uncommitted changes node at the beginning if there are uncommitted changes
     if let Some(count) = uncommitted_count {
-        // Find the node index that HEAD points to
-        let head_node_idx = head_commit_oid.and_then(|oid| {
-            nodes
-                .iter()
-                .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(oid))
-        });
-
-        if let Some(head_idx) = head_node_idx {
-            let head_lane = nodes[head_idx].lane;
-
-            // Find an available lane for the uncommitted line
-            // Check if head_lane is available for all nodes before HEAD
-            let head_lane_available = (0..head_idx).all(|i| {
-                let cell_idx = head_lane * 2;
-                nodes[i]
-                    .cells
-                    .get(cell_idx)
-                    .map(|c| *c == CellType::Empty)
-                    .unwrap_or(true)
-            });
-
-            let uncommitted_lane = if head_lane_available {
-                head_lane
-            } else {
-                // Find an available lane closest to head_lane
-                let mut best_lane = max_lane + 1;
-                let mut best_distance = usize::MAX;
-
-                for candidate_lane in 0..=max_lane + 1 {
-                    let available = (0..head_idx).all(|i| {
-                        let cell_idx = candidate_lane * 2;
-                        nodes[i]
-                            .cells
-                            .get(cell_idx)
-                            .map(|c| *c == CellType::Empty)
-                            .unwrap_or(true)
-                    });
-                    if available {
-                        let distance = candidate_lane.abs_diff(head_lane);
-                        if distance < best_distance {
-                            best_distance = distance;
-                            best_lane = candidate_lane;
-                        }
-                    }
-                }
-                best_lane
-            };
-
-            // Update max_lane if needed
-            if uncommitted_lane > max_lane {
-                max_lane = uncommitted_lane;
-            }
-
-            // Ensure all nodes have enough cells
-            let required_cells = (max_lane + 1) * 2;
-            for node in nodes.iter_mut() {
-                while node.cells.len() < required_cells {
-                    node.cells.push(CellType::Empty);
-                }
-            }
-
-            // Add Pipe to all nodes before HEAD commit
-            let cell_idx = uncommitted_lane * 2;
-            for node in nodes.iter_mut().take(head_idx) {
-                if node.cells[cell_idx] == CellType::Empty {
-                    node.cells[cell_idx] = CellType::Pipe(UNCOMMITTED_COLOR_INDEX);
-                }
-            }
-
-            // If uncommitted_lane != head_lane, add a connector from HEAD to the uncommitted lane
-            if uncommitted_lane != head_lane {
-                let head_cell_idx = head_lane * 2;
-                let uncommitted_cell_idx = uncommitted_lane * 2;
-
-                if uncommitted_lane > head_lane {
-                    // Uncommitted lane is to the right - draw horizontal line and curve up (╯)
-                    for col in (head_cell_idx + 1)..uncommitted_cell_idx {
-                        if nodes[head_idx].cells[col] == CellType::Empty {
-                            nodes[head_idx].cells[col] =
-                                CellType::Horizontal(UNCOMMITTED_COLOR_INDEX);
-                        }
-                    }
-                    nodes[head_idx].cells[uncommitted_cell_idx] =
-                        CellType::MergeLeft(UNCOMMITTED_COLOR_INDEX);
-                } else {
-                    // Uncommitted lane is to the left - draw horizontal line and curve up (╰)
-                    for col in (uncommitted_cell_idx + 1)..head_cell_idx {
-                        if nodes[head_idx].cells[col] == CellType::Empty {
-                            nodes[head_idx].cells[col] =
-                                CellType::Horizontal(UNCOMMITTED_COLOR_INDEX);
-                        }
-                    }
-                    nodes[head_idx].cells[uncommitted_cell_idx] =
-                        CellType::MergeRight(UNCOMMITTED_COLOR_INDEX);
-                }
-            }
-
-            // Build cells for the uncommitted node
-            let mut cells = vec![CellType::Empty; required_cells];
-            cells[uncommitted_lane * 2] = CellType::Commit(UNCOMMITTED_COLOR_INDEX);
-
-            // Insert uncommitted node at the beginning
-            nodes.insert(
-                0,
-                GraphNode {
-                    commit: None,
-                    lane: uncommitted_lane,
-                    color_index: UNCOMMITTED_COLOR_INDEX,
-                    branch_names: Vec::new(),
-                    tag_names: Vec::new(),
-                    is_head: false,
-                    is_uncommitted: true,
-                    is_stash: false,
-                    stash_label: None,
-                    uncommitted_count: count,
-                    cells,
-                },
-            );
-        }
+        insert_uncommitted_node(&mut nodes, &mut max_lane, head_commit_oid, count);
     }
 
     GraphLayout { nodes, max_lane }
+}
+
+/// Insert the synthetic "uncommitted changes" node at the top of the graph and
+/// draw its dotted lane down to the HEAD commit.
+///
+/// When HEAD's own lane is free above it, the node simply sits on that lane. If
+/// a newer branch line occupies HEAD's lane, the node takes the nearest free
+/// lane and a connector curves across to HEAD on the HEAD row. That connector
+/// must never sever a lane it crosses:
+///
+/// - The chosen lane is required to be free above HEAD **and on the HEAD row
+///   itself** — the curve's endpoint lands on the HEAD row, so a lane that's
+///   free above but occupied on the HEAD row would otherwise be clobbered
+///   (this was the root cause of the "severed pink lane" bug).
+/// - Intermediate lane pipes the connector passes through become
+///   `HorizontalPipe` crossings, keeping both the grey connector and the
+///   crossed lane visible.
+fn insert_uncommitted_node(
+    nodes: &mut Vec<GraphNode>,
+    max_lane: &mut usize,
+    head_commit_oid: Option<Oid>,
+    count: Option<usize>,
+) {
+    // Find the node index that HEAD points to.
+    let head_node_idx = head_commit_oid.and_then(|oid| {
+        nodes
+            .iter()
+            .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(oid))
+    });
+    let Some(head_idx) = head_node_idx else {
+        return;
+    };
+
+    let head_lane = nodes[head_idx].lane;
+
+    // Whether a lane's column is Empty across the given rows.
+    let column_free = |nodes: &[GraphNode], lane: usize, rows: std::ops::Range<usize>| {
+        let cell_idx = lane * 2;
+        rows.into_iter().all(|i| {
+            nodes[i]
+                .cells
+                .get(cell_idx)
+                .map(|c| *c == CellType::Empty)
+                .unwrap_or(true)
+        })
+    };
+
+    // HEAD's own lane is usable when its column is free in every row ABOVE HEAD;
+    // the HEAD row itself holds the commit dot, which the lane connects into.
+    let head_lane_available = column_free(nodes, head_lane, 0..head_idx);
+
+    let uncommitted_lane = if head_lane_available {
+        head_lane
+    } else {
+        // A different lane must be free above HEAD *and* on the HEAD row, since
+        // the connector's curve endpoint lands on the HEAD row. Checking only
+        // the rows above HEAD (the old behaviour) let the curve clobber a lane
+        // still active on the HEAD row. `max_lane + 1` is always free.
+        let mut best_lane = *max_lane + 1;
+        let mut best_distance = usize::MAX;
+
+        for candidate_lane in 0..=*max_lane + 1 {
+            if column_free(nodes, candidate_lane, 0..head_idx + 1) {
+                let distance = candidate_lane.abs_diff(head_lane);
+                if distance < best_distance {
+                    best_distance = distance;
+                    best_lane = candidate_lane;
+                }
+            }
+        }
+        best_lane
+    };
+
+    // Update max_lane if needed.
+    if uncommitted_lane > *max_lane {
+        *max_lane = uncommitted_lane;
+    }
+
+    // Ensure all nodes have enough cells.
+    let required_cells = (*max_lane + 1) * 2;
+    for node in nodes.iter_mut() {
+        while node.cells.len() < required_cells {
+            node.cells.push(CellType::Empty);
+        }
+    }
+
+    // Add Pipe to all nodes before HEAD commit.
+    let cell_idx = uncommitted_lane * 2;
+    for node in nodes.iter_mut().take(head_idx) {
+        if node.cells[cell_idx] == CellType::Empty {
+            node.cells[cell_idx] = CellType::Pipe(UNCOMMITTED_COLOR_INDEX);
+        }
+    }
+
+    // If uncommitted_lane != head_lane, add a connector from HEAD to the lane.
+    if uncommitted_lane != head_lane {
+        let head_cell_idx = head_lane * 2;
+        let uncommitted_cell_idx = uncommitted_lane * 2;
+        // Columns strictly between the two lanes, regardless of direction.
+        let (lo, hi) = if uncommitted_lane > head_lane {
+            (head_cell_idx + 1, uncommitted_cell_idx)
+        } else {
+            (uncommitted_cell_idx + 1, head_cell_idx)
+        };
+
+        // Cross intermediate columns: an active lane pipe becomes a
+        // HorizontalPipe crossing so both the connector and the crossed lane
+        // stay visible; empty columns get the plain horizontal stroke.
+        for col in lo..hi {
+            match nodes[head_idx].cells[col] {
+                CellType::Empty => {
+                    nodes[head_idx].cells[col] = CellType::Horizontal(UNCOMMITTED_COLOR_INDEX);
+                }
+                CellType::Pipe(pipe_lane) => {
+                    nodes[head_idx].cells[col] =
+                        CellType::HorizontalPipe(UNCOMMITTED_COLOR_INDEX, pipe_lane);
+                }
+                _ => {}
+            }
+        }
+
+        // Curve endpoint. The chosen lane is free on the HEAD row, so this lands
+        // on an empty cell and severs nothing.
+        nodes[head_idx].cells[uncommitted_cell_idx] = if uncommitted_lane > head_lane {
+            CellType::MergeLeft(UNCOMMITTED_COLOR_INDEX) // ╯
+        } else {
+            CellType::MergeRight(UNCOMMITTED_COLOR_INDEX) // ╰
+        };
+    }
+
+    // Build cells for the uncommitted node.
+    let mut cells = vec![CellType::Empty; required_cells];
+    cells[uncommitted_lane * 2] = CellType::Commit(UNCOMMITTED_COLOR_INDEX);
+
+    // Insert uncommitted node at the beginning.
+    nodes.insert(
+        0,
+        GraphNode {
+            commit: None,
+            lane: uncommitted_lane,
+            color_index: UNCOMMITTED_COLOR_INDEX,
+            branch_names: Vec::new(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: true,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: count,
+            cells,
+        },
+    );
 }
 
 /// Build cells for one row - color index version
@@ -861,5 +894,118 @@ mod tests {
         assert!(!node(None, true).is_connector());
         // A real commit row is not a connector.
         assert!(!node(Some(commit_with_parents(1)), false).is_connector());
+    }
+
+    // ── insert_uncommitted_node: crossing lanes stay visible ─────────
+
+    fn oid(byte: u8) -> Oid {
+        Oid::from_bytes(&[byte; 20]).unwrap()
+    }
+
+    /// A commit node carrying a specific oid, lane, and cell row.
+    fn commit_node(oid: Oid, lane: usize, cells: Vec<CellType>) -> GraphNode {
+        let mut c = commit_with_parents(1);
+        c.oid = oid;
+        GraphNode {
+            commit: Some(c),
+            lane,
+            color_index: 0,
+            branch_names: Vec::new(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells,
+        }
+    }
+
+    #[test]
+    fn uncommitted_node_uses_head_lane_when_free_above() {
+        // HEAD is the newest commit on lane 0, its lane clear above → no
+        // connector, just the uncommitted dot on the same lane.
+        let head = oid(1);
+        let mut nodes = vec![commit_node(head, 0, vec![CellType::Commit(0), CellType::Empty])];
+        let mut max_lane = 0;
+        insert_uncommitted_node(&mut nodes, &mut max_lane, Some(head), Some(3));
+
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes[0].is_uncommitted);
+        assert_eq!(nodes[0].lane, 0);
+        assert_eq!(nodes[0].cells[0], CellType::Commit(UNCOMMITTED_COLOR_INDEX));
+        // No connector markers on the HEAD row.
+        let head_row = &nodes[1];
+        assert!(!head_row
+            .cells
+            .iter()
+            .any(|c| matches!(c, CellType::MergeLeft(_) | CellType::MergeRight(_))));
+    }
+
+    #[test]
+    fn uncommitted_connector_crosses_lanes_without_severing_them() {
+        // Regression: the grey uncommitted connector used to clobber a lane that
+        // was free above HEAD but active on the HEAD row, severing it.
+        //
+        // Row 0 (newer commit): occupies HEAD's lane 0 above HEAD, so HEAD's lane
+        //   is unavailable and a connector is needed.
+        // Row 1 (HEAD, lane 0): a pink pipe (color 4) sits on lane 1 (col 2),
+        //   active on the HEAD row itself.
+        let newer = oid(1);
+        let head = oid(2);
+        let mut nodes = vec![
+            commit_node(
+                newer,
+                1,
+                vec![
+                    CellType::Pipe(3), // col 0: occupies HEAD's lane above HEAD
+                    CellType::Empty,
+                    CellType::Empty, // col 2: free above HEAD
+                    CellType::Empty,
+                ],
+            ),
+            commit_node(
+                head,
+                0,
+                vec![
+                    CellType::Commit(0),
+                    CellType::Empty,
+                    CellType::Pipe(4), // col 2: the pink lane, active on the HEAD row
+                    CellType::Empty,
+                ],
+            ),
+        ];
+        let mut max_lane = 1;
+        insert_uncommitted_node(&mut nodes, &mut max_lane, Some(head), Some(1));
+
+        // The old off-by-one would pick lane 1 (col 2 free *above* HEAD) and its
+        // curve would overwrite the pink pipe. The fix requires the lane free on
+        // the HEAD row too, so it moves right to lane 2 (col 4).
+        assert!(nodes[0].is_uncommitted);
+        assert_eq!(nodes[0].lane, 2, "uncommitted lane avoids the active pink lane");
+        assert_eq!(max_lane, 2);
+
+        // HEAD is now at index 2 (uncommitted inserted at 0, newer at 1).
+        let head_row = &nodes[2];
+        // The pink lane survives as a HorizontalPipe crossing — the connector
+        // draws over it without erasing it.
+        assert_eq!(
+            head_row.cells[2],
+            CellType::HorizontalPipe(UNCOMMITTED_COLOR_INDEX, 4),
+            "crossed pink lane must remain visible under the connector"
+        );
+        // The pink lane is NOT replaced by a curve.
+        assert!(
+            !matches!(
+                head_row.cells[2],
+                CellType::MergeLeft(_) | CellType::MergeRight(_)
+            ),
+            "crossing cell must not become the connector's curve"
+        );
+        // The curve endpoint lands on the free lane 2 (col 4).
+        assert_eq!(
+            head_row.cells[4],
+            CellType::MergeLeft(UNCOMMITTED_COLOR_INDEX)
+        );
     }
 }
