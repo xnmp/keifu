@@ -129,6 +129,8 @@ impl App {
             menu_anchor: None,
             popup_rect: None,
             graph_chip_hits: Vec::new(),
+            graph_split_ratio: crate::mouse::clamp_split_ratio(ui_state.graph_split_ratio as i32),
+            dragging_divider: false,
             config,
             terminal_bg,
             pixel_graph: None,

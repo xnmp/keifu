@@ -134,19 +134,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = vertical[0];
     let status_area = vertical[1];
 
-    // Split main area: graph + detail
+    // Split main area: graph + detail. The graph gets `graph_split_ratio`%;
+    // the divider between them is drag-resizable.
+    let graph_ratio = app.graph_split_ratio;
+    let detail_ratio = 100u16.saturating_sub(graph_ratio);
     let (graph_area, detail_area) = if app.side_panel_layout {
-        // Side layout: detail (30%) on LEFT, graph (70%) on RIGHT
+        // Side layout: detail on LEFT, graph on RIGHT.
         let h = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .constraints([
+                Constraint::Percentage(detail_ratio),
+                Constraint::Percentage(graph_ratio),
+            ])
             .split(main_area);
         (h[1], h[0])
     } else {
-        // Default: graph (65%) on TOP, detail (35%) on BOTTOM
+        // Default: graph on TOP, detail on BOTTOM.
         let v = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .constraints([
+                Constraint::Percentage(graph_ratio),
+                Constraint::Percentage(detail_ratio),
+            ])
             .split(main_area);
         (v[0], v[1])
     };
@@ -169,6 +178,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         graph: graph_area,
         files: files_area,
         commit: commit_area,
+        main: main_area,
         side_layout: app.side_panel_layout,
     };
 

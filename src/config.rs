@@ -175,18 +175,35 @@ impl MetadataColumns {
     }
 }
 
+/// Default graph-pane share of the graph/detail split, as a percentage.
+pub const DEFAULT_GRAPH_SPLIT_RATIO: u16 = 65;
+
 /// Persistent UI state saved between sessions.
 ///
 /// Field order matters for TOML: scalar values must be emitted before the
 /// `[metadata_columns]` table, so keep `metadata_columns` last.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiState {
     pub side_panel_layout: bool,
     /// Cap on the graph column width in cells; `None` = uncapped (fit all lanes,
     /// the default). A cap wider than a later graph's needed width is uncapped.
     pub graph_width_cap: Option<usize>,
+    /// Graph-pane share of the graph/detail split, as a percentage (clamped
+    /// 20–80 when set by dragging the divider).
+    pub graph_split_ratio: u16,
     pub metadata_columns: MetadataColumns,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            side_panel_layout: false,
+            graph_width_cap: None,
+            graph_split_ratio: DEFAULT_GRAPH_SPLIT_RATIO,
+            metadata_columns: MetadataColumns::default(),
+        }
+    }
 }
 
 impl UiState {
@@ -379,6 +396,8 @@ mod tests {
     fn ui_state_defaults_all_metadata_columns_visible() {
         let state: UiState = toml::from_str("").unwrap();
         assert!(!state.side_panel_layout);
+        // Missing from an older state file → the sensible default, not 0.
+        assert_eq!(state.graph_split_ratio, DEFAULT_GRAPH_SPLIT_RATIO);
         assert!(state.metadata_columns.author);
         assert!(state.metadata_columns.hash);
         assert!(state.metadata_columns.date);
@@ -389,6 +408,7 @@ mod tests {
         let state = UiState {
             side_panel_layout: true,
             graph_width_cap: Some(8),
+            graph_split_ratio: 40,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -400,6 +420,7 @@ mod tests {
         let restored: UiState = toml::from_str(&serialized).unwrap();
         assert!(restored.side_panel_layout);
         assert_eq!(restored.graph_width_cap, Some(8));
+        assert_eq!(restored.graph_split_ratio, 40);
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);

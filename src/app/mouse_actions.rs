@@ -7,8 +7,8 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::mouse::{
-    chip_at, is_double_click, list_row_index, point_in, ChipTarget, LastClick,
-    DOUBLE_CLICK_WINDOW,
+    chip_at, divider_ratio, is_double_click, list_row_index, on_divider, point_in, ChipTarget,
+    LastClick, DOUBLE_CLICK_WINDOW,
 };
 
 /// The inner (border-inset) area of a panel, where its list rows render.
@@ -27,8 +27,26 @@ impl App {
             Action::MouseClick { col, row } => self.handle_mouse_click(col, row),
             Action::MouseRightClick { col, row } => self.handle_mouse_right_click(col, row),
             Action::MouseScroll { col, row, down } => self.handle_mouse_scroll(col, row, down),
-            // Divider drag and button-up are handled by later capabilities.
+            Action::MouseDrag { col, row } => self.handle_mouse_drag(col, row),
+            Action::MouseUp { .. } => self.handle_mouse_up(),
             _ => {}
+        }
+    }
+
+    /// Drag in progress: if the divider grab is active, resize the split live.
+    fn handle_mouse_drag(&mut self, col: u16, row: u16) {
+        if !self.dragging_divider {
+            return;
+        }
+        let ml = self.mouse_layout;
+        self.graph_split_ratio = divider_ratio(ml.main, ml.side_layout, col, row);
+    }
+
+    /// Button released: end a divider drag and persist the new ratio.
+    fn handle_mouse_up(&mut self) {
+        if self.dragging_divider {
+            self.dragging_divider = false;
+            self.save_ui_state();
         }
     }
 
@@ -54,6 +72,12 @@ impl App {
         }
 
         let ml = self.mouse_layout;
+        // Grabbing the divider between graph and detail starts a resize drag
+        // instead of selecting a row.
+        if on_divider(ml.graph, ml.side_layout, col, row) {
+            self.dragging_divider = true;
+            return;
+        }
         if point_in(ml.graph, col, row) {
             self.focused_panel = FocusedPanel::Graph;
             let inner = inner_rect(ml.graph);

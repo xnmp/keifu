@@ -63,6 +63,50 @@ pub fn chip_at(chips: &[ChipHit], line_col: u16) -> Option<&ChipHit> {
         .find(|c| line_col >= c.x_start && line_col < c.x_end)
 }
 
+/// Bounds on the graph/detail split ratio (graph-pane percentage).
+pub const MIN_SPLIT_RATIO: u16 = 20;
+pub const MAX_SPLIT_RATIO: u16 = 80;
+
+/// Clamp a split percentage into the allowed `[MIN_SPLIT_RATIO, MAX_SPLIT_RATIO]`.
+pub fn clamp_split_ratio(pct: i32) -> u16 {
+    pct.clamp(MIN_SPLIT_RATIO as i32, MAX_SPLIT_RATIO as i32) as u16
+}
+
+/// Whether `(col, row)` lands on the divider between the graph and detail
+/// panes (within ±1 cell). `graph` is the graph panel's rect. In the stacked
+/// layout the divider is the graph's bottom edge; in the side layout the graph
+/// sits on the right, so the divider is its left edge.
+pub fn on_divider(graph: Rect, side_layout: bool, col: u16, row: u16) -> bool {
+    if side_layout {
+        let within = row >= graph.y && row < graph.y + graph.height;
+        within && (col as i32 - graph.x as i32).abs() <= 1
+    } else {
+        let boundary = graph.y + graph.height;
+        let within = col >= graph.x && col < graph.x + graph.width;
+        within && (row as i32 - boundary as i32).abs() <= 1
+    }
+}
+
+/// The graph-pane percentage implied by dragging the divider to `(col, row)`
+/// within `main`, clamped to the allowed range. In the stacked layout the graph
+/// is on top, so its share grows as the divider moves down; in the side layout
+/// the graph is on the right, so its share grows as the divider moves left.
+pub fn divider_ratio(main: Rect, side_layout: bool, col: u16, row: u16) -> u16 {
+    if side_layout {
+        if main.width == 0 {
+            return clamp_split_ratio(MAX_SPLIT_RATIO as i32);
+        }
+        let from_right = (main.x + main.width).saturating_sub(col) as i32;
+        clamp_split_ratio(from_right * 100 / main.width as i32)
+    } else {
+        if main.height == 0 {
+            return clamp_split_ratio(MAX_SPLIT_RATIO as i32);
+        }
+        let from_top = row.saturating_sub(main.y) as i32;
+        clamp_split_ratio(from_top * 100 / main.height as i32)
+    }
+}
+
 /// A prior click, for double-click detection.
 #[derive(Debug, Clone, Copy)]
 pub struct LastClick {
@@ -131,6 +175,47 @@ mod tests {
         assert_eq!(clamp_menu_pos((79, 23), 20, 8, screen), (60, 16));
         // Menu larger than screen → clamps to 0.
         assert_eq!(clamp_menu_pos((10, 5), 100, 40, screen), (0, 0));
+    }
+
+    #[test]
+    fn clamp_split_ratio_bounds() {
+        assert_eq!(clamp_split_ratio(65), 65);
+        assert_eq!(clamp_split_ratio(5), MIN_SPLIT_RATIO);
+        assert_eq!(clamp_split_ratio(95), MAX_SPLIT_RATIO);
+        assert_eq!(clamp_split_ratio(-10), MIN_SPLIT_RATIO);
+    }
+
+    #[test]
+    fn on_divider_detects_the_boundary() {
+        // Stacked: graph at y=0, height 10 → divider at row 10, ±1.
+        let graph = rect(0, 0, 40, 10);
+        assert!(on_divider(graph, false, 5, 10));
+        assert!(on_divider(graph, false, 5, 9));
+        assert!(on_divider(graph, false, 5, 11));
+        assert!(!on_divider(graph, false, 5, 12));
+        assert!(!on_divider(graph, false, 41, 10), "outside the columns");
+        // Side: graph on the right at x=20 → divider at col 20, ±1.
+        let graph = rect(20, 0, 30, 12);
+        assert!(on_divider(graph, true, 20, 5));
+        assert!(on_divider(graph, true, 19, 5));
+        assert!(on_divider(graph, true, 21, 5));
+        assert!(!on_divider(graph, true, 23, 5));
+        assert!(!on_divider(graph, true, 20, 20), "outside the rows");
+    }
+
+    #[test]
+    fn divider_ratio_maps_position_to_graph_share() {
+        // Stacked: main y=0 height 100. Dragging to row 40 → graph gets 40%.
+        let main = rect(0, 0, 100, 100);
+        assert_eq!(divider_ratio(main, false, 10, 40), 40);
+        assert_eq!(divider_ratio(main, false, 10, 65), 65);
+        // Clamped at the extremes.
+        assert_eq!(divider_ratio(main, false, 10, 5), MIN_SPLIT_RATIO);
+        assert_eq!(divider_ratio(main, false, 10, 95), MAX_SPLIT_RATIO);
+        // Side: main x=0 width 100. Graph on the right; dragging to col 30
+        // leaves 70 columns to the right → graph 70%.
+        assert_eq!(divider_ratio(main, true, 30, 10), 70);
+        assert_eq!(divider_ratio(main, true, 40, 10), 60);
     }
 
     #[test]

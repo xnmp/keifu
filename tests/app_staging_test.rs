@@ -153,6 +153,8 @@ fn make_base_app(
         menu_anchor: None,
         popup_rect: None,
         graph_chip_hits: Vec::new(),
+        graph_split_ratio: 65,
+        dragging_divider: false,
         config: Config::default(),
         terminal_bg: None,
         pixel_graph: None,

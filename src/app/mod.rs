@@ -422,6 +422,8 @@ pub struct MouseLayout {
     pub graph: ratatui::layout::Rect,
     pub files: ratatui::layout::Rect,
     pub commit: ratatui::layout::Rect,
+    /// The graph+detail area, for computing divider-drag ratios.
+    pub main: ratatui::layout::Rect,
     /// True when graph is on the right and detail on the left (side layout).
     pub side_layout: bool,
 }
@@ -701,6 +703,10 @@ pub struct App {
     /// Clickable chip regions per graph row (indexed by filtered row position),
     /// recorded each frame for badge/branch-chip clicks.
     pub graph_chip_hits: Vec<Vec<crate::mouse::ChipHit>>,
+    /// Graph-pane share of the graph/detail split, as a percentage (20–80).
+    pub graph_split_ratio: u16,
+    /// Whether the divider between graph and detail is being dragged.
+    pub dragging_divider: bool,
 
     // Config
     pub config: Config,
@@ -893,6 +899,7 @@ impl App {
         UiState {
             side_panel_layout: self.side_panel_layout,
             graph_width_cap: self.graph_width_cap,
+            graph_split_ratio: self.graph_split_ratio,
             metadata_columns: self.metadata_columns,
         }
         .save();
