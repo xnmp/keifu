@@ -307,6 +307,8 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("filter ", desc_style));
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
+                            spans.push(Span::styled(" ? ", key_style));
+                            spans.push(Span::styled("help", desc_style));
                         }
                         FocusedPanel::CommitDetail => {
                             spans.push(Span::styled(" ↑↓ ", key_style));
@@ -322,7 +324,9 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                             spans.push(Span::styled(" Esc ", key_style));
-                            spans.push(Span::styled("graph", desc_style));
+                            spans.push(Span::styled("graph ", desc_style));
+                            spans.push(Span::styled(" ? ", key_style));
+                            spans.push(Span::styled("help", desc_style));
                         }
                     }
                     }
