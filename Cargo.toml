@@ -15,6 +15,12 @@ categories = ["command-line-utilities", "development-tools"]
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
 
+# Pixel-rendered graph (terminal image protocols). Default features pull in
+# chafa (a C library needing pkg-config), which we don't use — only the Kitty
+# and iTerm2 protocols, which are pure Rust.
+ratatui-image = { version = "9", default-features = false, features = ["crossterm", "image-defaults"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Git — network transports (https/ssh, and with them openssl-sys) are
 # unused: fetch/push shell out to the git CLI (see git/operations.rs).
 git2 = { version = "0.19", default-features = false }

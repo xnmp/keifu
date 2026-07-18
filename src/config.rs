@@ -18,14 +18,33 @@ pub struct Config {
 pub struct UiConfig {
     /// Theme name: "dark" or "light"
     pub theme: String,
+    /// How the commit graph lines are rendered.
+    pub graph_renderer: GraphRenderer,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: "auto".to_string(),
+            graph_renderer: GraphRenderer::default(),
         }
     }
+}
+
+/// Commit graph rendering strategy.
+///
+/// - `Auto`: use pixel rendering when the terminal supports a graphics protocol,
+///   otherwise fall back to Unicode box-drawing glyphs.
+/// - `Unicode`: always use box-drawing glyphs.
+/// - `Pixel`: force pixel rendering; silently falls back to Unicode when no
+///   graphics protocol is available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GraphRenderer {
+    #[default]
+    Auto,
+    Unicode,
+    Pixel,
 }
 
 /// Auto-refresh configuration
@@ -228,6 +247,35 @@ mod tests {
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert!(!cfg.refresh.auto_refresh);
         assert_eq!(cfg.ui.theme, "auto");
+    }
+
+    #[test]
+    fn graph_renderer_defaults_to_auto() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert_eq!(cfg.ui.graph_renderer, GraphRenderer::Auto);
+    }
+
+    #[test]
+    fn graph_renderer_parses_each_variant() {
+        for (raw, expected) in [
+            ("auto", GraphRenderer::Auto),
+            ("unicode", GraphRenderer::Unicode),
+            ("pixel", GraphRenderer::Pixel),
+        ] {
+            let toml_str = format!("[ui]\ngraph_renderer = \"{raw}\"\n");
+            let cfg: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(cfg.ui.graph_renderer, expected, "variant {raw}");
+        }
+    }
+
+    #[test]
+    fn graph_renderer_invalid_value_fails_to_parse() {
+        let toml_str = r#"
+            [ui]
+            graph_renderer = "sixel"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
     }
 
     #[test]

@@ -7,6 +7,15 @@ All items implemented in the `feat/panel-system-and-features` branch.
 
 ## Graph Pane
 
+### [DONE] 2026-07-18 Pixel-rendered graph lines
+Continuous VSCode-style graph lines via terminal image protocols (Kitty/iTerm2),
+replacing gappy box-drawing glyphs. New `ui/graph_pixels.rs` (pure, deterministic
+rasterizer + `RowSpec` cache + `PixelGraphState`), overlaid in `ui/mod.rs` on a
+blanked graph column so text layout is unchanged and selection highlight shows
+through transparent images. Auto-detected at startup; `ui.graph_renderer` config
+(`auto`/`unicode`/`pixel`) with Unicode fallback when no protocol is available.
+See `docs/architecture.md`.
+
 ### [DONE] Commit Options Menu
 Enter on a commit opens a full options menu with: checkout, create branch, merge into current branch (if at branch head), cherry-pick, rebase, reset (soft/mixed/hard), add tag, revert, copy commit hash to clipboard, push (if at branch head).
 

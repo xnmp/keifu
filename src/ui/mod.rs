@@ -7,6 +7,7 @@ pub mod dialog;
 pub mod file_diff_view;
 pub mod file_icons;
 pub mod files_pane;
+pub mod graph_pixels;
 pub mod graph_view;
 pub mod help_popup;
 pub mod search_dropdown;
@@ -152,12 +153,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Pre-render pass: compute layout metrics that update App scroll state
     let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
 
+    // Pixel graph pre-pass: build the row specs and transmit their protocols
+    // (needs &mut app) before the immutable borrow taken by the graph widget.
+    let pixel_specs = if app.pixel_graph.is_some() {
+        let specs = graph_view::build_pixel_row_specs(app, &theme);
+        if let Some(pg) = app.pixel_graph.as_mut() {
+            for spec in &specs {
+                pg.ensure_protocol(spec);
+            }
+        }
+        Some(specs)
+    } else {
+        None
+    };
+    let pixel_mode = pixel_specs.is_some();
+
     // Render widgets
     frame.render_stateful_widget(
-        GraphViewWidget::new(app, graph_area.width, &theme),
+        GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode),
         graph_area,
         &mut app.graph_nav.graph_list_state,
     );
+    if let Some(specs) = &pixel_specs {
+        overlay_pixel_graph(frame, app, graph_area, specs);
+    }
     frame.render_stateful_widget(
         FilesPaneWidget::new(app, &theme),
         files_area,
@@ -327,6 +346,49 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             );
         }
         _ => {}
+    }
+}
+
+/// Overlay pixel-rendered graph images on top of the (blank) graph column.
+///
+/// Runs after the list widget has rendered and written the current scroll
+/// offset back into `graph_list_state`. Each visible row's image is placed at
+/// the leading-space column so it lines up with the spaces emitted by
+/// `render_graph_line` in pixel mode. Images are transparent, so the list's
+/// selection highlight shows through.
+fn overlay_pixel_graph(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    specs: &[graph_pixels::RowSpec],
+) {
+    use ratatui_image::Image;
+    if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
+        return;
+    }
+    let Some(pg) = &app.pixel_graph else {
+        return;
+    };
+    let inner_x = area.x + 1;
+    let inner_y = area.y + 1;
+    let inner_h = area.height.saturating_sub(2);
+    let inner_w = area.width.saturating_sub(2);
+    let offset = app.graph_nav.graph_list_state.offset();
+    for row in 0..inner_h {
+        let idx = offset + row as usize;
+        let Some(spec) = specs.get(idx) else {
+            break;
+        };
+        let Some(proto) = pg.get(spec) else {
+            continue;
+        };
+        // +1 for the leading space emitted before the graph glyphs.
+        let w = (spec.cells.len() as u16).min(inner_w.saturating_sub(1));
+        if w == 0 {
+            continue;
+        }
+        let rect = Rect::new(inner_x + 1, inner_y + row, w, 1);
+        frame.render_widget(Image::new(proto), rect);
     }
 }
 

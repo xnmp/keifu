@@ -511,6 +511,11 @@ pub struct App {
     // Used to derive theme-adaptive structural colors. `None` when the
     // terminal doesn't report it (e.g. headless tests).
     pub terminal_bg: Option<(u8, u8, u8)>,
+
+    // Pixel-rendered graph state. `Some` only when a graphics protocol was
+    // detected at startup and pixel rendering is enabled; `None` in tests and
+    // when falling back to Unicode glyphs.
+    pub pixel_graph: Option<crate::ui::graph_pixels::PixelGraphState>,
 }
 
 impl App {

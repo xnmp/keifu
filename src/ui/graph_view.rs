@@ -93,8 +93,34 @@ pub struct GraphViewWidget<'a> {
     theme: &'a Theme,
 }
 
+/// Build one `RowSpec` per list item (respecting the active commit filter), in
+/// the same order the graph widget lists them, so the overlay can index into it
+/// by visible-row position. Neighbours follow visible order.
+pub fn build_pixel_row_specs(
+    app: &App,
+    theme: &Theme,
+) -> Vec<crate::ui::graph_pixels::RowSpec> {
+    use crate::ui::graph_pixels::build_row_spec;
+    let has_filter = !app.commit_filter.is_empty();
+    let nodes: Vec<&GraphNode> = if has_filter {
+        app.visible_commit_indices
+            .iter()
+            .map(|&idx| &app.graph_layout.nodes[idx])
+            .collect()
+    } else {
+        app.graph_layout.nodes.iter().collect()
+    };
+    (0..nodes.len())
+        .map(|i| {
+            let prev = i.checked_sub(1).map(|p| nodes[p]);
+            let next = nodes.get(i + 1).copied();
+            build_row_spec(prev, nodes[i], next, theme)
+        })
+        .collect()
+}
+
 impl<'a> GraphViewWidget<'a> {
-    pub fn new(app: &App, width: u16, theme: &'a Theme) -> Self {
+    pub fn new(app: &App, width: u16, theme: &'a Theme, pixel_mode: bool) -> Self {
         let max_lane = app.graph_layout.max_lane;
         let inner_width = width.saturating_sub(2) as usize;
         let selected_branch_name = app.selected_branch_name();
@@ -136,6 +162,7 @@ impl<'a> GraphViewWidget<'a> {
                 selected_branch_name,
                 theme,
                 now,
+                pixel_mode,
             );
             items.push(ListItem::new(line));
         }
@@ -442,6 +469,7 @@ fn render_graph_line<'a>(
     selected_branch_name: Option<&str>,
     theme: &Theme,
     now: DateTime<Local>,
+    pixel_mode: bool,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -449,6 +477,48 @@ fn render_graph_line<'a>(
     spans.push(Span::raw(" "));
     let mut left_width: usize = 1;
 
+    // Pixel mode: the graph column is painted by an image overlay, so emit
+    // blank space of the exact same width (one column per cell, HEAD star
+    // included) to keep the text layout identical.
+    if pixel_mode {
+        for _ in &node.cells {
+            spans.push(Span::raw(" "));
+            left_width += 1;
+        }
+    } else {
+        left_width = render_cells_unicode(&mut spans, node, theme, left_width);
+    }
+
+    // Padding to align graph width (display width based)
+    let graph_display_width = (max_lane + 1) * 2;
+    if left_width < graph_display_width + 1 {
+        // +1 accounts for the start marker
+        let padding = graph_display_width + 1 - left_width;
+        spans.push(Span::raw(" ".repeat(padding)));
+        left_width += padding;
+    }
+
+    render_graph_line_tail(
+        spans,
+        left_width,
+        node,
+        is_selected,
+        is_marked,
+        total_width,
+        selected_branch_name,
+        theme,
+        now,
+    )
+}
+
+/// Render the Unicode box-drawing glyphs for a row's cells into `spans`,
+/// returning the updated `left_width`.
+fn render_cells_unicode(
+    spans: &mut Vec<Span<'_>>,
+    node: &GraphNode,
+    theme: &Theme,
+    mut left_width: usize,
+) -> usize {
     // Render cells.
     //
     // The HEAD commit is drawn with a width-2 star emoji so it stands out. To
@@ -520,15 +590,23 @@ fn render_graph_line<'a>(
         idx += 1;
     }
 
-    // Padding to align graph width (display width based)
-    let graph_display_width = (max_lane + 1) * 2;
-    if left_width < graph_display_width + 1 {
-        // +1 accounts for the start marker
-        let padding = graph_display_width + 1 - left_width;
-        spans.push(Span::raw(" ".repeat(padding)));
-        left_width += padding;
-    }
+    left_width
+}
 
+/// Render everything after the graph column: separator, compare marker,
+/// branch/tag/stash labels, message, and the right-aligned metadata block.
+#[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
+fn render_graph_line_tail<'a>(
+    mut spans: Vec<Span<'a>>,
+    mut left_width: usize,
+    node: &GraphNode,
+    is_selected: bool,
+    is_marked: bool,
+    total_width: usize,
+    selected_branch_name: Option<&str>,
+    theme: &Theme,
+    now: DateTime<Local>,
+) -> Line<'a> {
     // Separator between graph and commit info
     spans.push(Span::raw(" "));
     left_width += 1;

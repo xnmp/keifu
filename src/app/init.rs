@@ -109,6 +109,7 @@ impl App {
             debug_keys: false,
             config,
             terminal_bg,
+            pixel_graph: None,
         })
     }
 

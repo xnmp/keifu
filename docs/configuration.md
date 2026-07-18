@@ -41,3 +41,30 @@ auto_fetch = false
 ```
 
 You can still manually refresh with `R` and fetch with `f`.
+
+## UI
+
+```toml
+[ui]
+# Theme: "auto" (detect from terminal background), "dark", or "light"
+theme = "auto"
+
+# Commit graph line rendering:
+#   "auto"    — pixel rendering when the terminal supports a graphics protocol,
+#               otherwise Unicode box-drawing glyphs (default)
+#   "unicode" — always use Unicode glyphs
+#   "pixel"   — force pixel rendering (falls back to Unicode if unsupported)
+graph_renderer = "auto"
+```
+
+### Options
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `theme` | string | `"auto"` | `"auto"`, `"dark"`, or `"light"` |
+| `graph_renderer` | string | `"auto"` | `"auto"`, `"unicode"`, or `"pixel"` |
+
+Pixel rendering draws the graph lines as transparent images via the terminal's
+image protocol (detected once at startup). It requires a graphics-capable
+terminal such as WezTerm, Kitty, or iTerm2; on any other terminal keifu
+silently uses the Unicode renderer.

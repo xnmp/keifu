@@ -94,3 +94,46 @@ case (a file with only unstaged changes, so index == HEAD) every direction
 applies cleanly. Untracked files have no index/HEAD entry, so stage-hunk falls
 back to a whole-file `git add` (the combined diff is a single all-additions hunk
 == the whole file) and unstage/discard-hunk defer to the files pane.
+
+## Pixel-Rendered Graph (2026-07-18)
+
+**Decision:** Draw graph lines as transparent RGBA images via a terminal
+graphics protocol, overlaid on top of a blanked graph column, instead of
+box-drawing glyphs. Off by default-to-Unicode unless a protocol is detected.
+
+**Why:** Box-drawing glyphs leave visible gaps between rows (a `│` never quite
+touches the cell above/below, `●` is barely wider than the line), so the graph
+reads as dashed rather than continuous. Rasterizing each row lets lines touch
+cell edges exactly and dots be visibly wider than lines, matching VSCode Git
+Graph.
+
+**How it works:**
+1. `PixelGraphState::new()` (`ui/graph_pixels.rs`) calls
+   `ratatui_image::Picker::from_query_stdio()` once at startup — after raw mode
+   is enabled but before the event loop polls, so crossterm's reader doesn't eat
+   the terminal's query reply. It returns `None` (→ Unicode fallback) if the
+   query fails or only the Halfblocks fallback is available. `config.ui.graph_renderer`
+   gates this: `Unicode` skips detection entirely; `Auto`/`Pixel` attempt it.
+2. Each visible row is described by a `RowSpec` — a fully-resolved, hashable list
+   of `PixelCell`s (shape + concrete RGB, resolved from the theme; commit dots
+   carry `connect_up`/`connect_down` bits computed from whether the adjacent
+   *visible* rows' cells touch the shared edge). `build_row_spec` takes the
+   previous/next visible nodes (adjacency follows `visible_commit_indices` in
+   filtered mode, not raw node order).
+3. `rasterize_row` is a pure, deterministic function drawing lines (distance-based
+   anti-aliasing), quadratic-bezier arcs for branch/merge corners, and commit
+   dots (filled disc / ring for HEAD / hollow for uncommitted) onto a transparent
+   canvas at exactly `n_cells * cell_w × cell_h` pixels.
+4. Protocols are cached in a `HashMap<RowSpec, Protocol>` (cleared wholesale past
+   1024 entries); identical rows reuse a transmitted image.
+5. In `ui/mod.rs::draw`, a pre-pass (needs `&mut app`) builds all row specs and
+   ensures their protocols before the graph widget's immutable borrow. In pixel
+   mode `render_graph_line` emits blank spaces of the exact same width as the
+   glyphs (HEAD star included) so text layout is unchanged, then
+   `overlay_pixel_graph` renders each row's `Image` at the leading-space column
+   using the scroll offset the list widget wrote back into `graph_list_state`.
+   Images are transparent so the list's selection highlight shows through.
+
+**Color mapping:** theme lane colors may be named ANSI variants, not RGB.
+`color_to_rgb` maps named/Indexed colors to real RGB (standard xterm values,
+xterm-256 palette formula) so rasterization has concrete colors.

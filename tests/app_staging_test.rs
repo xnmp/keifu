@@ -134,6 +134,7 @@ fn make_base_app(
         debug_keys: false,
         config: Config::default(),
         terminal_bg: None,
+        pixel_graph: None,
     }
 }
 

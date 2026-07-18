@@ -38,6 +38,13 @@ fn main() -> Result<()> {
     // Initialize terminal
     let mut terminal = tui::init()?;
 
+    // Detect a terminal graphics protocol for pixel-rendered graph lines. This
+    // must run after raw mode is enabled (above) and before the event loop
+    // starts polling, so crossterm's reader doesn't swallow the query reply.
+    if app.config.ui.graph_renderer != keifu::config::GraphRenderer::Unicode {
+        app.pixel_graph = keifu::ui::graph_pixels::PixelGraphState::new();
+    }
+
     let mut needs_render = true;
     let mut render_deadline: Option<Instant> = None;
 
