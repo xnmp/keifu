@@ -979,31 +979,19 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     set.insert(sel);
 
     // DOWN: follow the first parent (which inherits the commit's lane) as long
-    // as it's visible in the graph.
+    // as it's visible in the graph. An off-graph parent ends the walk: lanes
+    // are only ever assigned loaded commits, so no rendered edge can reference
+    // it and including it would change nothing.
     let mut cur = sel;
     while let Some(&row) = oid_row.get(&cur) {
         let first_parent = layout.nodes[row]
             .commit
             .as_ref()
-            .and_then(|c| c.parent_oids.first().copied());
+            .and_then(|c| c.parent_oids.first().copied())
+            .filter(|p| oid_row.contains_key(p));
         match first_parent {
-            // Visible parent: keep walking the branch line down.
-            Some(p) if oid_row.contains_key(&p) => {
-                if set.insert(p) {
-                    cur = p;
-                } else {
-                    break;
-                }
-            }
-            // Terminal invisible parent: the branch line continues below the
-            // loaded/filtered window. Insert it anyway so the trunk's bottom-edge
-            // pipe — whose edge is `(visible_child, this_parent)` — still counts
-            // both endpoints as lineage and stays lit instead of wrongly dimming.
-            Some(p) => {
-                set.insert(p);
-                break;
-            }
-            None => break,
+            Some(p) if set.insert(p) => cur = p,
+            _ => break,
         }
     }
 
@@ -1320,17 +1308,17 @@ mod tests {
     }
 
     #[test]
-    fn terminal_parent_rule_keeps_bottom_edge_pipe_traced() {
-        let (layout, [_a, b, c, _f1, _f2, z]) = trace_fixture();
-        let lineage = lineage_oids(&layout, row_of(&layout, b));
-
-        // The DOWN walk hits C's off-graph first parent Z and stops — but the
-        // terminal-parent rule inserts Z anyway, so a bottom-edge trunk pipe
-        // whose edge is (C, Z) still counts both endpoints as lineage.
-        assert!(lineage.contains(&z), "terminal invisible parent Z joins the lineage");
-        assert!(
-            cell_is_traced((Some((c, z)), None), &lineage),
-            "a trunk pipe into an off-graph parent stays lit, not dimmed"
-        );
+    fn off_graph_parent_never_appears_in_any_rendered_edge() {
+        // Lanes are only ever assigned loaded commits, so a commit whose first
+        // parent is off-graph must not produce a cell edge referencing it —
+        // the lineage walk can safely stop at the graph boundary.
+        let (layout, [_a, _b, _c, _f1, _f2, z]) = trace_fixture();
+        let references_z = layout.nodes.iter().any(|n| {
+            n.cell_oids.iter().any(|(p, s)| {
+                p.is_some_and(|(c, pa)| c == z || pa == z)
+                    || s.is_some_and(|(c, pa)| c == z || pa == z)
+            })
+        });
+        assert!(!references_z, "no rendered edge may reference off-graph Z");
     }
 }
