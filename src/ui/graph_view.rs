@@ -384,15 +384,27 @@ pub fn build_pixel_row_specs(
         .collect()
 }
 
-/// Set `dim` on every pixel cell whose edge OIDs are not in `lineage`.
+/// Set `dim` on every pixel cell whose edge OIDs are not in `lineage`. A
+/// `HorizontalPipe` crossing carries two independent edges — the horizontal
+/// stroke (primary OID, drawn in the cell's `secondary` color) and the
+/// vertical lane crossed underneath (secondary OID, the cell's `color`) — so
+/// each direction is dimmed from its own edge rather than all-or-nothing.
 fn apply_trace_dim(
     cells: &mut [crate::ui::graph_pixels::PixelCell],
     oids: &[crate::git::graph::CellOids],
     lineage: &std::collections::HashSet<git2::Oid>,
 ) {
+    use crate::ui::graph_pixels::CellShape;
+    let traced = |o: Option<git2::Oid>| o.is_some_and(|o| lineage.contains(&o));
     for (i, pc) in cells.iter_mut().enumerate() {
-        let cell_oids = oids.get(i).copied().unwrap_or((None, None));
-        pc.dim = !crate::git::graph::cell_is_traced(cell_oids, lineage);
+        let (primary, secondary) = oids.get(i).copied().unwrap_or((None, None));
+        if pc.shape == CellShape::HorizontalPipe {
+            pc.dim_secondary = !traced(primary);
+            pc.dim = !traced(secondary);
+        } else {
+            pc.dim = !crate::git::graph::cell_is_traced((primary, secondary), lineage);
+            pc.dim_secondary = pc.dim;
+        }
     }
 }
 

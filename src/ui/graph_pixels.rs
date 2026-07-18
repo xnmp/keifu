@@ -52,15 +52,19 @@ pub enum CellShape {
 
 /// A fully-resolved cell: shape plus concrete RGB colors. `secondary` is only
 /// meaningful for `HorizontalPipe` (the horizontal stroke color); elsewhere it
-/// equals `color`. `dim` fades the cell to a low alpha when branch tracing is
-/// active and this cell is not on the selected commit's lineage. It's part of
-/// the hash/eq, so a dimmed variant is a distinct spec and caches separately.
+/// equals `color`. `dim` fades the primary stroke to a low alpha when branch
+/// tracing is active and its edge is not on the selected commit's lineage;
+/// `dim_secondary` does the same for the secondary stroke (`HorizontalPipe`'s
+/// horizontal), so a crossing can light one direction while the other fades.
+/// For every other shape `dim_secondary` mirrors `dim`. Both are part of the
+/// hash/eq, so a dimmed variant is a distinct spec and caches separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PixelCell {
     pub shape: CellShape,
     pub color: [u8; 3],
     pub secondary: [u8; 3],
     pub dim: bool,
+    pub dim_secondary: bool,
 }
 
 /// Alpha applied to non-traced graph cells while branch tracing is active.
@@ -186,6 +190,7 @@ fn solid(shape: CellShape, rgb: [u8; 3]) -> PixelCell {
         color: rgb,
         secondary: rgb,
         dim: false,
+        dim_secondary: false,
     }
 }
 
@@ -219,6 +224,7 @@ fn cell_to_pixel(
             color: rgb(p),
             secondary: rgb(h),
             dim: false,
+            dim_secondary: false,
         },
         CellType::Commit(ci) => {
             let connect_up = above
@@ -524,11 +530,21 @@ fn draw_cells(
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
         let color = cell.color;
+        // A crossing routes its two strokes independently, so tracing can
+        // light one direction while the other fades; the traced stroke ends
+        // up on the bright layer, composited over the faded one.
+        if cell.shape == CellShape::HorizontalPipe {
+            let h = if cell.dim_secondary { &mut *dim } else { &mut *bright };
+            draw_segment(h, ox, cy, ox + cw, cy, half, cell.secondary);
+            let v = if cell.dim { &mut *dim } else { &mut *bright };
+            draw_segment(v, cx, 0.0, cx, ch, half, color);
+            continue;
+        }
         // Non-traced cells rasterize onto the dim layer, which rasterize_row
         // fades as a whole once drawing is done.
         let canvas: &mut Canvas = if cell.dim { dim } else { bright };
         match cell.shape {
-            CellShape::Empty => {}
+            CellShape::Empty | CellShape::HorizontalPipe => {}
             CellShape::Pipe => draw_segment(canvas, cx, 0.0, cx, ch, half, color),
             CellShape::Horizontal => draw_segment(canvas, ox, cy, ox + cw, cy, half, color),
             CellShape::BranchRight => {
@@ -542,10 +558,6 @@ fn draw_cells(
             }
             CellShape::MergeLeft => {
                 draw_bezier(canvas, (cx, 0.0), (cx, cy), (ox, cy), half, color)
-            }
-            CellShape::HorizontalPipe => {
-                draw_segment(canvas, ox, cy, ox + cw, cy, half, cell.secondary);
-                draw_segment(canvas, cx, 0.0, cx, ch, half, color);
             }
             CellShape::TeeRight => {
                 draw_segment(canvas, cx, 0.0, cx, ch, half, color);
@@ -938,6 +950,27 @@ mod tests {
             max_a <= cap,
             "dimmed row alpha {max_a} exceeds the {cap} cap"
         );
+    }
+
+    #[test]
+    fn horizontal_pipe_dims_each_direction_independently() {
+        // A crossing where the vertical pipe is off-lineage but the horizontal
+        // stroke is traced: each direction fades from its own edge instead of
+        // the whole cell being all-or-nothing.
+        let mut cross = solid(CellShape::HorizontalPipe, [255, 0, 0]);
+        cross.secondary = [0, 255, 0];
+        cross.dim = true; // vertical pipe off-lineage
+        cross.dim_secondary = false; // horizontal stroke traced
+        let img = rasterize_row(&spec(vec![cross]), CW, CH);
+        let cap = (TRACE_DIM_ALPHA * 255.0).round() as u8;
+        let cx = PAD_X + CW / 2;
+        let mid = CH / 2;
+        // Vertical-only pixel (top edge, centre column): dimmed.
+        let v = alpha(&img, cx, 0);
+        assert!(v > 0 && v <= cap, "vertical stroke should be dim, got {v}");
+        // Horizontal-only pixel (left edge, mid row): full strength.
+        let h = alpha(&img, PAD_X, mid);
+        assert!(h > 200, "horizontal stroke should stay bright, got {h}");
     }
 
     #[test]
