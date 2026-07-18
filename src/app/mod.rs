@@ -742,6 +742,10 @@ pub struct App {
     /// Clickable chip regions per graph row (indexed by filtered row position),
     /// recorded each frame for badge/branch-chip clicks.
     pub graph_chip_hits: Vec<Vec<crate::mouse::ChipHit>>,
+    /// Clickable status-bar key hints: each hint's absolute cell rect paired with
+    /// the `Action` pressing its key would dispatch. Rebuilt every frame by the
+    /// status bar so a click reflects the current mode/panel's hints.
+    pub status_hints: Vec<(ratatui::layout::Rect, Action)>,
     /// Graph-pane share of the graph/detail split, as a percentage (20–80).
     pub graph_split_ratio: u16,
     /// Whether the divider between graph and detail is being dragged.

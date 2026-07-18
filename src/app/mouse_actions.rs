@@ -55,6 +55,14 @@ impl App {
         let double = is_double_click(self.last_click, col, row, now, DOUBLE_CLICK_WINDOW);
         self.last_click = Some(LastClick { col, row, at: now });
 
+        // Status-bar key hints are clickable in every mode: a hit dispatches the
+        // same Action pressing the key would. Checked before popup routing so a
+        // hint click isn't swallowed as a click-outside dismissal.
+        if let Some(action) = crate::mouse::region_at(&self.status_hints, col, row).cloned() {
+            let _ = self.handle_action(action);
+            return;
+        }
+
         // A popup is open: route the click to it rather than the panels behind.
         if !matches!(self.mode, AppMode::Normal) {
             if let Some(rect) = self.popup_rect {
