@@ -60,8 +60,34 @@ mod file_history_actions;
 mod palette_actions;
 mod undo_actions;
 
+/// Which mechanism handled a successful clipboard copy, and whether the
+/// payload had to be truncated (OSC 52 fallback only, which some terminals
+/// cap around 100KB of base64).
+struct ClipboardOutcome {
+    via_osc52: bool,
+    truncated: bool,
+}
+
+impl ClipboardOutcome {
+    /// Short suffix to append to status-line feedback. Empty for the common
+    /// case (a shell clipboard tool handled it) so existing messages are
+    /// unchanged; only decorated when the OSC 52 fallback was used.
+    fn suffix(&self) -> &'static str {
+        match (self.via_osc52, self.truncated) {
+            (false, _) => "",
+            (true, false) => " (via OSC 52)",
+            (true, true) => " (via OSC 52, truncated)",
+        }
+    }
+}
+
 /// Copy text to system clipboard using platform-specific commands
-fn copy_to_clipboard(text: &str) -> Result<()> {
+/// (xclip/xsel/wl-copy/pbcopy). If none of those tools are available, falls
+/// back to emitting an OSC 52 escape sequence directly to the terminal —
+/// this works over SSH and needs no external binary, but not every terminal
+/// emulator supports it, which is why it's a fallback rather than the
+/// primary mechanism.
+fn copy_to_clipboard(text: &str) -> Result<ClipboardOutcome> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -84,12 +110,24 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
                 let _ = stdin.write_all(text.as_bytes());
             }
             if child.wait().is_ok() {
-                return Ok(());
+                return Ok(ClipboardOutcome {
+                    via_osc52: false,
+                    truncated: false,
+                });
             }
         }
     }
 
-    anyhow::bail!("No clipboard tool found (install xclip, xsel, or wl-copy)")
+    // No shell clipboard tool found (missing or every candidate failed) —
+    // fall back to OSC 52. This is called from an action handler, which
+    // runs after the frame has been drawn and before the next one, so
+    // writing raw escape bytes to stdout here doesn't corrupt the ratatui
+    // frame.
+    let truncated = crate::tui::copy_to_clipboard_osc52(text)?;
+    Ok(ClipboardOutcome {
+        via_osc52: true,
+        truncated,
+    })
 }
 
 /// Open a URL in the user's default browser, detached so the TUI's terminal

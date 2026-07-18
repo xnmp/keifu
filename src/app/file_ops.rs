@@ -416,7 +416,9 @@ impl App {
             return;
         };
         match copy_to_clipboard(&path) {
-            Ok(()) => self.set_message(format!("Copied path '{}'", path)),
+            Ok(outcome) => {
+                self.set_message(format!("Copied path '{}'{}", path, outcome.suffix()))
+            }
             Err(e) => self.set_message(format!("Clipboard error: {}", e)),
         }
     }

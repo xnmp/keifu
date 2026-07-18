@@ -53,7 +53,7 @@ Event loop in `main.rs`: render frame → poll input → `map_key_to_action()` �
 - **Two-tier diff caching.** Quick cache (synchronous, file names from `diff.deltas()`) shows instantly. Full cache (async, line stats) loads with 120ms debounce. `cached_diff_or_quick()` returns the best available.
 - **`refresh_after_file_op()`** — After file operations (stage/gitignore/archive/trash), uses `invalidate_uncommitted_diff_cache()` (keeps stale data visible) + immediate quick-diff recomputation to avoid UI flash.
 - **TextEditor lives on `App.commit_editor`**, not in a mode variant, so commit messages survive panel focus changes.
-- **Clipboard uses shell commands** (`xclip`/`xsel`/`wl-copy`/`pbcopy`) to avoid openssl-sys build issues.
+- **Clipboard uses shell commands** (`xclip`/`xsel`/`wl-copy`/`pbcopy`) to avoid openssl-sys build issues, falling back to an OSC 52 escape sequence (`tui::copy_to_clipboard_osc52`) when no shell tool is found.
 - **git2 ignore cache** — `repo.clear_ignore_rules()` is called before status queries so `.gitignore` edits take effect without restarting.
 
 ### AppMode variants

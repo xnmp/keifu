@@ -166,3 +166,13 @@ true, a misleading in-progress-operation hint shown in status_bar.rs outside
 the files panel where the keys actually work, and added missing entries for
 folder-toggle and commit-filter); refreshed README.md/README_JA.md and
 vscode-parity.md to match current behavior.
+
+### [DONE] 2026-07-19 OSC 52 clipboard fallback
+`copy_to_clipboard` still tries xclip/xsel/wl-copy/pbcopy first; if none is
+found, falls back to `tui::copy_to_clipboard_osc52`, which writes
+`\x1b]52;c;<base64>\x07` straight to stdout (works headless/over SSH, no
+external binary). Base64 is a small hand-rolled encoder, not a new
+dependency. Payload capped at 100,000 base64 chars (typical terminal limit),
+truncated on a 3-byte boundary if oversized. Status-line messages append
+"(via OSC 52[, truncated])" when the fallback fires, unchanged otherwise.
+See `docs/architecture.md` "Clipboard via Shell Commands" for details.

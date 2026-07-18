@@ -543,7 +543,8 @@ impl App {
                 if let Some(oid) = commit_oid {
                     let hash = oid.to_string();
                     match copy_to_clipboard(&hash) {
-                        Ok(()) => self.set_message(format!("Copied {}", &hash[..7])),
+                        Ok(outcome) => self
+                            .set_message(format!("Copied {}{}", &hash[..7], outcome.suffix())),
                         Err(e) => self.set_message(format!("Clipboard error: {}", e)),
                     }
                 }
@@ -555,7 +556,10 @@ impl App {
                     .map(|c| c.full_message.clone())
                 {
                     match copy_to_clipboard(&msg) {
-                        Ok(()) => self.set_message("Copied commit message"),
+                        Ok(outcome) => self.set_message(format!(
+                            "Copied commit message{}",
+                            outcome.suffix()
+                        )),
                         Err(e) => self.set_message(format!("Clipboard error: {}", e)),
                     }
                 }
