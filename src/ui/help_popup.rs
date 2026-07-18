@@ -133,7 +133,7 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  M          ", key_style),
-                Span::styled("Toggle columns (author/hash/date) & muted merges", desc_style),
+                Span::styled("Toggle author/hash/date, muted merges & avatars", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  < / >      ", key_style),

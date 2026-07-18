@@ -2,6 +2,8 @@
 
 pub mod action;
 pub mod app;
+pub mod avatar;
+pub mod avatar_fetch;
 pub mod config;
 pub mod diff_cache;
 pub mod event;

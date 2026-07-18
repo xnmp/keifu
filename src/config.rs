@@ -120,6 +120,8 @@ pub struct MetadataColumns {
     pub date: bool,
     /// Dim the dot and message of merge commits (VSCode Git Graph style).
     pub mute_merges: bool,
+    /// Show round author avatars (pixel mode only).
+    pub avatars: bool,
 }
 
 impl Default for MetadataColumns {
@@ -129,6 +131,7 @@ impl Default for MetadataColumns {
             hash: true,
             date: true,
             mute_merges: true,
+            avatars: true,
         }
     }
 }
@@ -140,10 +143,17 @@ pub enum MetadataColumn {
     Hash,
     Date,
     MuteMerges,
+    Avatars,
 }
 
 impl MetadataColumn {
-    pub const ALL: [MetadataColumn; 4] = [Self::Author, Self::Hash, Self::Date, Self::MuteMerges];
+    pub const ALL: [MetadataColumn; 5] = [
+        Self::Author,
+        Self::Hash,
+        Self::Date,
+        Self::MuteMerges,
+        Self::Avatars,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -151,6 +161,7 @@ impl MetadataColumn {
             Self::Hash => "Hash",
             Self::Date => "Date",
             Self::MuteMerges => "Mute merges",
+            Self::Avatars => "Avatars",
         }
     }
 }
@@ -162,6 +173,7 @@ impl MetadataColumns {
             MetadataColumn::Hash => self.hash,
             MetadataColumn::Date => self.date,
             MetadataColumn::MuteMerges => self.mute_merges,
+            MetadataColumn::Avatars => self.avatars,
         }
     }
 
@@ -171,6 +183,7 @@ impl MetadataColumns {
             MetadataColumn::Hash => self.hash = !self.hash,
             MetadataColumn::Date => self.date = !self.date,
             MetadataColumn::MuteMerges => self.mute_merges = !self.mute_merges,
+            MetadataColumn::Avatars => self.avatars = !self.avatars,
         }
     }
 }
@@ -405,6 +418,8 @@ mod tests {
         assert!(state.metadata_columns.author);
         assert!(state.metadata_columns.hash);
         assert!(state.metadata_columns.date);
+        // Avatars default on and survive an older state file lacking the key.
+        assert!(state.metadata_columns.avatars);
     }
 
     #[test]
@@ -419,6 +434,7 @@ mod tests {
                 hash: false,
                 date: false,
                 mute_merges: false,
+                avatars: false,
             },
         };
         let serialized = toml::to_string(&state).unwrap();
@@ -431,6 +447,7 @@ mod tests {
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
         assert!(!restored.metadata_columns.mute_merges);
+        assert!(!restored.metadata_columns.avatars);
     }
 
     #[test]

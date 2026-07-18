@@ -21,6 +21,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 
 - Unicode commit graph with per-branch colors; tags render as refs next to branch labels; merge commits are muted (toggle with Shift+M)
 - Optional pixel-rendered graph lines (continuous VSCode-style curves) on terminals with a graphics protocol (Kitty/iTerm2); falls back to Unicode automatically (`ui.graph_renderer`)
+- Round author avatars per commit (pixel mode) — resolved from GitHub (noreply addresses) or Gravatar, downloaded in the background and disk-cached, with a deterministic colored disc fallback; toggle in the Shift+M menu
 - Commit list with branch/tag labels, compact relative age ("3d", "2w", "5mo"), author, short hash, and message (columns toggle with Shift+M; some fields may be hidden on narrow terminals)
 - Commit detail panel with full message, changed file stats (+/-), and GPG signature status
 - File diff view with syntax highlighting, word-level change emphasis, and hunk-level stage/unstage/discard
@@ -118,7 +119,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `v` | View the selected commit's PR conversation — description, comments, reviews, and review threads (resolved/open) in a scrollable popup; `r` inside submits a review (approve / request changes / comment) (needs `gh`) |
 
 PR actions live in the commit actions menu (`Enter`): **Create pull request** (on the current branch when it has no open PR) and **Merge pull request** (on a commit with an open PR — merge / squash / rebase). All PR mutations run in the background and confirm first (except a plain review comment), requiring the `gh` CLI.
-| `Shift+M` | Toggle which metadata columns (author/hash/date) show on commit rows (persists across restarts) |
+| `Shift+M` | Toggle per-row display options — author/hash/date columns, merge muting, and author avatars (avatars are pixel-mode only); persists across restarts |
 | `<` / `>` | Shrink / widen the graph column width (caps wasted padding from wide history; `…` marks truncated rows; persists) |
 | `t` | Toggle branch tracing — highlight the selected commit's lineage (first-parent ancestry down, descendants up) and dim every other lane; on by default, only active on branchy graphs (> 2 lanes); persists |
 

@@ -19,7 +19,13 @@ crossterm = "0.28"
 # chafa (a C library needing pkg-config), which we don't use — only the Kitty
 # and iTerm2 protocols, which are pure Rust.
 ratatui-image = { version = "9", default-features = false, features = ["crossterm"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+# Avatars arrive as PNG or JPEG; both decoders are needed. (ratatui-image's own
+# image dep may not enable jpeg, so we enable it on our direct dependency.)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# MD5 for Gravatar hashes and avatar cache filenames. Pure Rust, no deps — never
+# openssl (see the git2/network policy above).
+md5 = "0.7"
 
 # Git — network transports (https/ssh, and with them openssl-sys) are
 # unused: fetch/push shell out to the git CLI (see git/operations.rs).

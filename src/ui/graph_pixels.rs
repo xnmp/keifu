@@ -598,12 +598,32 @@ fn prune_over_cap<V>(map: &mut HashMap<RowSpec, V>, current: &[RowSpec], cap: us
     }
 }
 
+/// Where a row's avatar image comes from.
+#[derive(Debug, Clone)]
+pub enum AvatarSource {
+    /// A downloaded PNG/JPEG in the disk cache, decoded and circle-cropped.
+    Ready(std::path::PathBuf),
+    /// No avatar available — draw a deterministic colored disc.
+    Fallback,
+}
+
+/// A per-row avatar to prepare: keyed by author `email`, with the `color` used
+/// for the fallback disc (also if a downloaded file fails to decode).
+#[derive(Debug, Clone)]
+pub struct AvatarReq {
+    pub email: String,
+    pub source: AvatarSource,
+    pub color: [u8; 3],
+}
+
 /// Live state for pixel graph rendering: the detected picker plus a cache of
 /// transmitted protocols keyed by `RowSpec`.
 pub struct PixelGraphState {
     picker: Picker,
     font_size: (u16, u16),
     protocols: HashMap<RowSpec, Protocol>,
+    /// Transmitted avatar protocols, keyed by author email.
+    avatar_protocols: HashMap<String, Protocol>,
     consecutive_failures: u32,
     poisoned: bool,
 }
@@ -631,6 +651,7 @@ impl PixelGraphState {
             picker,
             font_size,
             protocols: HashMap::new(),
+            avatar_protocols: HashMap::new(),
             consecutive_failures: 0,
             poisoned: false,
         })
@@ -688,6 +709,61 @@ impl PixelGraphState {
     /// Look up a cached protocol.
     pub fn get(&self, spec: &RowSpec) -> Option<&Protocol> {
         self.protocols.get(spec)
+    }
+
+    /// Prepare an avatar protocol for each request (deduped by email). Prunes to
+    /// the current request set on overflow, mirroring `sync_frame`.
+    pub fn sync_avatars(&mut self, reqs: &[AvatarReq]) {
+        if self.avatar_protocols.len() >= MAX_CACHED_PROTOCOLS {
+            let keep: HashSet<&str> = reqs.iter().map(|r| r.email.as_str()).collect();
+            self.avatar_protocols.retain(|k, _| keep.contains(k.as_str()));
+        }
+        for req in reqs {
+            if self.poisoned {
+                break;
+            }
+            self.ensure_avatar(req);
+        }
+    }
+
+    /// Decode/generate, circle-crop, and transmit the avatar for `req` if not
+    /// already cached. A decode failure falls back to the colored disc.
+    fn ensure_avatar(&mut self, req: &AvatarReq) {
+        if self.avatar_protocols.contains_key(&req.email) {
+            return;
+        }
+        let (cw, ch) = self.font_size;
+        let w = cw as u32 * super::graph_view::AVATAR_IMAGE_CELLS as u32;
+        let h = ch as u32;
+        let img = match &req.source {
+            AvatarSource::Ready(path) => image::open(path)
+                .ok()
+                .map(|d| crate::avatar::circle_crop(&d.to_rgba8(), w, h))
+                .unwrap_or_else(|| crate::avatar::fallback_disc(req.color, w, h)),
+            AvatarSource::Fallback => crate::avatar::fallback_disc(req.color, w, h),
+        };
+        let dyn_img = DynamicImage::ImageRgba8(img);
+        match self.picker.new_protocol(
+            dyn_img,
+            Rect::new(0, 0, super::graph_view::AVATAR_IMAGE_CELLS, 1),
+            Resize::Fit(None),
+        ) {
+            Ok(proto) => {
+                self.avatar_protocols.insert(req.email.clone(), proto);
+                self.consecutive_failures = 0;
+            }
+            Err(_) => {
+                self.consecutive_failures += 1;
+                if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    self.poisoned = true;
+                }
+            }
+        }
+    }
+
+    /// Look up a cached avatar protocol by author email.
+    pub fn get_avatar(&self, email: &str) -> Option<&Protocol> {
+        self.avatar_protocols.get(email)
     }
 }
 

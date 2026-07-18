@@ -140,6 +140,8 @@ fn make_base_app(
         pr_thread: None,
         pr_editor: keifu::text_editor::TextEditor::new(),
         pr_action_runner: keifu::pr_action::PrActionRunner::new(),
+        avatar_fetch: keifu::avatar_fetch::AvatarFetch::new(),
+        avatar_enqueued_generation: None,
         watcher: None,
         pending_watcher: None,
         last_undoable_op: None,

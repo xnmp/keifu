@@ -240,6 +240,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         false
     };
 
+    // Prepare avatar protocols for the visible authors (pixel mode + toggle on).
+    // Built from an immutable borrow into an owned Vec first, so the mutable
+    // `pixel_graph` borrow that transmits them doesn't overlap.
+    if pixel_mode && app.metadata_columns.avatars {
+        let reqs = build_avatar_reqs(app);
+        if let Some(pg) = app.pixel_graph.as_mut() {
+            pg.sync_avatars(&reqs);
+        }
+    }
+
     // Render widgets
     let graph_widget = GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode);
     app.graph_chip_hits = graph_widget.chip_hits.clone();
@@ -251,6 +261,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if pixel_mode {
         if let Some((_, _, _, _, _, specs)) = &app.pixel_specs_cache {
             overlay_pixel_graph(frame, app, graph_area, specs);
+        }
+        if app.metadata_columns.avatars {
+            overlay_avatars(frame, app, graph_area);
         }
     }
     let mut files_state = FilesPaneState {
@@ -372,8 +385,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         AppMode::MetadataMenu { selected } => {
             use self::metadata_menu::MetadataMenuWidget;
-            // 4 rows + top/bottom border.
-            let popup_area = centered_rect_fixed(24, 6, area);
+            // 5 rows + top/bottom border.
+            let popup_area = centered_rect_fixed(24, 7, area);
             frame.render_widget(
                 MetadataMenuWidget::new(app.metadata_columns, *selected, &theme),
                 popup_area,
@@ -651,6 +664,75 @@ fn overlay_pixel_graph(
         }
         let w = spec.cells.len() as u16 + graph_pixels::PIXEL_LEFT_PAD_CELLS;
         let rect = Rect::new(x, inner_y + row, w, 1);
+        frame.render_widget(Image::new(proto), rect);
+    }
+}
+
+/// The avatars to prepare this frame: one per unique visible author email whose
+/// download has resolved (pending emails are skipped — nothing drawn yet). The
+/// fallback color is precomputed so a decode failure still yields a disc.
+fn build_avatar_reqs(app: &App) -> Vec<graph_pixels::AvatarReq> {
+    use crate::avatar_fetch::AvatarState;
+    let dir = crate::avatar::cache_dir();
+    let mut reqs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in graph_view::visible_rows(app, true) {
+        let Some(commit) = &row.node.commit else {
+            continue;
+        };
+        let email = &commit.author_email;
+        if email.trim().is_empty() || !seen.insert(email.clone()) {
+            continue;
+        }
+        let source = match app.avatar_fetch.state_of(email) {
+            Some(AvatarState::Ready) => match &dir {
+                Some(d) => graph_pixels::AvatarSource::Ready(crate::avatar::cache_png_path(d, email)),
+                None => continue,
+            },
+            Some(AvatarState::Missing) => graph_pixels::AvatarSource::Fallback,
+            None => continue, // still downloading — draw nothing yet
+        };
+        reqs.push(graph_pixels::AvatarReq {
+            email: email.clone(),
+            source,
+            color: crate::avatar::fallback_color(email),
+        });
+    }
+    reqs
+}
+
+/// Overlay each on-screen row's author avatar in the reserved columns between
+/// the graph and the message (pixel mode). Mirrors `overlay_pixel_graph`'s
+/// offset/index-space handling; the 2-cell-wide protocol matches its 2-cell rect
+/// (required by iTerm2).
+fn overlay_avatars(frame: &mut Frame, app: &App, area: Rect) {
+    use ratatui_image::Image;
+    if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
+        return;
+    }
+    let Some(pg) = &app.pixel_graph else {
+        return;
+    };
+    let inner_x = area.x + 1;
+    let inner_y = area.y + 1;
+    let inner_h = area.height.saturating_sub(2);
+    let needed = (app.graph_layout.max_lane + 1) * 2;
+    let graph_width = graph_view::effective_graph_width(needed, app.graph_width_cap);
+    let avatar_x = graph_view::avatar_overlay_x(inner_x, graph_width);
+    let rows = graph_view::visible_rows(app, true);
+    let offset = app.graph_nav.graph_list_state.offset();
+    for row in 0..inner_h {
+        let idx = offset + row as usize;
+        let Some(rr) = rows.get(idx) else {
+            break;
+        };
+        let Some(commit) = &rr.node.commit else {
+            continue;
+        };
+        let Some(proto) = pg.get_avatar(&commit.author_email) else {
+            continue;
+        };
+        let rect = Rect::new(avatar_x, inner_y + row, graph_view::AVATAR_IMAGE_CELLS, 1);
         frame.render_widget(Image::new(proto), rect);
     }
 }

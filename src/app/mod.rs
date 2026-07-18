@@ -666,6 +666,11 @@ pub struct App {
     pub pr_editor: crate::text_editor::TextEditor,
     pub pr_action_runner: crate::pr_action::PrActionRunner,
 
+    // Author avatars (pixel mode): background downloader + the graph generation
+    // whose author emails have already been enqueued (re-enqueue on reload).
+    pub avatar_fetch: crate::avatar_fetch::AvatarFetch,
+    pub avatar_enqueued_generation: Option<u64>,
+
     // Filesystem watcher
     pub watcher: Option<crate::watcher::FsWatcher>,
     // Watcher still being built on a background thread; installed into
@@ -907,6 +912,31 @@ impl App {
     /// Show an error
     pub fn show_error(&mut self, message: String) {
         self.mode = AppMode::Error { message };
+    }
+
+    /// Enqueue this graph's author emails for avatar download (once per graph
+    /// load) and drain any finished downloads. Returns whether a new avatar
+    /// arrived, so the caller can trigger a redraw. Cheap no-op when avatars are
+    /// toggled off.
+    pub fn update_avatars(&mut self) -> bool {
+        if !self.metadata_columns.avatars {
+            return false;
+        }
+        if self.avatar_enqueued_generation != Some(self.graph_generation) {
+            self.avatar_enqueued_generation = Some(self.graph_generation);
+            // Collect first so the immutable borrow of `graph_layout` doesn't
+            // overlap the mutable `avatar_fetch` calls.
+            let emails: Vec<String> = self
+                .graph_layout
+                .nodes
+                .iter()
+                .filter_map(|n| n.commit.as_ref().map(|c| c.author_email.clone()))
+                .collect();
+            for email in &emails {
+                self.avatar_fetch.request(email);
+            }
+        }
+        self.avatar_fetch.poll()
     }
 
     /// Whether branch tracing is currently in effect: enabled by the user and

@@ -116,6 +116,8 @@ impl App {
             pr_thread: None,
             pr_editor: crate::text_editor::TextEditor::new(),
             pr_action_runner: crate::pr_action::PrActionRunner::new(),
+            avatar_fetch: crate::avatar_fetch::AvatarFetch::new(),
+            avatar_enqueued_generation: None,
             watcher,
             pending_watcher,
             last_undoable_op: None,

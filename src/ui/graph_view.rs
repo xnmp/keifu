@@ -108,6 +108,24 @@ pub struct GraphViewWidget<'a> {
 /// overlay in `ui::mod` key off this so the image lines up with the glyph slot.
 pub const GRAPH_LEADING_COLUMNS: u16 = 1;
 
+/// Columns reserved between the graph and the message for the author avatar
+/// (pixel mode only): a ~square 2-cell-wide image, then a 1-cell gap. The text
+/// layer emits blank space here; a separate overlay draws the avatar image.
+pub const AVATAR_IMAGE_CELLS: u16 = 2;
+pub const AVATAR_GAP_CELLS: u16 = 1;
+pub const AVATAR_RESERVED_CELLS: u16 = AVATAR_IMAGE_CELLS + AVATAR_GAP_CELLS;
+
+/// Whether avatars should render this frame: pixel mode on, toggle on.
+pub fn avatars_active(pixel_mode: bool, metadata_columns: MetadataColumns) -> bool {
+    pixel_mode && metadata_columns.avatars
+}
+
+/// The screen x-column where the avatar image is drawn: immediately after the
+/// (padded) graph column. `inner_x` is the panel's inner-left edge.
+pub fn avatar_overlay_x(inner_x: u16, graph_width: usize) -> u16 {
+    inner_x + graph_width as u16 + GRAPH_LEADING_COLUMNS
+}
+
 /// The graph column width in cells actually shown: the number needed to fit all
 /// lanes (`needed`), unless the user set a smaller cap. `cap == None` — or a cap
 /// at/above `needed` — means uncapped. Never below 4 (two lanes) or above
@@ -955,6 +973,13 @@ fn render_graph_line<'a>(
         left_width += padding;
     }
 
+    // Reserve blank columns for the author avatar (drawn by a separate image
+    // overlay in pixel mode). The message tail then starts after them.
+    if avatars_active(pixel_mode, metadata_columns) {
+        spans.push(Span::raw(" ".repeat(AVATAR_RESERVED_CELLS as usize)));
+        left_width += AVATAR_RESERVED_CELLS as usize;
+    }
+
     render_graph_line_tail(
         spans,
         left_width,
@@ -1778,6 +1803,7 @@ mod tests {
             hash,
             date,
             mute_merges: true,
+            avatars: false,
         }
     }
 
@@ -2133,6 +2159,7 @@ mod tests {
             hash: false,
             date: false,
             mute_merges,
+            avatars: false,
         };
         let (line, _chips) = render_graph_line(
             node,
