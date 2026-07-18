@@ -89,10 +89,12 @@ fn make_base_app(
         head_detached: false,
         commits,
         branches: Vec::new(),
+        remotes: Vec::new(),
         graph_layout: GraphLayout {
             nodes: vec![node],
             max_lane: 0,
         },
+        graph_generation: 0,
         graph_nav: GraphNav::new(),
         focused_panel: FocusedPanel::Graph,
         files_pane: FilesPaneState::new(),
@@ -135,6 +137,7 @@ fn make_base_app(
         config: Config::default(),
         terminal_bg: None,
         pixel_graph: None,
+        pixel_specs_cache: None,
     }
 }
 

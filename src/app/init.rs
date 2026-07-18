@@ -37,6 +37,7 @@ impl App {
         let stashes = repo.get_stashes();
         // No branches are hidden at startup, so all branches are visible.
         let branches = repo.get_branches()?;
+        let remotes = repo.remotes();
         let tags = repo.get_tags();
         let commits = repo.get_commits(500, &branches, &stashes)?;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
@@ -68,7 +69,9 @@ impl App {
             head_detached,
             commits,
             branches,
+            remotes,
             graph_layout,
+            graph_generation: 0,
             graph_nav,
             focused_panel: if ui_state.side_panel_layout {
                 FocusedPanel::Files
@@ -110,6 +113,7 @@ impl App {
             config,
             terminal_bg,
             pixel_graph: None,
+            pixel_specs_cache: None,
         })
     }
 

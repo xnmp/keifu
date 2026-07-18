@@ -93,28 +93,50 @@ pub struct GraphViewWidget<'a> {
     theme: &'a Theme,
 }
 
+/// Number of leading blank columns before the graph glyphs on every row (the
+/// start marker). Both the space-emitter in `render_graph_line` and the pixel
+/// overlay in `ui::mod` key off this so the image lines up with the glyph slot.
+pub const GRAPH_LEADING_COLUMNS: u16 = 1;
+
+/// The nodes shown by the graph list, paired with their index into
+/// `graph_layout.nodes`. When a commit filter is active only the matching
+/// nodes are listed, in `visible_commit_indices` order. This is the single
+/// source of the list's row ordering — used by the widget and by the pixel
+/// pre-pass so their rows stay aligned.
+pub fn visible_nodes(app: &App) -> Vec<(usize, &GraphNode)> {
+    if app.commit_filter.is_empty() {
+        app.graph_layout.nodes.iter().enumerate().collect()
+    } else {
+        app.visible_commit_indices
+            .iter()
+            .map(|&idx| (idx, &app.graph_layout.nodes[idx]))
+            .collect()
+    }
+}
+
 /// Build one `RowSpec` per list item (respecting the active commit filter), in
 /// the same order the graph widget lists them, so the overlay can index into it
 /// by visible-row position. Neighbours follow visible order.
+///
+/// `available_cells` caps each spec's cell count to the width the overlay will
+/// actually draw: the iTerm2/Sixel fixed protocols render *nothing* when the
+/// protocol is wider than its render area (only Kitty crops), so the cached
+/// protocol's width must equal the rect the overlay uses. Truncating here keeps
+/// them in lockstep; truncated specs still hash as themselves so caching holds.
 pub fn build_pixel_row_specs(
     app: &App,
     theme: &Theme,
+    available_cells: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
-    let has_filter = !app.commit_filter.is_empty();
-    let nodes: Vec<&GraphNode> = if has_filter {
-        app.visible_commit_indices
-            .iter()
-            .map(|&idx| &app.graph_layout.nodes[idx])
-            .collect()
-    } else {
-        app.graph_layout.nodes.iter().collect()
-    };
+    let nodes: Vec<&GraphNode> = visible_nodes(app).into_iter().map(|(_, n)| n).collect();
     (0..nodes.len())
         .map(|i| {
             let prev = i.checked_sub(1).map(|p| nodes[p]);
             let next = nodes.get(i + 1).copied();
-            build_row_spec(prev, nodes[i], next, theme)
+            let mut spec = build_row_spec(prev, nodes[i], next, theme);
+            spec.cells.truncate(available_cells);
+            spec
         })
         .collect()
 }
@@ -127,16 +149,9 @@ impl<'a> GraphViewWidget<'a> {
         let has_filter = !app.commit_filter.is_empty();
         let current_selected = app.graph_nav.graph_list_state.selected();
         let now = Local::now();
-        let remotes = app.repo.remotes();
+        let remotes = &app.remotes;
 
-        let node_iter: Vec<(usize, &crate::git::graph::GraphNode)> = if has_filter {
-            app.visible_commit_indices
-                .iter()
-                .map(|&idx| (idx, &app.graph_layout.nodes[idx]))
-                .collect()
-        } else {
-            app.graph_layout.nodes.iter().enumerate().collect()
-        };
+        let node_iter = visible_nodes(app);
 
         let mut selected_in_filtered = None;
         let mut items: Vec<ListItem> = Vec::new();
@@ -164,7 +179,7 @@ impl<'a> GraphViewWidget<'a> {
                 theme,
                 now,
                 pixel_mode,
-                &remotes,
+                remotes,
             );
             items.push(ListItem::new(line));
         }
@@ -225,15 +240,12 @@ fn optimize_branch_display(
     // Max width for a single branch label (e.g., "[fix/feature-name]")
     const MAX_LABEL_WIDTH: usize = 40;
 
-    // Split local and remote branches (HashSet for O(1) lookup)
+    // Split local and remote branches by real remote prefix (HashSet for O(1)
+    // lookup). A name is remote only when it starts with a configured remote
+    // (e.g. "origin/", "upstream/"), never merely for containing a slash.
     let local_branches: HashSet<&str> = branch_names
         .iter()
-        .filter(|n| !n.starts_with("origin/"))
-        .map(|s| s.as_str())
-        .collect();
-    let remote_branches: HashSet<&str> = branch_names
-        .iter()
-        .filter(|n| n.starts_with("origin/"))
+        .filter(|n| strip_remote(n, remotes).is_none())
         .map(|s| s.as_str())
         .collect();
 
@@ -318,21 +330,23 @@ fn optimize_branch_display(
     // Process branches in original order (matches tab order from filter_remote_duplicates)
     let mut result: Vec<(String, Style)> = Vec::new();
     for name in branch_names {
-        if let Some(local_name) = name.strip_prefix("origin/") {
+        if let Some(bare) = strip_remote(name, remotes) {
             // Remote branch: skip if matching local exists
-            if local_branches.contains(local_name) {
+            if local_branches.contains(bare) {
                 continue;
             }
             result.push((make_label("", name, None), make_style(name)));
         } else {
-            // Local branch: check for matching remote
-            let remote_name = format!("origin/{}", name);
-            let suffix = if remote_branches.contains(remote_name.as_str()) {
-                Some("↔ origin")
-            } else {
-                None
-            };
-            result.push((make_label("", name, suffix), make_style(name)));
+            // Local branch: show "↔ <remote>" when a remote ref points at the
+            // same bare name (not just origin — any configured remote).
+            let sync_remote = branch_names.iter().find_map(|other| {
+                match strip_remote(other, remotes) {
+                    Some(bare) if bare == name => other.strip_suffix(bare)?.strip_suffix('/'),
+                    _ => None,
+                }
+            });
+            let suffix = sync_remote.map(|r| format!("↔ {}", r));
+            result.push((make_label("", name, suffix.as_deref()), make_style(name)));
         }
     }
 
@@ -528,9 +542,10 @@ fn render_graph_line<'a>(
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
-    // Graph start marker (to distinguish from borders)
-    spans.push(Span::raw(" "));
-    let mut left_width: usize = 1;
+    // Graph start marker (to distinguish from borders). GRAPH_LEADING_COLUMNS
+    // is the shared contract with the pixel overlay's x-offset.
+    spans.push(Span::raw(" ".repeat(GRAPH_LEADING_COLUMNS as usize)));
+    let mut left_width: usize = GRAPH_LEADING_COLUMNS as usize;
 
     // Pixel mode: the graph column is painted by an image overlay, so emit
     // blank space of the exact same width (one column per cell, HEAD star
@@ -1097,5 +1112,60 @@ mod tests {
         assert!(display_width(label) <= 24, "label too wide: {label:?}");
         assert!(label.starts_with('<') && label.ends_with('>'));
         assert!(label.contains('…'), "expected an ellipsis: {label:?}");
+    }
+
+    // ── remote classification (strip_remote / optimize_branch_display) ───
+
+    #[test]
+    fn strip_remote_classifies_by_configured_remote_only() {
+        let remotes = vec!["origin".to_string(), "upstream".to_string()];
+        assert_eq!(strip_remote("upstream/main", &remotes), Some("main"));
+        assert_eq!(strip_remote("origin/feature/x", &remotes), Some("feature/x"));
+        // A slash alone does not make a branch remote.
+        assert_eq!(strip_remote("feature/x", &remotes), None);
+        assert_eq!(strip_remote("main", &remotes), None);
+        // Not a configured remote.
+        assert_eq!(strip_remote("fork/main", &remotes), None);
+    }
+
+    #[test]
+    fn multi_branch_dedupes_non_origin_remote_counterpart() {
+        let theme = Theme::dark();
+        // main + its upstream counterpart + an unrelated local branch. Three
+        // names skip the single/pair early-returns and hit the general loop.
+        let names = vec![
+            "main".to_string(),
+            "upstream/main".to_string(),
+            "dev".to_string(),
+        ];
+        let remotes = vec!["upstream".to_string()];
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes);
+        // Collapses to a single combined label.
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        // upstream/main is recognized as main's remote counterpart and deduped,
+        // leaving two real branches — so no "+N" overflow marker appears.
+        assert!(
+            !label.contains('+'),
+            "non-origin remote counterpart should be deduped: {label:?}"
+        );
+        assert!(label.contains("main"), "expected main: {label:?}");
+        assert!(label.contains("dev"), "expected dev: {label:?}");
+    }
+
+    #[test]
+    fn slashed_local_branch_is_not_treated_as_remote() {
+        let theme = Theme::dark();
+        // "feature/x" contains a slash but "feature" is not a remote.
+        let names = vec!["feature/x".to_string()];
+        let remotes = vec!["origin".to_string()];
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes);
+        assert_eq!(out.len(), 1);
+        // No cloud icon (remote-only marker); rendered as a plain local label.
+        assert!(
+            !out[0].0.contains(REMOTE_ONLY_ICON),
+            "local branch must not get the remote icon: {:?}",
+            out[0].0
+        );
     }
 }

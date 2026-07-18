@@ -153,20 +153,45 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Pre-render pass: compute layout metrics that update App scroll state
     let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
 
-    // Pixel graph pre-pass: build the row specs and transmit their protocols
-    // (needs &mut app) before the immutable borrow taken by the graph widget.
-    let pixel_specs = if app.pixel_graph.is_some() {
-        let specs = graph_view::build_pixel_row_specs(app, &theme);
-        if let Some(pg) = app.pixel_graph.as_mut() {
-            for spec in &specs {
-                pg.ensure_protocol(spec);
-            }
+    // Pixel graph pre-pass: (re)build the row specs and transmit their
+    // protocols (needs &mut app) before the immutable borrow taken by the graph
+    // widget. Specs are capped to the width the overlay will draw and cached
+    // until the layout, filter, or width changes.
+    let pixel_mode = if app.pixel_graph.is_some() {
+        let available = graph_area
+            .width
+            .saturating_sub(2)
+            .saturating_sub(graph_view::GRAPH_LEADING_COLUMNS) as usize;
+        let reuse = app.pixel_specs_cache.as_ref().is_some_and(|(gen, filter, w, _)| {
+            *gen == app.graph_generation
+                && filter == &app.commit_filter
+                && *w as usize == available
+        });
+        if !reuse {
+            let specs = graph_view::build_pixel_row_specs(app, &theme, available);
+            app.pixel_specs_cache = Some((
+                app.graph_generation,
+                app.commit_filter.clone(),
+                available as u16,
+                specs,
+            ));
         }
-        Some(specs)
+        // Disjoint field borrows: `specs` from pixel_specs_cache, `pg` from
+        // pixel_graph. Sync transmits/evicts protocols for this frame.
+        let specs = &app.pixel_specs_cache.as_ref().unwrap().3;
+        let active = app.pixel_graph.as_mut().is_some_and(|pg| {
+            pg.sync_frame(specs);
+            pg.is_active()
+        });
+        if !active {
+            // Protocol creation kept failing — drop pixel rendering and fall
+            // back to Unicode glyphs for the rest of the session.
+            app.pixel_graph = None;
+        }
+        active
     } else {
-        None
+        false
     };
-    let pixel_mode = pixel_specs.is_some();
 
     // Render widgets
     frame.render_stateful_widget(
@@ -174,8 +199,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         graph_area,
         &mut app.graph_nav.graph_list_state,
     );
-    if let Some(specs) = &pixel_specs {
-        overlay_pixel_graph(frame, app, graph_area, specs);
+    if pixel_mode {
+        if let Some((_, _, _, specs)) = &app.pixel_specs_cache {
+            overlay_pixel_graph(frame, app, graph_area, specs);
+        }
     }
     frame.render_stateful_widget(
         FilesPaneWidget::new(app, &theme),
@@ -372,7 +399,11 @@ fn overlay_pixel_graph(
     let inner_x = area.x + 1;
     let inner_y = area.y + 1;
     let inner_h = area.height.saturating_sub(2);
-    let inner_w = area.width.saturating_sub(2);
+    // Graph column starts after the leading marker; specs were already
+    // truncated to this width in the pre-pass, so draw them at their full cell
+    // count (no re-clamping — a clamp here would desync the protocol's width
+    // from the rect and blank the row on iTerm2/Sixel).
+    let x = inner_x + graph_view::GRAPH_LEADING_COLUMNS;
     let offset = app.graph_nav.graph_list_state.offset();
     for row in 0..inner_h {
         let idx = offset + row as usize;
@@ -382,12 +413,11 @@ fn overlay_pixel_graph(
         let Some(proto) = pg.get(spec) else {
             continue;
         };
-        // +1 for the leading space emitted before the graph glyphs.
-        let w = (spec.cells.len() as u16).min(inner_w.saturating_sub(1));
+        let w = spec.cells.len() as u16;
         if w == 0 {
             continue;
         }
-        let rect = Rect::new(inner_x + 1, inner_y + row, w, 1);
+        let rect = Rect::new(x, inner_y + row, w, 1);
         frame.render_widget(Image::new(proto), rect);
     }
 }

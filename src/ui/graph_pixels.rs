@@ -5,7 +5,7 @@
 //! gappy box-drawing glyphs. Everything below `PixelGraphState` is pure and
 //! deterministic so it can be unit-tested without a terminal.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
@@ -502,8 +502,33 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     canvas.img
 }
 
-/// Maximum number of cached protocols before the cache is dropped wholesale.
+/// Soft cap on cached protocols. On overflow the cache is pruned down to the
+/// specs referenced by the current frame (see `sync_frame`) rather than cleared
+/// wholesale, so the hot set survives.
 const MAX_CACHED_PROTOCOLS: usize = 1024;
+
+/// Consecutive protocol-creation failures that mark the state dead. Once dead,
+/// the app falls back to the Unicode renderer instead of re-encoding every
+/// frame forever.
+const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
+/// Whether a detected protocol honours image transparency. Only Kitty and
+/// iTerm2 qualify: Halfblocks is a non-graphics fallback, and Sixel's encoder
+/// drops alpha (`to_rgb8`), which would paint black boxes over the selection
+/// highlight.
+fn is_supported_protocol(pt: ProtocolType) -> bool {
+    matches!(pt, ProtocolType::Kitty | ProtocolType::Iterm2)
+}
+
+/// Prune `map` down to the keys referenced by `current` when it has reached
+/// `cap`. Keeps the frame's hot set instead of clearing everything (which would
+/// force a re-encode of every visible row the next frame).
+fn prune_over_cap<V>(map: &mut HashMap<RowSpec, V>, current: &[RowSpec], cap: usize) {
+    if map.len() >= cap {
+        let keep: HashSet<&RowSpec> = current.iter().collect();
+        map.retain(|k, _| keep.contains(k));
+    }
+}
 
 /// Live state for pixel graph rendering: the detected picker plus a cache of
 /// transmitted protocols keyed by `RowSpec`.
@@ -511,19 +536,23 @@ pub struct PixelGraphState {
     picker: Picker,
     font_size: (u16, u16),
     protocols: HashMap<RowSpec, Protocol>,
+    consecutive_failures: u32,
+    poisoned: bool,
 }
 
 impl PixelGraphState {
     /// Query the terminal for a graphics protocol and font cell size. Returns
-    /// `None` when no real graphics protocol is available (query failed, or the
-    /// terminal only supports the half-blocks fallback).
+    /// `None` unless a protocol that honours image transparency is available —
+    /// only Kitty and iTerm2 qualify. Halfblocks is a non-graphics fallback,
+    /// and Sixel drops the alpha channel (its encoder calls `to_rgb8`), which
+    /// would paint black boxes over the selection highlight.
     ///
     /// Must be called once at startup after raw mode is enabled and before the
     /// event loop starts polling, so the terminal's query reply isn't consumed
     /// by crossterm's reader.
     pub fn new() -> Option<Self> {
         let picker = Picker::from_query_stdio().ok()?;
-        if picker.protocol_type() == ProtocolType::Halfblocks {
+        if !is_supported_protocol(picker.protocol_type()) {
             return None;
         }
         let font_size = picker.font_size();
@@ -534,16 +563,36 @@ impl PixelGraphState {
             picker,
             font_size,
             protocols: HashMap::new(),
+            consecutive_failures: 0,
+            poisoned: false,
         })
     }
 
+    /// Whether the state can still render. Becomes false after
+    /// `MAX_CONSECUTIVE_FAILURES` protocol-creation failures in a row.
+    pub fn is_active(&self) -> bool {
+        !self.poisoned
+    }
+
+    /// Prepare every protocol referenced by the current frame. Prunes the cache
+    /// to the current spec set on overflow (item: bounded, no thrash), then
+    /// ensures each spec. Stops early once poisoned so a persistent failure
+    /// can't trigger a per-frame rasterize/encode storm.
+    pub fn sync_frame(&mut self, specs: &[RowSpec]) {
+        prune_over_cap(&mut self.protocols, specs, MAX_CACHED_PROTOCOLS);
+        for spec in specs {
+            if self.poisoned {
+                break;
+            }
+            self.ensure_protocol(spec);
+        }
+    }
+
     /// Rasterize and transmit the protocol for `spec` if not already cached.
-    pub fn ensure_protocol(&mut self, spec: &RowSpec) {
+    /// Tracks consecutive failures so a broken protocol poisons the state.
+    fn ensure_protocol(&mut self, spec: &RowSpec) {
         if self.protocols.contains_key(spec) {
             return;
-        }
-        if self.protocols.len() >= MAX_CACHED_PROTOCOLS {
-            self.protocols.clear();
         }
         let (cw, ch) = self.font_size;
         let img = rasterize_row(spec, cw as u32, ch as u32);
@@ -551,11 +600,20 @@ impl PixelGraphState {
         let dyn_img = DynamicImage::ImageRgba8(img);
         // The image is already at exactly n*cell pixels, so Fit performs no
         // scaling — it just places the pixels 1:1 in the n×1 cell area.
-        if let Ok(proto) =
-            self.picker
-                .new_protocol(dyn_img, Rect::new(0, 0, n, 1), Resize::Fit(None))
+        match self
+            .picker
+            .new_protocol(dyn_img, Rect::new(0, 0, n, 1), Resize::Fit(None))
         {
-            self.protocols.insert(spec.clone(), proto);
+            Ok(proto) => {
+                self.protocols.insert(spec.clone(), proto);
+                self.consecutive_failures = 0;
+            }
+            Err(_) => {
+                self.consecutive_failures += 1;
+                if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    self.poisoned = true;
+                }
+            }
         }
     }
 
@@ -772,5 +830,71 @@ mod tests {
         assert_eq!(indexed_to_rgb(231), [255, 255, 255]);
         // Grayscale ramp start.
         assert_eq!(indexed_to_rgb(232), [8, 8, 8]);
+    }
+
+    #[test]
+    fn only_kitty_and_iterm2_are_supported() {
+        // Transparency-preserving protocols.
+        assert!(is_supported_protocol(ProtocolType::Kitty));
+        assert!(is_supported_protocol(ProtocolType::Iterm2));
+        // Halfblocks isn't graphics; Sixel drops alpha → black boxes.
+        assert!(!is_supported_protocol(ProtocolType::Halfblocks));
+        assert!(!is_supported_protocol(ProtocolType::Sixel));
+    }
+
+    #[test]
+    fn prune_over_cap_keeps_only_the_current_frame_set() {
+        // Under cap: nothing is pruned even if none are current.
+        let mut map: HashMap<RowSpec, u32> = HashMap::new();
+        for c in 0..5u8 {
+            map.insert(spec(vec![pipe([c, 0, 0])]), c as u32);
+        }
+        prune_over_cap(&mut map, &[], 100);
+        assert_eq!(map.len(), 5, "under cap: no eviction");
+
+        // At/over cap: retain exactly the current specs, drop the rest.
+        let keep_a = spec(vec![pipe([1, 0, 0])]);
+        let keep_b = spec(vec![pipe([2, 0, 0])]);
+        let current = vec![keep_a.clone(), keep_b.clone()];
+        prune_over_cap(&mut map, &current, 5);
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key(&keep_a));
+        assert!(map.contains_key(&keep_b));
+        // A stale key (not in the current frame) is gone.
+        assert!(!map.contains_key(&spec(vec![pipe([4, 0, 0])])));
+    }
+
+    #[test]
+    fn truncating_a_spec_caps_width_and_preserves_hashability() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let hash = |s: &RowSpec| {
+            let mut h = DefaultHasher::new();
+            s.hash(&mut h);
+            h.finish()
+        };
+
+        let full = spec(vec![
+            pipe([1, 0, 0]),
+            commit(true, true, CommitStyle::Normal, [2, 0, 0]),
+            pipe([3, 0, 0]),
+            pipe([4, 0, 0]),
+        ]);
+
+        // Truncate to fewer cells than present.
+        let mut narrow = full.clone();
+        narrow.cells.truncate(2);
+        assert_eq!(narrow.cells.len(), 2);
+
+        // A spec built directly with the same prefix cells is equal and hashes
+        // equal — so a truncated spec is a stable cache key, and truncating to a
+        // width >= len is a no-op.
+        let expected = spec(vec![pipe([1, 0, 0]), commit(true, true, CommitStyle::Normal, [2, 0, 0])]);
+        assert_eq!(narrow, expected);
+        assert_eq!(hash(&narrow), hash(&expected));
+
+        let mut wide = full.clone();
+        wide.cells.truncate(10);
+        assert_eq!(wide, full, "truncate beyond len is a no-op");
     }
 }

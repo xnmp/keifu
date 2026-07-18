@@ -111,9 +111,12 @@ Graph.
 1. `PixelGraphState::new()` (`ui/graph_pixels.rs`) calls
    `ratatui_image::Picker::from_query_stdio()` once at startup — after raw mode
    is enabled but before the event loop polls, so crossterm's reader doesn't eat
-   the terminal's query reply. It returns `None` (→ Unicode fallback) if the
-   query fails or only the Halfblocks fallback is available. `config.ui.graph_renderer`
-   gates this: `Unicode` skips detection entirely; `Auto`/`Pixel` attempt it.
+   the terminal's query reply. It returns `None` (→ Unicode fallback) unless a
+   *transparency-preserving* protocol is detected: only **Kitty** and **iTerm2**
+   are whitelisted. Halfblocks isn't graphics, and Sixel's encoder drops the
+   alpha channel (`to_rgb8`), which would paint black boxes over the selection
+   highlight. `config.ui.graph_renderer` gates this: `Unicode` skips detection
+   entirely; `Auto`/`Pixel` attempt it.
 2. Each visible row is described by a `RowSpec` — a fully-resolved, hashable list
    of `PixelCell`s (shape + concrete RGB, resolved from the theme; commit dots
    carry `connect_up`/`connect_down` bits computed from whether the adjacent
@@ -124,15 +127,26 @@ Graph.
    anti-aliasing), quadratic-bezier arcs for branch/merge corners, and commit
    dots (filled disc / ring for HEAD / hollow for uncommitted) onto a transparent
    canvas at exactly `n_cells * cell_w × cell_h` pixels.
-4. Protocols are cached in a `HashMap<RowSpec, Protocol>` (cleared wholesale past
-   1024 entries); identical rows reuse a transmitted image.
-5. In `ui/mod.rs::draw`, a pre-pass (needs `&mut app`) builds all row specs and
-   ensures their protocols before the graph widget's immutable borrow. In pixel
-   mode `render_graph_line` emits blank spaces of the exact same width as the
-   glyphs (HEAD star included) so text layout is unchanged, then
-   `overlay_pixel_graph` renders each row's `Image` at the leading-space column
-   using the scroll offset the list widget wrote back into `graph_list_state`.
-   Images are transparent so the list's selection highlight shows through.
+   Each spec's cells are truncated to the width the overlay will draw, because
+   the iTerm2/Sixel fixed protocols render *nothing* when the protocol is wider
+   than its render area (only Kitty crops) — the cached protocol's cell-width
+   must equal the overlay rect.
+4. Protocols are cached in a `HashMap<RowSpec, Protocol>`; on overflow past 1024
+   entries the cache is pruned down to the current frame's spec set (not cleared
+   wholesale), so the hot set survives. Protocol-creation failures are counted;
+   after 3 in a row the state is poisoned and the app permanently falls back to
+   Unicode instead of re-encoding every frame.
+5. In `ui/mod.rs::draw`, a pre-pass (needs `&mut app`) builds the row specs —
+   cached on `App` keyed by `(graph_generation, commit_filter, width)` and
+   rebuilt only when one changes — then `sync_frame` transmits/evicts protocols
+   before the graph widget's immutable borrow. In pixel mode `render_graph_line`
+   emits blank spaces of the exact same width as the glyphs (HEAD star included)
+   so text layout is unchanged, then `overlay_pixel_graph` renders each row's
+   `Image` at the shared `GRAPH_LEADING_COLUMNS` x-offset using the scroll offset
+   the list widget wrote back into `graph_list_state`. Both the space-emitter and
+   the overlay share `visible_nodes()` for row ordering and the same offset
+   constant, so they can't drift. Images are transparent so the list's selection
+   highlight shows through.
 
 **Color mapping:** theme lane colors may be named ANSI variants, not RGB.
 `color_to_rgb` maps named/Indexed colors to real RGB (standard xterm values,

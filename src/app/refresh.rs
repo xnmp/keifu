@@ -148,6 +148,7 @@ impl App {
 
         let stashes = self.repo.get_stashes();
         self.branches = self.repo.get_branches()?;
+        self.remotes = self.repo.remotes();
         // Hidden branches are excluded from the revwalk, so their exclusive
         // commits are removed from the graph — not merely their labels.
         let visible_branches: Vec<BranchInfo> = self
@@ -167,6 +168,8 @@ impl App {
             uncommitted_count,
             head_commit_oid,
         );
+        // Invalidate the pixel-graph spec cache: the layout changed.
+        self.graph_generation = self.graph_generation.wrapping_add(1);
         self.head_name = self.repo.head_name();
         self.head_detached = self.repo.is_head_detached();
 

@@ -426,7 +426,13 @@ pub struct App {
     // Data
     pub commits: Vec<CommitInfo>,
     pub branches: Vec<BranchInfo>,
+    /// Configured remote names (e.g. "origin", "upstream"), refreshed alongside
+    /// branches. Cached here so the per-frame graph render doesn't hit git2.
+    pub remotes: Vec<String>,
     pub graph_layout: GraphLayout,
+    /// Bumped every time `graph_layout` is reassigned. Lets the pixel pre-pass
+    /// reuse a cached `RowSpec` list without diffing the layout.
+    pub graph_generation: u64,
 
     // UI state
     pub graph_nav: GraphNav,
@@ -516,6 +522,12 @@ pub struct App {
     // detected at startup and pixel rendering is enabled; `None` in tests and
     // when falling back to Unicode glyphs.
     pub pixel_graph: Option<crate::ui::graph_pixels::PixelGraphState>,
+
+    // Cached pixel-graph row specs, valid while (graph_generation, commit_filter,
+    // available graph width) are unchanged. Theme is stable at runtime, so it's
+    // not part of the key. Rebuilt lazily by the render pre-pass.
+    pub pixel_specs_cache:
+        Option<(u64, String, u16, Vec<crate::ui::graph_pixels::RowSpec>)>,
 }
 
 impl App {
