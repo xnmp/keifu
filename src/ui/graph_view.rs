@@ -197,13 +197,12 @@ pub fn build_pixel_row_specs(
     panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
-    let mute_merges = app.metadata_columns.mute_merges;
     let nodes: Vec<&GraphNode> = visible_nodes(app).into_iter().map(|(_, n)| n).collect();
     (0..nodes.len())
         .map(|i| {
             let prev = i.checked_sub(1).map(|p| nodes[p]);
             let next = nodes.get(i + 1).copied();
-            let mut spec = build_row_spec(prev, nodes[i], next, theme, mute_merges);
+            let mut spec = build_row_spec(prev, nodes[i], next, theme);
             spec.cells
                 .truncate(pixel_row_cells(nodes[i].cells.len(), graph_width, panel_available));
             spec
@@ -756,12 +755,9 @@ fn render_graph_line<'a>(
             left_width += 1;
         }
     } else {
-        // Connector rows dim entirely; a muted merge dims only its dot (never
-        // HEAD). Matches the pixel renderer's per-cell dimming.
-        let row_dim = node.is_connector();
-        let mute_dot = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
-        left_width =
-            render_cells_unicode(&mut spans, node, theme, left_width, graph_width, row_dim, mute_dot);
+        // Graph glyphs always render at full strength; merge muting lives in the
+        // message text (see render_graph_line_tail), matching the pixel renderer.
+        left_width = render_cells_unicode(&mut spans, node, theme, left_width, graph_width);
     }
 
     // Padding to align to the (capped) graph width. Reclaimed width flows to the
@@ -793,24 +789,13 @@ fn render_graph_line<'a>(
 /// Render the Unicode box-drawing glyphs for a row's cells into `spans`, capped
 /// at `cap` graph columns, returning the updated `left_width`. When the row
 /// overflows the cap, the last column becomes a dim `…`.
-#[allow(clippy::too_many_arguments)] // cohesive per-row render params
 fn render_cells_unicode(
     spans: &mut Vec<Span<'_>>,
     node: &GraphNode,
     theme: &Theme,
     mut left_width: usize,
     cap: usize,
-    row_dim: bool,
-    mute_dot: bool,
 ) -> usize {
-    // Extra style modifier applied to graph glyphs: DIM for de-emphasized rows.
-    let dim_mod = |base: Style, dim: bool| -> Style {
-        if dim {
-            base.remove_modifier(Modifier::BOLD).add_modifier(Modifier::DIM)
-        } else {
-            base
-        }
-    };
     // `budget` graph columns are available for glyphs; when truncating, one more
     // column holds the `…`.
     let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
@@ -882,10 +867,8 @@ fn render_cells_unicode(
             CellType::TeeUp(color_idx) => ('┴', theme.lane_color(*color_idx)),
         };
 
-        // Draw all line glyphs in bold, dimmed when de-emphasized (whole
-        // connector row, or just the dot of a muted merge).
-        let cell_dim = row_dim || (mute_dot && matches!(cell, CellType::Commit(_)));
-        let style = dim_mod(Style::default().fg(color).add_modifier(Modifier::BOLD), cell_dim);
+        // All line glyphs render in bold at full strength.
+        let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
 
         let ch_str = ch.to_string();
         let ch_width = display_width(&ch_str);
@@ -962,8 +945,8 @@ fn render_graph_line_tail<'a>(
     let hash_style = Style::default().fg(theme.hash_color);
     let author_style = Style::default().fg(theme.author_color);
     let date_style = Style::default().fg(theme.date_color);
-    // Muted merge: dim the message (dot is dimmed in the graph column). HEAD is
-    // never muted so its message stays legible.
+    // Muted merge: dim only the message text (VSCode-style) — the graph dot and
+    // lines stay full-strength. HEAD is never muted so its message stays legible.
     let muted_merge = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
     let msg_style = if muted_merge {
         Style::default().add_modifier(Modifier::DIM)
@@ -1759,7 +1742,7 @@ mod tests {
     fn render_cells(node: &GraphNode, cap: usize) -> String {
         let theme = Theme::dark();
         let mut spans: Vec<Span> = Vec::new();
-        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, false, false);
+        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         // left_width is columns emitted (started at 0); it must equal the text's
         // display width.
@@ -1825,5 +1808,91 @@ mod tests {
         assert_eq!(display_width(&text), 4, "exactly cap wide: {text:?}");
         assert!(!text.contains('⭐'), "no half star: {text:?}");
         assert!(text.ends_with('…'));
+    }
+
+    // ── muted merges dim only the message text ───────────────────────
+
+    fn merge_node(message: &str) -> GraphNode {
+        use crate::git::CommitInfo;
+        let commit = CommitInfo {
+            oid: git2::Oid::zero(),
+            short_id: "abc1234".to_string(),
+            author_name: "a".to_string(),
+            author_email: "a@b".to_string(),
+            timestamp: Local::now(),
+            message: message.to_string(),
+            full_message: message.to_string(),
+            parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
+        };
+        GraphNode {
+            commit: Some(commit),
+            lane: 0,
+            color_index: 0,
+            branch_names: Vec::new(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells: vec![CellType::Commit(0)],
+        }
+    }
+
+    /// The style applied to `node`'s message span when rendered with the given
+    /// mute-merges setting. Panics if the message span isn't found.
+    fn message_style(node: &GraphNode, message: &str, mute_merges: bool) -> Style {
+        let theme = Theme::dark();
+        let cols = MetadataColumns {
+            author: false,
+            hash: false,
+            date: false,
+            mute_merges,
+        };
+        let line = render_graph_line(
+            node,
+            4,
+            false,
+            false,
+            200,
+            None,
+            &theme,
+            Local::now(),
+            false,
+            &[],
+            &HashMap::new(),
+            cols,
+        );
+        line.spans
+            .iter()
+            .find(|s| s.content.as_ref() == message)
+            .unwrap_or_else(|| panic!("message span not found in {:?}", line))
+            .style
+    }
+
+    #[test]
+    fn muted_merge_dims_message_text_not_the_graph() {
+        let node = merge_node("merge-branch-into-main");
+        // Toggle ON: the merge's message text is dimmed.
+        let muted = message_style(&node, "merge-branch-into-main", true);
+        assert!(
+            muted.add_modifier.contains(Modifier::DIM),
+            "muted merge message should be DIM: {muted:?}"
+        );
+        // Toggle OFF: the message renders at full strength.
+        let normal = message_style(&node, "merge-branch-into-main", false);
+        assert!(
+            !normal.add_modifier.contains(Modifier::DIM),
+            "un-muted merge message must not be DIM: {normal:?}"
+        );
+    }
+
+    #[test]
+    fn head_merge_is_never_muted() {
+        let mut node = merge_node("head-merge");
+        node.is_head = true;
+        // Even with muting on, the HEAD commit's message stays legible.
+        let style = message_style(&node, "head-merge", true);
+        assert!(!style.add_modifier.contains(Modifier::DIM));
     }
 }
