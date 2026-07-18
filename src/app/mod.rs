@@ -541,6 +541,10 @@ pub struct App {
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
 
+    // User cap on the graph column width, in cells. None = uncapped (fit all
+    // lanes). Trims wasted padding from a wide region far back in history.
+    pub graph_width_cap: Option<usize>,
+
     // Debug mode
     pub debug_keys: bool,
 
@@ -558,10 +562,11 @@ pub struct App {
     pub pixel_graph: Option<crate::ui::graph_pixels::PixelGraphState>,
 
     // Cached pixel-graph row specs, valid while (graph_generation, commit_filter,
-    // available graph width) are unchanged. Theme is stable at runtime, so it's
-    // not part of the key. Rebuilt lazily by the render pre-pass.
+    // panel_available, graph_width) are unchanged. Theme is stable at runtime, so
+    // it's not part of the key; the graph_width component captures the resize cap.
+    // Rebuilt lazily by the render pre-pass.
     pub pixel_specs_cache:
-        Option<(u64, String, u16, Vec<crate::ui::graph_pixels::RowSpec>)>,
+        Option<(u64, String, u16, u16, Vec<crate::ui::graph_pixels::RowSpec>)>,
 }
 
 impl App {
@@ -715,6 +720,7 @@ impl App {
     pub(crate) fn save_ui_state(&self) {
         UiState {
             side_panel_layout: self.side_panel_layout,
+            graph_width_cap: self.graph_width_cap,
             metadata_columns: self.metadata_columns,
         }
         .save();

@@ -112,6 +112,7 @@ impl App {
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             metadata_columns: ui_state.metadata_columns,
+            graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,
             config,
             terminal_bg,

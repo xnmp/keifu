@@ -38,6 +38,9 @@ pub struct StatusBar<'a> {
     conflict_count: usize,
     /// Open-PR hint for the selected commit (`o: open PR #N`), when it has one.
     pr_hint: Option<String>,
+    /// Whether the graph column is capped or cappable (needs > 4 cells), so the
+    /// `< >` resize hint is worth showing.
+    graph_cappable: bool,
     theme: &'a Theme,
 }
 
@@ -96,6 +99,7 @@ impl<'a> StatusBar<'a> {
                     })
                     .map(|pr| pr.number),
             ),
+            graph_cappable: (app.graph_layout.max_lane + 1) * 2 > 4,
             theme,
         }
     }
@@ -251,6 +255,11 @@ impl<'a> Widget for StatusBar<'a> {
                             if let Some(hint) = &self.pr_hint {
                                 spans.push(Span::styled(" o ", key_style));
                                 spans.push(Span::styled(format!("{hint} "), desc_style));
+                            }
+                            // Only when the graph is wide enough to be capped.
+                            if self.graph_cappable {
+                                spans.push(Span::styled(" <> ", key_style));
+                                spans.push(Span::styled("width ", desc_style));
                             }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));

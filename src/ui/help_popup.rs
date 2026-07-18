@@ -124,6 +124,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  M          ", key_style),
                 Span::styled("Toggle metadata columns (author/hash/date)", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  < / >      ", key_style),
+                Span::styled("Shrink / widen the graph column (… = truncated)", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
         ];

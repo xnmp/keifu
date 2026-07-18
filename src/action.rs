@@ -45,6 +45,10 @@ pub enum Action {
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 
+    // Shrink / widen the graph column width cap (graph)
+    ShrinkGraphWidth,
+    WidenGraphWidth,
+
     // Per-file history (files pane)
     FileHistory,
 

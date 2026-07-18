@@ -112,6 +112,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
 | `o` | Open the selected commit's PR in the browser (needs `gh`; badge shown on commits with an open PR) |
 | `Shift+M` | Toggle which metadata columns (author/hash/date) show on commit rows (persists across restarts) |
+| `<` / `>` | Shrink / widen the graph column width (caps wasted padding from wide history; `…` marks truncated rows; persists) |
 
 The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depending on context: checkout, create/rename/delete branch, merge into current, rebase current onto this, cherry-pick, revert, reset (soft/mixed/hard), add/delete/push tag, push, pull, prune remote-tracking refs, copy hash/message, mark/compare, and — on the uncommitted or a stash node — stash apply/pop/drop and branch-from-stash.
 

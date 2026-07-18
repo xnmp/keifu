@@ -168,10 +168,16 @@ impl MetadataColumns {
 }
 
 /// Persistent UI state saved between sessions.
+///
+/// Field order matters for TOML: scalar values must be emitted before the
+/// `[metadata_columns]` table, so keep `metadata_columns` last.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiState {
     pub side_panel_layout: bool,
+    /// Cap on the graph column width in cells; `None` = uncapped (fit all lanes,
+    /// the default). A cap wider than a later graph's needed width is uncapped.
+    pub graph_width_cap: Option<usize>,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -374,6 +380,7 @@ mod tests {
     fn ui_state_round_trips_metadata_columns() {
         let state = UiState {
             side_panel_layout: true,
+            graph_width_cap: Some(8),
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -383,17 +390,29 @@ mod tests {
         let serialized = toml::to_string(&state).unwrap();
         let restored: UiState = toml::from_str(&serialized).unwrap();
         assert!(restored.side_panel_layout);
+        assert_eq!(restored.graph_width_cap, Some(8));
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
     }
 
     #[test]
+    fn ui_state_uncapped_graph_width_omits_the_field() {
+        // None serializes to nothing and round-trips back to None (uncapped).
+        let state = UiState::default();
+        assert_eq!(state.graph_width_cap, None);
+        let serialized = toml::to_string(&state).unwrap();
+        let restored: UiState = toml::from_str(&serialized).unwrap();
+        assert_eq!(restored.graph_width_cap, None);
+    }
+
+    #[test]
     fn ui_state_missing_metadata_section_falls_back_to_all_visible() {
-        // An older state.toml (before the field existed) must still load, with
-        // every column defaulting to visible.
+        // An older state.toml (before the fields existed) must still load, with
+        // every column visible and the graph uncapped.
         let state: UiState = toml::from_str("side_panel_layout = true").unwrap();
         assert!(state.side_panel_layout);
+        assert_eq!(state.graph_width_cap, None);
         assert_eq!(state.metadata_columns, MetadataColumns::default());
     }
 

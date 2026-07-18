@@ -78,6 +78,12 @@ impl App {
             Action::OpenMetadataMenu => {
                 self.mode = AppMode::MetadataMenu { selected: 0 };
             }
+            Action::ShrinkGraphWidth => {
+                self.resize_graph_width(-1);
+            }
+            Action::WidenGraphWidth => {
+                self.resize_graph_width(1);
+            }
             Action::MoveUp => {
                 self.move_selection(-1);
             }
@@ -322,6 +328,17 @@ impl App {
             }
             None => self.set_message("No open PR for this commit"),
         }
+    }
+
+    /// Adjust the graph column width cap by `direction` lanes (each lane = 2
+    /// cells): negative shrinks (adds/tightens the cap, floor 4 cells), positive
+    /// widens (loosens it; past the width needed to fit all lanes it becomes
+    /// uncapped). Persists the choice.
+    pub(crate) fn resize_graph_width(&mut self, direction: i32) {
+        let needed = (self.graph_layout.max_lane + 1) * 2;
+        self.graph_width_cap =
+            crate::ui::graph_view::next_graph_cap(needed, self.graph_width_cap, direction);
+        self.save_ui_state();
     }
 
     pub(crate) fn do_checkout(&mut self) -> Result<()> {

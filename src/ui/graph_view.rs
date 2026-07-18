@@ -102,6 +102,64 @@ pub struct GraphViewWidget<'a> {
 /// overlay in `ui::mod` key off this so the image lines up with the glyph slot.
 pub const GRAPH_LEADING_COLUMNS: u16 = 1;
 
+/// The graph column width in cells actually shown: the number needed to fit all
+/// lanes (`needed`), unless the user set a smaller cap. `cap == None` — or a cap
+/// at/above `needed` — means uncapped. Never below 4 (two lanes) or above
+/// `needed`.
+pub fn effective_graph_width(needed: usize, cap: Option<usize>) -> usize {
+    match cap {
+        None => needed,
+        Some(c) => {
+            let lo = 4.min(needed);
+            c.clamp(lo, needed)
+        }
+    }
+}
+
+/// The next graph-width cap after a resize step of `direction` lanes (each lane
+/// = 2 cells). Negative shrinks (floor 4 cells); positive widens, and widening
+/// to or past `needed` returns `None` (uncapped). A stale cap wider than
+/// `needed` is treated as uncapped, so shrinking from it caps at `needed - 2`.
+pub fn next_graph_cap(needed: usize, cap: Option<usize>, direction: i32) -> Option<usize> {
+    let eff = effective_graph_width(needed, cap);
+    let new = if direction < 0 {
+        eff.saturating_sub(2).max(4).min(needed)
+    } else {
+        eff + 2
+    };
+    if new >= needed {
+        None
+    } else {
+        Some(new)
+    }
+}
+
+/// For a row of `n` graph cells and an effective `graph_width` (in cells),
+/// returns (cells to render, whether a `…` marker is appended). When the row
+/// overflows the width, one column is reserved for the marker. Shared by both
+/// renderers so the truncation point and the ellipsis agree.
+fn graph_truncation(n: usize, graph_width: usize) -> (usize, bool) {
+    if n > graph_width {
+        (graph_width.saturating_sub(1), true)
+    } else {
+        (n, false)
+    }
+}
+
+/// Cells drawn in a pixel row's image: the `graph_width` truncation budget,
+/// further bounded by what fits the panel (`panel_available`). The `…` marker,
+/// when truncating, is drawn by the text layer, so it's excluded here.
+fn pixel_row_cells(n: usize, graph_width: usize, panel_available: usize) -> usize {
+    graph_truncation(n, graph_width).0.min(panel_available)
+}
+
+/// Dim style for the truncation `…` marker.
+fn ellipsis_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.text_muted)
+        .add_modifier(Modifier::DIM)
+}
+
 /// The nodes shown by the graph list, paired with their index into
 /// `graph_layout.nodes`. When a commit filter is active only the matching
 /// nodes are listed, in `visible_commit_indices` order. This is the single
@@ -122,15 +180,19 @@ pub fn visible_nodes(app: &App) -> Vec<(usize, &GraphNode)> {
 /// the same order the graph widget lists them, so the overlay can index into it
 /// by visible-row position. Neighbours follow visible order.
 ///
-/// `available_cells` caps each spec's cell count to the width the overlay will
-/// actually draw: the iTerm2/Sixel fixed protocols render *nothing* when the
-/// protocol is wider than its render area (only Kitty crops), so the cached
-/// protocol's width must equal the rect the overlay uses. Truncating here keeps
-/// them in lockstep; truncated specs still hash as themselves so caching holds.
+/// Each spec's cells are truncated to what the overlay actually draws:
+/// - `graph_width` is the user-capped effective width; a row overflowing it
+///   reserves one column for the `…` marker (added by the text layer).
+/// - `panel_available` bounds the image to the render area — the iTerm2/Sixel
+///   fixed protocols render *nothing* when the protocol is wider than its render
+///   area (only Kitty crops), so the cached protocol's width must fit.
+///
+/// Truncated specs still hash as themselves, so the protocol cache holds.
 pub fn build_pixel_row_specs(
     app: &App,
     theme: &Theme,
-    available_cells: usize,
+    graph_width: usize,
+    panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
     let nodes: Vec<&GraphNode> = visible_nodes(app).into_iter().map(|(_, n)| n).collect();
@@ -139,7 +201,8 @@ pub fn build_pixel_row_specs(
             let prev = i.checked_sub(1).map(|p| nodes[p]);
             let next = nodes.get(i + 1).copied();
             let mut spec = build_row_spec(prev, nodes[i], next, theme);
-            spec.cells.truncate(available_cells);
+            spec.cells
+                .truncate(pixel_row_cells(nodes[i].cells.len(), graph_width, panel_available));
             spec
         })
         .collect()
@@ -147,7 +210,8 @@ pub fn build_pixel_row_specs(
 
 impl<'a> GraphViewWidget<'a> {
     pub fn new(app: &App, width: u16, theme: &'a Theme, pixel_mode: bool) -> Self {
-        let max_lane = app.graph_layout.max_lane;
+        let needed = (app.graph_layout.max_lane + 1) * 2;
+        let graph_width = effective_graph_width(needed, app.graph_width_cap);
         let inner_width = width.saturating_sub(2) as usize;
         let selected_branch_name = app.selected_branch_name();
         let has_filter = !app.commit_filter.is_empty();
@@ -177,7 +241,7 @@ impl<'a> GraphViewWidget<'a> {
             });
             let line = render_graph_line(
                 node,
-                max_lane,
+                graph_width,
                 is_selected,
                 is_marked,
                 inner_width,
@@ -622,7 +686,7 @@ fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(String, Style)>
 #[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
 fn render_graph_line<'a>(
     node: &GraphNode,
-    max_lane: usize,
+    graph_width: usize,
     is_selected: bool,
     is_marked: bool,
     total_width: usize,
@@ -642,19 +706,26 @@ fn render_graph_line<'a>(
     let mut left_width: usize = GRAPH_LEADING_COLUMNS as usize;
 
     // Pixel mode: the graph column is painted by an image overlay, so emit
-    // blank space of the exact same width (one column per cell, HEAD star
-    // included) to keep the text layout identical.
+    // blank space of the exact same width to keep the text layout identical —
+    // plus the `…` marker (in the text layer) when the width cap truncates the
+    // row, since the image can't draw it.
     if pixel_mode {
-        for _ in &node.cells {
+        let (budget, ellipsis) = graph_truncation(node.cells.len(), graph_width);
+        for _ in 0..budget {
             spans.push(Span::raw(" "));
             left_width += 1;
         }
+        if ellipsis {
+            spans.push(Span::styled("…", ellipsis_style(theme)));
+            left_width += 1;
+        }
     } else {
-        left_width = render_cells_unicode(&mut spans, node, theme, left_width);
+        left_width = render_cells_unicode(&mut spans, node, theme, left_width, graph_width);
     }
 
-    // Padding to align graph width (display width based)
-    let graph_display_width = (max_lane + 1) * 2;
+    // Padding to align to the (capped) graph width. Reclaimed width flows to the
+    // message budget: the tail sizes the message from `total_width - left_width`.
+    let graph_display_width = graph_width;
     if left_width < graph_display_width + 1 {
         // +1 accounts for the start marker
         let padding = graph_display_width + 1 - left_width;
@@ -678,14 +749,20 @@ fn render_graph_line<'a>(
     )
 }
 
-/// Render the Unicode box-drawing glyphs for a row's cells into `spans`,
-/// returning the updated `left_width`.
+/// Render the Unicode box-drawing glyphs for a row's cells into `spans`, capped
+/// at `cap` graph columns, returning the updated `left_width`. When the row
+/// overflows the cap, the last column becomes a dim `…`.
 fn render_cells_unicode(
     spans: &mut Vec<Span<'_>>,
     node: &GraphNode,
     theme: &Theme,
     mut left_width: usize,
+    cap: usize,
 ) -> usize {
+    // `budget` graph columns are available for glyphs; when truncating, one more
+    // column holds the `…`.
+    let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
+
     // Render cells.
     //
     // The HEAD commit is drawn with a width-2 star emoji so it stands out. To
@@ -694,6 +771,7 @@ fn render_cells_unicode(
     // line (Empty or a plain Horizontal connector). If a pipe or junction sits
     // there, painting over it would corrupt the graph, so we fall back to the
     // width-1 glyph instead.
+    let mut cols = 0usize; // graph columns emitted so far
     let mut idx = 0;
     while idx < node.cells.len() {
         let cell = &node.cells[idx];
@@ -713,20 +791,27 @@ fn render_cells_unicode(
                     node.cells.get(idx + 1),
                     None | Some(CellType::Empty) | Some(CellType::Horizontal(_))
                 );
-                if right_is_clear {
-                    // ⭐ is width-2; it spans the commit cell + the cleared neighbor.
-                    spans.push(Span::styled("⭐", style));
-                    left_width += 2;
-                    idx += 2; // skip the swallowed cell
-                    continue;
+                // ⭐ is width-2 and spans two cells; ◉ is the width-1 fallback.
+                let (glyph, gw, consumed) = if right_is_clear {
+                    ("⭐", 2usize, 2usize)
                 } else {
-                    // No room to widen: keep the distinct width-1 HEAD glyph.
-                    spans.push(Span::styled("◉".to_string(), style));
-                    left_width += 1;
-                    idx += 1;
-                    continue;
+                    ("◉", 1usize, 1usize)
+                };
+                if cols + gw > budget {
+                    // Would overflow the cap — and a width-2 star can't be halved
+                    // at the boundary. Stop; the ellipsis padding below fills in.
+                    break;
                 }
+                spans.push(Span::styled(glyph, style));
+                cols += gw;
+                left_width += gw;
+                idx += consumed;
+                continue;
             }
+        }
+
+        if cols + 1 > budget {
+            break;
         }
 
         let (ch, color) = match cell {
@@ -753,8 +838,20 @@ fn render_cells_unicode(
         let ch_str = ch.to_string();
         let ch_width = display_width(&ch_str);
         spans.push(Span::styled(ch_str, style));
+        cols += ch_width;
         left_width += ch_width;
         idx += 1;
+    }
+
+    if ellipsis {
+        // Fill any gap a width-2 star left at the boundary, then the marker.
+        while cols < budget {
+            spans.push(Span::raw(" "));
+            cols += 1;
+            left_width += 1;
+        }
+        spans.push(Span::styled("…", ellipsis_style(theme)));
+        left_width += 1;
     }
 
     left_width
@@ -1522,5 +1619,147 @@ mod tests {
         let label = &out[0].0;
         assert!(label.contains("lonely"), "stripped name present: {label:?}");
         assert!(!label.contains("origin/"), "{label:?}");
+    }
+
+    // ── graph width cap arithmetic ───────────────────────────────────
+
+    #[test]
+    fn effective_graph_width_clamps_and_honours_uncapped() {
+        assert_eq!(effective_graph_width(10, None), 10, "None = uncapped");
+        assert_eq!(effective_graph_width(10, Some(6)), 6);
+        assert_eq!(effective_graph_width(10, Some(2)), 4, "floor at 4");
+        assert_eq!(effective_graph_width(10, Some(100)), 10, "cap >= needed = uncapped");
+        // Graph too small to cap: floor collapses to needed.
+        assert_eq!(effective_graph_width(2, Some(6)), 2);
+        assert_eq!(effective_graph_width(2, None), 2);
+    }
+
+    #[test]
+    fn next_graph_cap_steps_by_two_and_uncaps_past_needed() {
+        // Shrink from uncapped caps at needed-2.
+        assert_eq!(next_graph_cap(10, None, -1), Some(8));
+        assert_eq!(next_graph_cap(10, Some(8), -1), Some(6));
+        // Floor at 4.
+        assert_eq!(next_graph_cap(10, Some(4), -1), Some(4));
+        // Widen loosens; reaching needed uncaps.
+        assert_eq!(next_graph_cap(10, Some(4), 1), Some(6));
+        assert_eq!(next_graph_cap(10, Some(8), 1), None);
+        assert_eq!(next_graph_cap(10, None, 1), None);
+        // A stale cap wider than needed resets on shrink, uncaps on widen.
+        assert_eq!(next_graph_cap(10, Some(100), -1), Some(8));
+        assert_eq!(next_graph_cap(10, Some(100), 1), None);
+        // Graph too small to cap stays uncapped.
+        assert_eq!(next_graph_cap(2, None, -1), None);
+    }
+
+    #[test]
+    fn graph_truncation_reserves_a_column_for_the_marker() {
+        assert_eq!(graph_truncation(8, 6), (5, true));
+        assert_eq!(graph_truncation(6, 6), (6, false));
+        assert_eq!(graph_truncation(3, 6), (3, false));
+    }
+
+    #[test]
+    fn pixel_row_cells_is_min_of_cap_budget_and_panel() {
+        // Cap truncates (8 cells, width 6 → budget 5), panel wide.
+        assert_eq!(pixel_row_cells(8, 6, 100), 5);
+        // Uncapped and fits.
+        assert_eq!(pixel_row_cells(8, 100, 100), 8);
+        // Panel narrower than the cap budget bounds it further.
+        assert_eq!(pixel_row_cells(8, 100, 3), 3);
+        assert_eq!(pixel_row_cells(8, 6, 3), 3);
+        // The image cell count depends on graph_width, so the pixel spec cache
+        // must key on it (different caps ⇒ different specs).
+        assert_ne!(pixel_row_cells(8, 6, 100), pixel_row_cells(8, 8, 100));
+    }
+
+    // ── unicode cell clamping ────────────────────────────────────────
+
+    fn node_with_cells(cells: Vec<CellType>, is_head: bool) -> GraphNode {
+        GraphNode {
+            commit: None,
+            lane: 0,
+            color_index: 0,
+            branch_names: Vec::new(),
+            tag_names: Vec::new(),
+            is_head,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells,
+        }
+    }
+
+    /// Render just the graph cells at `cap` and return the emitted text.
+    fn render_cells(node: &GraphNode, cap: usize) -> String {
+        let theme = Theme::dark();
+        let mut spans: Vec<Span> = Vec::new();
+        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // left_width is columns emitted (started at 0); it must equal the text's
+        // display width.
+        assert_eq!(lw, display_width(&text), "left_width tracks display width");
+        text
+    }
+
+    #[test]
+    fn unicode_cells_clamp_to_cap_with_ellipsis() {
+        // Eight pipes, capped at 6 → 5 glyphs + a dim …, exactly 6 columns.
+        let node = node_with_cells(vec![CellType::Pipe(0); 8], false);
+        let text = render_cells(&node, 6);
+        assert_eq!(display_width(&text), 6);
+        assert!(text.ends_with('…'), "truncation marker present: {text:?}");
+        assert_eq!(text.chars().filter(|c| *c == '│').count(), 5);
+    }
+
+    #[test]
+    fn unicode_cells_untruncated_when_within_cap() {
+        let node = node_with_cells(vec![CellType::Pipe(0); 4], false);
+        let text = render_cells(&node, 8);
+        assert_eq!(display_width(&text), 4);
+        assert!(!text.contains('…'));
+    }
+
+    #[test]
+    fn head_star_fits_when_it_lands_before_the_boundary() {
+        // Star (width-2) + one pipe fit in budget 3 (cap 4), then ….
+        let node = node_with_cells(
+            vec![
+                CellType::Commit(0),
+                CellType::Empty,
+                CellType::Pipe(0),
+                CellType::Pipe(0),
+                CellType::Pipe(0),
+                CellType::Pipe(0),
+            ],
+            true,
+        );
+        let text = render_cells(&node, 4);
+        assert_eq!(display_width(&text), 4);
+        assert!(text.contains('⭐'));
+        assert!(text.ends_with('…'));
+    }
+
+    #[test]
+    fn head_star_at_boundary_emits_no_broken_glyph() {
+        // Two pipes then the head star: budget 3 (cap 4) leaves room for only
+        // one more column, so the width-2 star is dropped (a space fills the
+        // gap) rather than emitting half a glyph.
+        let node = node_with_cells(
+            vec![
+                CellType::Pipe(0),
+                CellType::Pipe(0),
+                CellType::Commit(0),
+                CellType::Empty,
+                CellType::Pipe(0),
+                CellType::Pipe(0),
+            ],
+            true,
+        );
+        let text = render_cells(&node, 4);
+        assert_eq!(display_width(&text), 4, "exactly cap wide: {text:?}");
+        assert!(!text.contains('⭐'), "no half star: {text:?}");
+        assert!(text.ends_with('…'));
     }
 }

@@ -159,27 +159,36 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // widget. Specs are capped to the width the overlay will draw and cached
     // until the layout, filter, or width changes.
     let pixel_mode = if app.pixel_graph.is_some() {
-        let available = graph_area
+        let panel_available = graph_area
             .width
             .saturating_sub(2)
             .saturating_sub(graph_view::GRAPH_LEADING_COLUMNS) as usize;
-        let reuse = app.pixel_specs_cache.as_ref().is_some_and(|(gen, filter, w, _)| {
-            *gen == app.graph_generation
-                && filter == &app.commit_filter
-                && *w as usize == available
-        });
+        // The user's resize cap: specs (and thus cached protocols) depend on it,
+        // so it's part of the cache key alongside the panel width.
+        let needed = (app.graph_layout.max_lane + 1) * 2;
+        let graph_width = graph_view::effective_graph_width(needed, app.graph_width_cap);
+        let reuse = app
+            .pixel_specs_cache
+            .as_ref()
+            .is_some_and(|(gen, filter, pa, gw, _)| {
+                *gen == app.graph_generation
+                    && filter == &app.commit_filter
+                    && *pa as usize == panel_available
+                    && *gw as usize == graph_width
+            });
         if !reuse {
-            let specs = graph_view::build_pixel_row_specs(app, &theme, available);
+            let specs = graph_view::build_pixel_row_specs(app, &theme, graph_width, panel_available);
             app.pixel_specs_cache = Some((
                 app.graph_generation,
                 app.commit_filter.clone(),
-                available as u16,
+                panel_available as u16,
+                graph_width as u16,
                 specs,
             ));
         }
         // Disjoint field borrows: `specs` from pixel_specs_cache, `pg` from
         // pixel_graph. Sync transmits/evicts protocols for this frame.
-        let specs = &app.pixel_specs_cache.as_ref().unwrap().3;
+        let specs = &app.pixel_specs_cache.as_ref().unwrap().4;
         let active = app.pixel_graph.as_mut().is_some_and(|pg| {
             pg.sync_frame(specs);
             pg.is_active()
@@ -201,7 +210,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         &mut app.graph_nav.graph_list_state,
     );
     if pixel_mode {
-        if let Some((_, _, _, specs)) = &app.pixel_specs_cache {
+        if let Some((_, _, _, _, specs)) = &app.pixel_specs_cache {
             overlay_pixel_graph(frame, app, graph_area, specs);
         }
     }

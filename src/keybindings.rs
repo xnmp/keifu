@@ -149,6 +149,11 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // mark/compare, so Shift+M — mnemonic "Metadata")
         (KeyModifiers::SHIFT, KeyCode::Char('M')) => Some(Action::OpenMetadataMenu),
 
+        // Shrink / widen the graph column width cap (one lane = 2 cells). Match
+        // any modifier since '<'/'>' arrive shifted on most layouts.
+        (_, KeyCode::Char('<')) => Some(Action::ShrinkGraphWidth),
+        (_, KeyCode::Char('>')) => Some(Action::WidenGraphWidth),
+
         // Quick actions
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
