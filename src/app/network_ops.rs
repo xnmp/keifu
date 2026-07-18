@@ -116,6 +116,18 @@ impl App {
         }
     }
 
+    /// Kick off / poll the background open-PR fetch. Returns true when the PR
+    /// map changed (so badges re-render). Never blocks the UI thread.
+    pub fn update_open_prs(&mut self) -> bool {
+        self.pr_fetch.maybe_start(&self.repo_path);
+        if let Some(prs) = self.pr_fetch.poll() {
+            self.open_prs = prs;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn poll_fs_watcher(&mut self) -> bool {
         if let Some(pending) = self.pending_watcher.as_mut() {
             if let Some(watcher) = pending.try_take() {

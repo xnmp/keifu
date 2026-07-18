@@ -129,6 +129,8 @@ fn make_base_app(
         message: None,
         message_time: None,
         network: NetworkManager::new(),
+        open_prs: std::collections::HashMap::new(),
+        pr_fetch: keifu::pr::PrFetch::new(),
         watcher: None,
         pending_watcher: None,
         last_undoable_op: None,

@@ -39,6 +39,9 @@ pub enum Action {
     // Commit comparison (graph)
     MarkForCompare,
 
+    // Open the selected commit's PR in the browser (graph)
+    OpenPr,
+
     // Per-file history (files pane)
     FileHistory,
 

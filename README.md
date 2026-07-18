@@ -28,6 +28,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Merge-conflict handling: accept ours/theirs, continue/abort a merge, rebase, cherry-pick, or revert
 - Git operations: checkout, create/rename/delete branch, merge, rebase, cherry-pick, revert, reset (soft/mixed/hard), tag add/delete/push, stash (apply/pop/drop, staged/all/all+untracked push, branch-from-stash)
 - Fetch/pull/push with multi-remote support, upstream tracking, and one-key publish
+- Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge; `o` opens it in the browser (requires the `gh` CLI)
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
@@ -109,6 +110,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `Shift+B` | Branch filter — choose which branches' commits are shown |
 | `Ctrl+f` | Filter commits by message/author/hash |
 | `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
+| `o` | Open the selected commit's PR in the browser (needs `gh`; badge shown on commits with an open PR) |
 
 The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depending on context: checkout, create/rename/delete branch, merge into current, rebase current onto this, cherry-pick, revert, reset (soft/mixed/hard), add/delete/push tag, push, pull, prune remote-tracking refs, copy hash/message, mark/compare, and — on the uncommitted or a stash node — stash apply/pop/drop and branch-from-stash.
 

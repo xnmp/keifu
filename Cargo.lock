@@ -907,6 +907,7 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "serde",
+ "serde_json",
  "similar",
  "syntect",
  "tempfile",

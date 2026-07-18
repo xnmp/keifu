@@ -72,6 +72,9 @@ impl App {
             Action::MarkForCompare => {
                 self.mark_or_compare_selected();
             }
+            Action::OpenPr => {
+                self.open_selected_pr();
+            }
             Action::MoveUp => {
                 self.move_selection(-1);
             }
@@ -293,6 +296,29 @@ impl App {
 
     pub(crate) fn selected_commit_node(&self) -> Option<&crate::git::graph::GraphNode> {
         self.graph_nav.selected_node(&self.graph_layout)
+    }
+
+    /// Open the selected commit's associated open PR in the browser, if any of
+    /// its branch labels match an open PR's head branch.
+    pub(crate) fn open_selected_pr(&mut self) {
+        let pr = self.selected_commit_node().and_then(|node| {
+            crate::ui::graph_view::pr_for_branch_labels(
+                &node.branch_names,
+                &self.remotes,
+                &self.open_prs,
+            )
+            .cloned()
+        });
+        match pr {
+            Some(pr) => {
+                if let Err(e) = open_url(&pr.url) {
+                    self.show_error(format!("Could not open PR: {e}"));
+                } else {
+                    self.set_message(format!("Opening PR #{} in browser", pr.number));
+                }
+            }
+            None => self.set_message("No open PR for this commit"),
+        }
     }
 
     pub(crate) fn do_checkout(&mut self) -> Result<()> {

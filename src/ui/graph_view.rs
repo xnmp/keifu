@@ -10,9 +10,12 @@ use ratatui::{
 use chrono::{DateTime, Local};
 use unicode_width::UnicodeWidthChar;
 
+use std::collections::HashMap;
+
 use crate::{
     app::App,
     git::graph::{CellType, GraphNode},
+    pr::PrInfo,
 };
 
 /// Fixed display width for the date field (fits "59 minutes ago").
@@ -150,6 +153,7 @@ impl<'a> GraphViewWidget<'a> {
         let current_selected = app.graph_nav.graph_list_state.selected();
         let now = Local::now();
         let remotes = &app.remotes;
+        let open_prs = &app.open_prs;
 
         let node_iter = visible_nodes(app);
 
@@ -180,6 +184,7 @@ impl<'a> GraphViewWidget<'a> {
                 now,
                 pixel_mode,
                 remotes,
+                open_prs,
             );
             items.push(ListItem::new(line));
         }
@@ -210,6 +215,29 @@ fn strip_remote<'n>(name: &'n str, remotes: &[String]) -> Option<&'n str> {
         name.strip_prefix(r.as_str())
             .and_then(|rest| rest.strip_prefix('/'))
     })
+}
+
+/// Nerd Font pull-request glyph (nf-oct-git_pull_request) for the open-PR badge.
+const PR_BADGE_ICON: char = '\u{f407}';
+
+/// The first open PR (in branch-label order) whose head branch matches one of
+/// this node's branch labels. Remote refs are matched by their stripped name
+/// (handles non-origin remotes), so `origin/feat` and a local `feat` both match
+/// a PR whose `headRefName` is `feat`.
+pub fn pr_for_branch_labels<'p>(
+    branch_names: &[String],
+    remotes: &[String],
+    open_prs: &'p HashMap<String, PrInfo>,
+) -> Option<&'p PrInfo> {
+    branch_names.iter().find_map(|name| {
+        let bare = strip_remote(name, remotes).unwrap_or(name.as_str());
+        open_prs.get(bare)
+    })
+}
+
+/// Compact badge text for an open PR, e.g. " #12".
+fn pr_badge_text(pr: &PrInfo) -> String {
+    format!("{} #{}", PR_BADGE_ICON, pr.number)
 }
 
 /// Nerd Font cloud glyph marking a branch that only exists on a remote.
@@ -539,6 +567,7 @@ fn render_graph_line<'a>(
     now: DateTime<Local>,
     pixel_mode: bool,
     remotes: &[String],
+    open_prs: &HashMap<String, PrInfo>,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -579,6 +608,7 @@ fn render_graph_line<'a>(
         theme,
         now,
         remotes,
+        open_prs,
     )
 }
 
@@ -678,6 +708,7 @@ fn render_graph_line_tail<'a>(
     theme: &Theme,
     now: DateTime<Local>,
     remotes: &[String],
+    open_prs: &HashMap<String, PrInfo>,
 ) -> Line<'a> {
     // Separator between graph and commit info
     spans.push(Span::raw(" "));
@@ -736,6 +767,12 @@ fn render_graph_line_tail<'a>(
     // Tag labels render after branch labels with a distinct color.
     let tag_display = build_tag_labels(&node.tag_names, theme);
 
+    // Open-PR badge: chip after the branch labels when one of this node's
+    // branches has an open PR.
+    let pr_badge = pr_for_branch_labels(&node.branch_names, remotes, open_prs).map(pr_badge_text);
+    // Chip plus a trailing space.
+    let pr_badge_width = pr_badge.as_ref().map_or(0, |b| display_width(b) + 1);
+
     // === Right-aligned: date author hash (fixed width) ===
     let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
     let author = truncate_to_width(&commit.author_name, 8);
@@ -779,6 +816,16 @@ fn render_graph_line_tail<'a>(
         left_width += 1;
     }
 
+    // Render open-PR badge (after branch labels, before tags)
+    if let Some(badge) = &pr_badge {
+        let style = Style::default()
+            .fg(theme.pr_badge)
+            .add_modifier(Modifier::BOLD);
+        left_width += display_width(badge) + 1;
+        spans.push(Span::styled(badge.clone(), style));
+        spans.push(Span::raw(" "));
+    }
+
     // Render tag labels (after branches, before the stash label)
     for (label, style) in &tag_display {
         left_width += display_width(label) + 1;
@@ -804,6 +851,7 @@ fn render_graph_line_tail<'a>(
     // Compute max message width (remaining space after branch, stash label, and right side)
     let available_for_message = remaining_for_content
         .saturating_sub(branch_width)
+        .saturating_sub(pr_badge_width)
         .saturating_sub(tag_width)
         .saturating_sub(stash_width)
         .saturating_sub(right_width);
@@ -1167,5 +1215,70 @@ mod tests {
             "local branch must not get the remote icon: {:?}",
             out[0].0
         );
+    }
+
+    // ── open-PR badge matching ───────────────────────────────────────
+
+    fn pr(number: u64) -> PrInfo {
+        PrInfo {
+            number,
+            url: format!("https://github.com/o/r/pull/{number}"),
+            title: "t".to_string(),
+        }
+    }
+
+    fn prs(pairs: &[(&str, u64)]) -> HashMap<String, PrInfo> {
+        pairs.iter().map(|(b, n)| (b.to_string(), pr(*n))).collect()
+    }
+
+    #[test]
+    fn pr_matches_local_branch_label() {
+        let open = prs(&[("feat/x", 12)]);
+        let names = vec!["feat/x".to_string()];
+        let found = pr_for_branch_labels(&names, &[], &open);
+        assert_eq!(found.map(|p| p.number), Some(12));
+    }
+
+    #[test]
+    fn pr_matches_remote_ref_by_stripped_name() {
+        let open = prs(&[("feat/x", 3)]);
+        // Both origin and a non-origin remote strip to the PR's head branch.
+        let remotes = vec!["origin".to_string(), "upstream".to_string()];
+        assert_eq!(
+            pr_for_branch_labels(&["origin/feat/x".to_string()], &remotes, &open).map(|p| p.number),
+            Some(3)
+        );
+        assert_eq!(
+            pr_for_branch_labels(&["upstream/feat/x".to_string()], &remotes, &open)
+                .map(|p| p.number),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn pr_no_match_returns_none() {
+        let open = prs(&[("feat/x", 1)]);
+        assert!(pr_for_branch_labels(&["other".to_string()], &[], &open).is_none());
+        // A slashed local branch is not stripped, so it won't accidentally match
+        // a PR whose head is the trailing segment.
+        let open2 = prs(&[("x", 9)]);
+        assert!(pr_for_branch_labels(&["feature/x".to_string()], &["origin".to_string()], &open2).is_none());
+    }
+
+    #[test]
+    fn pr_first_matching_label_wins() {
+        let open = prs(&[("b", 2), ("a", 1)]);
+        // Labels checked in order; "a" comes first, so PR #1.
+        let names = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(pr_for_branch_labels(&names, &[], &open).map(|p| p.number), Some(1));
+    }
+
+    #[test]
+    fn pr_badge_text_is_compact() {
+        let text = pr_badge_text(&pr(42));
+        assert!(text.contains("#42"));
+        assert!(text.starts_with(PR_BADGE_ICON));
+        // Icon(1) + space(1) + "#42"(3) = 5 display columns.
+        assert_eq!(display_width(&text), 5);
     }
 }

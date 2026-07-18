@@ -85,6 +85,28 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
     anyhow::bail!("No clipboard tool found (install xclip, xsel, or wl-copy)")
 }
 
+/// Open a URL in the user's default browser, detached so the TUI's terminal
+/// state isn't disturbed (stdio redirected to null, no wait). Best-effort:
+/// tries `xdg-open` (Linux) then `open` (macOS).
+fn open_url(url: &str) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    for cmd in ["xdg-open", "open"] {
+        if Command::new(cmd)
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("No URL opener found (install xdg-open)")
+}
+
 /// Format a file-count label: the single quoted path, or "N files".
 fn file_count_label(paths: &[String]) -> String {
     if paths.len() == 1 {
@@ -494,6 +516,11 @@ pub struct App {
 
     // Network operations (fetch/push/auto-refresh)
     pub network: NetworkManager,
+
+    // Open GitHub PRs by head branch name, refreshed in the background via the
+    // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
+    pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
+    pub pr_fetch: crate::pr::PrFetch,
 
     // Filesystem watcher
     pub watcher: Option<crate::watcher::FsWatcher>,

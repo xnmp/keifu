@@ -77,6 +77,8 @@ pub struct Theme {
     pub branch_head: Color,
     // Tag labels in graph (distinct from branch labels)
     pub tag_label: Color,
+    // Open-PR badge in graph (distinct from branch/tag labels)
+    pub pr_badge: Color,
 
     // Editor selection
     pub editor_selection_fg: Color,
@@ -174,6 +176,8 @@ impl Theme {
             branch_head: Color::LightGreen,
             // Tag labels — gold, the git convention for tag refs.
             tag_label: Color::LightYellow,
+            // Open-PR badge — GitHub link blue, distinct from green/gold labels.
+            pr_badge: Color::Rgb(88, 166, 255),
 
             // Editor selection
             editor_selection_fg: Color::White,
@@ -277,6 +281,8 @@ impl Theme {
             branch_head: Color::Green,
             // Tag labels — dark gold, legible on light backgrounds.
             tag_label: Color::Rgb(150, 110, 0),
+            // Open-PR badge — GitHub link blue, darkened for light backgrounds.
+            pr_badge: Color::Rgb(9, 105, 218),
 
             // Editor selection
             editor_selection_fg: Color::White,

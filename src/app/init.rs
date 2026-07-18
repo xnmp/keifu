@@ -105,6 +105,8 @@ impl App {
             message: initial_message,
             message_time: initial_message_time,
             network: NetworkManager::new(),
+            open_prs: std::collections::HashMap::new(),
+            pr_fetch: crate::pr::PrFetch::new(),
             watcher,
             pending_watcher,
             last_undoable_op: None,

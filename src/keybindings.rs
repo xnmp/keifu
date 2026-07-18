@@ -135,6 +135,9 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Mark / compare two commits
         (KeyModifiers::NONE, KeyCode::Char('m')) => Some(Action::MarkForCompare),
 
+        // Open the selected commit's PR in the browser
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenPr),
+
         // Quick actions
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
