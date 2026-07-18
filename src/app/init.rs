@@ -114,6 +114,8 @@ impl App {
             ci_checks: None,
             thread_fetch: crate::pr_thread::PrThreadFetch::new(),
             pr_thread: None,
+            pr_editor: crate::text_editor::TextEditor::new(),
+            pr_action_runner: crate::pr_action::PrActionRunner::new(),
             watcher,
             pending_watcher,
             last_undoable_op: None,

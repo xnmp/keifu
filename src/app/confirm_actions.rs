@@ -112,6 +112,11 @@ impl App {
                         self.reload_file_diff_for_path(&file_path, scroll_offset)?;
                         return Ok(());
                     }
+                    ConfirmAction::PrAction(action) => {
+                        // Runs asynchronously; skip the synchronous refresh below.
+                        self.run_pr_action(action);
+                        return Ok(());
+                    }
                 }
                 self.refresh(true)?;
                 self.mode = AppMode::Normal;

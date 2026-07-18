@@ -425,8 +425,24 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled("scroll ", desc_style));
                 spans.push(Span::styled(" o ", key_style));
                 spans.push(Span::styled("open PR ", desc_style));
+                spans.push(Span::styled(" r ", key_style));
+                spans.push(Span::styled("review ", desc_style));
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("close", desc_style));
+            }
+            AppMode::PrCompose { .. } => {
+                spans.push(Span::styled(" Ctrl+S ", key_style));
+                spans.push(Span::styled("submit ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("cancel", desc_style));
+            }
+            AppMode::PrMergePicker { .. } | AppMode::PrReviewPicker { .. } => {
+                spans.push(Span::styled(" ↑/↓ ", key_style));
+                spans.push(Span::styled("move ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("choose ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("cancel", desc_style));
             }
             AppMode::BranchFilter { .. } => {
                 spans.push(Span::styled(" Space ", key_style));
@@ -463,6 +479,9 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::PullDivergence { .. } => Some(" PULL "),
             AppMode::CiChecks => Some(" CHECKS "),
             AppMode::PrThread => Some(" PR THREAD "),
+            AppMode::PrCompose { .. } => Some(" COMPOSE "),
+            AppMode::PrMergePicker { .. } => Some(" MERGE PR "),
+            AppMode::PrReviewPicker { .. } => Some(" REVIEW "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::TagPicker { .. } => Some(" TAG "),

@@ -47,6 +47,11 @@ impl App {
             Action::GoToTop => self.pr_thread_scroll(i32::MIN),
             Action::GoToBottom => self.pr_thread_scroll(i32::MAX),
             Action::OpenPr => self.pr_thread_open_url(),
+            Action::OpenReviewPicker => {
+                if let Some(number) = self.pr_thread.as_ref().map(|v| v.pr_number) {
+                    self.open_review_picker(number);
+                }
+            }
             _ => {}
         }
     }

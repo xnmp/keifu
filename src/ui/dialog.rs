@@ -160,6 +160,70 @@ impl<'a> Widget for PullDivergenceDialog<'a> {
     }
 }
 
+/// A small titled options picker (merge method, review disposition, …).
+pub struct OptionsDialog<'a> {
+    title: &'a str,
+    prompt: &'a str,
+    options: &'a [&'a str],
+    selected: usize,
+    theme: &'a Theme,
+}
+
+impl<'a> OptionsDialog<'a> {
+    pub fn new(
+        title: &'a str,
+        prompt: &'a str,
+        options: &'a [&'a str],
+        selected: usize,
+        theme: &'a Theme,
+    ) -> Self {
+        Self {
+            title,
+            prompt,
+            options,
+            selected,
+            theme,
+        }
+    }
+}
+
+impl<'a> Widget for OptionsDialog<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+        let block = Block::default()
+            .title(format!(" {} ", self.title))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(self.theme.confirm_border))
+            .style(Style::default().bg(self.theme.popup_bg));
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  {}", self.prompt),
+                Style::default().fg(self.theme.text_primary),
+            )),
+            Line::from(""),
+        ];
+        for (i, opt) in self.options.iter().enumerate() {
+            let selected = i == self.selected;
+            let style = if selected {
+                self.theme.list_selection_style()
+            } else {
+                Style::default().fg(self.theme.text_primary)
+            };
+            let prefix = if selected { " > " } else { "   " };
+            lines.push(Line::from(Span::styled(format!("{prefix}{opt}"), style)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ↑↓ move   Enter choose   Esc cancel",
+            Style::default().fg(self.theme.text_muted),
+        )));
+
+        Widget::render(Paragraph::new(lines).block(block), area, buf);
+    }
+}
+
 /// Branch picker dialog (shown when selecting from multiple branches on a commit)
 pub struct BranchPickerWidget<'a> {
     branches: &'a [String],

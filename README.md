@@ -113,7 +113,9 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
 | `o` | Open the selected commit's PR in the browser (needs `gh`; badge shown on commits with an open PR) |
 | `c` | CI check details for the selected commit's PR — list checks and read a failed check's log tail in a popup (needs `gh`) |
-| `v` | View the selected commit's PR conversation — description, comments, reviews, and review threads (resolved/open) in a scrollable popup (needs `gh`) |
+| `v` | View the selected commit's PR conversation — description, comments, reviews, and review threads (resolved/open) in a scrollable popup; `r` inside submits a review (approve / request changes / comment) (needs `gh`) |
+
+PR actions live in the commit actions menu (`Enter`): **Create pull request** (on the current branch when it has no open PR) and **Merge pull request** (on a commit with an open PR — merge / squash / rebase). All PR mutations run in the background and confirm first (except a plain review comment), requiring the `gh` CLI.
 | `Shift+M` | Toggle which metadata columns (author/hash/date) show on commit rows (persists across restarts) |
 | `<` / `>` | Shrink / widen the graph column width (caps wasted padding from wide history; `…` marks truncated rows; persists) |
 

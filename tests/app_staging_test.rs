@@ -138,6 +138,8 @@ fn make_base_app(
         ci_checks: None,
         thread_fetch: keifu::pr_thread::PrThreadFetch::new(),
         pr_thread: None,
+        pr_editor: keifu::text_editor::TextEditor::new(),
+        pr_action_runner: keifu::pr_action::PrActionRunner::new(),
         watcher: None,
         pending_watcher: None,
         last_undoable_op: None,

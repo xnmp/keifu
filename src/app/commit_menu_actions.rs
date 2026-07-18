@@ -93,6 +93,14 @@ impl App {
             }
         }
 
+        // PR actions (need the `gh` CLI + an open-PR context).
+        if self.can_offer_create_pr() {
+            items.push(CommitMenuItem::CreatePr);
+        }
+        if self.selected_commit_has_open_pr() {
+            items.push(CommitMenuItem::MergePr);
+        }
+
         items.push(CommitMenuItem::Checkout);
         items.push(CommitMenuItem::CreateBranch);
 
@@ -560,6 +568,12 @@ impl App {
             }
             CommitMenuItem::Prune => {
                 self.initiate_prune();
+            }
+            CommitMenuItem::CreatePr => {
+                self.open_create_pr();
+            }
+            CommitMenuItem::MergePr => {
+                self.open_merge_pr();
             }
             CommitMenuItem::StashApply => {
                 if let Some(index) = self.selected_stash_index() {

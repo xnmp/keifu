@@ -52,6 +52,11 @@ pub fn map_key_to_action(
         AppMode::PullDivergence { .. } => map_pull_divergence_mode(key),
         AppMode::CiChecks => map_ci_checks_mode(key),
         AppMode::PrThread => map_pr_thread_mode(key),
+        AppMode::PrCompose { .. } => map_pr_compose_mode(key),
+        // The small pickers share the pull-divergence menu keymap.
+        AppMode::PrMergePicker { .. } | AppMode::PrReviewPicker { .. } => {
+            map_pull_divergence_mode(key)
+        }
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
@@ -490,11 +495,26 @@ fn map_pr_thread_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::GoToBottom)
         }
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenPr),
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::OpenReviewPicker),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }
         _ => None,
     }
+}
+
+/// PR-compose editor: Enter inserts a newline, Ctrl+S / Ctrl+Enter submit, Esc
+/// cancels; everything else reuses the commit-message editor's key handling.
+fn map_pr_compose_mode(key: KeyEvent) -> Option<Action> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => return Some(Action::Cancel),
+        KeyCode::Char('s') if ctrl => return Some(Action::SubmitCompose),
+        KeyCode::Enter if ctrl => return Some(Action::SubmitCompose),
+        KeyCode::Enter if key.modifiers.is_empty() => return Some(Action::EditorNewline),
+        _ => {}
+    }
+    map_editor_mode(key)
 }
 
 fn map_ci_checks_mode(key: KeyEvent) -> Option<Action> {

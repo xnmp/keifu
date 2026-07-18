@@ -1,6 +1,34 @@
 //! Commit detail pane and commit-message editor.
 
 use super::*;
+use crate::text_editor::TextEditor;
+
+/// Apply a text-editing action to `editor`. Returns true if `action` was an
+/// editor edit/movement (so callers know it was consumed). Shared by the
+/// commit-message editor and the PR-compose editor.
+pub(crate) fn apply_editor_edit(editor: &mut TextEditor, action: &Action) -> bool {
+    match action {
+        Action::EditorChar(c) => editor.insert_char(*c),
+        Action::EditorNewline => editor.insert_newline(),
+        Action::EditorBackspace => editor.backspace(),
+        Action::EditorDelete => editor.delete(),
+        Action::EditorLeft(s) => editor.move_left(*s),
+        Action::EditorRight(s) => editor.move_right(*s),
+        Action::EditorUp(s) => editor.move_up(*s),
+        Action::EditorDown(s) => editor.move_down(*s),
+        Action::EditorHome(s) => editor.move_home(*s),
+        Action::EditorEnd(s) => editor.move_end(*s),
+        Action::EditorWordLeft(s) => editor.move_word_left(*s),
+        Action::EditorWordRight(s) => editor.move_word_right(*s),
+        Action::EditorBackspaceWord => editor.backspace_word(),
+        Action::EditorDeleteWord => editor.delete_word(),
+        Action::EditorKillLine => editor.kill_line(),
+        Action::EditorTextStart(s) => editor.move_text_start(*s),
+        Action::EditorTextEnd(s) => editor.move_text_end(*s),
+        _ => return false,
+    }
+    true
+}
 
 impl App {
     pub(crate) fn handle_commit_detail_action(&mut self, action: Action) -> Result<()> {
@@ -146,24 +174,9 @@ impl App {
                     self.focused_panel = FocusedPanel::Graph;
                 }
             }
-            Action::EditorChar(c) => self.commit_editor.insert_char(c),
-            Action::EditorNewline => self.commit_editor.insert_newline(),
-            Action::EditorBackspace => self.commit_editor.backspace(),
-            Action::EditorDelete => self.commit_editor.delete(),
-            Action::EditorLeft(s) => self.commit_editor.move_left(s),
-            Action::EditorRight(s) => self.commit_editor.move_right(s),
-            Action::EditorUp(s) => self.commit_editor.move_up(s),
-            Action::EditorDown(s) => self.commit_editor.move_down(s),
-            Action::EditorHome(s) => self.commit_editor.move_home(s),
-            Action::EditorEnd(s) => self.commit_editor.move_end(s),
-            Action::EditorWordLeft(s) => self.commit_editor.move_word_left(s),
-            Action::EditorWordRight(s) => self.commit_editor.move_word_right(s),
-            Action::EditorBackspaceWord => self.commit_editor.backspace_word(),
-            Action::EditorDeleteWord => self.commit_editor.delete_word(),
-            Action::EditorKillLine => self.commit_editor.kill_line(),
-            Action::EditorTextStart(s) => self.commit_editor.move_text_start(s),
-            Action::EditorTextEnd(s) => self.commit_editor.move_text_end(s),
-            _ => {}
+            other => {
+                apply_editor_edit(&mut self.commit_editor, &other);
+            }
         }
         self.scroll_to_editor_cursor();
         Ok(())

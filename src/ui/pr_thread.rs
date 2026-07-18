@@ -50,7 +50,7 @@ impl<'a> Widget for PrThreadWidget<'a> {
             .scroll((self.view.scroll as u16, 0))
             .render(body, buf);
 
-        let hint = " ↑↓/PgUp/PgDn scroll   g/G top/bottom   o open PR   Esc close";
+        let hint = " ↑↓ scroll   o open PR   r review   Esc close";
         let fy = inner.y + inner.height - 1;
         buf.set_string(
             inner.x,

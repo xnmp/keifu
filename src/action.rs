@@ -48,6 +48,12 @@ pub enum Action {
     // Open the PR conversation thread popup for the selected commit's PR (graph)
     OpenPrThread,
 
+    // Open the review-disposition picker from the PR thread popup
+    OpenReviewPicker,
+
+    // Submit the PR-compose editor (create PR / review body)
+    SubmitCompose,
+
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 

@@ -12,6 +12,7 @@ pub mod graph_pixels;
 pub mod graph_view;
 pub mod help_popup;
 pub mod metadata_menu;
+pub mod pr_compose;
 pub mod pr_thread;
 pub mod search_dropdown;
 pub mod status_bar;
@@ -33,7 +34,8 @@ use self::{
     commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
     commit_menu::CommitMenuWidget,
     dialog::{
-        BranchPickerWidget, ConfirmDialog, FileHistoryWidget, InputDialog, PullDivergenceDialog,
+        BranchPickerWidget, ConfirmDialog, FileHistoryWidget, InputDialog, OptionsDialog,
+        PullDivergenceDialog,
     },
     file_diff_view::FileDiffViewWidget,
     files_pane::{FilesPaneState, FilesPaneWidget},
@@ -352,6 +354,44 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 let popup_area = centered_rect(PR_THREAD_POPUP_PCT.0, PR_THREAD_POPUP_PCT.1, area);
                 frame.render_widget(PrThreadWidget::new(view, &theme), popup_area);
             }
+        }
+        AppMode::PrCompose { purpose } => {
+            use self::pr_compose::{text_area, PrComposeWidget};
+            let popup_area = centered_rect(64, 60, area);
+            frame.render_widget(
+                PrComposeWidget::new(&app.pr_editor, *purpose, &theme),
+                popup_area,
+            );
+            // Place the terminal cursor at the editor position.
+            let (row, col) = app.pr_editor.cursor_position();
+            let body = text_area(popup_area);
+            let cx = body.x + col as u16;
+            let cy = body.y + row as u16;
+            if cx < body.x + body.width && cy < body.y + body.height {
+                frame.set_cursor_position((cx, cy));
+            }
+        }
+        AppMode::PrMergePicker { selected, .. } => {
+            let labels: Vec<&str> = crate::pr_action::MergeMethod::ALL
+                .iter()
+                .map(|m| m.label())
+                .collect();
+            let popup_area = centered_rect_fixed(40, 9, area);
+            frame.render_widget(
+                OptionsDialog::new("Merge Pull Request", "Merge method:", &labels, *selected, &theme),
+                popup_area,
+            );
+        }
+        AppMode::PrReviewPicker { selected, .. } => {
+            let labels: Vec<&str> = crate::pr_action::ReviewDecision::ALL
+                .iter()
+                .map(|d| d.label())
+                .collect();
+            let popup_area = centered_rect_fixed(40, 9, area);
+            frame.render_widget(
+                OptionsDialog::new("Submit Review", "Disposition:", &labels, *selected, &theme),
+                popup_area,
+            );
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);

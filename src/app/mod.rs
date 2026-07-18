@@ -45,6 +45,7 @@ mod search_ops;
 mod graph_actions;
 mod ci_checks_actions;
 mod pr_thread_actions;
+mod pr_action_actions;
 mod file_ops;
 mod commit_editor_actions;
 mod commit_menu_actions;
@@ -180,6 +181,10 @@ pub enum CommitMenuItem {
     PushTag,
     Revert,
     Prune,
+    /// Create a PR from the current branch (open PR compose).
+    CreatePr,
+    /// Merge the open PR on this commit (open merge-method picker).
+    MergePr,
     CopyHash,
     CopyMessage,
     MarkForCompare,
@@ -215,6 +220,8 @@ impl CommitMenuItem {
             Self::PushTag => "Push tag",
             Self::Revert => "Revert this commit",
             Self::Prune => "Prune remote-tracking refs",
+            Self::CreatePr => "Create pull request...",
+            Self::MergePr => "Merge pull request...",
             Self::CopyHash => "Copy commit hash",
             Self::CopyMessage => "Copy commit message",
             Self::MarkForCompare => "Mark for compare",
@@ -278,6 +285,20 @@ pub enum AppMode {
     /// The selected commit's PR conversation (description, comments, reviews,
     /// review threads). Data on `App.pr_thread`.
     PrThread,
+    /// Compose a PR title/body or a review body in `App.pr_editor`.
+    PrCompose {
+        purpose: ComposePurpose,
+    },
+    /// Pick a merge method (merge / squash / rebase) for a PR.
+    PrMergePicker {
+        number: u64,
+        selected: usize,
+    },
+    /// Pick a review disposition (approve / request changes / comment) for a PR.
+    PrReviewPicker {
+        number: u64,
+        selected: usize,
+    },
     BranchFilter {
         filter: String,
         selected: usize,
@@ -392,6 +413,15 @@ pub enum ThreadViewState {
     Error(String),
 }
 
+/// What the `PrCompose` editor is composing. The editor's first line is the
+/// PR title (Create); for reviews the whole buffer is the body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposePurpose {
+    CreatePr,
+    ReviewComment { pr: u64 },
+    ReviewRequestChanges { pr: u64 },
+}
+
 /// Which tag operation a [`AppMode::TagPicker`] resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagAction {
@@ -452,6 +482,9 @@ pub enum ConfirmAction {
         file_path: std::path::PathBuf,
         scroll_offset: usize,
     },
+    /// Confirm a mutating PR action (create / merge / approve / request-changes)
+    /// before it runs asynchronously.
+    PrAction(crate::pr_action::PrAction),
 }
 
 /// Search state for branch search feature
@@ -611,6 +644,10 @@ pub struct App {
     // PR conversation popup (AppMode::PrThread): background fetcher + view.
     pub thread_fetch: crate::pr_thread::PrThreadFetch,
     pub pr_thread: Option<PrThreadView>,
+
+    // Mutating PR actions (create/merge/review): compose editor + async runner.
+    pub pr_editor: crate::text_editor::TextEditor,
+    pub pr_action_runner: crate::pr_action::PrActionRunner,
 
     // Filesystem watcher
     pub watcher: Option<crate::watcher::FsWatcher>,
@@ -789,6 +826,9 @@ impl App {
             AppMode::PullDivergence { .. } => self.handle_pull_divergence_action(action),
             AppMode::CiChecks => self.handle_ci_checks_action(action),
             AppMode::PrThread => self.handle_pr_thread_action(action),
+            AppMode::PrCompose { .. } => self.handle_pr_compose_action(action),
+            AppMode::PrMergePicker { .. } => self.handle_pr_merge_picker_action(action),
+            AppMode::PrReviewPicker { .. } => self.handle_pr_review_picker_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,

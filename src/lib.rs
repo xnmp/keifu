@@ -12,6 +12,7 @@ pub mod network;
 pub mod checks;
 pub mod gh;
 pub mod pr;
+pub mod pr_action;
 pub mod pr_thread;
 pub mod graph;
 pub mod keybindings;
