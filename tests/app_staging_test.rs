@@ -128,6 +128,8 @@ fn make_base_app(
         diff_viewport_width: 80,
         message: None,
         message_time: None,
+        toasts: keifu::toast::ToastQueue::new(),
+        pr_toasts_armed: false,
         network: NetworkManager::new(),
         open_prs: std::collections::HashMap::new(),
         pr_fetch: keifu::pr::PrFetch::new(),

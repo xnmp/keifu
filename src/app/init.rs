@@ -104,6 +104,8 @@ impl App {
             diff_viewport_width: 80,
             message: initial_message,
             message_time: initial_message_time,
+            toasts: crate::toast::ToastQueue::new(),
+            pr_toasts_armed: false,
             network: NetworkManager::new(),
             open_prs: std::collections::HashMap::new(),
             pr_fetch: crate::pr::PrFetch::new(),

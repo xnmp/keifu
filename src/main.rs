@@ -139,8 +139,13 @@ fn main() -> Result<()> {
         needs_render |= app.update_check_status();
         needs_render |= app.update_thread_status();
 
-        // Refresh message expiry deadline
-        render_deadline = app.message_expiry_time();
+        // Drop expired toasts (redraw only when the visible set actually changes,
+        // so an active-but-unexpired toast doesn't force per-frame repaints).
+        needs_render |= app.toasts.evict(Instant::now());
+
+        // Wake precisely at the next message/toast expiry (the poll timeout is
+        // still capped at 33ms, so the idle loop never busy-spins).
+        render_deadline = app.next_render_deadline();
     }
 
     // Restore terminal

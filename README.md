@@ -28,6 +28,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Merge-conflict handling: accept ours/theirs, continue/abort a merge, rebase, cherry-pick, or revert
 - Git operations: checkout, create/rename/delete branch, merge, rebase, cherry-pick, revert, reset (soft/mixed/hard), tag add/delete/push, stash (apply/pop/drop, staged/all/all+untracked push, branch-from-stash)
 - Fetch/pull/push with multi-remote support, upstream tracking, and one-key publish
+- Toast notifications for background outcomes (fetch/pull/push results, new PRs or CI-status changes) that stack in the top-right and auto-dismiss
 - Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge, colored by CI status (green pass / yellow pending / red fail, blue if no checks) with review (approved/changes-requested) and outside-comment markers; `o` opens it in the browser, `c` shows CI check details (read a failed check's log without leaving the terminal), and `v` opens the PR conversation (description, comments, reviews, and resolved/open review threads) — all require the `gh` CLI
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits

@@ -50,4 +50,18 @@ impl App {
     pub fn search_match_count(&self) -> usize {
         self.search_state.fuzzy_matches.len()
     }
+
+    /// Push a toast notification (kind drives color + TTL).
+    pub fn toast(&mut self, kind: crate::toast::ToastKind, text: impl Into<String>) {
+        self.toasts
+            .push(kind, text, std::time::Instant::now());
+    }
+
+    /// The next instant a toast or the status message will need a redraw.
+    pub fn next_render_deadline(&self) -> Option<std::time::Instant> {
+        [self.message_expiry_time(), self.toasts.next_expiry()]
+            .into_iter()
+            .flatten()
+            .min()
+    }
 }

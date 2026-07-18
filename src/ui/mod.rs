@@ -20,8 +20,9 @@ pub mod theme;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     Frame,
 };
 
@@ -117,6 +118,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             vertical[0],
         );
         frame.render_widget(StatusBar::new(app, &theme), vertical[1]);
+        // Toasts sit on top of the full-screen diff view too.
+        render_toasts(frame, app, &theme);
         return;
     }
 
@@ -437,6 +440,70 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             );
         }
         _ => {}
+    }
+
+    // Toasts render last, so they sit on top of every panel and popup.
+    render_toasts(frame, app, &theme);
+}
+
+/// Render stacked toast notifications in the top-right corner, newest on top,
+/// over whatever else is on screen.
+fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
+    use crate::toast::ToastKind;
+    let toasts = app.toasts.visible();
+    if toasts.is_empty() {
+        return;
+    }
+    let area = frame.area();
+    // Each toast is a 3-row bordered box; width fits the text within bounds.
+    const MAX_W: u16 = 44;
+    const H: u16 = 3;
+    let margin = 1u16;
+    let width = MAX_W.min(area.width.saturating_sub(margin * 2));
+    if width < 8 || area.height < H + margin {
+        return;
+    }
+
+    // Newest on top: iterate newest → oldest, stacking downward from the top.
+    for (i, toast) in toasts.iter().rev().enumerate() {
+        let y = margin + i as u16 * H;
+        if y + H > area.height {
+            break;
+        }
+        let x = area.width.saturating_sub(width + margin);
+        let rect = Rect::new(x, y, width, H);
+
+        let (accent, icon) = match toast.kind {
+            ToastKind::Success => (theme.pr_ci_pass, "✓"),
+            ToastKind::Error => (theme.pr_ci_fail, "✗"),
+            ToastKind::Info => (theme.pr_badge, "•"),
+        };
+        frame.render_widget(Clear, rect);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(accent))
+            .style(Style::default().bg(theme.popup_bg));
+        let text_w = width.saturating_sub(4) as usize; // borders + icon + space
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{icon} "),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                truncate_str(&toast.text, text_w),
+                Style::default().fg(theme.text_primary),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(line).block(block), rect);
+    }
+}
+
+/// Truncate to `max` display columns with an ellipsis.
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
     }
 }
 

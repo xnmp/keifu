@@ -168,8 +168,12 @@ impl NetworkManager {
         message
     }
 
-    /// Poll fetch receiver for completion.
-    pub fn poll_fetch(&mut self) -> Option<Result<(), String>> {
+    /// Poll fetch receiver for completion. Returns `(result, silent)` where
+    /// `silent` marks a background auto-fetch (vs a user-initiated one), so the
+    /// caller can decide whether to surface success. Silent *errors* are no
+    /// longer suppressed here — the caller shows them as a toast rather than the
+    /// full error dialog.
+    pub fn poll_fetch(&mut self) -> Option<(Result<(), String>, bool)> {
         let rx = self.fetch_receiver.as_ref()?;
         let result = match rx.try_recv() {
             Ok(result) => result,
@@ -181,11 +185,7 @@ impl NetworkManager {
         let silent = self.fetch_silent;
         self.fetch_receiver = None;
         self.fetch_silent = false;
-        match result {
-            Ok(()) => Some(Ok(())),
-            Err(e) if !silent => Some(Err(e)),
-            Err(_) => None, // Silent mode: suppress
-        }
+        Some((result, silent))
     }
 
     /// Poll push receiver for completion.

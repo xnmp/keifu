@@ -585,6 +585,12 @@ pub struct App {
     pub message: Option<String>,
     pub message_time: Option<std::time::Instant>,
 
+    // Transient toast notifications for background-op outcomes.
+    pub toasts: crate::toast::ToastQueue,
+    // Armed after the first open-PR fetch fills the map, so the initial load
+    // doesn't toast every PR as "new".
+    pub pr_toasts_armed: bool,
+
     // Network operations (fetch/push/auto-refresh)
     pub network: NetworkManager,
 

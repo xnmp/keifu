@@ -31,6 +31,18 @@ pub enum CiStatus {
     Fail,
 }
 
+impl CiStatus {
+    /// Short label for a toast, e.g. "CI passing".
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::None => "no CI",
+            Self::Pass => "CI passing",
+            Self::Pending => "CI running",
+            Self::Fail => "CI failing",
+        }
+    }
+}
+
 /// PR review decision, from `reviewDecision`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewState {
@@ -196,6 +208,58 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
             )
         })
         .collect()
+}
+
+/// Summarize what changed between two open-PR maps, for a refresh toast, or
+/// `None` when nothing worth surfacing changed. Surfaces a newly-appeared PR or
+/// a CI-status change on an existing PR; a no-op refresh (equal maps, or only
+/// unrelated field changes) returns `None`.
+pub fn pr_refresh_summary(
+    old: &HashMap<String, PrInfo>,
+    new: &HashMap<String, PrInfo>,
+) -> Option<String> {
+    let mut new_pr: Option<u64> = None;
+    let mut new_count = 0usize;
+    let mut ci_change: Option<(u64, CiStatus)> = None;
+    let mut ci_count = 0usize;
+    for (branch, pr) in new {
+        match old.get(branch) {
+            None => {
+                new_count += 1;
+                new_pr.get_or_insert(pr.number);
+            }
+            Some(o) if o.ci != pr.ci => {
+                ci_count += 1;
+                ci_change.get_or_insert((pr.number, pr.ci));
+            }
+            _ => {}
+        }
+    }
+    if new_count == 0 && ci_count == 0 {
+        return None;
+    }
+    // A single specific event gets precise text; multiple get a count (which is
+    // order-independent, since HashMap iteration order isn't stable).
+    Some(match (new_count, ci_count) {
+        (1, 0) => format!("New PR #{}", new_pr.unwrap()),
+        (0, 1) => {
+            let (n, ci) = ci_change.unwrap();
+            format!("PR #{n}: {}", ci.short_label())
+        }
+        _ => {
+            let mut parts = Vec::new();
+            if new_count > 0 {
+                parts.push(format!("{new_count} new"));
+            }
+            if ci_count > 0 {
+                parts.push(format!(
+                    "{ci_count} CI update{}",
+                    if ci_count == 1 { "" } else { "s" }
+                ));
+            }
+            format!("PRs: {}", parts.join(", "))
+        }
+    })
 }
 
 /// Run `gh pr list` in `repo_path`, returning open PRs by head branch. `None`
@@ -496,5 +560,67 @@ mod tests {
         assert!(!pr.outside_activity);
         // Whole parse still succeeds and yields the PR.
         assert_eq!(pr.number, 1);
+    }
+
+    // ── pr_refresh_summary ───────────────────────────────────────────
+
+    fn pr_info(number: u64, ci: CiStatus) -> PrInfo {
+        PrInfo {
+            number,
+            url: String::new(),
+            title: String::new(),
+            ci,
+            review: ReviewState::None,
+            outside_activity: false,
+        }
+    }
+
+    fn map(entries: &[(&str, u64, CiStatus)]) -> HashMap<String, PrInfo> {
+        entries
+            .iter()
+            .map(|(b, n, ci)| (b.to_string(), pr_info(*n, *ci)))
+            .collect()
+    }
+
+    #[test]
+    fn refresh_summary_no_op_is_none() {
+        let m = map(&[("a", 1, CiStatus::Pass)]);
+        assert_eq!(pr_refresh_summary(&m, &m.clone()), None);
+        // Unrelated field change (not CI) is not surfaced.
+        let mut changed = m.clone();
+        changed.get_mut("a").unwrap().outside_activity = true;
+        assert_eq!(pr_refresh_summary(&m, &changed), None);
+    }
+
+    #[test]
+    fn refresh_summary_new_pr() {
+        let old = map(&[("a", 1, CiStatus::Pass)]);
+        let new = map(&[("a", 1, CiStatus::Pass), ("b", 7, CiStatus::None)]);
+        assert_eq!(pr_refresh_summary(&old, &new).as_deref(), Some("New PR #7"));
+    }
+
+    #[test]
+    fn refresh_summary_ci_change() {
+        let old = map(&[("a", 3, CiStatus::Pending)]);
+        let new = map(&[("a", 3, CiStatus::Fail)]);
+        assert_eq!(
+            pr_refresh_summary(&old, &new).as_deref(),
+            Some("PR #3: CI failing")
+        );
+    }
+
+    #[test]
+    fn refresh_summary_multiple_uses_counts() {
+        let old = map(&[("a", 1, CiStatus::Pending)]);
+        let new = map(&[
+            ("a", 1, CiStatus::Pass),  // CI change
+            ("b", 2, CiStatus::None),  // new
+            ("c", 3, CiStatus::None),  // new
+        ]);
+        // Order-independent count summary.
+        assert_eq!(
+            pr_refresh_summary(&old, &new).as_deref(),
+            Some("PRs: 2 new, 1 CI update")
+        );
     }
 }

@@ -17,6 +17,7 @@ pub mod graph;
 pub mod keybindings;
 pub mod search;
 pub mod text_editor;
+pub mod toast;
 pub mod tui;
 pub mod ui;
 pub mod watcher;

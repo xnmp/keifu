@@ -1,10 +1,11 @@
 //! Network operations: fetch/pull/push, auto-refresh, fs-watcher polling.
 
 use super::*;
+use crate::toast::ToastKind;
 
 impl App {
     pub fn update_fetch_status(&mut self) -> bool {
-        let Some(result) = self.network.poll_fetch() else {
+        let Some((result, silent)) = self.network.poll_fetch() else {
             return false;
         };
         match result {
@@ -17,17 +18,31 @@ impl App {
                     let prev_branch_count = self.branches.len();
                     match self.refresh(true) {
                         Ok(()) => {
-                            let new_head = self.repo.head_oid();
-                            let new_branch_count = self.branches.len();
-                            if prev_head != new_head || prev_branch_count != new_branch_count {
-                                self.set_message("Fetched from origin");
+                            let changed = self.repo.head_oid() != prev_head
+                                || self.branches.len() != prev_branch_count;
+                            // Only user-initiated fetches (manual `f` / F5) toast;
+                            // silent auto-fetch stays quiet on success.
+                            if !silent {
+                                if changed {
+                                    self.toast(ToastKind::Success, "Fetched — graph updated");
+                                } else {
+                                    self.toast(ToastKind::Info, "Fetched — up to date");
+                                }
                             }
                         }
                         Err(e) => self.show_error(format!("Refresh failed: {e}")),
                     }
                 }
             }
-            Err(e) => self.show_git_error(e),
+            // A silent auto-fetch error was previously swallowed; surface it as a
+            // toast. A user-initiated fetch keeps the full error dialog.
+            Err(e) => {
+                if silent {
+                    self.toast(ToastKind::Error, format!("Auto-fetch failed: {e}"));
+                } else {
+                    self.show_git_error(e);
+                }
+            }
         }
         true
     }
@@ -38,7 +53,7 @@ impl App {
         };
         match result {
             Ok(()) => {
-                self.set_message("Pushed");
+                self.toast(ToastKind::Success, "Pushed");
                 if let Err(e) = self.refresh(true) {
                     self.show_error(format!("Refresh failed: {e}"));
                 }
@@ -63,10 +78,16 @@ impl App {
                     return true;
                 }
                 match outcome {
-                    OpOutcome::Completed => self.set_message("Pulled"),
+                    OpOutcome::Completed => self.toast(ToastKind::Success, "Pulled"),
                     OpOutcome::Conflicts { count } => {
                         self.focus_conflict_files();
+                        // Keep the workflow guidance in the status bar; toast the
+                        // (easily-missed) conflict outcome prominently.
                         self.set_message(Self::conflict_guidance(count));
+                        self.toast(
+                            ToastKind::Error,
+                            format!("Pulled with {count} conflict{}", if count == 1 { "" } else { "s" }),
+                        );
                     }
                 }
             }
@@ -125,15 +146,23 @@ impl App {
     }
 
     /// Kick off / poll the background open-PR fetch. Returns true when the PR
-    /// map changed (so badges re-render). Never blocks the UI thread.
+    /// map changed (so badges re-render). Toasts a concise summary when a PR
+    /// appears or a CI status changes — but not on the initial load, and not on
+    /// no-op 5-minute refreshes. Never blocks the UI thread.
     pub fn update_open_prs(&mut self) -> bool {
         self.pr_fetch.maybe_start(&self.repo_path);
-        if let Some(prs) = self.pr_fetch.poll() {
-            self.open_prs = prs;
-            true
-        } else {
-            false
+        let Some(prs) = self.pr_fetch.poll() else {
+            return false;
+        };
+        if self.pr_toasts_armed {
+            if let Some(summary) = crate::pr::pr_refresh_summary(&self.open_prs, &prs) {
+                self.toast(ToastKind::Info, summary);
+            }
         }
+        // Arm after the first successful fill so the startup population is quiet.
+        self.pr_toasts_armed = true;
+        self.open_prs = prs;
+        true
     }
 
     pub fn poll_fs_watcher(&mut self) -> bool {
