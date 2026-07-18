@@ -64,9 +64,15 @@ pub struct PixelCell {
 /// A fully-resolved, hashable description of one row's pixel content. Two rows
 /// with an identical `RowSpec` rasterize to an identical image, so protocols
 /// are cached by it.
+///
+/// `underlay` holds the cells of any connector row(s) folded into this row (in
+/// pixel mode, standalone connector rows are collapsed into the following commit
+/// row so lanes converge onto the dot the VSCode way). It's drawn *behind*
+/// `cells` and is part of the hash, so the protocol cache stays correct.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RowSpec {
     pub cells: Vec<PixelCell>,
+    pub underlay: Vec<PixelCell>,
 }
 
 /// Whether a cell's line reaches the bottom edge of its box (so a commit below
@@ -177,14 +183,15 @@ fn solid(shape: CellShape, rgb: [u8; 3]) -> PixelCell {
     }
 }
 
-/// Resolve one `CellType` into a `PixelCell`, computing commit connectivity
-/// from the adjacent (visible) rows. `head_rgb` is the gold used for a HEAD
-/// commit dot (drawn as a star).
+/// Resolve one `CellType` into a `PixelCell`, computing commit-dot connectivity
+/// from the effective cells directly above/below this row. For a folded commit
+/// row those include the folded connector's cells (see `build_row_spec`).
+/// `head_rgb` is the gold used for a HEAD commit dot (drawn as a star).
 fn cell_to_pixel(
     cell: &CellType,
     col: usize,
-    prev: Option<&GraphNode>,
-    next: Option<&GraphNode>,
+    above: Option<&[CellType]>,
+    below: Option<&[CellType]>,
     style: CommitStyle,
     theme: &Theme,
     head_rgb: [u8; 3],
@@ -207,11 +214,11 @@ fn cell_to_pixel(
             secondary: rgb(h),
         },
         CellType::Commit(ci) => {
-            let connect_up = prev
-                .and_then(|p| p.cells.get(col))
+            let connect_up = above
+                .and_then(|c| c.get(col))
                 .is_some_and(cell_touches_bottom);
-            let connect_down = next
-                .and_then(|n| n.cells.get(col))
+            let connect_down = below
+                .and_then(|c| c.get(col))
                 .is_some_and(cell_touches_top);
             // HEAD dots render as a gold star; other dots keep the lane color.
             let color = if style == CommitStyle::Head { head_rgb } else { rgb(ci) };
@@ -227,13 +234,17 @@ fn cell_to_pixel(
     }
 }
 
-/// Build the `RowSpec` for `node`, using its adjacent visible neighbours to
-/// resolve commit-dot connectivity. Graph strokes always render at full
-/// strength — merges are muted only in the message text, never in the graph.
+/// Build the `RowSpec` for `node`. `above`/`below` are the effective cells
+/// physically adjacent to this row (used to resolve commit-dot connectivity);
+/// in pixel mode they fold in any adjacent connector's cells. `underlay` holds
+/// the folded connector cells drawn behind `node`'s own cells (empty when no
+/// connector is folded here). Graph strokes always render at full strength —
+/// merges are muted only in the message text, never in the graph.
 pub fn build_row_spec(
-    prev: Option<&GraphNode>,
+    above: Option<&[CellType]>,
     node: &GraphNode,
-    next: Option<&GraphNode>,
+    below: Option<&[CellType]>,
+    underlay: &[CellType],
     theme: &Theme,
 ) -> RowSpec {
     let style = if node.is_uncommitted {
@@ -248,9 +259,18 @@ pub fn build_row_spec(
         .cells
         .iter()
         .enumerate()
-        .map(|(col, cell)| cell_to_pixel(cell, col, prev, next, style, theme, head_rgb))
+        .map(|(col, cell)| cell_to_pixel(cell, col, above, below, style, theme, head_rgb))
         .collect();
-    RowSpec { cells }
+    // Folded connector cells carry no commit dots, so their connectivity is
+    // irrelevant; resolve them with no neighbours.
+    let underlay = underlay
+        .iter()
+        .enumerate()
+        .map(|(col, cell)| {
+            cell_to_pixel(cell, col, None, None, CommitStyle::Normal, theme, head_rgb)
+        })
+        .collect();
+    RowSpec { cells, underlay }
 }
 
 /// A minimal RGBA canvas with source-over compositing and coverage-based
@@ -443,42 +463,64 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     // gold fill color.
     let mut stars: Vec<(f32, f32, f32, [u8; 3])> = Vec::new();
 
-    for (i, cell) in spec.cells.iter().enumerate() {
+    // Folded connector cells first (behind), then the row's own cells on top.
+    draw_cells(&mut canvas, &spec.underlay, half, cw, ch, &mut stars);
+    draw_cells(&mut canvas, &spec.cells, half, cw, ch, &mut stars);
+
+    for (cx, cy, r, color) in stars {
+        fill_star(&mut canvas, cx, cy, r, color);
+    }
+
+    canvas.img
+}
+
+/// Stroke one row of `cells` onto `canvas`. HEAD commit stars are deferred into
+/// `stars` (drawn last, on top). Shared by the folded underlay and the row's own
+/// cells so they rasterize identically.
+fn draw_cells(
+    canvas: &mut Canvas,
+    cells: &[PixelCell],
+    half: f32,
+    cw: f32,
+    ch: f32,
+    stars: &mut Vec<(f32, f32, f32, [u8; 3])>,
+) {
+    for (i, cell) in cells.iter().enumerate() {
         let ox = (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw;
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
         let color = cell.color;
         match cell.shape {
             CellShape::Empty => {}
-            CellShape::Pipe => draw_segment(&mut canvas, cx, 0.0, cx, ch, half, color),
-            CellShape::Horizontal => draw_segment(&mut canvas, ox, cy, ox + cw, cy, half, color),
+            CellShape::Pipe => draw_segment(canvas, cx, 0.0, cx, ch, half, color),
+            CellShape::Horizontal => draw_segment(canvas, ox, cy, ox + cw, cy, half, color),
             CellShape::BranchRight => {
-                draw_bezier(&mut canvas, (ox + cw, cy), (cx, cy), (cx, ch), half, color)
+                draw_bezier(canvas, (ox + cw, cy), (cx, cy), (cx, ch), half, color)
             }
             CellShape::BranchLeft => {
-                draw_bezier(&mut canvas, (ox, cy), (cx, cy), (cx, ch), half, color)
+                draw_bezier(canvas, (ox, cy), (cx, cy), (cx, ch), half, color)
             }
             CellShape::MergeRight => {
-                draw_bezier(&mut canvas, (cx, 0.0), (cx, cy), (ox + cw, cy), half, color)
+                draw_bezier(canvas, (cx, 0.0), (cx, cy), (ox + cw, cy), half, color)
             }
             CellShape::MergeLeft => {
-                draw_bezier(&mut canvas, (cx, 0.0), (cx, cy), (ox, cy), half, color)
+                draw_bezier(canvas, (cx, 0.0), (cx, cy), (ox, cy), half, color)
             }
             CellShape::HorizontalPipe => {
-                draw_segment(&mut canvas, ox, cy, ox + cw, cy, half, cell.secondary);
-                draw_segment(&mut canvas, cx, 0.0, cx, ch, half, color);
+                draw_segment(canvas, ox, cy, ox + cw, cy, half, cell.secondary);
+                draw_segment(canvas, cx, 0.0, cx, ch, half, color);
             }
             CellShape::TeeRight => {
-                draw_segment(&mut canvas, cx, 0.0, cx, ch, half, color);
-                draw_segment(&mut canvas, cx, cy, ox + cw, cy, half, color);
+                draw_segment(canvas, cx, 0.0, cx, ch, half, color);
+                draw_segment(canvas, cx, cy, ox + cw, cy, half, color);
             }
             CellShape::TeeLeft => {
-                draw_segment(&mut canvas, cx, 0.0, cx, ch, half, color);
-                draw_segment(&mut canvas, ox, cy, cx, cy, half, color);
+                draw_segment(canvas, cx, 0.0, cx, ch, half, color);
+                draw_segment(canvas, ox, cy, cx, cy, half, color);
             }
             CellShape::TeeUp => {
-                draw_segment(&mut canvas, cx, 0.0, cx, cy, half, color);
-                draw_segment(&mut canvas, ox, cy, ox + cw, cy, half, color);
+                draw_segment(canvas, cx, 0.0, cx, cy, half, color);
+                draw_segment(canvas, ox, cy, ox + cw, cy, half, color);
             }
             CellShape::Commit {
                 connect_up,
@@ -486,17 +528,17 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
                 style,
             } => {
                 if connect_up {
-                    draw_segment(&mut canvas, cx, 0.0, cx, cy, half, color);
+                    draw_segment(canvas, cx, 0.0, cx, cy, half, color);
                 }
                 if connect_down {
-                    draw_segment(&mut canvas, cx, cy, cx, ch, half, color);
+                    draw_segment(canvas, cx, cy, cx, ch, half, color);
                 }
                 // Dots may spill slightly into the adjacent connector column;
                 // lanes are two columns wide, so the overlap is harmless.
                 let base = cw.min(ch * 2.0 / 5.0).max(3.0);
                 let r = (base * 0.6).min(cw * 0.65);
                 match style {
-                    CommitStyle::Normal => fill_disc(&mut canvas, cx, cy, r, color),
+                    CommitStyle::Normal => fill_disc(canvas, cx, cy, r, color),
                     CommitStyle::Head => {
                         // A point-up star spans cy-r..cy+0.81r, so it sits
                         // optically high; nudging it down recenters it and,
@@ -507,18 +549,12 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
                         stars.push((cx, cy + r_s * 0.09, r_s, color));
                     }
                     CommitStyle::Uncommitted => {
-                        stroke_circle(&mut canvas, cx, cy, r, half, color);
+                        stroke_circle(canvas, cx, cy, r, half, color);
                     }
                 }
             }
         }
     }
-
-    for (cx, cy, r, color) in stars {
-        fill_star(&mut canvas, cx, cy, r, color);
-    }
-
-    canvas.img
 }
 
 /// Soft cap on cached protocols. On overflow the cache is pruned down to the
@@ -654,7 +690,10 @@ mod tests {
     }
 
     fn spec(cells: Vec<PixelCell>) -> RowSpec {
-        RowSpec { cells }
+        RowSpec {
+            cells,
+            underlay: Vec::new(),
+        }
     }
 
     fn pipe(color: [u8; 3]) -> PixelCell {
@@ -813,11 +852,9 @@ mod tests {
         assert_ne!(hash(&a), hash(&recolored));
     }
 
-    #[test]
-    fn build_row_spec_reads_connectivity_from_neighbours() {
-        let theme = Theme::dark();
-
-        let make = |cells: Vec<CellType>| GraphNode {
+    /// A commit-only node with a single `Commit(0)` cell.
+    fn commit_node() -> GraphNode {
+        GraphNode {
             commit: None,
             lane: 0,
             color_index: 0,
@@ -828,18 +865,23 @@ mod tests {
             is_stash: false,
             stash_label: None,
             uncommitted_count: None,
-            cells,
-        };
+            cells: vec![CellType::Commit(0)],
+        }
+    }
 
-        let node = make(vec![CellType::Commit(0)]);
+    #[test]
+    fn build_row_spec_reads_connectivity_from_neighbours() {
+        let theme = Theme::dark();
+        let node = commit_node();
 
-        // Neighbour that touches the shared edge vs. one that does not.
-        let pipe_above = make(vec![CellType::Pipe(0)]);
-        let merge_above = make(vec![CellType::MergeRight(0)]); // touches top, not bottom
-        let pipe_below = make(vec![CellType::Pipe(0)]);
-        let tee_up_above = make(vec![CellType::TeeUp(0)]); // touches top, not bottom
-
-        let s = build_row_spec(Some(&pipe_above), &node, Some(&pipe_below), &theme);
+        // A pipe above and below touches the shared edges → connects both ways.
+        let s = build_row_spec(
+            Some(&[CellType::Pipe(0)]),
+            &node,
+            Some(&[CellType::Pipe(0)]),
+            &[],
+            &theme,
+        );
         assert_eq!(
             s.cells[0].shape,
             CellShape::Commit {
@@ -851,7 +893,7 @@ mod tests {
 
         // A merge glyph above touches its own top, not its bottom, so the
         // commit below must NOT connect up into it.
-        let s2 = build_row_spec(Some(&merge_above), &node, None, &theme);
+        let s2 = build_row_spec(Some(&[CellType::MergeRight(0)]), &node, None, &[], &theme);
         assert_eq!(
             s2.cells[0].shape,
             CellShape::Commit {
@@ -862,7 +904,7 @@ mod tests {
         );
 
         // TeeUp above likewise doesn't reach down.
-        let s3 = build_row_spec(Some(&tee_up_above), &node, None, &theme);
+        let s3 = build_row_spec(Some(&[CellType::TeeUp(0)]), &node, None, &[], &theme);
         assert_eq!(
             s3.cells[0].shape,
             CellShape::Commit {
@@ -890,8 +932,59 @@ mod tests {
             uncommitted_count: None,
             cells: vec![CellType::Commit(0)],
         };
-        let head = build_row_spec(None, &n, None, &theme);
+        let head = build_row_spec(None, &n, None, &[], &theme);
         assert_eq!(head.cells[0].color, color_to_rgb(theme.head_star));
+    }
+
+    #[test]
+    fn build_row_spec_folds_connector_cells_into_underlay() {
+        let theme = Theme::dark();
+        let node = commit_node();
+        // A fork connector (TeeRight on the main lane) folded into this row.
+        let connector = [CellType::TeeRight(0), CellType::Empty];
+        let s = build_row_spec(None, &node, None, &connector, &theme);
+        assert_eq!(s.cells.len(), 1, "the row's own cells are unchanged");
+        assert_eq!(s.underlay.len(), 2, "connector cells become the underlay");
+        assert_eq!(s.underlay[0].shape, CellShape::TeeRight);
+    }
+
+    #[test]
+    fn underlay_is_part_of_the_spec_identity() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let hash = |s: &RowSpec| {
+            let mut h = DefaultHasher::new();
+            s.hash(&mut h);
+            h.finish()
+        };
+        // Two rows with identical cells but different folded underlays must not
+        // collide in the protocol cache.
+        let base = spec(vec![commit(true, true, CommitStyle::Normal, [1, 2, 3])]);
+        let mut folded = base.clone();
+        folded.underlay = vec![solid(CellShape::TeeRight, [4, 5, 6])];
+        assert_ne!(base, folded, "differing underlay must change identity");
+        assert_ne!(hash(&base), hash(&folded));
+    }
+
+    #[test]
+    fn folded_connector_underlay_rasterizes_behind_the_dot() {
+        // A row whose dot has no connectors of its own, but whose folded
+        // connector underlay carries a pipe in the neighbouring column: that
+        // column paints even though the row's own cell there is Empty.
+        let s = RowSpec {
+            cells: vec![
+                commit(false, false, CommitStyle::Normal, [0, 255, 0]),
+                solid(CellShape::Empty, [0, 0, 0]),
+            ],
+            underlay: vec![
+                solid(CellShape::Empty, [0, 0, 0]),
+                pipe([255, 0, 0]),
+            ],
+        };
+        let img = rasterize_row(&s, CW, CH);
+        // Column 1's pipe (from the underlay) reaches the top edge.
+        let cx = PAD_X + CW + CW / 2;
+        assert!(alpha(&img, cx, 0) > 0, "underlay pipe should paint column 1");
     }
 
     #[test]

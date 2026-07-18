@@ -178,6 +178,125 @@ pub fn visible_nodes(app: &App) -> Vec<(usize, &GraphNode)> {
     }
 }
 
+/// One rendered graph row: a node plus, when connectors are folded (pixel mode),
+/// the cells of any preceding connector row(s) collapsed into it as an
+/// `underlay`. `full_idx` is the row's index into `graph_layout.nodes` (used to
+/// map selection, exactly like `visible_nodes`).
+pub struct RenderRow<'a> {
+    pub full_idx: usize,
+    pub node: &'a GraphNode,
+    pub underlay: Vec<CellType>,
+}
+
+/// The rows the graph list renders, in list order. When `fold_connectors` is
+/// false (Unicode mode) every visible node is its own row. When true (pixel
+/// mode) standalone connector rows are removed and folded into the following
+/// commit row's `underlay`, so the list, the pixel specs, the scroll offset, and
+/// selection indices all share one filtered index space.
+///
+/// Connectors always precede their commit, so folding attaches each connector to
+/// the next commit row. A trailing connector with no following commit (never
+/// produced by `build_graph`, but handled defensively) renders standalone.
+pub fn visible_rows(app: &App, fold_connectors: bool) -> Vec<RenderRow<'_>> {
+    fold_rows(visible_nodes(app), fold_connectors)
+}
+
+/// Pure core of [`visible_rows`]: fold (or not) a list of `(full_idx, node)`
+/// pairs into rendered rows. Extracted so the folding is unit-testable without
+/// constructing an `App`.
+fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<RenderRow<'_>> {
+    if !fold_connectors {
+        return base
+            .into_iter()
+            .map(|(full_idx, node)| RenderRow {
+                full_idx,
+                node,
+                underlay: Vec::new(),
+            })
+            .collect();
+    }
+
+    let mut rows: Vec<RenderRow> = Vec::new();
+    let mut pending: Vec<(usize, &GraphNode)> = Vec::new();
+    for (full_idx, node) in base {
+        if node.is_connector() {
+            pending.push((full_idx, node));
+        } else {
+            let underlay = merge_connector_cells(&pending);
+            pending.clear();
+            rows.push(RenderRow {
+                full_idx,
+                node,
+                underlay,
+            });
+        }
+    }
+    // Trailing connectors with no following commit: render standalone.
+    for (full_idx, node) in pending {
+        rows.push(RenderRow {
+            full_idx,
+            node,
+            underlay: Vec::new(),
+        });
+    }
+    rows
+}
+
+/// Merge one or more connector rows' cells into a single underlay row: per
+/// column, the last non-empty cell wins. `build_graph` never emits adjacent
+/// connectors, so in practice this collapses a single connector.
+fn merge_connector_cells(pending: &[(usize, &GraphNode)]) -> Vec<CellType> {
+    let width = pending.iter().map(|(_, n)| n.cells.len()).max().unwrap_or(0);
+    let mut out = vec![CellType::Empty; width];
+    for (_, node) in pending {
+        for (col, cell) in node.cells.iter().enumerate() {
+            if *cell != CellType::Empty {
+                out[col] = *cell;
+            }
+        }
+    }
+    out
+}
+
+/// The effective cells physically adjacent to `rows[i]` in the given direction,
+/// used to resolve a commit dot's connect-up/down. A folded connector sits
+/// between a commit and the row on the connector's far side, so it takes
+/// precedence (per column) over the neighbouring commit's own cells.
+fn adjacent_cells(rows: &[RenderRow], i: usize, above: bool) -> Option<Vec<CellType>> {
+    // The underlay that lies between row i's dot and the neighbour: for the row
+    // above, it's row i's own underlay; for the row below, it's the next row's.
+    let (underlay, neighbour): (&[CellType], Option<&[CellType]>) = if above {
+        (
+            &rows[i].underlay,
+            i.checked_sub(1).map(|p| rows[p].node.cells.as_slice()),
+        )
+    } else {
+        match rows.get(i + 1) {
+            Some(next) => (&next.underlay, Some(next.node.cells.as_slice())),
+            None => (&[], None),
+        }
+    };
+    if underlay.is_empty() && neighbour.is_none() {
+        return None;
+    }
+    let width = underlay
+        .len()
+        .max(neighbour.map_or(0, |c| c.len()));
+    let mut out = vec![CellType::Empty; width];
+    for (col, slot) in out.iter_mut().enumerate() {
+        let u = underlay.get(col).copied().unwrap_or(CellType::Empty);
+        *slot = if u != CellType::Empty {
+            u
+        } else {
+            neighbour
+                .and_then(|c| c.get(col))
+                .copied()
+                .unwrap_or(CellType::Empty)
+        };
+    }
+    Some(out)
+}
+
 /// Build one `RowSpec` per list item (respecting the active commit filter), in
 /// the same order the graph widget lists them, so the overlay can index into it
 /// by visible-row position. Neighbours follow visible order.
@@ -197,14 +316,27 @@ pub fn build_pixel_row_specs(
     panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
-    let nodes: Vec<&GraphNode> = visible_nodes(app).into_iter().map(|(_, n)| n).collect();
-    (0..nodes.len())
+    // Fold connector rows into their following commit row (pixel-only): one spec
+    // per rendered row, in the same order and index space as the list items.
+    let rows = visible_rows(app, true);
+    (0..rows.len())
         .map(|i| {
-            let prev = i.checked_sub(1).map(|p| nodes[p]);
-            let next = nodes.get(i + 1).copied();
-            let mut spec = build_row_spec(prev, nodes[i], next, theme);
-            spec.cells
-                .truncate(pixel_row_cells(nodes[i].cells.len(), graph_width, panel_available));
+            let node = rows[i].node;
+            let above = adjacent_cells(&rows, i, true);
+            let below = adjacent_cells(&rows, i, false);
+            let mut spec = build_row_spec(
+                above.as_deref(),
+                node,
+                below.as_deref(),
+                &rows[i].underlay,
+                theme,
+            );
+            let budget = pixel_row_cells(node.cells.len(), graph_width, panel_available);
+            spec.cells.truncate(budget);
+            // Keep the underlay within the row's drawn width so it stays inside
+            // the rasterized canvas (sized from `cells`).
+            let underlay_cap = spec.cells.len();
+            spec.underlay.truncate(underlay_cap);
             spec
         })
         .collect()
@@ -223,12 +355,16 @@ impl<'a> GraphViewWidget<'a> {
         let open_prs = &app.open_prs;
         let metadata_columns = app.metadata_columns;
 
-        let node_iter = visible_nodes(app);
+        // In pixel mode, connector rows are folded into their commit row so the
+        // list items match the pixel specs one-for-one (same filtered index
+        // space). In Unicode mode connectors remain their own rows.
+        let rows = visible_rows(app, pixel_mode);
 
         let mut selected_in_filtered = None;
         let mut items: Vec<ListItem> = Vec::new();
 
-        for (filtered_pos, (full_idx, node)) in node_iter.into_iter().enumerate() {
+        for (filtered_pos, row) in rows.into_iter().enumerate() {
+            let (full_idx, node) = (row.full_idx, row.node);
             let is_selected = current_selected == Some(full_idx);
             if is_selected {
                 selected_in_filtered = Some(filtered_pos);
@@ -1894,5 +2030,107 @@ mod tests {
         // Even with muting on, the HEAD commit's message stays legible.
         let style = message_style(&node, "head-merge", true);
         assert!(!style.add_modifier.contains(Modifier::DIM));
+    }
+
+    // ── connector folding (pixel mode) ───────────────────────────────
+
+    fn connector_node(cells: Vec<CellType>) -> GraphNode {
+        // commit: None + not uncommitted => a connector row.
+        node_with_cells(cells, false)
+    }
+
+    fn commit_row(cells: Vec<CellType>) -> GraphNode {
+        let mut n = merge_node("m");
+        n.cells = cells;
+        n
+    }
+
+    #[test]
+    fn unicode_mode_keeps_connector_rows_as_their_own_rows() {
+        let a = commit_row(vec![CellType::Commit(0)]);
+        let conn = connector_node(vec![CellType::TeeRight(0)]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let base = vec![(0, &a), (1, &conn), (2, &b)];
+        let rows = fold_rows(base, false);
+        // All three nodes remain, each with an empty underlay.
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.underlay.is_empty()));
+        assert_eq!(rows.iter().map(|r| r.full_idx).collect::<Vec<_>>(), [0, 1, 2]);
+    }
+
+    #[test]
+    fn pixel_mode_folds_connector_into_the_following_commit_row() {
+        let a = commit_row(vec![CellType::Commit(0)]);
+        let conn = connector_node(vec![CellType::TeeRight(0), CellType::MergeLeft(1)]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let base = vec![(0, &a), (1, &conn), (2, &b)];
+        let rows = fold_rows(base, true);
+
+        // N_commits rows from N_commits + N_connectors nodes.
+        assert_eq!(rows.len(), 2, "connector row is folded away");
+        // The commit rows keep their real graph indices (selection alignment).
+        assert_eq!(rows[0].full_idx, 0);
+        assert_eq!(rows[1].full_idx, 2);
+        // Row 0 has no preceding connector; row 1 carries the folded connector.
+        assert!(rows[0].underlay.is_empty());
+        assert_eq!(rows[1].underlay, vec![CellType::TeeRight(0), CellType::MergeLeft(1)]);
+    }
+
+    #[test]
+    fn folded_index_space_maps_selection_to_the_right_row() {
+        // Select the second commit (full_idx 2). After folding, it's row 1.
+        let a = commit_row(vec![CellType::Commit(0)]);
+        let conn = connector_node(vec![CellType::TeeRight(0)]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let base = vec![(0, &a), (1, &conn), (2, &b)];
+        let rows = fold_rows(base, true);
+        let selected_full = 2;
+        let filtered_pos = rows.iter().position(|r| r.full_idx == selected_full);
+        assert_eq!(filtered_pos, Some(1), "selected commit maps to folded row 1");
+    }
+
+    #[test]
+    fn multiple_consecutive_connectors_all_fold_into_the_next_commit() {
+        let c1 = connector_node(vec![CellType::TeeRight(0), CellType::Empty]);
+        let c2 = connector_node(vec![CellType::Empty, CellType::MergeLeft(1)]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let base = vec![(0, &c1), (1, &c2), (2, &b)];
+        let rows = fold_rows(base, true);
+        assert_eq!(rows.len(), 1);
+        // Per-column merge of both connectors.
+        assert_eq!(
+            rows[0].underlay,
+            vec![CellType::TeeRight(0), CellType::MergeLeft(1)]
+        );
+    }
+
+    #[test]
+    fn trailing_connector_without_a_commit_renders_standalone() {
+        let a = commit_row(vec![CellType::Commit(0)]);
+        let conn = connector_node(vec![CellType::TeeRight(0)]);
+        let base = vec![(0, &a), (1, &conn)];
+        let rows = fold_rows(base, true);
+        // The commit row, plus the dangling connector as its own row.
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].full_idx, 1);
+        assert!(rows[1].underlay.is_empty());
+    }
+
+    #[test]
+    fn adjacent_cells_prefers_folded_underlay_over_the_neighbour() {
+        // Row 1 folds a connector whose column 0 is a TeeRight (touches bottom).
+        // Its "above" cells should read the underlay, not row 0's node cells.
+        let a = commit_row(vec![CellType::Empty]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let rows = vec![
+            RenderRow { full_idx: 0, node: &a, underlay: Vec::new() },
+            RenderRow {
+                full_idx: 2,
+                node: &b,
+                underlay: vec![CellType::TeeRight(0)],
+            },
+        ];
+        let above = adjacent_cells(&rows, 1, true).unwrap();
+        assert_eq!(above[0], CellType::TeeRight(0), "underlay wins over neighbour");
     }
 }
