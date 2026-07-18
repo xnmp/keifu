@@ -12,6 +12,12 @@ use super::theme::Theme;
 use crate::app::{App, AppMode, FocusedPanel, InputAction};
 use crate::git::OperationState;
 
+/// Contextual hint text for the open-PR shortcut, shown when the selected
+/// commit has an open PR. Pure so it can be unit-tested without a terminal.
+fn pr_hint_label(pr_number: Option<u64>) -> Option<String> {
+    pr_number.map(|n| format!("open PR #{n}"))
+}
+
 pub struct StatusBar<'a> {
     mode: &'a AppMode,
     focused_panel: FocusedPanel,
@@ -30,6 +36,8 @@ pub struct StatusBar<'a> {
     search_info: Option<String>,
     op_state: OperationState,
     conflict_count: usize,
+    /// Open-PR hint for the selected commit (`o: open PR #N`), when it has one.
+    pr_hint: Option<String>,
     theme: &'a Theme,
 }
 
@@ -77,6 +85,17 @@ impl<'a> StatusBar<'a> {
             search_info,
             op_state: app.op_state,
             conflict_count: app.conflict_count,
+            pr_hint: pr_hint_label(
+                app.selected_commit_node()
+                    .and_then(|node| {
+                        crate::ui::graph_view::pr_for_branch_labels(
+                            &node.branch_names,
+                            &app.remotes,
+                            &app.open_prs,
+                        )
+                    })
+                    .map(|pr| pr.number),
+            ),
             theme,
         }
     }
@@ -228,6 +247,11 @@ impl<'a> Widget for StatusBar<'a> {
                             spans.push(Span::styled("move ", desc_style));
                             spans.push(Span::styled(" Enter ", key_style));
                             spans.push(Span::styled("actions ", desc_style));
+                            // Only when the selected commit has an open PR.
+                            if let Some(hint) = &self.pr_hint {
+                                spans.push(Span::styled(" o ", key_style));
+                                spans.push(Span::styled(format!("{hint} "), desc_style));
+                            }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));
                             spans.push(Span::styled(" B ", key_style));
@@ -394,5 +418,16 @@ impl<'a> Widget for StatusBar<'a> {
                 buf.set_string(x, area.y, text, mode_style);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pr_hint_shown_only_when_a_pr_exists() {
+        assert_eq!(pr_hint_label(Some(12)).as_deref(), Some("open PR #12"));
+        assert_eq!(pr_hint_label(None), None);
     }
 }

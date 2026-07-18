@@ -65,6 +65,12 @@ fn map_normal_mode(
     files_filter_active: bool,
     commit_filter_active: bool,
 ) -> Option<Action> {
+    // F5 triggers a full update (fetch all remotes + PR refetch + refresh) from
+    // anywhere in Normal mode, including while editing a commit message.
+    if key.code == KeyCode::F(5) {
+        return Some(Action::FullUpdate);
+    }
+
     // If editing commit message, route to editor keybindings
     if editing_commit && panel == FocusedPanel::CommitDetail {
         return map_editor_mode(key);

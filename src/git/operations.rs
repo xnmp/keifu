@@ -342,6 +342,12 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
     fetch_remote(repo_path, "origin")
 }
 
+/// Fetch from every configured remote (`git fetch --all`).
+pub fn fetch_all(repo_path: &str) -> Result<()> {
+    run_git(repo_path, &["fetch", "--all"])?;
+    Ok(())
+}
+
 /// Fetch and integrate from a remote (`git pull`), honoring the user's
 /// `pull.rebase` config.
 ///

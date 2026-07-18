@@ -173,6 +173,7 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 | Key | Action |
 | --- | --- |
 | `R` | Refresh repository data |
+| `F5` | Full update — fetch all remotes, refetch open PRs, and refresh |
 | `?` | Toggle help |
 | `Ctrl+Q` | Quit from anywhere |
 

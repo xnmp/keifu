@@ -129,6 +129,12 @@ impl PrFetch {
         }
     }
 
+    /// Make the next `maybe_start` fetch immediately, ignoring the interval.
+    /// A fetch already in flight is untouched (no duplicate spawn).
+    pub fn force(&mut self) {
+        self.last_fetch = None;
+    }
+
     /// Spawn a fetch when none is in flight and one is due (immediately on the
     /// first call, then on the interval).
     pub fn maybe_start(&mut self, repo_path: &str) {

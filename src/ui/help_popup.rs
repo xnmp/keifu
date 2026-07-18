@@ -256,6 +256,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Refresh", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  F5         ", key_style),
+                Span::styled("Full update (fetch all remotes + PRs + refresh)", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  ?          ", key_style),
                 Span::styled("Toggle this help", desc_style),
             ]),

@@ -102,6 +102,8 @@ pub enum Action {
     ToggleHelp,
     Search,
     Refresh,
+    /// F5: fetch all remotes + force PR refetch + refresh (full update).
+    FullUpdate,
     Quit,
 
     // Dialogs

@@ -172,6 +172,33 @@ impl App {
         }
     }
 
+    pub(crate) fn start_fetch_all(&mut self) {
+        let msg = self.network.start_fetch_all(&self.repo_path);
+        self.set_message(msg);
+    }
+
+    /// F5 "full update": force an immediate PR refetch, refresh the graph/status
+    /// now for instant feedback, and kick off a background fetch of every
+    /// remote (its completion triggers another refresh). Fully async; a fetch
+    /// already in flight is left alone rather than duplicated.
+    pub(crate) fn full_update(&mut self) {
+        // Skip the PR fetch's 5-min interval on the next poll.
+        self.pr_fetch.force();
+
+        if let Err(e) = self.refresh(true) {
+            self.show_error(format!("Refresh failed: {e}"));
+        }
+        self.reset_timers();
+
+        if self.network.is_busy() {
+            return;
+        }
+        if self.repo.remotes().is_empty() {
+            return;
+        }
+        self.start_fetch_all();
+    }
+
     pub(crate) fn start_push_current(&mut self) {
         let msg = self.network.start_push(&self.repo_path, PushSpec::Current);
         self.set_message(msg);

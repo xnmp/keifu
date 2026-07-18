@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::config::RefreshConfig;
 use crate::git::operations::{
-    fetch_remote, pull, push_current, push_set_upstream, OpOutcome,
+    fetch_all, fetch_remote, pull, push_current, push_set_upstream, OpOutcome,
 };
 
 /// What a background push should do.
@@ -102,6 +102,21 @@ impl NetworkManager {
         } else {
             None
         }
+    }
+
+    /// Start a background fetch from every configured remote (`git fetch
+    /// --all`). Shares the fetch receiver, so completion flows through the same
+    /// `poll_fetch` / refresh path as a single-remote fetch.
+    pub fn start_fetch_all(&mut self, repo_path: &str) -> String {
+        let (tx, rx) = mpsc::channel();
+        let path = repo_path.to_string();
+        thread::spawn(move || {
+            let result = fetch_all(&path).map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+        self.fetch_receiver = Some(rx);
+        self.fetch_silent = false;
+        "Fetching all remotes...".to_string()
     }
 
     /// Start a background push per `spec`.

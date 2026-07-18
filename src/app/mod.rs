@@ -676,6 +676,12 @@ impl App {
             });
             return Ok(());
         }
+        // F5 full update works from any panel/sub-state; the keybinding layer
+        // only emits it in Normal mode.
+        if matches!(action, Action::FullUpdate) {
+            self.full_update();
+            return Ok(());
+        }
 
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
