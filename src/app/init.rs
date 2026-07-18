@@ -35,11 +35,23 @@ impl App {
         let head_detached = repo.is_head_detached();
 
         let stashes = repo.get_stashes();
-        // No branches are hidden at startup, so all branches are visible.
+        // The per-branch picker hides nothing at startup, but the show/hide-
+        // remotes toggle is persisted, so honour it here to avoid a first-frame
+        // flash of remote-only commits that the next refresh would remove.
         let branches = repo.get_branches()?;
+        let visible_branches: Vec<BranchInfo> = if ui_state.hide_remote_branches {
+            let remote_only = remote_only_branch_names(&branches);
+            branches
+                .iter()
+                .filter(|b| !remote_only.contains(&b.name))
+                .cloned()
+                .collect()
+        } else {
+            branches.clone()
+        };
         let remotes = repo.remotes();
         let tags = repo.get_tags();
-        let commits = repo.get_commits(INITIAL_COMMIT_LIMIT, &branches, &stashes)?;
+        let commits = repo.get_commits(INITIAL_COMMIT_LIMIT, &visible_branches, &stashes)?;
         // If the first walk yielded fewer than the limit, the whole history fits.
         let all_commits_loaded = commits.len() < INITIAL_COMMIT_LIMIT;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
@@ -50,8 +62,14 @@ impl App {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
-        let graph_layout =
-            build_graph(&commits, &branches, &tags, &stashes, uncommitted_count, head_commit_oid);
+        let graph_layout = build_graph(
+            &commits,
+            &visible_branches,
+            &tags,
+            &stashes,
+            uncommitted_count,
+            head_commit_oid,
+        );
 
         let mut graph_nav = GraphNav::new();
         graph_nav.rebuild_branch_positions(&graph_layout);
@@ -128,6 +146,7 @@ impl App {
             pending_watcher,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
+            hide_remote_branches: ui_state.hide_remote_branches,
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,

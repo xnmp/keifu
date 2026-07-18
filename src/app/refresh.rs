@@ -199,12 +199,22 @@ impl App {
         let stashes = self.repo.get_stashes();
         self.branches = self.repo.get_branches()?;
         self.remotes = self.repo.remotes();
-        // Hidden branches are excluded from the revwalk, so their exclusive
-        // commits are removed from the graph — not merely their labels.
+        // Excluded branches are dropped from the revwalk, so their exclusive
+        // commits are removed from the graph — not merely their labels. Two
+        // filters compose: the per-branch picker (`hidden_branches`) and the
+        // show/hide-remotes toggle, which hides every remote-only ref (a remote
+        // branch with no matching local one). A branch is visible iff neither
+        // filter excludes it.
+        let remote_only = if self.hide_remote_branches {
+            remote_only_branch_names(&self.branches)
+        } else {
+            std::collections::HashSet::new()
+        };
         let visible_branches: Vec<BranchInfo> = self
             .branches
             .iter()
             .filter(|b| !self.hidden_branches.contains(&b.name))
+            .filter(|b| !remote_only.contains(&b.name))
             .cloned()
             .collect();
         self.commits = self

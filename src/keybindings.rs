@@ -256,6 +256,11 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Branch filter
         (KeyModifiers::SHIFT, KeyCode::Char('B')) => Some(Action::OpenBranchFilter),
 
+        // Show/hide remote-only branches. Upstream uses 'o', but that's taken
+        // here by Open PR, so Shift+O — it keeps the "O" mnemonic and pairs with
+        // Shift+B (the per-branch filter), the other branch-visibility control.
+        (KeyModifiers::SHIFT, KeyCode::Char('O')) => Some(Action::ToggleRemoteBranches),
+
         // UI
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),

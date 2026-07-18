@@ -47,6 +47,8 @@ pub struct StatusBar<'a> {
     /// the `t trace` hint is worth showing; carries the current on/off state.
     trace_traceable: bool,
     trace_enabled: bool,
+    /// Whether remote-only branches are currently hidden from the graph.
+    remotes_hidden: bool,
     theme: &'a Theme,
 }
 
@@ -108,6 +110,7 @@ impl<'a> StatusBar<'a> {
             graph_cappable: (app.graph_layout.max_lane + 1) * 2 > 4,
             trace_traceable: crate::git::graph::graph_has_enough_lanes(&app.graph_layout),
             trace_enabled: app.trace_enabled,
+            remotes_hidden: app.hide_remote_branches,
             theme,
         }
     }
@@ -180,6 +183,18 @@ impl<'a> Widget for StatusBar<'a> {
                     spans.push(Span::raw(" "));
                 }
             }
+        }
+
+        // Remote-only branches hidden by the show/hide-remotes toggle (Shift+O).
+        if self.remotes_hidden {
+            spans.push(Span::styled(
+                " remotes hidden ",
+                Style::default()
+                    .fg(self.theme.status_mode_fg)
+                    .bg(self.theme.status_mode_bg)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
         }
 
         // In-progress operation indicator (merge/rebase/…): prominent, shown in

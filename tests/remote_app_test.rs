@@ -11,7 +11,10 @@ use keifu::git::operations::{create_branch, delete_branch};
 use keifu::git::GitRepository;
 
 mod common;
-use common::{add_bare_origin, add_bare_remote, current_branch, git_cli, head_oid, init_repo, Seed};
+use common::{
+    add_bare_origin, add_bare_remote, commit_file, current_branch, git_cli, head_oid, init_repo,
+    Seed,
+};
 
 /// Build an App over a fresh open of the repo at `path`, focused on the graph.
 fn app_at(path: &str) -> App {
@@ -122,4 +125,47 @@ fn delete_remote_branch_flow_removes_branch_from_remote() {
     );
     // HEAD branch is untouched.
     assert_eq!(current_branch(app.repo.repo()), branch);
+}
+
+/// End-to-end: the show/hide-remotes toggle (Shift+O → `ToggleRemoteBranches`)
+/// removes a remote-only branch's exclusive commit from the graph — not just
+/// its label — while leaving local work in place, and restores it when toggled
+/// back.
+#[test]
+fn toggle_remote_branches_hides_remote_only_commits() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let path = git_repo.path.clone();
+    let base = current_branch(git_repo.repo());
+
+    // Craft a commit that is reachable ONLY through a remote ref: branch off,
+    // commit, publish that commit under refs/remotes/origin/*, then delete the
+    // local branch so nothing local points at it.
+    git_cli(&path, &["checkout", "-b", "tmp"]);
+    let remote_oid = commit_file(git_repo.repo(), "remote-only.txt", "remote\n", "remote only work");
+    git_cli(
+        &path,
+        &["update-ref", "refs/remotes/origin/agent-work", &remote_oid.to_string()],
+    );
+    git_cli(&path, &["checkout", &base]);
+    git_cli(&path, &["branch", "-D", "tmp"]);
+    let local_oid = head_oid(git_repo.repo());
+
+    let mut app = app_at(&path);
+    let shows_remote = |app: &App| app.commits.iter().any(|c| c.oid == remote_oid);
+    let shows_local = |app: &App| app.commits.iter().any(|c| c.oid == local_oid);
+
+    // Default: remotes shown, so the remote-only commit is in the graph.
+    assert!(!app.hide_remote_branches);
+    assert!(shows_remote(&app), "remote-only commit should show by default");
+
+    // Toggle hides the remote-only commit but keeps local work.
+    app.handle_action(Action::ToggleRemoteBranches).unwrap();
+    assert!(app.hide_remote_branches);
+    assert!(!shows_remote(&app), "remote-only commit should be hidden");
+    assert!(shows_local(&app), "hiding remotes must not drop local work");
+
+    // Toggle back restores it.
+    app.handle_action(Action::ToggleRemoteBranches).unwrap();
+    assert!(!app.hide_remote_branches);
+    assert!(shows_remote(&app), "remote-only commit should return when shown again");
 }

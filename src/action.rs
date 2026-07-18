@@ -32,6 +32,8 @@ pub enum Action {
     // Commit menu
     OpenCommitMenu,
     OpenBranchFilter,
+    /// Show/hide all remote-only branches in the graph.
+    ToggleRemoteBranches,
     MenuSelect,
     SelectAll,
     SelectNone,

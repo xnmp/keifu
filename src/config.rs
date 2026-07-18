@@ -210,6 +210,9 @@ pub struct UiState {
     /// Branch tracing: highlight the selected commit's lineage and dim the rest.
     /// On by default; only takes effect on branchy (>2 lane) graphs.
     pub trace_enabled: bool,
+    /// Hide remote-only branches (remote refs with no matching local branch)
+    /// from the graph. Off by default (remotes shown).
+    pub hide_remote_branches: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -220,6 +223,7 @@ impl Default for UiState {
             graph_width_cap: None,
             graph_split_ratio: DEFAULT_GRAPH_SPLIT_RATIO,
             trace_enabled: true,
+            hide_remote_branches: false,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -432,6 +436,7 @@ mod tests {
             graph_width_cap: Some(8),
             graph_split_ratio: 40,
             trace_enabled: false,
+            hide_remote_branches: true,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -446,6 +451,7 @@ mod tests {
         assert_eq!(restored.graph_width_cap, Some(8));
         assert_eq!(restored.graph_split_ratio, 40);
         assert!(!restored.trace_enabled);
+        assert!(restored.hide_remote_branches);
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
@@ -465,6 +471,23 @@ mod tests {
         cols.toggle(MetadataColumn::MuteMerges);
         assert!(!cols.mute_merges);
         assert!(!cols.is_visible(MetadataColumn::MuteMerges));
+    }
+
+    #[test]
+    fn hide_remote_branches_defaults_off_and_round_trips() {
+        // Remotes are shown by default, including for an older state.toml that
+        // predates the key.
+        assert!(!UiState::default().hide_remote_branches);
+        let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(!older.hide_remote_branches, "missing key defaults to shown");
+
+        // Once set, the preference survives a save/load round-trip.
+        let hidden = UiState {
+            hide_remote_branches: true,
+            ..UiState::default()
+        };
+        let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
+        assert!(restored.hide_remote_branches);
     }
 
     #[test]

@@ -9,7 +9,7 @@ pub mod operations;
 pub mod patch;
 pub mod repository;
 
-pub use branch::BranchInfo;
+pub use branch::{remote_only_branch_names, BranchInfo};
 pub use commit::CommitInfo;
 pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,

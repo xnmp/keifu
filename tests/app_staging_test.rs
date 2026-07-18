@@ -150,6 +150,7 @@ fn make_base_app(
         pending_watcher: None,
         last_undoable_op: None,
         side_panel_layout: false,
+        hide_remote_branches: false,
         metadata_columns: keifu::config::MetadataColumns::default(),
         graph_width_cap: None,
         debug_keys: false,

@@ -24,6 +24,9 @@ Shift+B in graph pane opens branch filter popup. Space toggles branches, `a` sel
 
 **Update:** Now performs *real* commit filtering — `get_commits()` accepts the visible branch set and only walks from those tips (HEAD is always pushed too), so hiding a branch removes its exclusive commits from the graph, not just the labels. Commits reachable from a visible branch stay. Hiding every branch still shows HEAD's history.
 
+### [DONE] 2026-07-19 Show/Hide Remote-Only Branches
+`Shift+O` (graph pane) toggles visibility of every remote-only branch at once — a remote ref with no matching local branch (matched by upstream config, short name, or shared tip). Hidden remotes drop their labels *and* their exclusive commits, reusing the existing `visible_branches` revwalk path, and compose with the per-branch filter (`hidden_branches`): a branch is visible iff not individually hidden AND not excluded by the remote toggle. Pure classifier `git::branch::remote_only_branch_names()` (unit-tested); state persisted in `UiState.hide_remote_branches` (`state.toml`) and honored on startup; surfaced as a "remotes hidden" status-bar chip and a help-popup entry. Upstream (trasta298) binds this to `o`, but that's Open-PR in the fork, so `Shift+O` — keeps the mnemonic and pairs with `Shift+B`.
+
 ### [DONE] Tags Rendered as Graph Refs
 Lightweight and annotated tags (peeled to their target commit) are loaded via `repository.get_tags()`, threaded through `build_graph` onto `GraphNode.tag_names`, and rendered next to branch labels as `<tag>` in a distinct tag color (`theme.tag_label`).
 

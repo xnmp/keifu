@@ -109,6 +109,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Branch filter", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  O          ", key_style),
+                Span::styled("Show/hide remote-only branches", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  Ctrl+f     ", key_style),
                 Span::styled("Filter commits (message/author/hash)", desc_style),
             ]),
