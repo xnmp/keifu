@@ -27,7 +27,7 @@ impl App {
                     }
                 }
             }
-            Err(e) => self.show_error(e),
+            Err(e) => self.show_git_error(e),
         }
         true
     }
@@ -43,7 +43,7 @@ impl App {
                     self.show_error(format!("Refresh failed: {e}"));
                 }
             }
-            Err(e) => self.show_error(e),
+            Err(e) => self.show_git_error(e),
         }
         true
     }
@@ -70,7 +70,15 @@ impl App {
                     }
                 }
             }
-            Err(e) => self.show_error(e),
+            Err(e) => {
+                // A --ff-only pull that fails on divergence isn't an error to
+                // surface — offer merge/rebase instead.
+                if is_divergent_pull_error(&e) && self.last_pull.is_some() {
+                    self.mode = AppMode::PullDivergence { selected: 0 };
+                } else {
+                    self.show_git_error(e);
+                }
+            }
         }
         true
     }
@@ -211,16 +219,47 @@ impl App {
         self.set_message(msg);
     }
 
-    /// Start a pull. `remote = None` uses the branch's configured upstream; an
-    /// explicit remote pulls `<remote> <current-branch>`.
-    pub(crate) fn start_pull_remote(&mut self, remote: Option<String>) {
+    /// Start a pull with strategy `mode`. `remote = None` uses the branch's
+    /// configured upstream; an explicit remote pulls `<remote> <current-branch>`.
+    pub(crate) fn start_pull_remote(&mut self, remote: Option<String>, mode: PullMode) {
         let branch = if remote.is_some() {
             self.head_branch_info().map(|b| b.name.clone())
         } else {
             None
         };
-        let msg = self.network.start_pull(&self.repo_path, remote, branch);
+        self.start_pull_with(remote, branch, mode);
+    }
+
+    /// Kick off the async pull, remembering (remote, branch) so a divergence
+    /// prompt can rerun it with an explicit merge/rebase strategy.
+    fn start_pull_with(&mut self, remote: Option<String>, branch: Option<String>, mode: PullMode) {
+        self.last_pull = Some((remote.clone(), branch.clone()));
+        let msg = self.network.start_pull(&self.repo_path, remote, branch, mode);
         self.set_message(msg);
+    }
+
+    /// Rerun the last pull with an explicit strategy after the divergence
+    /// prompt. Respects the busy guard so it never launches a second concurrent
+    /// pull.
+    pub(crate) fn rerun_pull_with_mode(&mut self, mode: PullMode) {
+        if self.network.is_busy() {
+            self.set_message("busy: pull in progress");
+            return;
+        }
+        let Some((remote, branch)) = self.last_pull.clone() else {
+            return;
+        };
+        self.start_pull_with(remote, branch, mode);
+    }
+
+    /// Show a git failure with a humanized one-liner (when recognized) plus the
+    /// raw stderr below for debuggability.
+    pub(crate) fn show_git_error(&mut self, raw: String) {
+        let msg = match humanize_git_error(&raw) {
+            Some(human) => format!("{human}\n\n{}", raw.trim()),
+            None => raw,
+        };
+        self.show_error(msg);
     }
 
     pub(crate) fn reset_timers(&mut self) {

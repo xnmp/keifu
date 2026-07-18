@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::config::RefreshConfig;
 use crate::git::operations::{
-    fetch_all, fetch_remote, pull, push_current, push_set_upstream, OpOutcome,
+    fetch_all, fetch_remote, pull, push_current, push_set_upstream, OpOutcome, PullMode,
 };
 
 /// What a background push should do.
@@ -151,6 +151,7 @@ impl NetworkManager {
         repo_path: &str,
         remote: Option<String>,
         branch: Option<String>,
+        mode: PullMode,
     ) -> String {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
@@ -159,7 +160,7 @@ impl NetworkManager {
             None => "Pulling...".to_string(),
         };
         thread::spawn(move || {
-            let result = pull(&path, remote.as_deref(), branch.as_deref())
+            let result = pull(&path, remote.as_deref(), branch.as_deref(), mode)
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });

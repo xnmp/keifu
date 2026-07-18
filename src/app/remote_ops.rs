@@ -75,12 +75,12 @@ impl App {
             .map(|b| b.upstream.is_some())
             .unwrap_or(false);
         if has_upstream {
-            self.start_pull_remote(None);
+            self.start_pull_remote(None, PullMode::FfOnly);
             return;
         }
         match self.resolve_remote() {
             RemoteChoice::None => self.set_message("No remote configured"),
-            RemoteChoice::Use(r) => self.start_pull_remote(Some(r)),
+            RemoteChoice::Use(r) => self.start_pull_remote(Some(r), PullMode::FfOnly),
             RemoteChoice::Prompt(remotes) => self.open_remote_picker(remotes, RemoteOp::Pull),
         }
     }
@@ -180,7 +180,7 @@ impl App {
     fn run_remote_op(&mut self, op: RemoteOp, remote: String) {
         match op {
             RemoteOp::Fetch => self.start_fetch_remote(remote, true, false),
-            RemoteOp::Pull => self.start_pull_remote(Some(remote)),
+            RemoteOp::Pull => self.start_pull_remote(Some(remote), PullMode::FfOnly),
             RemoteOp::Push => match self.head_branch_info().map(|b| b.name.clone()) {
                 Some(branch) => self.start_publish(remote, branch),
                 None => self.set_message("Not on a branch"),

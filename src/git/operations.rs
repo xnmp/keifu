@@ -27,6 +27,10 @@ fn run_git(repo_path: &str, args: &[&str]) -> Result<std::process::Output> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repo_path)
+        // Never let auth block on /dev/tty: a missing credential becomes an
+        // instant "could not read Username" error instead of a silent hang that
+        // wedges the background op forever.
+        .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .output()
         .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
@@ -61,6 +65,8 @@ fn run_git_allow_conflict(repo_path: &str, args: &[&str]) -> Result<OpOutcome> {
         // Never block the TUI on an editor prompt.
         .env("GIT_EDITOR", "true")
         .env("GIT_SEQUENCE_EDITOR", "true")
+        // Never block on a credential prompt (see run_git).
+        .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .output()
         .context(format!("Failed to execute git {subcommand}"))?;
@@ -348,18 +354,48 @@ pub fn fetch_all(repo_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Fetch and integrate from a remote (`git pull`), honoring the user's
-/// `pull.rebase` config.
+/// How a pull reconciles divergent branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullMode {
+    /// `--ff-only`: refuse to merge/rebase; fail loudly on divergence (default).
+    FfOnly,
+    /// `--no-rebase`: create a merge commit.
+    Merge,
+    /// `--rebase`: replay local commits on top of the remote.
+    Rebase,
+}
+
+impl PullMode {
+    fn arg(self) -> &'static str {
+        match self {
+            PullMode::FfOnly => "--ff-only",
+            PullMode::Merge => "--no-rebase",
+            PullMode::Rebase => "--rebase",
+        }
+    }
+}
+
+/// Fetch and integrate from a remote (`git pull`) with an explicit `mode`.
 ///
-/// With `remote`/`branch` = `None`, runs a bare `git pull`, which resolves the
-/// current branch's configured upstream. With an explicit remote (+ branch),
-/// runs `git pull <remote> <branch>` — used when no upstream is set yet.
+/// The default is `PullMode::FfOnly`: with `pull.rebase`/`pull.ff` unset (git
+/// 2.27+) a bare `git pull` on divergent branches aborts with "Need to specify
+/// how to reconcile divergent branches". `--ff-only` makes that a clean,
+/// catchable failure the caller turns into a merge/rebase prompt.
+///
+/// With `remote`/`branch` = `None`, resolves the current branch's configured
+/// upstream. With an explicit remote (+ branch), runs `git pull <flag> <remote>
+/// <branch>` — used when no upstream is set yet.
 ///
 /// A conflicting merge/rebase is reported as `OpOutcome::Conflicts` (leaving the
 /// repo mid-operation for the guided resolve flow), not an error. The editor is
 /// disabled so a merge-commit prompt never blocks the TUI.
-pub fn pull(repo_path: &str, remote: Option<&str>, branch: Option<&str>) -> Result<OpOutcome> {
-    let mut args = vec!["pull"];
+pub fn pull(
+    repo_path: &str,
+    remote: Option<&str>,
+    branch: Option<&str>,
+    mode: PullMode,
+) -> Result<OpOutcome> {
+    let mut args = vec!["pull", mode.arg()];
     if let Some(r) = remote {
         args.push(r);
         if let Some(b) = branch {
@@ -367,6 +403,58 @@ pub fn pull(repo_path: &str, remote: Option<&str>, branch: Option<&str>) -> Resu
         }
     }
     run_git_allow_conflict(repo_path, &args)
+}
+
+/// Whether a `git pull --ff-only` failure is due to divergent branches (offer
+/// merge/rebase) rather than a hard error.
+pub fn is_divergent_pull_error(stderr: &str) -> bool {
+    stderr.contains("Not possible to fast-forward")
+        || stderr.contains("Need to specify how to reconcile")
+        || stderr.contains("fatal: Not possible")
+}
+
+/// Extract the missing ref name from a "couldn't find remote ref <ref>" error.
+fn parse_missing_ref(stderr: &str) -> Option<String> {
+    stderr
+        .split("couldn't find remote ref ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(|s| s.trim_end_matches(['\n', '.', '\'']).to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Map known git failure stderr to an actionable one-liner, or `None` when
+/// unrecognized (the caller then shows the raw message).
+pub fn humanize_git_error(stderr: &str) -> Option<String> {
+    if stderr.contains("could not read Username")
+        || stderr.contains("Authentication failed")
+        || stderr.contains("Permission denied (publickey")
+    {
+        return Some(
+            "Authentication failed — check your credentials / SSH key (e.g. `gh auth login`)"
+                .to_string(),
+        );
+    }
+    if stderr.contains("couldn't find remote ref") {
+        return Some(match parse_missing_ref(stderr) {
+            Some(r) => format!("Remote has no branch '{r}' — it may be renamed or not pushed yet"),
+            None => {
+                "That branch is missing on the remote — it may be renamed or not pushed yet"
+                    .to_string()
+            }
+        });
+    }
+    if stderr.contains("would be overwritten by merge")
+        || stderr.contains("Your local changes to the following files would be overwritten")
+    {
+        return Some("Local changes would be overwritten — commit or stash them first".to_string());
+    }
+    if stderr.contains("index.lock") {
+        return Some(
+            "Another git operation is in progress (index.lock) — wait for it to finish".to_string(),
+        );
+    }
+    None
 }
 
 /// Prune stale remote-tracking refs for a remote (`git remote prune <remote>`).
@@ -785,7 +873,60 @@ pub fn signature_status_label(code: char) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::signature_status_label;
+    use super::{
+        humanize_git_error, is_divergent_pull_error, signature_status_label, PullMode,
+    };
+
+    #[test]
+    fn pull_mode_maps_to_reconcile_flags() {
+        assert_eq!(PullMode::FfOnly.arg(), "--ff-only");
+        assert_eq!(PullMode::Merge.arg(), "--no-rebase");
+        assert_eq!(PullMode::Rebase.arg(), "--rebase");
+    }
+
+    #[test]
+    fn divergence_predicate_matches_reconcile_failures() {
+        assert!(is_divergent_pull_error(
+            "fatal: Not possible to fast-forward, aborting."
+        ));
+        assert!(is_divergent_pull_error(
+            "hint: You have divergent branches...\nfatal: Need to specify how to reconcile divergent branches."
+        ));
+        assert!(is_divergent_pull_error("fatal: Not possible"));
+        // A normal auth failure is NOT divergence.
+        assert!(!is_divergent_pull_error(
+            "fatal: Authentication failed for 'https://github.com/o/r'"
+        ));
+        assert!(!is_divergent_pull_error("Already up to date."));
+    }
+
+    #[test]
+    fn humanize_maps_known_failures_to_guidance() {
+        // Auth (both HTTPS credential and SSH key forms).
+        assert!(humanize_git_error("fatal: could not read Username for 'https://github.com'")
+            .unwrap()
+            .contains("Authentication failed"));
+        assert!(humanize_git_error("remote: Permission denied (publickey).")
+            .unwrap()
+            .contains("Authentication failed"));
+        // Missing remote ref names the branch.
+        let missing = humanize_git_error("fatal: couldn't find remote ref feature/x").unwrap();
+        assert!(missing.contains("feature/x"), "names the branch: {missing}");
+        // Would-be-overwritten local changes.
+        assert!(humanize_git_error(
+            "error: Your local changes to the following files would be overwritten by merge:\n\tsrc/main.rs"
+        )
+        .unwrap()
+        .contains("commit or stash"));
+        // index.lock.
+        assert!(humanize_git_error(
+            "fatal: Unable to create '/repo/.git/index.lock': File exists."
+        )
+        .unwrap()
+        .contains("in progress"));
+        // Unrecognized -> None (caller falls back to raw).
+        assert_eq!(humanize_git_error("some unexpected failure"), None);
+    }
 
     #[test]
     fn signature_labels_cover_all_git_codes() {

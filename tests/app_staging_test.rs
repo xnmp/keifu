@@ -131,6 +131,7 @@ fn make_base_app(
         network: NetworkManager::new(),
         open_prs: std::collections::HashMap::new(),
         pr_fetch: keifu::pr::PrFetch::new(),
+        last_pull: None,
         watcher: None,
         pending_watcher: None,
         last_undoable_op: None,

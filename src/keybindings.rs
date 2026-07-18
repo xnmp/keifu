@@ -49,6 +49,7 @@ pub fn map_key_to_action(
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
         AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
+        AppMode::PullDivergence { .. } => map_pull_divergence_mode(key),
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
@@ -451,6 +452,22 @@ fn map_metadata_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char(' ')) | (KeyModifiers::NONE, KeyCode::Enter) => {
             Some(Action::MenuSelect)
         }
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
+fn map_pull_divergence_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }

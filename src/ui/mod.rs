@@ -29,7 +29,9 @@ use self::{
     branch_filter::BranchFilterWidget,
     commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
     commit_menu::CommitMenuWidget,
-    dialog::{BranchPickerWidget, ConfirmDialog, FileHistoryWidget, InputDialog},
+    dialog::{
+        BranchPickerWidget, ConfirmDialog, FileHistoryWidget, InputDialog, PullDivergenceDialog,
+    },
     file_diff_view::FileDiffViewWidget,
     files_pane::{FilesPaneState, FilesPaneWidget},
     graph_view::GraphViewWidget,
@@ -304,6 +306,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 MetadataMenuWidget::new(app.metadata_columns, *selected, &theme),
                 popup_area,
             );
+        }
+        AppMode::PullDivergence { selected } => {
+            let popup_area = centered_rect_fixed(48, 8, area);
+            frame.render_widget(PullDivergenceDialog::new(*selected, &theme), popup_area);
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);

@@ -8,8 +8,8 @@
 use std::path::Path;
 
 use keifu::git::operations::{
-    create_branch, delete_remote_branch, fetch_remote, prune_remote, pull, push_current,
-    push_set_upstream, OpOutcome,
+    create_branch, delete_remote_branch, fetch_remote, is_divergent_pull_error, prune_remote, pull,
+    push_current, push_set_upstream, OpOutcome, PullMode,
 };
 use keifu::git::{GitRepository, OperationState};
 
@@ -52,7 +52,8 @@ fn pull_fast_forward_advances_head_and_worktree() {
 
     advance_origin(origin.path(), &branch, "remote.txt", "from remote\n", "remote change");
 
-    let outcome = pull(&path, None, None).unwrap();
+    // A fast-forward succeeds even under the strict --ff-only default.
+    let outcome = pull(&path, None, None, PullMode::FfOnly).unwrap();
     assert_eq!(outcome, OpOutcome::Completed);
 
     // The worktree gained the remote file and HEAD is the remote commit.
@@ -68,15 +69,14 @@ fn pull_fast_forward_advances_head_and_worktree() {
 fn pull_divergent_remote_creates_merge_commit() {
     let (_td, git_repo, origin, branch) = repo_with_tracked_origin();
     let path = git_repo.path.clone();
-    // Merge on pull, regardless of the runner's global git config.
-    git_cli(&path, &["config", "pull.rebase", "false"]);
 
     // Remote and local advance on disjoint files → divergence, no conflict.
     advance_origin(origin.path(), &branch, "fileR.txt", "R\n", "remote work");
     commit_file(git_repo.repo(), "fileL.txt", "L\n", "local work");
     let before = head_oid(git_repo.repo());
 
-    let outcome = pull(&path, None, None).unwrap();
+    // The merge strategy is explicit (--no-rebase), independent of git config.
+    let outcome = pull(&path, None, None, PullMode::Merge).unwrap();
     assert_eq!(outcome, OpOutcome::Completed);
 
     // HEAD is a fresh merge commit (two parents) with both sides' files.
@@ -93,7 +93,6 @@ fn pull_divergent_remote_creates_merge_commit() {
 fn pull_conflict_leaves_repo_in_merge_state() {
     let (_td, git_repo, origin, branch) = repo_with_tracked_origin();
     let path = git_repo.path.clone();
-    git_cli(&path, &["config", "pull.rebase", "false"]);
 
     // Shared base line both sides edit differently.
     commit_file(git_repo.repo(), "conflict.txt", "base\n", "add conflict base");
@@ -104,14 +103,34 @@ fn pull_conflict_leaves_repo_in_merge_state() {
     std::fs::write(Path::new(&path).join("conflict.txt"), "local\n").unwrap();
     git_cli(&path, &["commit", "-am", "local edit"]);
 
-    // A conflicting pull is a typed outcome, not an error.
-    let outcome = pull(&path, None, None).unwrap();
+    // A conflicting merge-pull is a typed outcome, not an error.
+    let outcome = pull(&path, None, None, PullMode::Merge).unwrap();
     assert!(
         matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
         "expected Conflicts, got {outcome:?}"
     );
     // The repo is left mid-merge so the guided resolve flow can take over.
     assert_eq!(git_repo.operation_state(), OperationState::Merge);
+}
+
+#[test]
+fn pull_ff_only_fails_on_divergence_with_a_recognized_error() {
+    let (_td, git_repo, origin, branch) = repo_with_tracked_origin();
+    let path = git_repo.path.clone();
+
+    // Divergent history (disjoint files): a fast-forward is impossible.
+    advance_origin(origin.path(), &branch, "fileR.txt", "R\n", "remote work");
+    commit_file(git_repo.repo(), "fileL.txt", "L\n", "local work");
+
+    // The default --ff-only pull fails loudly, and the failure is classified as
+    // divergence (which drives the merge/rebase prompt) rather than a hard error.
+    let err = pull(&path, None, None, PullMode::FfOnly).unwrap_err().to_string();
+    assert!(
+        is_divergent_pull_error(&err),
+        "expected a divergence error, got: {err}"
+    );
+    // No merge was started — the repo is untouched.
+    assert_eq!(git_repo.operation_state(), OperationState::Clean);
 }
 
 // ── Push / publish ──────────────────────────────────────────────────

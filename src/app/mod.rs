@@ -22,10 +22,10 @@ use crate::{
             checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
             delete_branch, delete_remote_branch, delete_tag, get_last_commit_message,
-            merge_branch, prune_remote, push_tag, rebase_branch, rename_branch,
-            reset_to_commit, restore_files, revert_commit, stage_all, stage_file,
-            stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
-            unstage_all, unstage_file, OpOutcome, ResetMode,
+            humanize_git_error, is_divergent_pull_error, merge_branch, prune_remote, push_tag,
+            rebase_branch, rename_branch, reset_to_commit, restore_files, revert_commit, stage_all,
+            stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
+            unstage_all, unstage_file, OpOutcome, PullMode, ResetMode,
         },
         extract_hunk_from_working_tree, render_hunk_patch,
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
@@ -263,6 +263,11 @@ pub enum AppMode {
     },
     /// Checkbox menu to toggle which metadata columns show on commit rows.
     MetadataMenu {
+        selected: usize,
+    },
+    /// A `--ff-only` pull failed on divergent branches: choose merge or rebase.
+    /// The remote/branch to rerun with are held in `App.last_pull`.
+    PullDivergence {
         selected: usize,
     },
     BranchFilter {
@@ -526,6 +531,10 @@ pub struct App {
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
     pub pr_fetch: crate::pr::PrFetch,
 
+    // The last pull's (remote, branch) so a divergence prompt can rerun it with
+    // an explicit merge/rebase strategy.
+    pub last_pull: Option<(Option<String>, Option<String>)>,
+
     // Filesystem watcher
     pub watcher: Option<crate::watcher::FsWatcher>,
     // Watcher still being built on a background thread; installed into
@@ -700,6 +709,7 @@ impl App {
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
+            AppMode::PullDivergence { .. } => self.handle_pull_divergence_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,
@@ -748,6 +758,39 @@ impl App {
                 };
                 self.metadata_columns.toggle(MetadataColumn::ALL[idx]);
                 self.save_ui_state();
+            }
+            Action::Cancel => self.mode = AppMode::Normal,
+            _ => {}
+        }
+    }
+
+    /// Pull-divergence prompt: pick merge (0) or rebase (1), or cancel. The
+    /// choice reruns the pull with that strategy through the normal async path.
+    fn handle_pull_divergence_action(&mut self, action: Action) {
+        const N: usize = 2; // Merge, Rebase
+        match action {
+            Action::MoveUp => {
+                if let AppMode::PullDivergence { selected } = &mut self.mode {
+                    *selected = (*selected + N - 1) % N;
+                }
+            }
+            Action::MoveDown => {
+                if let AppMode::PullDivergence { selected } = &mut self.mode {
+                    *selected = (*selected + 1) % N;
+                }
+            }
+            Action::MenuSelect => {
+                let idx = match &self.mode {
+                    AppMode::PullDivergence { selected } => *selected,
+                    _ => return,
+                };
+                self.mode = AppMode::Normal;
+                let mode = if idx == 0 {
+                    PullMode::Merge
+                } else {
+                    PullMode::Rebase
+                };
+                self.rerun_pull_with_mode(mode);
             }
             Action::Cancel => self.mode = AppMode::Normal,
             _ => {}

@@ -7,6 +7,14 @@ impl App {
         self.sync_file_list_cache();
         let item_count = self.files_pane.display_items().len();
 
+        // Index-mutating ops must not race a background pull: both touch
+        // `.git/index.lock`, and a collision leaves a stuck lock. Read-only
+        // navigation stays ungated.
+        if action_touches_index(&action) && self.network.is_busy() {
+            self.set_message("busy: pull in progress");
+            return Ok(());
+        }
+
         match action {
             Action::Quit => {
                 self.should_quit = true;
@@ -417,5 +425,63 @@ impl App {
         let node = self.selected_commit_node()?;
         let label = node.stash_label.as_ref()?;
         label.strip_prefix("stash@{")?.strip_suffix('}')?.parse().ok()
+    }
+}
+
+/// Whether a files-pane action mutates the git index / working tree via git,
+/// and so must not run concurrently with a background pull (index.lock race).
+/// Read-only actions (navigation, open, copy path, filter) return false.
+fn action_touches_index(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::ToggleStage
+            | Action::StageAll
+            | Action::UnstageAll
+            | Action::RestoreFile
+            | Action::AcceptOurs
+            | Action::AcceptTheirs
+            | Action::ContinueOperation
+            | Action::UndoLastFileOp
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::action_touches_index;
+    use crate::action::Action;
+
+    #[test]
+    fn index_mutating_actions_are_gated() {
+        for a in [
+            Action::ToggleStage,
+            Action::StageAll,
+            Action::UnstageAll,
+            Action::RestoreFile,
+            Action::AcceptOurs,
+            Action::AcceptTheirs,
+            Action::ContinueOperation,
+            Action::UndoLastFileOp,
+        ] {
+            assert!(action_touches_index(&a), "{a:?} should be gated");
+        }
+    }
+
+    #[test]
+    fn read_only_actions_are_not_gated() {
+        // Constructing a busy NetworkManager in a unit test isn't practical
+        // (its receivers are private and set only by a spawned thread), so the
+        // guard is verified through this pure predicate rather than end-to-end.
+        for a in [
+            Action::MoveUp,
+            Action::MoveDown,
+            Action::OpenFileDiff,
+            Action::CopyPath,
+            Action::OpenWithDefault,
+            Action::FileHistory,
+            Action::ToggleFolderView,
+            Action::StartFilesFilter,
+        ] {
+            assert!(!action_touches_index(&a), "{a:?} should stay ungated");
+        }
     }
 }

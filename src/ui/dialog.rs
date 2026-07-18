@@ -106,6 +106,60 @@ impl<'a> Widget for ConfirmDialog<'a> {
     }
 }
 
+/// Divergence prompt shown when a `--ff-only` pull fails: pick merge or rebase.
+pub struct PullDivergenceDialog<'a> {
+    selected: usize,
+    theme: &'a Theme,
+}
+
+impl<'a> PullDivergenceDialog<'a> {
+    /// Menu order matches the handler: 0 = Merge, 1 = Rebase.
+    pub const OPTIONS: [&'static str; 2] = ["Merge (create a merge commit)", "Rebase (replay your commits)"];
+
+    pub fn new(selected: usize, theme: &'a Theme) -> Self {
+        Self { selected, theme }
+    }
+}
+
+impl<'a> Widget for PullDivergenceDialog<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+
+        let block = Block::default()
+            .title(" Branches diverged ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(self.theme.confirm_border))
+            .style(Style::default().bg(self.theme.popup_bg));
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Can't fast-forward. Reconcile with:",
+                Style::default().fg(self.theme.text_primary),
+            )),
+            Line::from(""),
+        ];
+        for (i, opt) in Self::OPTIONS.iter().enumerate() {
+            let selected = i == self.selected;
+            let style = if selected {
+                self.theme.list_selection_style()
+            } else {
+                Style::default().fg(self.theme.text_primary)
+            };
+            let prefix = if selected { " > " } else { "   " };
+            lines.push(Line::from(Span::styled(format!("{prefix}{opt}"), style)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ↑↓ move   Enter choose   Esc cancel",
+            Style::default().fg(self.theme.text_muted),
+        )));
+
+        let paragraph = Paragraph::new(lines).block(block);
+        Widget::render(paragraph, area, buf);
+    }
+}
+
 /// Branch picker dialog (shown when selecting from multiple branches on a commit)
 pub struct BranchPickerWidget<'a> {
     branches: &'a [String],
