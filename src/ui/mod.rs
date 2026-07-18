@@ -10,6 +10,7 @@ pub mod files_pane;
 pub mod graph_pixels;
 pub mod graph_view;
 pub mod help_popup;
+pub mod metadata_menu;
 pub mod search_dropdown;
 pub mod status_bar;
 pub mod theme;
@@ -283,6 +284,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect_fixed(menu_width, menu_height, area);
             frame.render_widget(
                 CommitMenuWidget::new(items, *selected, filter, &theme),
+                popup_area,
+            );
+        }
+        AppMode::MetadataMenu { selected } => {
+            use self::metadata_menu::MetadataMenuWidget;
+            // 3 rows + top/bottom border.
+            let popup_area = centered_rect_fixed(24, 5, area);
+            frame.render_widget(
+                MetadataMenuWidget::new(app.metadata_columns, *selected, &theme),
                 popup_area,
             );
         }

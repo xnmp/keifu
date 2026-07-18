@@ -48,6 +48,7 @@ pub fn map_key_to_action(
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
+        AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
@@ -143,6 +144,10 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
         // Open the selected commit's PR in the browser
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenPr),
+
+        // Toggle which metadata columns show on commit rows ('m' is taken by
+        // mark/compare, so Shift+M — mnemonic "Metadata")
+        (KeyModifiers::SHIFT, KeyCode::Char('M')) => Some(Action::OpenMetadataMenu),
 
         // Quick actions
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
@@ -423,6 +428,24 @@ fn map_picker_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
+fn map_metadata_menu_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char(' ')) | (KeyModifiers::NONE, KeyCode::Enter) => {
+            Some(Action::MenuSelect)
+        }
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }

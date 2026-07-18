@@ -372,6 +372,14 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("cancel", desc_style));
             }
+            AppMode::MetadataMenu { .. } => {
+                spans.push(Span::styled(" ↑/↓ ", key_style));
+                spans.push(Span::styled("move ", desc_style));
+                spans.push(Span::styled(" Space ", key_style));
+                spans.push(Span::styled("toggle ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("close", desc_style));
+            }
             AppMode::BranchFilter { .. } => {
                 spans.push(Span::styled(" Space ", key_style));
                 spans.push(Span::styled("toggle ", desc_style));
@@ -403,6 +411,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::Confirm { .. } => Some(" CONFIRM "),
             AppMode::Error { .. } => Some(" ERROR "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
+            AppMode::MetadataMenu { .. } => Some(" COLUMNS "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::TagPicker { .. } => Some(" TAG "),

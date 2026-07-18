@@ -75,6 +75,9 @@ impl App {
             Action::OpenPr => {
                 self.open_selected_pr();
             }
+            Action::OpenMetadataMenu => {
+                self.mode = AppMode::MetadataMenu { selected: 0 };
+            }
             Action::MoveUp => {
                 self.move_selection(-1);
             }

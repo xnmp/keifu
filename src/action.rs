@@ -42,6 +42,9 @@ pub enum Action {
     // Open the selected commit's PR in the browser (graph)
     OpenPr,
 
+    // Open the metadata-columns toggle menu (graph)
+    OpenMetadataMenu,
+
     // Per-file history (files pane)
     FileHistory,
 

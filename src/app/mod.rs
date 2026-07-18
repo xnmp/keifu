@@ -261,6 +261,10 @@ pub enum AppMode {
         selected: usize,
         filter: String,
     },
+    /// Checkbox menu to toggle which metadata columns show on commit rows.
+    MetadataMenu {
+        selected: usize,
+    },
     BranchFilter {
         filter: String,
         selected: usize,
@@ -534,6 +538,9 @@ pub struct App {
     // Layout
     pub side_panel_layout: bool,
 
+    // Which metadata columns (author/hash/date) render on each commit row.
+    pub metadata_columns: crate::config::MetadataColumns,
+
     // Debug mode
     pub debug_keys: bool,
 
@@ -661,10 +668,7 @@ impl App {
         }
         if matches!(action, Action::ToggleLayout) {
             self.side_panel_layout = !self.side_panel_layout;
-            UiState {
-                side_panel_layout: self.side_panel_layout,
-            }
-            .save();
+            self.save_ui_state();
             return Ok(());
         }
         if matches!(action, Action::ToggleDebugKeys) {
@@ -690,6 +694,7 @@ impl App {
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
+            AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,
@@ -704,6 +709,43 @@ impl App {
     /// Show an error
     pub fn show_error(&mut self, message: String) {
         self.mode = AppMode::Error { message };
+    }
+
+    /// Persist the writable UI state (panel layout + metadata columns).
+    pub(crate) fn save_ui_state(&self) {
+        UiState {
+            side_panel_layout: self.side_panel_layout,
+            metadata_columns: self.metadata_columns,
+        }
+        .save();
+    }
+
+    /// Metadata-columns toggle menu: navigate, toggle (persisting), close.
+    fn handle_metadata_menu_action(&mut self, action: Action) {
+        use crate::config::MetadataColumn;
+        let n = MetadataColumn::ALL.len();
+        match action {
+            Action::MoveUp => {
+                if let AppMode::MetadataMenu { selected } = &mut self.mode {
+                    *selected = (*selected + n - 1) % n;
+                }
+            }
+            Action::MoveDown => {
+                if let AppMode::MetadataMenu { selected } = &mut self.mode {
+                    *selected = (*selected + 1) % n;
+                }
+            }
+            Action::MenuSelect => {
+                let idx = match &self.mode {
+                    AppMode::MetadataMenu { selected } => *selected,
+                    _ => return,
+                };
+                self.metadata_columns.toggle(MetadataColumn::ALL[idx]);
+                self.save_ui_state();
+            }
+            Action::Cancel => self.mode = AppMode::Normal,
+            _ => {}
+        }
     }
 
     fn handle_help_action(&mut self, action: Action) {

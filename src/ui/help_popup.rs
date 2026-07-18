@@ -120,6 +120,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  o          ", key_style),
                 Span::styled("Open the commit's PR in the browser (if any)", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  M          ", key_style),
+                Span::styled("Toggle metadata columns (author/hash/date)", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
         ];

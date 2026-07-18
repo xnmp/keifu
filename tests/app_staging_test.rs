@@ -135,6 +135,7 @@ fn make_base_app(
         pending_watcher: None,
         last_undoable_op: None,
         side_panel_layout: false,
+        metadata_columns: keifu::config::MetadataColumns::default(),
         debug_keys: false,
         config: Config::default(),
         terminal_bg: None,

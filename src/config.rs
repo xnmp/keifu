@@ -109,11 +109,70 @@ impl Config {
     }
 }
 
+/// Which right-aligned metadata columns are shown on each commit row. A hidden
+/// column's width flows to the commit message. Defaults to all visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MetadataColumns {
+    pub author: bool,
+    pub hash: bool,
+    pub date: bool,
+}
+
+impl Default for MetadataColumns {
+    fn default() -> Self {
+        Self {
+            author: true,
+            hash: true,
+            date: true,
+        }
+    }
+}
+
+/// A single toggleable metadata column. `ALL` is also the menu display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataColumn {
+    Author,
+    Hash,
+    Date,
+}
+
+impl MetadataColumn {
+    pub const ALL: [MetadataColumn; 3] = [Self::Author, Self::Hash, Self::Date];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Author => "Author",
+            Self::Hash => "Hash",
+            Self::Date => "Date",
+        }
+    }
+}
+
+impl MetadataColumns {
+    pub fn is_visible(&self, col: MetadataColumn) -> bool {
+        match col {
+            MetadataColumn::Author => self.author,
+            MetadataColumn::Hash => self.hash,
+            MetadataColumn::Date => self.date,
+        }
+    }
+
+    pub fn toggle(&mut self, col: MetadataColumn) {
+        match col {
+            MetadataColumn::Author => self.author = !self.author,
+            MetadataColumn::Hash => self.hash = !self.hash,
+            MetadataColumn::Date => self.date = !self.date,
+        }
+    }
+}
+
 /// Persistent UI state saved between sessions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiState {
     pub side_panel_layout: bool,
+    pub metadata_columns: MetadataColumns,
 }
 
 impl UiState {
@@ -298,5 +357,55 @@ mod tests {
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert!(!cfg.refresh.auto_refresh);
         assert_eq!(cfg.ui.theme, "light");
+    }
+
+    // ── UiState / MetadataColumns ────────────────────────────────────
+
+    #[test]
+    fn ui_state_defaults_all_metadata_columns_visible() {
+        let state: UiState = toml::from_str("").unwrap();
+        assert!(!state.side_panel_layout);
+        assert!(state.metadata_columns.author);
+        assert!(state.metadata_columns.hash);
+        assert!(state.metadata_columns.date);
+    }
+
+    #[test]
+    fn ui_state_round_trips_metadata_columns() {
+        let state = UiState {
+            side_panel_layout: true,
+            metadata_columns: MetadataColumns {
+                author: true,
+                hash: false,
+                date: false,
+            },
+        };
+        let serialized = toml::to_string(&state).unwrap();
+        let restored: UiState = toml::from_str(&serialized).unwrap();
+        assert!(restored.side_panel_layout);
+        assert!(restored.metadata_columns.author);
+        assert!(!restored.metadata_columns.hash);
+        assert!(!restored.metadata_columns.date);
+    }
+
+    #[test]
+    fn ui_state_missing_metadata_section_falls_back_to_all_visible() {
+        // An older state.toml (before the field existed) must still load, with
+        // every column defaulting to visible.
+        let state: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(state.side_panel_layout);
+        assert_eq!(state.metadata_columns, MetadataColumns::default());
+    }
+
+    #[test]
+    fn metadata_columns_toggle_flips_the_named_column_only() {
+        let mut cols = MetadataColumns::default();
+        cols.toggle(MetadataColumn::Hash);
+        assert!(cols.author);
+        assert!(!cols.hash);
+        assert!(cols.date);
+        assert!(!cols.is_visible(MetadataColumn::Hash));
+        cols.toggle(MetadataColumn::Hash);
+        assert!(cols.is_visible(MetadataColumn::Hash));
     }
 }

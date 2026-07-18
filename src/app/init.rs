@@ -111,6 +111,7 @@ impl App {
             pending_watcher,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
+            metadata_columns: ui_state.metadata_columns,
             debug_keys: false,
             config,
             terminal_bg,

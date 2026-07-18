@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use crate::{
     app::App,
+    config::MetadataColumns,
     git::graph::{CellType, GraphNode},
     pr::PrInfo,
 };
@@ -154,6 +155,7 @@ impl<'a> GraphViewWidget<'a> {
         let now = Local::now();
         let remotes = &app.remotes;
         let open_prs = &app.open_prs;
+        let metadata_columns = app.metadata_columns;
 
         let node_iter = visible_nodes(app);
 
@@ -185,6 +187,7 @@ impl<'a> GraphViewWidget<'a> {
                 pixel_mode,
                 remotes,
                 open_prs,
+                metadata_columns,
             );
             items.push(ListItem::new(line));
         }
@@ -454,26 +457,55 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 
 /// Determine which right-side elements (date, author, hash) to display based on available width.
 /// Returns (show_date, show_author, show_hash, total_right_width).
-/// Priority: author > date > hash (hash disappears first, then date, then author)
-fn compute_right_side_visibility(remaining_for_content: usize) -> (bool, bool, bool, usize) {
-    // Widths for each display level (right-aligned block)
-    const WIDTH_DATE_AUTHOR_HASH: usize = 35; // " <date:14>  author    hash   "
-    const WIDTH_DATE_AUTHOR: usize = 26; // " <date:14>  author   "
-    const WIDTH_AUTHOR_ONLY: usize = 11; // "  author   "
+///
+/// Only columns enabled in `cols` are eligible. Among the eligible ones, when
+/// the row is too narrow they drop by priority — hash first, then date, then
+/// author (author is kept longest). A hidden/dropped column's width is not
+/// counted, so it flows to the commit-message budget via `right_width`.
+fn compute_right_side_visibility(
+    remaining_for_content: usize,
+    cols: MetadataColumns,
+) -> (bool, bool, bool, usize) {
+    // Rendered width of each element incl. its leading separator (see the
+    // right-block rendering below): date " "+14, author "  "+8, hash "  "+7.
+    const DATE_W: usize = 15;
+    const AUTHOR_W: usize = 10;
+    const HASH_W: usize = 9;
+    const TRAILING_W: usize = 1; // single trailing space when anything shows
 
     // Ensure minimum space for branch + commit message before showing right-side info
     const CONTENT_MIN_WIDTH: usize = 50;
     let available = remaining_for_content.saturating_sub(CONTENT_MIN_WIDTH);
 
-    if available >= WIDTH_DATE_AUTHOR_HASH {
-        (true, true, true, WIDTH_DATE_AUTHOR_HASH)
-    } else if available >= WIDTH_DATE_AUTHOR {
-        (true, true, false, WIDTH_DATE_AUTHOR)
-    } else if available >= WIDTH_AUTHOR_ONLY {
-        (false, true, false, WIDTH_AUTHOR_ONLY)
-    } else {
-        (false, false, false, 0)
+    let width = |d: bool, a: bool, h: bool| -> usize {
+        if !d && !a && !h {
+            return 0;
+        }
+        (if d { DATE_W } else { 0 })
+            + (if a { AUTHOR_W } else { 0 })
+            + (if h { HASH_W } else { 0 })
+            + TRAILING_W
+    };
+
+    // Start from the user's enabled set, then shed low-priority columns until
+    // the block fits. (With all three enabled this reproduces the original
+    // 35/26/11 breakpoints exactly.)
+    let mut show_date = cols.date;
+    let mut show_author = cols.author;
+    let mut show_hash = cols.hash;
+
+    if width(show_date, show_author, show_hash) > available {
+        show_hash = false;
     }
+    if width(show_date, show_author, show_hash) > available {
+        show_date = false;
+    }
+    if width(show_date, show_author, show_hash) > available {
+        show_author = false;
+    }
+
+    let right_width = width(show_date, show_author, show_hash);
+    (show_date, show_author, show_hash, right_width)
 }
 
 /// Abbreviate branch name to max_width, showing "+N" if more branches exist
@@ -568,6 +600,7 @@ fn render_graph_line<'a>(
     pixel_mode: bool,
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
+    metadata_columns: MetadataColumns,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -609,6 +642,7 @@ fn render_graph_line<'a>(
         now,
         remotes,
         open_prs,
+        metadata_columns,
     )
 }
 
@@ -709,6 +743,7 @@ fn render_graph_line_tail<'a>(
     now: DateTime<Local>,
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
+    metadata_columns: MetadataColumns,
 ) -> Line<'a> {
     // Separator between graph and commit info
     spans.push(Span::raw(" "));
@@ -800,7 +835,7 @@ fn render_graph_line_tail<'a>(
 
     // Determine which right-side elements to show based on available space
     let (show_date, show_author, show_hash, right_width) =
-        compute_right_side_visibility(remaining_for_content);
+        compute_right_side_visibility(remaining_for_content, metadata_columns);
 
     // Render branch labels
     for (i, (label, style)) in branch_display.iter().enumerate() {
@@ -1281,4 +1316,61 @@ mod tests {
         // Icon(1) + space(1) + "#42"(3) = 5 display columns.
         assert_eq!(display_width(&text), 5);
     }
+
+    // ── metadata column visibility / width budget ────────────────────
+
+    fn cols(author: bool, hash: bool, date: bool) -> MetadataColumns {
+        MetadataColumns { author, hash, date }
+    }
+
+    #[test]
+    fn all_columns_shown_when_enabled_and_wide() {
+        // Reproduces the original 35-wide breakpoint with everything on.
+        assert_eq!(
+            compute_right_side_visibility(200, cols(true, true, true)),
+            (true, true, true, 35)
+        );
+    }
+
+    #[test]
+    fn disabled_column_is_never_shown_and_reclaims_its_width() {
+        // Hash off: only date+author, width drops from 35 to 26 (9 reclaimed).
+        assert_eq!(
+            compute_right_side_visibility(200, cols(true, false, true)),
+            (true, true, false, 26)
+        );
+        // Everything off: no right block at all.
+        assert_eq!(
+            compute_right_side_visibility(200, cols(false, false, false)),
+            (false, false, false, 0)
+        );
+        // Only date enabled: date " "+14 = 15, +1 trailing = 16.
+        assert_eq!(
+            compute_right_side_visibility(200, cols(false, false, true)),
+            (true, false, false, 16)
+        );
+    }
+
+    #[test]
+    fn enabled_columns_still_drop_by_priority_when_narrow() {
+        // available = remaining - 50. Hash drops first, then date, author last —
+        // matching the pre-existing cascade for the all-enabled case.
+        assert_eq!(
+            compute_right_side_visibility(85, cols(true, true, true)),
+            (true, true, true, 35)
+        );
+        assert_eq!(
+            compute_right_side_visibility(84, cols(true, true, true)),
+            (true, true, false, 26)
+        );
+        assert_eq!(
+            compute_right_side_visibility(61, cols(true, true, true)),
+            (false, true, false, 11)
+        );
+        assert_eq!(
+            compute_right_side_visibility(55, cols(true, true, true)),
+            (false, false, false, 0)
+        );
+    }
+
 }
