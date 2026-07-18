@@ -63,6 +63,17 @@ pub fn chip_at(chips: &[ChipHit], line_col: u16) -> Option<&ChipHit> {
         .find(|c| line_col >= c.x_start && line_col < c.x_end)
 }
 
+/// The payload of the first `(rect, payload)` region that contains `(col, row)`.
+/// Generic over the payload so it serves any rect→value hit map (e.g. clickable
+/// status-bar hints); the first match wins, so callers should order regions
+/// most-specific first when they can overlap.
+pub fn region_at<T>(regions: &[(Rect, T)], col: u16, row: u16) -> Option<&T> {
+    regions
+        .iter()
+        .find(|(rect, _)| point_in(*rect, col, row))
+        .map(|(_, payload)| payload)
+}
+
 /// Bounds on the graph/detail split ratio (graph-pane percentage).
 pub const MIN_SPLIT_RATIO: u16 = 20;
 pub const MAX_SPLIT_RATIO: u16 = 80;
@@ -239,6 +250,22 @@ mod tests {
         assert_eq!(chip_at(&chips, 15).map(|c| &c.target), Some(&ChipTarget::PrBadge));
         assert_eq!(chip_at(&chips, 16), None);
         assert_eq!(chip_at(&chips, 0), None);
+    }
+
+    #[test]
+    fn region_at_finds_containing_rect() {
+        // Two adjacent hint rects on the same (status) row: cols 0..4 and 4..9.
+        let regions = vec![
+            (rect(0, 23, 4, 1), "help"),
+            (rect(4, 23, 5, 1), "quit"),
+        ];
+        assert_eq!(region_at(&regions, 0, 23), Some(&"help"));
+        assert_eq!(region_at(&regions, 3, 23), Some(&"help"));
+        assert_eq!(region_at(&regions, 4, 23), Some(&"quit"), "left edge inclusive");
+        assert_eq!(region_at(&regions, 8, 23), Some(&"quit"));
+        assert_eq!(region_at(&regions, 9, 23), None, "right edge exclusive");
+        assert_eq!(region_at(&regions, 2, 22), None, "wrong row");
+        assert_eq!(region_at::<&str>(&[], 2, 23), None, "empty map");
     }
 
     #[test]

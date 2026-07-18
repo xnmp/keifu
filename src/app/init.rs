@@ -157,6 +157,7 @@ impl App {
             menu_anchor: None,
             popup_rect: None,
             graph_chip_hits: Vec::new(),
+            status_hints: Vec::new(),
             graph_split_ratio: crate::mouse::clamp_split_ratio(ui_state.graph_split_ratio as i32),
             dragging_divider: false,
             trace_enabled: ui_state.trace_enabled,

@@ -21,10 +21,13 @@ pub mod theme;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget,
+        Wrap,
+    },
     Frame,
 };
 
@@ -68,6 +71,50 @@ pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
     block.render(area, buf);
 }
 
+/// Whether a scrollbar is worth drawing: content overflows the viewport and the
+/// pane is tall enough to host a track between its rounded corners. Pure so the
+/// overflow decision is unit-testable.
+fn scrollbar_needed(content_length: usize, viewport_length: usize, area_height: u16) -> bool {
+    content_length > viewport_length && area_height > 2
+}
+
+/// Draw a vertical scrollbar on the right border of a bordered pane, reflecting
+/// `position` within `content_length` given a `viewport_length`-tall viewport.
+///
+/// The bar occupies the rightmost column, inset one row top and bottom so it
+/// sits between the pane's rounded corners. In pixel mode the graph images
+/// overlay the LEFT of the pane (see `overlay_pixel_graph`), so a right-border
+/// track never collides with them. Styled via the theme's muted track / brighter
+/// thumb so it stays coherent in light, dark, and background-adapted palettes.
+fn render_scrollbar(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    content_length: usize,
+    viewport_length: usize,
+    position: usize,
+) {
+    if !scrollbar_needed(content_length, viewport_length, area.height) {
+        return;
+    }
+    let mut state = ScrollbarState::new(content_length)
+        .viewport_content_length(viewport_length)
+        .position(position);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_style(theme.scrollbar_track_style())
+        .thumb_style(theme.scrollbar_thumb_style());
+    frame.render_stateful_widget(
+        scrollbar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut state,
+    );
+}
+
 /// Render the main UI
 pub fn draw(frame: &mut Frame, app: &mut App) {
     // Rebuild display items so they match the latest diff data.
@@ -108,6 +155,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.diff_viewport_height = vertical[0].height.saturating_sub(2);
         app.diff_viewport_width = vertical[0].width.saturating_sub(2);
 
+        // Capture scroll geometry before the app.mode borrow ends so the
+        // scrollbar can render after the status bar takes a &mut borrow.
+        let diff_total = rendered_lines.len();
+        let diff_viewport = app.diff_viewport_height as usize;
+        let diff_pos = *scroll_offset;
+
         frame.render_widget(
             FileDiffViewWidget::new(
                 content,
@@ -120,7 +173,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             vertical[0],
         );
-        frame.render_widget(StatusBar::new(app, &theme), vertical[1]);
+        render_scrollbar(frame, &theme, vertical[0], diff_total, diff_viewport, diff_pos);
+
+        let status_bar = StatusBar::new(app, &theme);
+        app.status_hints = status_bar.hint_regions(vertical[1]);
+        frame.render_widget(status_bar, vertical[1]);
         // Toasts sit on top of the full-screen diff view too.
         render_toasts(frame, app, &theme);
         return;
@@ -284,7 +341,41 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         CommitDetailWidget::new(app, commit_area, &theme, commit_lines),
         commit_area,
     );
-    frame.render_widget(StatusBar::new(app, &theme), status_area);
+
+    // Scrollbars on the right border of each scrollable pane. Rendered after the
+    // panes (and the pixel overlay) so the track sits on top of the border.
+    // - Graph: `graph_chip_hits` has one entry per rendered (filtered) row, so
+    //   its length is the filtered item count that the ListState offset indexes.
+    render_scrollbar(
+        frame,
+        &theme,
+        graph_area,
+        app.graph_chip_hits.len(),
+        graph_area.height.saturating_sub(2) as usize,
+        app.graph_nav.graph_list_state.offset(),
+    );
+    render_scrollbar(
+        frame,
+        &theme,
+        files_area,
+        app.display_items().len(),
+        files_area.height.saturating_sub(2) as usize,
+        app.files_view_offset,
+    );
+    // Commit detail wraps text; max_scroll + visible rows recovers the wrapped
+    // content height without recomputing it.
+    render_scrollbar(
+        frame,
+        &theme,
+        commit_area,
+        (app.commit_detail_max_scroll + app.commit_detail_visible_rows) as usize,
+        app.commit_detail_visible_rows as usize,
+        app.commit_detail_scroll as usize,
+    );
+
+    let status_bar = StatusBar::new(app, &theme);
+    app.status_hints = status_bar.hint_regions(status_area);
+    frame.render_widget(status_bar, status_area);
 
     // Show cursor when editing commit message
     if app.editing_commit_message && app.focused_panel == crate::app::FocusedPanel::CommitDetail {
@@ -808,4 +899,44 @@ fn bottom_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
         .split(area);
 
     Rect::new(horizontal[1].x, y, horizontal[1].width, clamped_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrollbar_paints_the_right_border_column_when_content_overflows() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let theme = Theme::dark();
+
+        // Overflowing content: expect glyphs on the right column, inset from the
+        // corners (rows 1..height-1).
+        let mut term = Terminal::new(TestBackend::new(10, 8)).unwrap();
+        term.draw(|f| render_scrollbar(f, &theme, Rect::new(0, 0, 10, 8), 100, 6, 0))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let painted = (1..7).any(|y| buf[(9, y)].symbol() != " ");
+        assert!(painted, "an overflowing pane draws a scrollbar on its right column");
+
+        // Content that fits draws nothing at all.
+        let mut term = Terminal::new(TestBackend::new(10, 8)).unwrap();
+        term.draw(|f| render_scrollbar(f, &theme, Rect::new(0, 0, 10, 8), 3, 6, 0))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let painted = (0..8).any(|y| (0..10).any(|x| buf[(x, y)].symbol() != " "));
+        assert!(!painted, "a pane whose content fits draws no scrollbar");
+    }
+
+    #[test]
+    fn scrollbar_hidden_unless_content_overflows_a_tall_enough_pane() {
+        // Content fits the viewport → no scrollbar.
+        assert!(!scrollbar_needed(10, 10, 12));
+        assert!(!scrollbar_needed(5, 10, 12));
+        // Overflow in a pane with room for a track → shown.
+        assert!(scrollbar_needed(20, 10, 12));
+        // Overflow but the pane is too short to host a track between corners.
+        assert!(!scrollbar_needed(20, 10, 2));
+        assert!(!scrollbar_needed(20, 0, 1));
+    }
 }

@@ -554,6 +554,7 @@ impl<'a> Widget for FileDiffViewWidget<'a> {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
+            .border_type(self.theme.border_type())
             .border_style(Style::default().fg(self.theme.popup_border))
             .title_style(
                 Style::default()

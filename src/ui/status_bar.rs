@@ -1,4 +1,10 @@
 //! Status bar widget
+//!
+//! Key hints are built through a [`HintBar`] that records each clickable hint's
+//! column range as it lays spans out, so the same pass drives both rendering and
+//! mouse hit-testing — there is one source of truth for where a hint sits and
+//! what pressing its key would do. `hint_regions` maps those ranges to absolute
+//! cell rects for the mouse layer.
 
 use ratatui::{
     buffer::Buffer,
@@ -7,10 +13,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::Widget,
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::theme::Theme;
+use crate::action::Action;
 use crate::app::{App, AppMode, FocusedPanel, InputAction};
-use crate::git::OperationState;
 
 /// Contextual hint text for the open-PR shortcut, shown when the selected
 /// commit has an open PR. Pure so it can be unit-tested without a terminal.
@@ -18,48 +25,114 @@ fn pr_hint_label(pr_number: Option<u64>) -> Option<String> {
     pr_number.map(|n| format!("open PR #{n}"))
 }
 
-pub struct StatusBar<'a> {
-    mode: &'a AppMode,
-    focused_panel: FocusedPanel,
-    repo_path: &'a str,
-    head_name: Option<&'a str>,
-    head_detached: bool,
-    /// (ahead, behind) of the HEAD branch vs its upstream, when tracking one.
-    head_ahead_behind: Option<(usize, usize)>,
-    error_message: Option<&'a str>,
-    message: Option<&'a str>,
-    is_busy: bool,
-    is_uncommitted: bool,
-    is_filtering: bool,
-    editing_commit: bool,
-    amending_commit: bool,
-    search_info: Option<String>,
-    op_state: OperationState,
-    conflict_count: usize,
-    /// Open-PR hint for the selected commit (`o: open PR #N`), when it has one.
-    pr_hint: Option<String>,
-    /// Whether the selected commit's PR has CI checks (`c checks` hint).
-    pr_has_ci: bool,
-    /// Whether the graph column is capped or cappable (needs > 4 cells), so the
-    /// `< >` resize hint is worth showing.
-    graph_cappable: bool,
-    /// Whether the graph is branchy enough (> 2 lanes) for branch tracing, so
-    /// the `t trace` hint is worth showing; carries the current on/off state.
-    trace_traceable: bool,
-    trace_enabled: bool,
-    /// Whether remote-only branches are currently hidden from the graph.
-    remotes_hidden: bool,
-    theme: &'a Theme,
+/// A clickable key hint's column range (offset from the line start) and the
+/// action a click dispatches.
+struct HintSpan {
+    start: u16,
+    end: u16,
+    action: Action,
 }
 
-impl<'a> StatusBar<'a> {
-    pub fn new(app: &'a App, theme: &'a Theme) -> Self {
-        let error_message = match &app.mode {
+/// Accumulates the status-bar line while tracking each span's starting column,
+/// so a `key`+`desc` hint can be recorded as a `[start, end)` range in the same
+/// pass that builds it. Non-clickable content (chips, separators, directional
+/// hints) advances the cursor without recording a range.
+struct HintBar {
+    spans: Vec<Span<'static>>,
+    hints: Vec<HintSpan>,
+    x: u16,
+}
+
+impl HintBar {
+    fn new() -> Self {
+        Self {
+            spans: Vec::new(),
+            hints: Vec::new(),
+            x: 0,
+        }
+    }
+
+    /// Push a span and advance the column cursor by its display width.
+    fn span(&mut self, span: Span<'static>) {
+        self.x = self
+            .x
+            .saturating_add(UnicodeWidthStr::width(span.content.as_ref()) as u16);
+        self.spans.push(span);
+    }
+
+    fn raw(&mut self, s: &'static str) {
+        self.span(Span::raw(s));
+    }
+
+    /// Push a `key`+`desc` hint pair and record the combined span as a clickable
+    /// region bound to `action`.
+    fn hint(
+        &mut self,
+        key: &str,
+        key_style: Style,
+        desc: &str,
+        desc_style: Style,
+        action: Action,
+    ) {
+        let start = self.x;
+        self.span(Span::styled(key.to_string(), key_style));
+        self.span(Span::styled(desc.to_string(), desc_style));
+        self.hints.push(HintSpan {
+            start,
+            end: self.x,
+            action,
+        });
+    }
+
+    /// Push a `key`+`desc` hint pair that isn't clickable — used for hints with
+    /// no single unambiguous action (directional `↑↓` / `←→`, the `<>` width
+    /// pair) and for the transient commit-editor hints.
+    fn hint_static(&mut self, key: &str, key_style: Style, desc: &str, desc_style: Style) {
+        self.span(Span::styled(key.to_string(), key_style));
+        self.span(Span::styled(desc.to_string(), desc_style));
+    }
+}
+
+pub struct StatusBar {
+    spans: Vec<Span<'static>>,
+    hints: Vec<HintSpan>,
+    mode_label: Option<&'static str>,
+    mode_style: Style,
+}
+
+impl StatusBar {
+    pub fn new(app: &App, theme: &Theme) -> Self {
+        // Three-tier hierarchy: accent (keys + the repo identity chip), normal
+        // text (the branch), muted text (hint labels). Colored backgrounds are
+        // reserved for semantic states (detached/error/mode).
+        let accent = theme.accent();
+        let key_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
+        let desc_style = Style::default().fg(theme.text_muted);
+        let mode_style = Style::default()
+            .fg(theme.status_mode_fg)
+            .bg(theme.status_mode_bg)
+            .add_modifier(Modifier::BOLD);
+        let repo_style = Style::default()
+            .fg(theme.status_repo_fg)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD);
+
+        let mode = &app.mode;
+        let focused_panel = app.focused_panel;
+        let is_busy = app.is_network_busy();
+        let is_uncommitted = app.is_uncommitted_selected();
+        let is_filtering = app.files_pane.files_filter_active;
+        let editing_commit = app.editing_commit_message;
+        let amending_commit = app.amending_commit;
+        let op_state = app.op_state;
+        let conflict_count = app.conflict_count;
+
+        let error_message = match mode {
             AppMode::Error { message } => Some(message.as_str()),
             _ => None,
         };
 
-        // The selected commit's open PR, if any — drives the o/c hints.
+        // The selected commit's open PR, if any — drives the o/c/v hints.
         let selected_pr = app.selected_commit_node().and_then(|node| {
             crate::ui::graph_view::pr_for_branch_labels(
                 &node.branch_names,
@@ -67,9 +140,14 @@ impl<'a> StatusBar<'a> {
                 &app.open_prs,
             )
         });
+        let pr_hint = pr_hint_label(selected_pr.map(|pr| pr.number));
+        let pr_has_ci = selected_pr.is_some_and(|pr| pr.ci != crate::pr::CiStatus::None);
+        let graph_cappable = (app.graph_layout.max_lane + 1) * 2 > 4;
+        let trace_traceable = crate::git::graph::graph_has_enough_lanes(&app.graph_layout);
+        let trace_enabled = app.trace_enabled;
 
-        // Generate search status message
-        let search_info = match &app.mode {
+        // Search status message (only while the search input is open).
+        let search_info = match mode {
             AppMode::Input {
                 action: InputAction::Search,
                 ..
@@ -84,89 +162,43 @@ impl<'a> StatusBar<'a> {
             _ => None,
         };
 
-        Self {
-            mode: &app.mode,
-            focused_panel: app.focused_panel,
-            repo_path: &app.repo_path,
-            head_name: app.head_name.as_deref(),
-            head_detached: app.head_detached,
-            head_ahead_behind: app
-                .branches
-                .iter()
-                .find(|b| b.is_head && b.upstream.is_some())
-                .map(|b| (b.ahead, b.behind)),
-            error_message,
-            message: app.get_message(),
-            is_busy: app.is_network_busy(),
-            is_uncommitted: app.is_uncommitted_selected(),
-            is_filtering: app.files_pane.files_filter_active,
-            editing_commit: app.editing_commit_message,
-            amending_commit: app.amending_commit,
-            search_info,
-            op_state: app.op_state,
-            conflict_count: app.conflict_count,
-            pr_hint: pr_hint_label(selected_pr.map(|pr| pr.number)),
-            pr_has_ci: selected_pr.is_some_and(|pr| pr.ci != crate::pr::CiStatus::None),
-            graph_cappable: (app.graph_layout.max_lane + 1) * 2 > 4,
-            trace_traceable: crate::git::graph::graph_has_enough_lanes(&app.graph_layout),
-            trace_enabled: app.trace_enabled,
-            remotes_hidden: app.hide_remote_branches,
-            theme,
-        }
-    }
-}
+        let mut hb = HintBar::new();
 
-impl<'a> Widget for StatusBar<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        // Three-tier hierarchy: accent (keys + the repo identity chip), normal
-        // text (the branch), muted text (hint labels). This collapses the old
-        // per-segment rainbow of background chips to the one app-wide accent,
-        // reserving colored backgrounds for semantic states (detached/error/mode).
-        let accent = self.theme.accent();
-        let key_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(self.theme.text_muted);
-        let mode_style = Style::default()
-            .fg(self.theme.status_mode_fg)
-            .bg(self.theme.status_mode_bg)
-            .add_modifier(Modifier::BOLD);
-        let repo_style = Style::default()
-            .fg(self.theme.status_repo_fg)
-            .bg(accent)
-            .add_modifier(Modifier::BOLD);
-
-        let mut spans: Vec<Span> = Vec::new();
-
-        // Show the repository name (folder name) on the left
-        let repo_name = std::path::Path::new(self.repo_path)
+        // Repository name (folder name) on the left.
+        let repo_name = std::path::Path::new(&app.repo_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(self.repo_path);
-        spans.push(Span::styled(format!(" {} ", repo_name), repo_style));
-        spans.push(Span::raw(" "));
+            .unwrap_or(app.repo_path.as_str());
+        hb.span(Span::styled(format!(" {} ", repo_name), repo_style));
+        hb.raw(" ");
 
-        // HEAD branch
-        if let Some(head) = self.head_name {
-            if self.head_detached {
-                spans.push(Span::styled(
+        // HEAD branch.
+        if let Some(head) = app.head_name.as_deref() {
+            if app.head_detached {
+                hb.span(Span::styled(
                     format!(" DETACHED: {} ", head),
                     Style::default()
-                        .fg(self.theme.status_detached_fg)
-                        .bg(self.theme.status_detached_bg)
+                        .fg(theme.status_detached_fg)
+                        .bg(theme.status_detached_bg)
                         .add_modifier(Modifier::BOLD),
                 ));
             } else {
-                spans.push(Span::styled(
+                hb.span(Span::styled(
                     format!(" {} ", head),
                     Style::default()
-                        .fg(self.theme.text_primary)
+                        .fg(theme.text_primary)
                         .add_modifier(Modifier::BOLD),
                 ));
             }
-            spans.push(Span::raw(" "));
+            hb.raw(" ");
 
-            // Ahead/behind vs upstream (e.g. "↑2 ↓1"), when tracking one and
-            // diverged.
-            if let Some((ahead, behind)) = self.head_ahead_behind {
+            // Ahead/behind vs upstream (e.g. "↑2 ↓1"), when tracking and diverged.
+            let head_ahead_behind = app
+                .branches
+                .iter()
+                .find(|b| b.is_head && b.upstream.is_some())
+                .map(|b| (b.ahead, b.behind));
+            if let Some((ahead, behind)) = head_ahead_behind {
                 if ahead > 0 || behind > 0 {
                     let mut label = String::new();
                     if ahead > 0 {
@@ -178,342 +210,251 @@ impl<'a> Widget for StatusBar<'a> {
                         }
                         label.push_str(&format!("↓{behind}"));
                     }
-                    spans.push(Span::styled(
+                    hb.span(Span::styled(
                         format!(" {label} "),
                         Style::default()
-                            .fg(self.theme.text_primary)
+                            .fg(theme.text_primary)
                             .add_modifier(Modifier::BOLD),
                     ));
-                    spans.push(Span::raw(" "));
+                    hb.raw(" ");
                 }
             }
         }
 
         // Remote-only branches hidden by the show/hide-remotes toggle (Shift+O).
-        if self.remotes_hidden {
-            spans.push(Span::styled(
-                " remotes hidden ",
-                Style::default()
-                    .fg(self.theme.status_mode_fg)
-                    .bg(self.theme.status_mode_bg)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" "));
+        if app.hide_remote_branches {
+            hb.span(Span::styled(" remotes hidden ", mode_style));
+            hb.raw(" ");
         }
 
         // In-progress operation indicator (merge/rebase/…): prominent, shown in
         // Normal mode regardless of message/hints so conflicts stay visible.
-        if matches!(self.mode, AppMode::Normal) && self.op_state.is_in_progress() {
+        if matches!(mode, AppMode::Normal) && op_state.is_in_progress() {
             let op_style = Style::default()
-                .fg(self.theme.status_error_fg)
-                .bg(self.theme.status_error_bg)
+                .fg(theme.status_error_fg)
+                .bg(theme.status_error_bg)
                 .add_modifier(Modifier::BOLD);
-            let label = if self.conflict_count > 0 {
+            let label = if conflict_count > 0 {
                 format!(
                     " {} ({} conflict{}) ",
-                    self.op_state.label(),
-                    self.conflict_count,
-                    if self.conflict_count == 1 { "" } else { "s" }
+                    op_state.label(),
+                    conflict_count,
+                    if conflict_count == 1 { "" } else { "s" }
                 )
             } else {
-                format!(" {} ", self.op_state.label())
+                format!(" {} ", op_state.label())
             };
-            spans.push(Span::styled(label, op_style));
-            // c/A (and o/t for conflicts) are only wired up in the files pane,
-            // so only advertise them once that's actually where the hint applies.
-            if self.focused_panel == FocusedPanel::Files {
-                spans.push(Span::styled(" c ", key_style));
-                spans.push(Span::styled("continue ", desc_style));
-                spans.push(Span::styled(" A ", key_style));
-                spans.push(Span::styled("abort ", desc_style));
+            hb.span(Span::styled(label, op_style));
+            // c/A are only wired up in the files pane, so only advertise them
+            // once that's actually where the hint applies.
+            if focused_panel == FocusedPanel::Files {
+                hb.hint(" c ", key_style, "continue ", desc_style, Action::ContinueOperation);
+                hb.hint(" A ", key_style, "abort ", desc_style, Action::AbortOperation);
             }
-            spans.push(Span::raw("  "));
+            hb.raw("  ");
         }
 
-        // Key hints (vary by mode)
-        match self.mode {
-            AppMode::Normal => match self.message {
+        // Key hints (vary by mode).
+        match mode {
+            AppMode::Normal => match app.get_message() {
                 Some(msg) => {
-                    let bg = if self.is_busy {
-                        self.theme.status_busy_bg
+                    let bg = if is_busy {
+                        theme.status_busy_bg
                     } else {
-                        self.theme.status_success_bg
+                        theme.status_success_bg
                     };
                     let msg_style = Style::default()
-                        .fg(self.theme.status_key_fg)
+                        .fg(theme.status_key_fg)
                         .bg(bg)
                         .add_modifier(Modifier::BOLD);
-                    spans.push(Span::styled(format!(" {} ", msg), msg_style));
-                    spans.push(Span::raw("  "));
+                    hb.span(Span::styled(format!(" {} ", msg), msg_style));
+                    hb.raw("  ");
                 }
                 None => {
-                    // Show search info if available
-                    if let Some(info) = &self.search_info {
+                    if let Some(info) = &search_info {
                         let search_style = Style::default()
-                            .fg(self.theme.status_branch_fg)
-                            .bg(self.theme.status_branch_bg)
+                            .fg(theme.status_branch_fg)
+                            .bg(theme.status_branch_bg)
                             .add_modifier(Modifier::BOLD);
-                        spans.push(Span::styled(format!(" {} ", info), search_style));
-                        spans.push(Span::raw("  "));
+                        hb.span(Span::styled(format!(" {} ", info), search_style));
+                        hb.raw("  ");
                     }
 
-                    if self.editing_commit {
-                        if self.amending_commit {
-                            spans.push(Span::styled(" Enter ", key_style));
-                            spans.push(Span::styled("save amend ", desc_style));
+                    if editing_commit {
+                        // Transient editor hints: not wired as clickable (a click
+                        // mid-edit shouldn't commit/amend).
+                        if amending_commit {
+                            hb.hint_static(" Enter ", key_style, "save amend ", desc_style);
                         } else {
-                            spans.push(Span::styled(" Enter ", key_style));
-                            spans.push(Span::styled("commit ", desc_style));
-                            spans.push(Span::styled(" Ctrl+Enter ", key_style));
-                            spans.push(Span::styled("amend ", desc_style));
-                            spans.push(Span::styled(" Ctrl+S ", key_style));
-                            spans.push(Span::styled("stash ", desc_style));
+                            hb.hint_static(" Enter ", key_style, "commit ", desc_style);
+                            hb.hint_static(" Ctrl+Enter ", key_style, "amend ", desc_style);
+                            hb.hint_static(" Ctrl+S ", key_style, "stash ", desc_style);
                         }
-                        spans.push(Span::styled(" Esc ", key_style));
-                        spans.push(Span::styled("cancel", desc_style));
+                        hb.hint_static(" Esc ", key_style, "cancel", desc_style);
                     } else {
-                    match self.focused_panel {
-                        FocusedPanel::Graph => {
-                            spans.push(Span::styled(" ↑↓ ", key_style));
-                            spans.push(Span::styled("move ", desc_style));
-                            spans.push(Span::styled(" Enter ", key_style));
-                            spans.push(Span::styled("actions ", desc_style));
-                            // Only when the selected commit has an open PR.
-                            if let Some(hint) = &self.pr_hint {
-                                spans.push(Span::styled(" o ", key_style));
-                                spans.push(Span::styled(format!("{hint} "), desc_style));
-                                // ...and a CI checks hint when the PR reports checks.
-                                if self.pr_has_ci {
-                                    spans.push(Span::styled(" c ", key_style));
-                                    spans.push(Span::styled("checks ", desc_style));
+                        match focused_panel {
+                            FocusedPanel::Graph => {
+                                hb.hint_static(" ↑↓ ", key_style, "move ", desc_style);
+                                hb.hint(" Enter ", key_style, "actions ", desc_style, Action::OpenCommitMenu);
+                                // Only when the selected commit has an open PR.
+                                if let Some(hint) = &pr_hint {
+                                    hb.hint(" o ", key_style, &format!("{hint} "), desc_style, Action::OpenPr);
+                                    // ...and a CI checks hint when the PR reports checks.
+                                    if pr_has_ci {
+                                        hb.hint(" c ", key_style, "checks ", desc_style, Action::OpenCiChecks);
+                                    }
+                                    hb.hint(" v ", key_style, "thread ", desc_style, Action::OpenPrThread);
                                 }
-                                spans.push(Span::styled(" v ", key_style));
-                                spans.push(Span::styled("thread ", desc_style));
+                                // Only when the graph is wide enough to be capped.
+                                if graph_cappable {
+                                    hb.hint_static(" <> ", key_style, "width ", desc_style);
+                                }
+                                // Only on branchy graphs, where tracing helps.
+                                if trace_traceable {
+                                    let label = if trace_enabled {
+                                        "trace on "
+                                    } else {
+                                        "trace off "
+                                    };
+                                    hb.hint(" t ", key_style, label, desc_style, Action::ToggleTrace);
+                                }
+                                hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
+                                hb.hint(" B ", key_style, "branches ", desc_style, Action::OpenBranchFilter);
+                                hb.hint(" ? ", key_style, "help", desc_style, Action::ToggleHelp);
                             }
-                            // Only when the graph is wide enough to be capped.
-                            if self.graph_cappable {
-                                spans.push(Span::styled(" <> ", key_style));
-                                spans.push(Span::styled("width ", desc_style));
+                            FocusedPanel::Files if is_filtering => {
+                                let filter_style = Style::default()
+                                    .fg(theme.status_mode_fg)
+                                    .bg(theme.status_mode_bg)
+                                    .add_modifier(Modifier::BOLD);
+                                hb.span(Span::styled(" FILTER ", filter_style));
+                                hb.raw("  ");
+                                hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::Confirm);
+                                hb.hint(" Esc ", key_style, "cancel ", desc_style, Action::Cancel);
                             }
-                            // Only on branchy graphs, where tracing helps.
-                            if self.trace_traceable {
-                                spans.push(Span::styled(" t ", key_style));
-                                let label = if self.trace_enabled {
-                                    "trace on "
-                                } else {
-                                    "trace off "
-                                };
-                                spans.push(Span::styled(label, desc_style));
+                            FocusedPanel::Files => {
+                                hb.hint_static(" ↑↓ ", key_style, "select ", desc_style);
+                                hb.hint(" Enter ", key_style, "diff ", desc_style, Action::OpenFileDiff);
+                                hb.hint(" Space ", key_style, "open ", desc_style, Action::OpenWithDefault);
+                                if is_uncommitted {
+                                    hb.hint(" s ", key_style, "stage ", desc_style, Action::ToggleStage);
+                                    hb.hint(" r ", key_style, "restore ", desc_style, Action::RestoreFile);
+                                    hb.hint(" i ", key_style, "ignore ", desc_style, Action::AddToGitignore);
+                                    hb.hint(" v ", key_style, "archive ", desc_style, Action::ArchiveFile);
+                                    hb.hint(" Del ", key_style, "trash ", desc_style, Action::TrashFile);
+                                    hb.hint(" ^z ", key_style, "undo ", desc_style, Action::UndoLastFileOp);
+                                }
+                                hb.hint(" f ", key_style, "folders ", desc_style, Action::ToggleFolderView);
+                                hb.hint(" ^f ", key_style, "filter ", desc_style, Action::StartFilesFilter);
+                                hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
+                                hb.hint(" ? ", key_style, "help", desc_style, Action::ToggleHelp);
                             }
-                            spans.push(Span::styled(" ←→ ", key_style));
-                            spans.push(Span::styled("panels ", desc_style));
-                            spans.push(Span::styled(" B ", key_style));
-                            spans.push(Span::styled("branches ", desc_style));
-                            spans.push(Span::styled(" ? ", key_style));
-                            spans.push(Span::styled("help", desc_style));
+                            FocusedPanel::CommitDetail => {
+                                hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
+                                if is_uncommitted {
+                                    hb.hint(" Enter ", key_style, "edit msg ", desc_style, Action::StartEditing);
+                                    hb.hint(" Ctrl+Enter ", key_style, "amend ", desc_style, Action::AmendCommit);
+                                    hb.hint(" Ctrl+S ", key_style, "stash ", desc_style, Action::StashStaged);
+                                }
+                                hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
+                                hb.hint(" Esc ", key_style, "graph ", desc_style, Action::FocusGraph);
+                                hb.hint(" ? ", key_style, "help", desc_style, Action::ToggleHelp);
+                            }
                         }
-                        FocusedPanel::Files if self.is_filtering => {
-                            let filter_style = Style::default()
-                                .fg(self.theme.status_mode_fg)
-                                .bg(self.theme.status_mode_bg)
-                                .add_modifier(Modifier::BOLD);
-                            spans.push(Span::styled(" FILTER ", filter_style));
-                            spans.push(Span::raw("  "));
-                            spans.push(Span::styled(" Enter ", key_style));
-                            spans.push(Span::styled("confirm ", desc_style));
-                            spans.push(Span::styled(" Esc ", key_style));
-                            spans.push(Span::styled("cancel ", desc_style));
-                        }
-                        FocusedPanel::Files => {
-                            spans.push(Span::styled(" ↑↓ ", key_style));
-                            spans.push(Span::styled("select ", desc_style));
-                            spans.push(Span::styled(" Enter ", key_style));
-                            spans.push(Span::styled("diff ", desc_style));
-                            spans.push(Span::styled(" Space ", key_style));
-                            spans.push(Span::styled("open ", desc_style));
-                            if self.is_uncommitted {
-                                spans.push(Span::styled(" s ", key_style));
-                                spans.push(Span::styled("stage ", desc_style));
-                                spans.push(Span::styled(" r ", key_style));
-                                spans.push(Span::styled("restore ", desc_style));
-                                spans.push(Span::styled(" i ", key_style));
-                                spans.push(Span::styled("ignore ", desc_style));
-                                spans.push(Span::styled(" v ", key_style));
-                                spans.push(Span::styled("archive ", desc_style));
-                                spans.push(Span::styled(" Del ", key_style));
-                                spans.push(Span::styled("trash ", desc_style));
-                                spans.push(Span::styled(" ^z ", key_style));
-                                spans.push(Span::styled("undo ", desc_style));
-                            }
-                            spans.push(Span::styled(" f ", key_style));
-                            spans.push(Span::styled("folders ", desc_style));
-                            spans.push(Span::styled(" ^f ", key_style));
-                            spans.push(Span::styled("filter ", desc_style));
-                            spans.push(Span::styled(" ←→ ", key_style));
-                            spans.push(Span::styled("panels ", desc_style));
-                            spans.push(Span::styled(" ? ", key_style));
-                            spans.push(Span::styled("help", desc_style));
-                        }
-                        FocusedPanel::CommitDetail => {
-                            spans.push(Span::styled(" ↑↓ ", key_style));
-                            spans.push(Span::styled("scroll ", desc_style));
-                            if self.is_uncommitted {
-                                spans.push(Span::styled(" Enter ", key_style));
-                                spans.push(Span::styled("edit msg ", desc_style));
-                                spans.push(Span::styled(" Ctrl+Enter ", key_style));
-                                spans.push(Span::styled("amend ", desc_style));
-                                spans.push(Span::styled(" Ctrl+S ", key_style));
-                                spans.push(Span::styled("stash ", desc_style));
-                            }
-                            spans.push(Span::styled(" ←→ ", key_style));
-                            spans.push(Span::styled("panels ", desc_style));
-                            spans.push(Span::styled(" Esc ", key_style));
-                            spans.push(Span::styled("graph ", desc_style));
-                            spans.push(Span::styled(" ? ", key_style));
-                            spans.push(Span::styled("help", desc_style));
-                        }
-                    }
                     }
                 }
             },
             AppMode::Help => {
-                spans.push(Span::styled(" Esc/q ", key_style));
-                spans.push(Span::styled("close help", desc_style));
+                hb.hint(" Esc/q ", key_style, "close help", desc_style, Action::ToggleHelp);
             }
             AppMode::Input { .. } => {
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("confirm ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("cancel", desc_style));
+                hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::Confirm);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::Confirm { .. } => {
-                spans.push(Span::styled(" y ", key_style));
-                spans.push(Span::styled("yes ", desc_style));
-                spans.push(Span::styled(" n ", key_style));
-                spans.push(Span::styled("no", desc_style));
+                hb.hint(" y ", key_style, "yes ", desc_style, Action::Confirm);
+                hb.hint(" n ", key_style, "no", desc_style, Action::Cancel);
             }
             AppMode::Error { .. } => {
-                // In error mode, show the message and hide key hints
+                // In error mode, show the message then a single close hint.
                 let error_style = Style::default()
-                    .fg(self.theme.status_error_fg)
-                    .bg(self.theme.status_error_bg)
+                    .fg(theme.status_error_fg)
+                    .bg(theme.status_error_bg)
                     .add_modifier(Modifier::BOLD);
-                if let Some(msg) = self.error_message {
-                    spans.push(Span::styled(format!(" {} ", msg), error_style));
-                    spans.push(Span::raw("  "));
-                    spans.push(Span::styled(" Esc/Enter ", key_style));
-                    spans.push(Span::styled("close", desc_style));
+                if let Some(msg) = error_message {
+                    hb.span(Span::styled(format!(" {} ", msg), error_style));
+                    hb.raw("  ");
+                    hb.hint(" Esc/Enter ", key_style, "close", desc_style, Action::Cancel);
                 }
             }
             AppMode::FileDiff { .. } => {
-                spans.push(Span::styled(" n/N ", key_style));
-                spans.push(Span::styled("file ", desc_style));
-                spans.push(Span::styled(" ]/[ ", key_style));
-                spans.push(Span::styled("hunk ", desc_style));
-                spans.push(Span::styled(" ↑↓ ", key_style));
-                spans.push(Span::styled("scroll ", desc_style));
-                spans.push(Span::styled(" ←→ ", key_style));
-                spans.push(Span::styled("pan ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("back", desc_style));
+                hb.hint_static(" n/N ", key_style, "file ", desc_style);
+                hb.hint_static(" ]/[ ", key_style, "hunk ", desc_style);
+                hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
+                hb.hint_static(" ←→ ", key_style, "pan ", desc_style);
+                hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::CommitMenu { .. }
             | AppMode::BranchPicker { .. }
             | AppMode::BranchDeletePicker { .. }
             | AppMode::TagPicker { .. }
             | AppMode::RemotePicker { .. } => {
-                spans.push(Span::styled(" ↑/↓ ", key_style));
-                spans.push(Span::styled("select ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("confirm ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("cancel", desc_style));
+                hb.hint_static(" ↑/↓ ", key_style, "select ", desc_style);
+                hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::MetadataMenu { .. } => {
-                spans.push(Span::styled(" ↑/↓ ", key_style));
-                spans.push(Span::styled("move ", desc_style));
-                spans.push(Span::styled(" Space ", key_style));
-                spans.push(Span::styled("toggle ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("close", desc_style));
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::PullDivergence { .. } => {
-                spans.push(Span::styled(" ↑/↓ ", key_style));
-                spans.push(Span::styled("move ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("choose ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("cancel", desc_style));
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Enter ", key_style, "choose ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::CiChecks => {
-                spans.push(Span::styled(" ↑↓ ", key_style));
-                spans.push(Span::styled("nav ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("details ", desc_style));
-                spans.push(Span::styled(" o ", key_style));
-                spans.push(Span::styled("open ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("back", desc_style));
+                hb.hint_static(" ↑↓ ", key_style, "nav ", desc_style);
+                hb.hint(" Enter ", key_style, "details ", desc_style, Action::MenuSelect);
+                hb.hint(" o ", key_style, "open ", desc_style, Action::OpenPr);
+                hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::PrThread => {
-                spans.push(Span::styled(" ↑↓ ", key_style));
-                spans.push(Span::styled("scroll ", desc_style));
-                spans.push(Span::styled(" o ", key_style));
-                spans.push(Span::styled("open PR ", desc_style));
-                spans.push(Span::styled(" r ", key_style));
-                spans.push(Span::styled("review ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("close", desc_style));
+                hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
+                hb.hint(" o ", key_style, "open PR ", desc_style, Action::OpenPr);
+                hb.hint(" r ", key_style, "review ", desc_style, Action::OpenReviewPicker);
+                hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::PrCompose { .. } => {
-                spans.push(Span::styled(" Ctrl+S ", key_style));
-                spans.push(Span::styled("submit ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("cancel", desc_style));
+                hb.hint(" Ctrl+S ", key_style, "submit ", desc_style, Action::SubmitCompose);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::PrMergePicker { .. } | AppMode::PrReviewPicker { .. } => {
-                spans.push(Span::styled(" ↑/↓ ", key_style));
-                spans.push(Span::styled("move ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("choose ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("cancel", desc_style));
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Enter ", key_style, "choose ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::BranchFilter { .. } => {
-                spans.push(Span::styled(" Space ", key_style));
-                spans.push(Span::styled("toggle ", desc_style));
-                spans.push(Span::styled(" C-a ", key_style));
-                spans.push(Span::styled("all ", desc_style));
-                spans.push(Span::styled(" C-o ", key_style));
-                spans.push(Span::styled("none ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("close", desc_style));
+                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
+                hb.hint(" C-a ", key_style, "all ", desc_style, Action::SelectAll);
+                hb.hint(" C-o ", key_style, "none ", desc_style, Action::SelectNone);
+                hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::FileHistory { .. } => {
-                spans.push(Span::styled(" ↑/↓ ", key_style));
-                spans.push(Span::styled("select ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("open diff ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("back", desc_style));
+                hb.hint_static(" ↑/↓ ", key_style, "select ", desc_style);
+                hb.hint(" Enter ", key_style, "open diff ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::CommandPalette { .. } => {
-                spans.push(Span::styled(" type ", key_style));
-                spans.push(Span::styled("filter ", desc_style));
-                spans.push(Span::styled(" ↑/↓ ", key_style));
-                spans.push(Span::styled("move ", desc_style));
-                spans.push(Span::styled(" Enter ", key_style));
-                spans.push(Span::styled("run ", desc_style));
-                spans.push(Span::styled(" Esc ", key_style));
-                spans.push(Span::styled("close", desc_style));
+                hb.hint_static(" type ", key_style, "filter ", desc_style);
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Enter ", key_style, "run ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
         }
 
-        let line = Line::from(spans);
-        buf.set_line(area.x, area.y, &line, area.width);
-
-        // Show the mode on the right (only for non-Normal modes)
-        let mode_text = match self.mode {
+        // Mode label shown on the right (only for non-Normal modes).
+        let mode_label = match mode {
             AppMode::Normal => None,
             AppMode::Help => Some(" HELP "),
             AppMode::Input { .. } => Some(" INPUT "),
@@ -536,11 +477,43 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::FileHistory { .. } => Some(" FILE HISTORY "),
             AppMode::CommandPalette { .. } => Some(" PALETTE "),
         };
-        if let Some(text) = mode_text {
+
+        Self {
+            spans: hb.spans,
+            hints: hb.hints,
+            mode_label,
+            mode_style,
+        }
+    }
+
+    /// Absolute cell rects for the clickable hints on this frame, paired with the
+    /// action each dispatches. `area` is the status-bar row. Hints scrolled past
+    /// the right edge are dropped (they aren't visible to click).
+    pub fn hint_regions(&self, area: Rect) -> Vec<(Rect, Action)> {
+        self.hints
+            .iter()
+            .filter(|h| h.start < area.width)
+            .map(|h| {
+                let end = h.end.min(area.width);
+                (
+                    Rect::new(area.x + h.start, area.y, end - h.start, 1),
+                    h.action.clone(),
+                )
+            })
+            .collect()
+    }
+}
+
+impl Widget for StatusBar {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let line = Line::from(self.spans);
+        buf.set_line(area.x, area.y, &line, area.width);
+
+        if let Some(text) = self.mode_label {
             let mode_len = text.len() as u16;
             if area.width > mode_len {
                 let x = area.x + area.width - mode_len;
-                buf.set_string(x, area.y, text, mode_style);
+                buf.set_string(x, area.y, text, self.mode_style);
             }
         }
     }
@@ -549,10 +522,66 @@ impl<'a> Widget for StatusBar<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Style;
 
     #[test]
     fn pr_hint_shown_only_when_a_pr_exists() {
         assert_eq!(pr_hint_label(Some(12)).as_deref(), Some("open PR #12"));
         assert_eq!(pr_hint_label(None), None);
+    }
+
+    #[test]
+    fn hint_bar_records_ranges_over_key_plus_desc() {
+        let s = Style::default();
+        let mut hb = HintBar::new();
+        // 2-column prefix chip, then two hints; a static hint records nothing.
+        hb.raw("AB");
+        hb.hint(" x ", s, "go ", s, Action::ToggleHelp); // 3 + 3 = 6 cols
+        hb.hint_static(" y ", s, "no ", s); // advances but no range
+        hb.hint(" z ", s, "end", s, Action::Cancel); // 3 + 3 = 6 cols
+
+        assert_eq!(hb.hints.len(), 2, "static hint is not clickable");
+        // First hint starts after the 2-col prefix, spans key+desc = 6 cols.
+        assert_eq!((hb.hints[0].start, hb.hints[0].end), (2, 8));
+        assert_eq!(hb.hints[0].action, Action::ToggleHelp);
+        // Second hint follows the static hint (2 + 6 + 6 = 14) and spans 6 cols.
+        assert_eq!((hb.hints[1].start, hb.hints[1].end), (14, 20));
+        assert_eq!(hb.hints[1].action, Action::Cancel);
+    }
+
+    #[test]
+    fn hint_bar_counts_wide_glyph_widths() {
+        let s = Style::default();
+        let mut hb = HintBar::new();
+        // "↑↓" are two display columns despite being multi-byte.
+        hb.raw("↑↓");
+        hb.hint(" k ", s, "d", s, Action::Cancel);
+        assert_eq!(hb.hints[0].start, 2, "wide glyphs count as their column width");
+    }
+
+    #[test]
+    fn hint_regions_offsets_by_area_and_drops_offscreen() {
+        let s = Style::default();
+        let mut hb = HintBar::new();
+        hb.hint(" a ", s, "one ", s, Action::ToggleHelp); // cols 0..7
+        hb.hint(" b ", s, "two ", s, Action::Cancel); // cols 7..14
+        let bar = StatusBar {
+            spans: hb.spans,
+            hints: hb.hints,
+            mode_label: None,
+            mode_style: Style::default(),
+        };
+        // Wide enough for both, offset by the bar's origin.
+        let regions = bar.hint_regions(Rect::new(5, 20, 40, 1));
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].0, Rect::new(5, 20, 7, 1));
+        assert_eq!(regions[0].1, Action::ToggleHelp);
+        assert_eq!(regions[1].0, Rect::new(12, 20, 7, 1));
+
+        // Narrow bar: the second hint starts past the edge and is dropped; the
+        // first is clipped to the visible width.
+        let regions = bar.hint_regions(Rect::new(0, 20, 5, 1));
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].0, Rect::new(0, 20, 5, 1));
     }
 }

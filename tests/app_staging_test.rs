@@ -161,6 +161,7 @@ fn make_base_app(
         menu_anchor: None,
         popup_rect: None,
         graph_chip_hits: Vec::new(),
+        status_hints: Vec::new(),
         graph_split_ratio: 65,
         dragging_divider: false,
         trace_enabled: true,
@@ -957,4 +958,52 @@ fn stage_all_action_stages_tracked_and_untracked_from_files_pane() {
 
     app.handle_action(Action::UnstageAll).unwrap();
     assert!(git_out(&rp, &["diff", "--cached", "--name-only"]).trim().is_empty());
+}
+
+// ── Clickable status-bar hints ──────────────────────────────────────
+
+/// End-to-end: the status bar records the "? help" hint's cell rect, and a mouse
+/// click landing in that rect dispatches its action (opening help) — the same as
+/// pressing the key.
+#[test]
+fn clicking_a_status_bar_hint_opens_help() {
+    use keifu::ui::status_bar::StatusBar;
+    use keifu::ui::theme::Theme;
+    use ratatui::layout::Rect;
+
+    let oid = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let mut app = make_diff_app(oid, None);
+    app.focused_panel = FocusedPanel::Graph;
+    app.graph_nav.graph_list_state.select(Some(0));
+
+    let theme = Theme::dark();
+    let status_area = Rect::new(0, 29, 120, 1);
+    let status_bar = StatusBar::new(&app, &theme);
+    let regions = status_bar.hint_regions(status_area);
+
+    // The graph pane's hints include "? help" → ToggleHelp.
+    let (rect, _) = regions
+        .iter()
+        .find(|(_, action)| *action == Action::ToggleHelp)
+        .expect("graph pane advertises a clickable help hint");
+    let (col, row) = (rect.x + rect.width / 2, rect.y);
+
+    // The mouse layer reads whatever the last render recorded.
+    app.status_hints = regions.clone();
+    assert!(matches!(app.mode, AppMode::Normal));
+    app.handle_action(Action::MouseClick { col, row }).unwrap();
+    assert!(
+        matches!(app.mode, AppMode::Help),
+        "clicking the help hint toggled help open"
+    );
+
+    // A click on the status row that misses every hint is a no-op for the hints
+    // layer (help stays as it was — no accidental dispatch).
+    let miss_col = status_area.width - 1;
+    app.handle_action(Action::MouseClick {
+        col: miss_col,
+        row: status_area.y,
+    })
+    .unwrap();
+    assert!(matches!(app.mode, AppMode::Help), "an empty-cell click dispatched nothing");
 }

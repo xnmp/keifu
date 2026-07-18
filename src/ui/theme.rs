@@ -422,6 +422,21 @@ impl Theme {
         BorderType::Rounded
     }
 
+    /// Scrollbar track: the muted, always-present rail. Drawn from the
+    /// background-adapted gray ladder so it stays legible on any terminal theme
+    /// while receding below content and never competing with the focus accent.
+    pub fn scrollbar_track_style(&self) -> Style {
+        Style::default().fg(self.border_unfocused)
+    }
+
+    /// Scrollbar thumb: one step brighter than the track (the same secondary
+    /// gray used for metadata), so the position marker reads clearly without
+    /// pulling focus. Calm-by-default over the accent, since scrollbars show on
+    /// every scrollable pane at once regardless of which one is focused.
+    pub fn scrollbar_thumb_style(&self) -> Style {
+        Style::default().fg(self.text_secondary)
+    }
+
     /// Get a lane color by index (replaces graph::colors::get_color_by_index).
     pub fn lane_color(&self, color_index: usize) -> Color {
         if color_index == usize::MAX {
