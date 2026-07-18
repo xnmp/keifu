@@ -615,17 +615,37 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             selected,
             all_branches,
         } => {
+            let author_of = |b: &String| {
+                app.branch_authors
+                    .get(b)
+                    .map(String::as_str)
+                    .unwrap_or("")
+            };
             let filtered_count = all_branches
                 .iter()
-                .filter(|b| b.to_lowercase().contains(&filter.to_lowercase()))
+                .filter(|b| {
+                    branch_filter::matches_branch_filter(b, author_of(b), filter)
+                })
                 .count();
             // +3 for borders and footer
             let popup_height = (filtered_count + 3).min(24) as u16;
-            let max_name_len = all_branches.iter().map(|b| b.len()).max().unwrap_or(10);
-            let popup_width = (max_name_len + 10).clamp(46, 60) as u16;
+            // Room for "[x] " + name + a gap + author.
+            let max_row_len = all_branches
+                .iter()
+                .map(|b| b.len() + author_of(b).len())
+                .max()
+                .unwrap_or(10);
+            let popup_width = (max_row_len + 12).clamp(46, 72) as u16;
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
-                BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected, &theme),
+                BranchFilterWidget::new(
+                    all_branches,
+                    &app.hidden_branches,
+                    &app.branch_authors,
+                    filter,
+                    *selected,
+                    &theme,
+                ),
                 popup_area,
             );
             rendered_popup = Some(popup_area);

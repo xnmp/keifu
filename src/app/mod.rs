@@ -648,6 +648,14 @@ pub struct App {
     /// Files pane subsystem state
     pub files_pane: FilesPaneState,
     pub hidden_branches: std::collections::HashSet<String>,
+    /// Branch name -> author name, shown in the branch-filter picker. Computed
+    /// lazily when the picker opens (see `open_branch_filter`), never on every
+    /// refresh — attribution runs one revwalk per branch.
+    pub branch_authors: std::collections::HashMap<String, String>,
+    /// Snapshot of `(branch name, tip OID)` the cached `branch_authors` were
+    /// computed from. When the current branch tips no longer match this, the
+    /// cache is stale and recomputed on the next picker open.
+    pub branch_authors_key: Vec<(String, git2::Oid)>,
     pub commit_editor: crate::text_editor::TextEditor,
     pub editing_commit_message: bool,
     /// When true, the editor is amending the HEAD commit (not creating a new one)

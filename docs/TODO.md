@@ -27,6 +27,21 @@ Shift+B in graph pane opens branch filter popup. Space toggles branches, `a` sel
 ### [DONE] 2026-07-19 Show/Hide Remote-Only Branches
 `Shift+O` (graph pane) toggles visibility of every remote-only branch at once — a remote ref with no matching local branch (matched by upstream config, short name, or shared tip). Hidden remotes drop their labels *and* their exclusive commits, reusing the existing `visible_branches` revwalk path, and compose with the per-branch filter (`hidden_branches`): a branch is visible iff not individually hidden AND not excluded by the remote toggle. Pure classifier `git::branch::remote_only_branch_names()` (unit-tested); state persisted in `UiState.hide_remote_branches` (`state.toml`) and honored on startup; surfaced as a "remotes hidden" status-bar chip and a help-popup entry. Upstream (trasta298) binds this to `o`, but that's Open-PR in the fork, so `Shift+O` — keeps the mnemonic and pairs with `Shift+B`.
 
+### [DONE] 2026-07-19 Filter Branches by Author
+The branch-filter picker (`Shift+B`) now attributes an author to each branch and
+lets you filter/bulk-hide by author. Author = the author of the *oldest commit
+unique to that branch* (reachable from its tip but no other branch tip, found via
+`git2` revwalk: push tip, hide all other tips); falls back to the tip commit's
+author when the branch has no unique commits (shared/merged tip). Pure, unit-
+tested domain fn `git::branch::branch_authors(repo, &branches)`. Computed lazily
+when the picker opens and cached on `App`, keyed by a `(name, tip OID)` snapshot
+so it only recomputes when tips change — never per keystroke or per refresh. The
+picker shows the author (muted, right-aligned); a filter starting with `@` matches
+the author (case-insensitive), plain queries still match names. `Ctrl+A`/`Ctrl+O`
+(show-all / hide-all) are scoped to the currently filtered subset, so `@alice` +
+`Ctrl+O` hides all of alice's branches at once (identical to before when no filter
+is active).
+
 ### [DONE] Tags Rendered as Graph Refs
 Lightweight and annotated tags (peeled to their target commit) are loaded via `repository.get_tags()`, threaded through `build_graph` onto `GraphNode.tag_names`, and rendered next to branch labels as `<tag>` in a distinct tag color (`theme.tag_label`).
 

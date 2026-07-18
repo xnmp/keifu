@@ -106,7 +106,7 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  B          ", key_style),
-                Span::styled("Branch filter", desc_style),
+                Span::styled("Branch filter (type to filter by name, @ by author)", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  O          ", key_style),

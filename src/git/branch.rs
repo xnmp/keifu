@@ -1,6 +1,6 @@
 //! Branch info structure and operations
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use git2::{BranchType, Oid, Repository};
@@ -129,6 +129,59 @@ pub fn remote_only_branch_names(branches: &[BranchInfo]) -> HashSet<String> {
         .collect()
 }
 
+/// Attribute an author (name) to each branch in `branches`.
+///
+/// A branch's author is the author of the **oldest commit unique to that
+/// branch** — a commit reachable from the branch tip but from no *other*
+/// branch tip. That commit is the earliest work that exists only on this
+/// branch, so its author is the person who started the branch. When a branch
+/// has no unique commits (its tip is shared with, or fully merged into,
+/// another branch), the author of the **tip commit** is used instead.
+///
+/// Runs one revwalk per branch (push the tip, hide every other tip), so it is
+/// O(branches × history). Intended to be computed lazily — e.g. when the
+/// branch picker opens — not on every refresh.
+///
+/// Never panics: any git error degrades to the tip author, and a commit
+/// without a readable author name degrades to an empty string.
+pub fn branch_authors(repo: &Repository, branches: &[BranchInfo]) -> HashMap<String, String> {
+    branches
+        .iter()
+        .map(|b| (b.name.clone(), branch_author(repo, b, branches).unwrap_or_default()))
+        .collect()
+}
+
+/// Author name for a single branch, applying the oldest-unique-commit rule
+/// with a tip-commit fallback. `None` only when even the tip commit can't be
+/// read (treated as an empty author by the caller).
+fn branch_author(repo: &Repository, branch: &BranchInfo, all: &[BranchInfo]) -> Option<String> {
+    let oid = oldest_unique_commit(repo, branch, all).unwrap_or(branch.tip_oid);
+    let commit = repo.find_commit(oid).ok()?;
+    let name = commit.author().name().unwrap_or_default().to_string();
+    Some(name)
+}
+
+/// OID of the oldest commit reachable from `branch.tip_oid` but from no other
+/// branch tip in `all`. `None` when the walk can't be built or the branch
+/// contributes no unique commits (tip shared or fully merged elsewhere).
+fn oldest_unique_commit(repo: &Repository, branch: &BranchInfo, all: &[BranchInfo]) -> Option<Oid> {
+    let mut walk = repo.revwalk().ok()?;
+    // Oldest-first: the first commit the walk yields is the branch's earliest
+    // own commit.
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME | git2::Sort::REVERSE)
+        .ok()?;
+    walk.push(branch.tip_oid).ok()?;
+    // Hide every other branch's tip. If another branch shares this tip (or sits
+    // ahead of it), the walk empties out — correctly yielding "no unique
+    // commits" and falling back to the tip author.
+    for other in all {
+        if other.name != branch.name {
+            let _ = walk.hide(other.tip_oid);
+        }
+    }
+    walk.filter_map(Result::ok).next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +271,138 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains("origin/dependabot"));
         assert!(names.contains("origin/colleague"));
+    }
+
+    // --- branch_authors: exercised against real fixture repositories, since
+    // authorship attribution needs a real object graph to walk. ---
+
+    use git2::{Signature, Time};
+    use tempfile::TempDir;
+
+    /// Commit a single-file tree onto `refname` with the given author name,
+    /// wall-clock `secs` (so walk order is deterministic) and parents. Returns
+    /// the new commit OID. Pure object plumbing — no workdir/index churn.
+    fn commit(
+        repo: &Repository,
+        refname: &str,
+        author: &str,
+        secs: i64,
+        parents: &[Oid],
+        content: &str,
+    ) -> Oid {
+        let blob = repo.blob(content.as_bytes()).unwrap();
+        let mut tb = repo.treebuilder(None).unwrap();
+        tb.insert("file.txt", blob, 0o100644).unwrap();
+        let tree = repo.find_tree(tb.write().unwrap()).unwrap();
+        let sig = Signature::new(author, "dev@example.com", &Time::new(secs, 0)).unwrap();
+        let parent_commits: Vec<_> = parents.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+        let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
+        repo.commit(Some(refname), &sig, &sig, "msg", &tree, &parent_refs)
+            .unwrap()
+    }
+
+    fn info(name: &str, tip: Oid) -> BranchInfo {
+        local(name, tip, None)
+    }
+
+    fn info_remote(name: &str, tip: Oid) -> BranchInfo {
+        remote(name, tip)
+    }
+
+    #[test]
+    fn author_is_oldest_commit_unique_to_the_branch() {
+        // main:    a <- b            (Root, Main Dev)
+        // feature: a <- f1 <- f2     (Feat Dev, Feat Dev Jr)
+        // `a` is shared. feature's oldest *unique* commit is f1 -> "Feat Dev",
+        // not the newer f2 and not the shared root's author.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
+        let b = commit(&repo, "refs/heads/main", "Main Dev", 2000, &[a], "b");
+        let f1 = commit(&repo, "refs/heads/feature", "Feat Dev", 3000, &[a], "f1");
+        let _f2 = commit(&repo, "refs/heads/feature", "Feat Dev Jr", 4000, &[f1], "f2");
+
+        let branches = vec![info("main", b), info("feature", _f2)];
+        let authors = branch_authors(&repo, &branches);
+
+        assert_eq!(authors.get("feature").map(String::as_str), Some("Feat Dev"));
+        // main's only unique commit is b (a is shared with feature).
+        assert_eq!(authors.get("main").map(String::as_str), Some("Main Dev"));
+    }
+
+    #[test]
+    fn falls_back_to_tip_author_when_no_unique_commits() {
+        // Two branches at the *same* tip: neither has a unique commit, so both
+        // fall back to the tip commit's own author.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
+        let c = commit(&repo, "refs/heads/main", "Tip Author", 2000, &[a], "c");
+        // `dup` points at the same commit as main.
+        repo.reference("refs/heads/dup", c, true, "dup").unwrap();
+
+        let branches = vec![info("main", c), info("dup", c)];
+        let authors = branch_authors(&repo, &branches);
+
+        assert_eq!(authors.get("dup").map(String::as_str), Some("Tip Author"));
+        assert_eq!(authors.get("main").map(String::as_str), Some("Tip Author"));
+    }
+
+    #[test]
+    fn merged_branch_with_no_exclusive_commits_uses_tip_author() {
+        // main:  a <- b <- c
+        // topic:  points at b, which is fully contained in main. topic has no
+        // unique commits, so it uses b's author.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
+        let b = commit(&repo, "refs/heads/main", "Topic Author", 2000, &[a], "b");
+        let c = commit(&repo, "refs/heads/main", "Main Dev", 3000, &[b], "c");
+        repo.reference("refs/heads/topic", b, true, "topic").unwrap();
+
+        let branches = vec![info("main", c), info("topic", b)];
+        let authors = branch_authors(&repo, &branches);
+
+        assert_eq!(authors.get("topic").map(String::as_str), Some("Topic Author"));
+    }
+
+    #[test]
+    fn shared_history_is_not_attributed_to_the_other_branch() {
+        // Two feature branches forking off a common root, each with its own
+        // author. Neither should inherit the other's or the root's author.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
+        let x = commit(&repo, "refs/heads/alice", "Alice", 2000, &[a], "x");
+        let y = commit(&repo, "refs/heads/bob", "Bob", 3000, &[a], "y");
+
+        let branches = vec![info("main", a), info("alice", x), info("bob", y)];
+        let authors = branch_authors(&repo, &branches);
+
+        assert_eq!(authors.get("alice").map(String::as_str), Some("Alice"));
+        assert_eq!(authors.get("bob").map(String::as_str), Some("Bob"));
+    }
+
+    #[test]
+    fn remote_ref_counts_as_another_tip() {
+        // A remote ref sharing a local branch's tip must still be treated as
+        // "another tip", so the local branch sees no unique commits and falls
+        // back to its tip author rather than walking shared history.
+        let dir: TempDir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
+        let c = commit(&repo, "refs/heads/main", "Local Tip", 2000, &[a], "c");
+        repo.reference("refs/remotes/origin/main", c, true, "origin/main")
+            .unwrap();
+
+        let branches = vec![info("main", c), info_remote("origin/main", c)];
+        let authors = branch_authors(&repo, &branches);
+
+        // origin/main also has a unique-commit set of {} vs main -> tip author.
+        assert_eq!(authors.get("main").map(String::as_str), Some("Local Tip"));
+        assert_eq!(
+            authors.get("origin/main").map(String::as_str),
+            Some("Local Tip")
+        );
     }
 }
