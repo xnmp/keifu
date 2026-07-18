@@ -150,6 +150,8 @@ fn make_base_app(
         mouse_layout: Default::default(),
         last_click: None,
         files_view_offset: 0,
+        menu_anchor: None,
+        popup_rect: None,
         config: Config::default(),
         terminal_bg: None,
         pixel_graph: None,

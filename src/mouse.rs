@@ -28,6 +28,16 @@ pub fn list_row_index(inner: Rect, offset: usize, col: u16, row: u16) -> Option<
     Some(offset + (row - inner.y) as usize)
 }
 
+/// Top-left position for a popup of size `w`×`h` opened at `anchor`, clamped so
+/// it never crosses the screen edges (shifted left/up as needed, then to 0).
+pub fn clamp_menu_pos(anchor: (u16, u16), w: u16, h: u16, screen: (u16, u16)) -> (u16, u16) {
+    let (ax, ay) = anchor;
+    let (sw, sh) = screen;
+    let x = ax.min(sw.saturating_sub(w));
+    let y = ay.min(sh.saturating_sub(h));
+    (x, y)
+}
+
 /// A prior click, for double-click detection.
 #[derive(Debug, Clone, Copy)]
 pub struct LastClick {
@@ -81,6 +91,21 @@ mod tests {
         // Outside the inner area → None.
         assert_eq!(list_row_index(inner, 0, 2, 8), None);
         assert_eq!(list_row_index(inner, 0, 0, 4), None);
+    }
+
+    #[test]
+    fn clamp_menu_keeps_it_on_screen() {
+        let screen = (80, 24);
+        // Fits at the anchor.
+        assert_eq!(clamp_menu_pos((10, 5), 20, 8, screen), (10, 5));
+        // Near the right edge → shifted left so x+w == sw.
+        assert_eq!(clamp_menu_pos((70, 5), 20, 8, screen), (60, 5));
+        // Near the bottom → shifted up so y+h == sh.
+        assert_eq!(clamp_menu_pos((10, 22), 20, 8, screen), (10, 16));
+        // Both edges.
+        assert_eq!(clamp_menu_pos((79, 23), 20, 8, screen), (60, 16));
+        // Menu larger than screen → clamps to 0.
+        assert_eq!(clamp_menu_pos((10, 5), 100, 40, screen), (0, 0));
     }
 
     #[test]

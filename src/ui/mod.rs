@@ -286,7 +286,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    // Popups
+    // Popups. Each interactive popup records its rect for mouse hit-testing
+    // (click-inside routes, click-outside closes).
+    let mut rendered_popup: Option<Rect> = None;
     match &app.mode {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
@@ -330,11 +332,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         } => {
             let menu_height = (items.len() + 2).min(20) as u16;
             let menu_width = 42;
-            let popup_area = centered_rect_fixed(menu_width, menu_height, area);
+            // Right-click anchors the menu at the cursor (clamped on-screen);
+            // keyboard opens it centered.
+            let popup_area = match app.menu_anchor {
+                Some(anchor) => {
+                    let (x, y) = crate::mouse::clamp_menu_pos(
+                        anchor,
+                        menu_width,
+                        menu_height,
+                        (area.width, area.height),
+                    );
+                    Rect::new(x, y, menu_width, menu_height)
+                }
+                None => centered_rect_fixed(menu_width, menu_height, area),
+            };
             frame.render_widget(
                 CommitMenuWidget::new(items, *selected, filter, &theme),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::MetadataMenu { selected } => {
             use self::metadata_menu::MetadataMenuWidget;
@@ -344,16 +360,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 MetadataMenuWidget::new(app.metadata_columns, *selected, &theme),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::PullDivergence { selected } => {
             let popup_area = centered_rect_fixed(48, 8, area);
             frame.render_widget(PullDivergenceDialog::new(*selected, &theme), popup_area);
+            rendered_popup = Some(popup_area);
         }
         AppMode::CiChecks => {
             if let Some(view) = &app.ci_checks {
                 use self::ci_checks::CiChecksWidget;
                 let popup_area = centered_rect(72, 74, area);
                 frame.render_widget(CiChecksWidget::new(view, &theme), popup_area);
+                rendered_popup = Some(popup_area);
             }
         }
         AppMode::PrThread => {
@@ -361,11 +380,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 use self::pr_thread::PrThreadWidget;
                 let popup_area = centered_rect(PR_THREAD_POPUP_PCT.0, PR_THREAD_POPUP_PCT.1, area);
                 frame.render_widget(PrThreadWidget::new(view, &theme), popup_area);
+                rendered_popup = Some(popup_area);
             }
         }
         AppMode::PrCompose { purpose } => {
             use self::pr_compose::{text_area, PrComposeWidget};
             let popup_area = centered_rect(64, 60, area);
+            rendered_popup = Some(popup_area);
             frame.render_widget(
                 PrComposeWidget::new(&app.pr_editor, *purpose, &theme),
                 popup_area,
@@ -389,6 +410,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 OptionsDialog::new("Merge Pull Request", "Merge method:", &labels, *selected, &theme),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::PrReviewPicker { selected, .. } => {
             let labels: Vec<&str> = crate::pr_action::ReviewDecision::ALL
@@ -400,6 +422,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 OptionsDialog::new("Submit Review", "Disposition:", &labels, *selected, &theme),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
@@ -410,6 +433,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 BranchPickerWidget::new(branches, *selected, &theme),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::BranchDeletePicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
@@ -420,6 +444,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 BranchPickerWidget::with_title(branches, *selected, &theme, " Delete Branch "),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::TagPicker {
             tags,
@@ -438,6 +463,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 BranchPickerWidget::with_title(tags, *selected, &theme, title),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::RemotePicker { remotes, selected, op } => {
             let title = match op {
@@ -454,6 +480,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 BranchPickerWidget::with_title(remotes, *selected, &theme, title),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::BranchFilter {
             filter,
@@ -473,6 +500,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 BranchFilterWidget::new(all_branches, &app.hidden_branches, filter, *selected, &theme),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::FileHistory {
             path,
@@ -486,9 +514,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 FileHistoryWidget::new(entries, *selected, &theme, path),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         _ => {}
     }
+
+    // Record the active popup's rect for mouse hit-testing (click-inside to
+    // select a row, click-outside to dismiss).
+    app.popup_rect = rendered_popup;
 
     // Toasts render last, so they sit on top of every panel and popup.
     render_toasts(frame, app, &theme);

@@ -690,6 +690,12 @@ pub struct App {
     pub last_click: Option<crate::mouse::LastClick>,
     /// Files-pane scroll offset from the last render, for mouse hit-testing.
     pub files_view_offset: usize,
+    /// When the commit menu was opened by right-click, its screen anchor;
+    /// `None` = keyboard-opened (centered).
+    pub menu_anchor: Option<(u16, u16)>,
+    /// Rect of the currently open popup, recorded each frame for click-outside
+    /// detection and in-popup row hit-testing.
+    pub popup_rect: Option<ratatui::layout::Rect>,
 
     // Config
     pub config: Config,

@@ -126,6 +126,8 @@ impl App {
             mouse_layout: MouseLayout::default(),
             last_click: None,
             files_view_offset: 0,
+            menu_anchor: None,
+            popup_rect: None,
             config,
             terminal_bg,
             pixel_graph: None,

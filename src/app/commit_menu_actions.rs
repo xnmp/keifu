@@ -54,6 +54,9 @@ impl App {
     }
 
     pub(crate) fn open_commit_menu(&mut self) {
+        // Keyboard opens the menu centered; a right-click sets `menu_anchor`
+        // afterward to place it at the cursor.
+        self.menu_anchor = None;
         let Some(node) = self.selected_commit_node() else {
             return;
         };
@@ -396,7 +399,7 @@ impl App {
         scored.into_iter().map(|(item, _)| item).collect()
     }
 
-    fn commit_menu_visible_count(&self, items: &[CommitMenuItem], filter: &str) -> usize {
+    pub(crate) fn commit_menu_visible_count(&self, items: &[CommitMenuItem], filter: &str) -> usize {
         if filter.is_empty() {
             return items.len();
         }

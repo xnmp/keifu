@@ -22,8 +22,9 @@ impl App {
     pub(crate) fn handle_mouse_action(&mut self, action: Action) {
         match action {
             Action::MouseClick { col, row } => self.handle_mouse_click(col, row),
+            Action::MouseRightClick { col, row } => self.handle_mouse_right_click(col, row),
             Action::MouseScroll { col, row, down } => self.handle_mouse_scroll(col, row, down),
-            // Right-click, drag, and up are handled by later capabilities.
+            // Divider drag and button-up are handled by later capabilities.
             _ => {}
         }
     }
@@ -33,9 +34,19 @@ impl App {
         let double = is_double_click(self.last_click, col, row, now, DOUBLE_CLICK_WINDOW);
         self.last_click = Some(LastClick { col, row, at: now });
 
-        // Popup/overlay click handling is layered on by later capabilities; for
-        // now clicks only act in the main (Normal) layout.
+        // A popup is open: route the click to it rather than the panels behind.
         if !matches!(self.mode, AppMode::Normal) {
+            if let Some(rect) = self.popup_rect {
+                if point_in(rect, col, row) {
+                    self.handle_popup_click(rect, col, row);
+                } else if !matches!(self.mode, AppMode::PrCompose { .. }) {
+                    // A click outside the popup dismisses it — and is swallowed
+                    // so it does not also act on the panel underneath. The
+                    // compose editor is excluded so a stray click can't discard
+                    // in-progress text.
+                    let _ = self.handle_action(Action::Cancel);
+                }
+            }
             return;
         }
 
@@ -88,6 +99,90 @@ impl App {
         self.graph_nav.graph_list_state.select(Some(full_idx));
         self.graph_nav.sync_branch_selection_to_node(full_idx);
         self.commit_detail_scroll = 0;
+    }
+
+    /// Right-click on a graph row: select that commit and open its context menu
+    /// anchored at the cursor (clamped on-screen by the renderer).
+    fn handle_mouse_right_click(&mut self, col: u16, row: u16) {
+        if !matches!(self.mode, AppMode::Normal) {
+            return;
+        }
+        let ml = self.mouse_layout;
+        if !point_in(ml.graph, col, row) {
+            return;
+        }
+        self.focused_panel = FocusedPanel::Graph;
+        let inner = inner_rect(ml.graph);
+        let offset = self.graph_nav.graph_list_state.offset();
+        let Some(list_idx) = list_row_index(inner, offset, col, row) else {
+            return;
+        };
+        let Some(full_idx) = self.graph_row_full_idx(list_idx) else {
+            return;
+        };
+        self.select_commit_by_full_idx(full_idx);
+        self.open_commit_menu();
+        // `open_commit_menu` clears the anchor (keyboard opens centered); set it
+        // now so this menu renders at the click position. Only if a menu opened
+        // (uncommitted/stash-less nodes may not produce one).
+        if matches!(self.mode, AppMode::CommitMenu { .. }) {
+            self.menu_anchor = Some((col, row));
+        }
+    }
+
+    /// A click landed inside the open popup's rect: if it hit a selectable row,
+    /// select it and activate (Enter-equivalent).
+    fn handle_popup_click(&mut self, rect: Rect, col: u16, row: u16) {
+        let inner = inner_rect(rect);
+        let Some(idx) = list_row_index(inner, 0, col, row) else {
+            return;
+        };
+        // Only some popups expose click-selectable list rows; others (editors,
+        // scroll views) swallow the click without acting.
+        let Some(count) = self.popup_row_count() else {
+            return;
+        };
+        if idx >= count {
+            return;
+        }
+        if self.set_popup_selected(idx) {
+            let _ = self.handle_action(Action::MenuSelect);
+        }
+    }
+
+    /// Number of click-selectable rows in the current popup, or `None` when the
+    /// popup has no clickable list.
+    fn popup_row_count(&self) -> Option<usize> {
+        match &self.mode {
+            AppMode::CommitMenu { items, filter, .. } => {
+                Some(self.commit_menu_visible_count(items, filter))
+            }
+            AppMode::BranchPicker { branches, .. }
+            | AppMode::BranchDeletePicker { branches, .. } => Some(branches.len()),
+            AppMode::TagPicker { tags, .. } => Some(tags.len()),
+            AppMode::RemotePicker { remotes, .. } => Some(remotes.len()),
+            AppMode::PrMergePicker { .. } => Some(crate::pr_action::MergeMethod::ALL.len()),
+            AppMode::PrReviewPicker { .. } => Some(crate::pr_action::ReviewDecision::ALL.len()),
+            _ => None,
+        }
+    }
+
+    /// Set the `selected` index on the current list popup. Returns whether the
+    /// mode had a selectable list.
+    fn set_popup_selected(&mut self, idx: usize) -> bool {
+        match &mut self.mode {
+            AppMode::CommitMenu { selected, .. }
+            | AppMode::BranchPicker { selected, .. }
+            | AppMode::BranchDeletePicker { selected, .. }
+            | AppMode::TagPicker { selected, .. }
+            | AppMode::RemotePicker { selected, .. }
+            | AppMode::PrMergePicker { selected, .. }
+            | AppMode::PrReviewPicker { selected, .. } => {
+                *selected = idx;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn handle_mouse_scroll(&mut self, col: u16, row: u16, down: bool) {
