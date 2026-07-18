@@ -269,6 +269,32 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("Search branches", desc_style),
             ]),
             Line::from(""),
+            Line::from(Span::styled("Mouse", header_style)),
+            Line::from(vec![
+                Span::styled("  Click        ", key_style),
+                Span::styled("Select commit/file, focus panel", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Double-click ", key_style),
+                Span::styled("Open commit menu / file diff", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Right-click  ", key_style),
+                Span::styled("Commit context menu at cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Click chip   ", key_style),
+                Span::styled("PR badge opens PR; branch chip checks out", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Wheel        ", key_style),
+                Span::styled("Scroll panel / popup under cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  Drag divider ", key_style),
+                Span::styled("Resize the graph/detail split", desc_style),
+            ]),
+            Line::from(""),
             Line::from(Span::styled("Other", header_style)),
             Line::from(vec![
                 Span::styled("  R          ", key_style),

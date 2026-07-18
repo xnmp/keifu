@@ -33,6 +33,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
+- Full mouse support: click to select and focus, double-click to open, right-click for a context menu, clickable PR/branch chips, scroll-wheel routing, and a drag-resizable graph/detail divider
 
 ## Requirements
 
@@ -183,6 +184,19 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 | `F5` | Full update — fetch all remotes, refetch open PRs, and refresh |
 | `?` | Toggle help |
 | `Ctrl+Q` | Quit from anywhere |
+
+### Mouse
+
+| Action | Result |
+| --- | --- |
+| Left-click | Select the commit/file under the cursor and focus its panel |
+| Double-click | Open the commit context menu (graph) or the file diff (files) |
+| Right-click | Open the commit context menu anchored at the cursor |
+| Click PR badge | Open the pull request in the browser |
+| Click branch chip | Check out that branch (after confirmation) |
+| Scroll wheel | Scroll the panel or popup under the cursor |
+| Drag divider | Resize the graph/detail split (persisted between sessions) |
+| Click outside a popup | Dismiss it |
 
 ## Notes and limitations
 
