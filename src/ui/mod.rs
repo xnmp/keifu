@@ -1,6 +1,7 @@
 //! UI components
 
 pub mod branch_filter;
+pub mod command_palette;
 pub mod commit_detail;
 pub mod ci_checks;
 pub mod commit_menu;
@@ -543,6 +544,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
                 FileHistoryWidget::new(entries, *selected, &theme, path),
+                popup_area,
+            );
+            rendered_popup = Some(popup_area);
+        }
+        AppMode::CommandPalette { query, selected } => {
+            use self::command_palette::CommandPaletteWidget;
+            let results = app.palette_results(query);
+            // A tall, wide centered popup: query line + up to PALETTE_CAP rows +
+            // borders (+ a footer line when capped).
+            let footer = usize::from(results.more > 0);
+            let popup_height =
+                (results.items.len() + 3 + footer).clamp(6, 22) as u16;
+            let popup_width = area.width.saturating_sub(6).clamp(40, 90);
+            let popup_area = centered_rect_fixed(popup_width, popup_height, area);
+            frame.render_widget(
+                CommandPaletteWidget::new(
+                    query,
+                    &results.items,
+                    results.more,
+                    *selected,
+                    &theme,
+                ),
                 popup_area,
             );
             rendered_popup = Some(popup_area);

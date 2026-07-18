@@ -560,7 +560,7 @@ fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
 }
 
 /// Nerd Font cloud glyph marking a branch that only exists on a remote.
-const REMOTE_ONLY_ICON: &str = "\u{f0c2}"; //
+pub const REMOTE_ONLY_ICON: &str = "\u{f0c2}"; //
 /// Marks a local branch whose remote counterpart points at the same commit.
 const SYNCED_ICON: &str = "↔";
 

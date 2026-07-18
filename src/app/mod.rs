@@ -56,6 +56,7 @@ mod input_actions;
 mod confirm_actions;
 mod compare_actions;
 mod file_history_actions;
+mod palette_actions;
 
 /// Copy text to system clipboard using platform-specific commands
 fn copy_to_clipboard(text: &str) -> Result<()> {
@@ -347,6 +348,12 @@ pub enum AppMode {
     FileHistory {
         path: std::path::PathBuf,
         entries: Vec<FileHistoryEntry>,
+        selected: usize,
+    },
+    /// Fuzzy command palette (Ctrl+P): commands, branches, and commits in one
+    /// ranked list. Holds the query string and the selected row.
+    CommandPalette {
+        query: String,
         selected: usize,
     },
 }
@@ -871,6 +878,11 @@ impl App {
             self.full_update();
             return Ok(());
         }
+        // The command palette opens from any panel in Normal mode.
+        if matches!(action, Action::OpenCommandPalette) {
+            self.open_command_palette();
+            return Ok(());
+        }
         // Mouse actions hit-test the recorded layout regardless of mode.
         if matches!(
             action,
@@ -905,6 +917,7 @@ impl App {
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
             AppMode::FileDiff { .. } => self.handle_file_diff_action(action)?,
             AppMode::FileHistory { .. } => self.handle_file_history_action(action)?,
+            AppMode::CommandPalette { .. } => self.handle_command_palette_action(action)?,
         }
         Ok(())
     }

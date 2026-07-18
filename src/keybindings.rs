@@ -88,6 +88,25 @@ pub fn map_key_to_action(
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
         AppMode::FileDiff { .. } => map_file_diff_mode(key),
         AppMode::FileHistory { .. } => map_picker_mode(key),
+        AppMode::CommandPalette { .. } => map_command_palette_mode(key),
+    }
+}
+
+/// Command palette: type to filter, ↑↓ to navigate, Enter to run, Esc to close.
+/// Reuses the shared single-line text-editing shortcuts for the query.
+fn map_command_palette_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        _ => None,
     }
 }
 
@@ -107,6 +126,19 @@ fn map_normal_mode(
     // If editing commit message, route to editor keybindings
     if editing_commit && panel == FocusedPanel::CommitDetail {
         return map_editor_mode(key);
+    }
+
+    // Command palette: Ctrl+P (or ':' for vim muscle memory) from any panel,
+    // unless a text filter is currently capturing input.
+    if !files_filter_active && !commit_filter_active {
+        let ctrl_p = key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('p');
+        let colon = !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && key.code == KeyCode::Char(':');
+        if ctrl_p || colon {
+            return Some(Action::OpenCommandPalette);
+        }
     }
 
     // Panel navigation with left/right arrows and Tab (from any panel)

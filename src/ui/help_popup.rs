@@ -301,6 +301,10 @@ impl<'a> Widget for HelpPopup<'a> {
             Line::from(""),
             Line::from(Span::styled("Other", header_style)),
             Line::from(vec![
+                Span::styled("  Ctrl+P / :  ", key_style),
+                Span::styled("Command palette (commands, branches, commits)", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  R          ", key_style),
                 Span::styled("Refresh", desc_style),
             ]),

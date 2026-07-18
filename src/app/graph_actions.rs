@@ -75,6 +75,12 @@ impl App {
             Action::OpenPr => {
                 self.open_selected_pr();
             }
+            Action::CreatePullRequest => {
+                self.open_create_pr();
+            }
+            Action::MergePullRequest => {
+                self.open_merge_pr();
+            }
             Action::OpenCiChecks => {
                 self.open_ci_checks();
             }

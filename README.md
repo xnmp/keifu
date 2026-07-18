@@ -34,6 +34,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Branch tracing (`t`) — selecting a commit highlights its full branch line (first-parent ancestry and descendants) and dims every other lane, the way VSCode does on hover; on by default for branchy graphs
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits
+- Command palette (`Ctrl+P` / `:`) — one fuzzy list over commands, branch checkouts, and commit jumps
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
 - Full mouse support: click to select and focus, double-click to open, right-click for a context menu, clickable PR/branch chips, scroll-wheel routing, and a drag-resizable graph/detail divider
 
@@ -183,6 +184,7 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 
 | Key | Action |
 | --- | --- |
+| `Ctrl+P` / `:` | Command palette — fuzzy-find over commands, branches (checkout), and commits (jump); ↑↓ to move, Enter to run, Esc to close |
 | `R` | Refresh repository data |
 | `F5` | Full update — fetch all remotes, refetch open PRs, and refresh |
 | `?` | Toggle help |

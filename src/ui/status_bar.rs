@@ -478,6 +478,16 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("back", desc_style));
             }
+            AppMode::CommandPalette { .. } => {
+                spans.push(Span::styled(" type ", key_style));
+                spans.push(Span::styled("filter ", desc_style));
+                spans.push(Span::styled(" ↑/↓ ", key_style));
+                spans.push(Span::styled("move ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("run ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("close", desc_style));
+            }
         }
 
         let line = Line::from(spans);
@@ -505,6 +515,7 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::BranchFilter { .. } => Some(" BRANCH FILTER "),
             AppMode::FileDiff { .. } => Some(" DIFF "),
             AppMode::FileHistory { .. } => Some(" FILE HISTORY "),
+            AppMode::CommandPalette { .. } => Some(" PALETTE "),
         };
         if let Some(text) = mode_text {
             let mode_len = text.len() as u16;
