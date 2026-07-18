@@ -513,7 +513,13 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
                 match style {
                     CommitStyle::Normal => fill_disc(&mut canvas, cx, cy, r, color),
                     CommitStyle::Head => {
-                        stars.push((cx, cy, (r * 1.7).min(ch / 2.0 - 0.5), color));
+                        // A point-up star spans cy-r..cy+0.81r, so it sits
+                        // optically high; nudging it down recenters it and,
+                        // with the larger clamp margin, keeps the top point
+                        // clear of the row boundary even when the terminal
+                        // places the image a pixel or two off.
+                        let r_s = (r * 1.7).min(ch / 2.0 - 2.5).max(3.0);
+                        stars.push((cx, cy + r_s * 0.09, r_s, color));
                     }
                     CommitStyle::Uncommitted => {
                         stroke_circle(&mut canvas, cx, cy, r, half, color);
