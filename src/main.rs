@@ -121,6 +121,7 @@ fn main() -> Result<()> {
         needs_render |= app.update_thread_status();
         needs_render |= app.update_pr_action_status();
         needs_render |= app.update_avatars();
+        needs_render |= app.maybe_autoload_commits();
 
         // Drop expired toasts (redraw only when the visible set actually changes,
         // so an active-but-unexpired toast doesn't force per-frame repaints).

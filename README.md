@@ -206,7 +206,7 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 
 ## Notes and limitations
 
-- The TUI loads up to 500 commits, walked from the currently visible branch tips (HEAD is always included). Hiding branches in the branch filter shrinks this set rather than just hiding labels.
+- The TUI loads 500 commits initially, walked from the currently visible branch tips (HEAD is always included), and loads the next chunk automatically as you scroll near the bottom — or on demand via the command palette ("Load 500 more commits" / "Load all commits"). Hiding branches in the branch filter shrinks this set rather than just hiding labels.
 - Merge commits are diffed against the first parent; the initial commit is diffed against an empty tree.
 - Changed files are capped at 50. Binary files are shown without line stats.
 - If there are staged, unstaged, or untracked changes, an "uncommitted changes" row appears at the top.

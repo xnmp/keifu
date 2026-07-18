@@ -68,6 +68,10 @@ pub enum Action {
     // Jump to the merge base / fork point of the selection vs main (or HEAD) (graph)
     JumpToMergeBase,
 
+    // Load the next chunk / all remaining commits (graph)
+    LoadMoreCommits,
+    LoadAllCommits,
+
     // Toggle branch tracing (highlight selected commit's lineage) (graph)
     ToggleTrace,
 

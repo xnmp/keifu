@@ -481,6 +481,8 @@ pub enum InputAction {
 pub enum ConfirmAction {
     /// Check out a branch (from clicking its chip in the graph).
     Checkout(String),
+    /// Load the entire commit history (may be a large walk).
+    LoadAllCommits,
     DeleteBranch(String),
     Merge(String),
     Rebase(String),
@@ -565,6 +567,13 @@ impl SearchState {
     }
 }
 
+/// Commits loaded by the first revwalk, and the chunk size for each extension.
+pub const INITIAL_COMMIT_LIMIT: usize = 500;
+pub const COMMIT_CHUNK: usize = 500;
+/// Auto-load the next chunk when the selection/scroll comes within this many
+/// rows of the last loaded commit.
+pub const AUTOLOAD_THRESHOLD: usize = 50;
+
 /// Application state
 pub struct App {
     pub mode: AppMode,
@@ -575,6 +584,13 @@ pub struct App {
 
     // Data
     pub commits: Vec<CommitInfo>,
+    /// How many commits the revwalk currently loads (grows on demand). The graph
+    /// starts at `INITIAL_COMMIT_LIMIT` and extends when the selection nears the
+    /// bottom or the user asks for more.
+    pub commit_load_limit: usize,
+    /// True once the revwalk has yielded fewer commits than the limit — i.e. the
+    /// whole history is loaded and there's nothing more to fetch.
+    pub all_commits_loaded: bool,
     pub branches: Vec<BranchInfo>,
     /// Configured remote names (e.g. "origin", "upstream"), refreshed alongside
     /// branches. Cached here so the per-frame graph render doesn't hit git2.

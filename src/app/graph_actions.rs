@@ -93,6 +93,17 @@ impl App {
             Action::JumpToMergeBase => {
                 self.jump_to_merge_base();
             }
+            Action::LoadMoreCommits => {
+                self.load_more_commits(false);
+            }
+            Action::LoadAllCommits => {
+                // Confirm first — "load all" can be a big walk on huge repos.
+                self.mode = AppMode::Confirm {
+                    message: "Load ALL commits? This may take a moment on large repositories."
+                        .to_string(),
+                    action: ConfirmAction::LoadAllCommits,
+                };
+            }
             Action::ToggleTrace => {
                 self.toggle_trace();
             }

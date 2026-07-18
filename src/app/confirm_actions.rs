@@ -24,6 +24,11 @@ impl App {
                         self.checkout_branch_by_name(&name)?;
                         return Ok(());
                     }
+                    ConfirmAction::LoadAllCommits => {
+                        self.mode = AppMode::Normal;
+                        self.load_more_commits(true);
+                        return Ok(());
+                    }
                     ConfirmAction::DeleteBranch(name) => {
                         delete_branch(self.repo.repo(), &name)?;
                     }

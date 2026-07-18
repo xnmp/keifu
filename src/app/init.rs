@@ -39,7 +39,9 @@ impl App {
         let branches = repo.get_branches()?;
         let remotes = repo.remotes();
         let tags = repo.get_tags();
-        let commits = repo.get_commits(500, &branches, &stashes)?;
+        let commits = repo.get_commits(INITIAL_COMMIT_LIMIT, &branches, &stashes)?;
+        // If the first walk yielded fewer than the limit, the whole history fits.
+        let all_commits_loaded = commits.len() < INITIAL_COMMIT_LIMIT;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
         let initial_message_time = initial_message.as_ref().map(|_| now);
         let op_state = repo.operation_state();
@@ -68,6 +70,8 @@ impl App {
             head_name,
             head_detached,
             commits,
+            commit_load_limit: INITIAL_COMMIT_LIMIT,
+            all_commits_loaded,
             branches,
             remotes,
             graph_layout,

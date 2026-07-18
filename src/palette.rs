@@ -64,6 +64,8 @@ pub struct PaletteContext {
     pub can_create_pr: bool,
     /// The selected commit's branch has an open PR.
     pub selected_has_open_pr: bool,
+    /// More commits remain to load (the walk isn't exhausted).
+    pub can_load_more: bool,
 }
 
 /// One curated command: a label, an optional right-aligned keybind hint, the
@@ -92,6 +94,9 @@ pub fn command_registry() -> Vec<PaletteEntry> {
     fn has_open_pr(c: &PaletteContext) -> bool {
         c.selected_has_open_pr
     }
+    fn can_load_more(c: &PaletteContext) -> bool {
+        c.can_load_more
+    }
 
     vec![
         entry("Fetch all remotes & refresh", Some("F5"), Action::FullUpdate, always),
@@ -112,6 +117,8 @@ pub fn command_registry() -> Vec<PaletteEntry> {
         entry("Display columns menu", Some("M"), Action::OpenMetadataMenu, always),
         entry("Filter branches", Some("B"), Action::OpenBranchFilter, always),
         entry("Search branches", Some("/"), Action::Search, always),
+        entry("Load 500 more commits", None, Action::LoadMoreCommits, can_load_more),
+        entry("Load all commits", None, Action::LoadAllCommits, can_load_more),
     ]
 }
 
@@ -226,12 +233,29 @@ mod tests {
         assert!(!labels.contains(&"Commit actions menu"));
         // The merge-base jump needs a selected commit.
         assert!(!labels.contains(&"Jump to merge base with main"));
+        // Load-commits entries are hidden once everything is loaded.
+        assert!(!labels.contains(&"Load 500 more commits"));
+        assert!(!labels.contains(&"Load all commits"));
+
+        // With more history to load, both appear.
+        let more = PaletteContext {
+            can_load_more: true,
+            ..Default::default()
+        };
+        let labels: Vec<&str> = reg
+            .iter()
+            .filter(|e| (e.eligible)(&more))
+            .map(|e| e.label)
+            .collect();
+        assert!(labels.contains(&"Load 500 more commits"));
+        assert!(labels.contains(&"Load all commits"));
 
         // A commit with an open PR unlocks the PR commands.
         let ctx = PaletteContext {
             has_selected_commit: true,
             can_create_pr: false,
             selected_has_open_pr: true,
+            ..Default::default()
         };
         let labels: Vec<&str> = reg
             .iter()

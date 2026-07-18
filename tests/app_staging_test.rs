@@ -88,6 +88,8 @@ fn make_base_app(
         head_name: None,
         head_detached: false,
         commits,
+        commit_load_limit: 500,
+        all_commits_loaded: true,
         branches: Vec::new(),
         remotes: Vec::new(),
         graph_layout: GraphLayout {

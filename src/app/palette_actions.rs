@@ -25,6 +25,7 @@ impl App {
             has_selected_commit,
             can_create_pr: self.can_offer_create_pr(),
             selected_has_open_pr: self.selected_commit_has_open_pr(),
+            can_load_more: !self.all_commits_loaded,
         }
     }
 
