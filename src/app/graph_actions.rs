@@ -165,6 +165,9 @@ impl App {
             Action::OpenBranchFilter => {
                 self.open_branch_filter();
             }
+            Action::ToggleRemoteBranches => {
+                self.toggle_remote_branches()?;
+            }
             Action::CreateBranch => {
                 self.mode = AppMode::Input {
                     title: "New Branch Name".to_string(),

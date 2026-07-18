@@ -28,7 +28,7 @@ use crate::{
             stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
             unstage_all, unstage_file, OpOutcome, PullMode, ResetMode,
         },
-        extract_hunk_from_working_tree, render_hunk_patch,
+        extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch,
         BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
         GitRepository, OperationState, StageStatus, WorkingTreeStatus,
     },
@@ -755,6 +755,11 @@ pub struct App {
     // Layout
     pub side_panel_layout: bool,
 
+    /// When true, remote-only branches (remote refs with no matching local
+    /// branch) are hidden from the graph — their labels and their exclusive
+    /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
+    pub hide_remote_branches: bool,
+
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
 
@@ -1057,6 +1062,22 @@ impl App {
         self.set_message(format!("Branch tracing {state}"));
     }
 
+    /// Toggle whether remote-only branches are shown in the graph (persisted).
+    /// Rebuilds the graph so their exclusive commits appear/disappear, not just
+    /// their labels. Composes with the per-branch filter.
+    pub(crate) fn toggle_remote_branches(&mut self) -> Result<()> {
+        self.hide_remote_branches = !self.hide_remote_branches;
+        self.save_ui_state();
+        self.refresh(true)?;
+        let state = if self.hide_remote_branches {
+            "hidden"
+        } else {
+            "shown"
+        };
+        self.set_message(format!("Remote branches {state}"));
+        Ok(())
+    }
+
     /// Persist the writable UI state (panel layout + metadata columns).
     pub(crate) fn save_ui_state(&self) {
         UiState {
@@ -1064,6 +1085,7 @@ impl App {
             graph_width_cap: self.graph_width_cap,
             graph_split_ratio: self.graph_split_ratio,
             trace_enabled: self.trace_enabled,
+            hide_remote_branches: self.hide_remote_branches,
             metadata_columns: self.metadata_columns,
         }
         .save();
