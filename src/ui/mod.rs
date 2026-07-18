@@ -427,8 +427,11 @@ fn overlay_pixel_graph(
     // Graph column starts after the leading marker; specs were already
     // truncated to this width in the pre-pass, so draw them at their full cell
     // count (no re-clamping — a clamp here would desync the protocol's width
-    // from the rect and blank the row on iTerm2/Sixel).
-    let x = inner_x + graph_view::GRAPH_LEADING_COLUMNS;
+    // from the rect and blank the row on iTerm2/Sixel). The image carries a
+    // transparent pad column on its left (HEAD-star spill room), so the rect
+    // starts that many cells before the graph column, over the leading spaces.
+    let x = inner_x + graph_view::GRAPH_LEADING_COLUMNS
+        - graph_pixels::PIXEL_LEFT_PAD_CELLS;
     let offset = app.graph_nav.graph_list_state.offset();
     for row in 0..inner_h {
         let idx = offset + row as usize;
@@ -438,10 +441,10 @@ fn overlay_pixel_graph(
         let Some(proto) = pg.get(spec) else {
             continue;
         };
-        let w = spec.cells.len() as u16;
-        if w == 0 {
+        if spec.cells.is_empty() {
             continue;
         }
+        let w = spec.cells.len() as u16 + graph_pixels::PIXEL_LEFT_PAD_CELLS;
         let rect = Rect::new(x, inner_y + row, w, 1);
         frame.render_widget(Image::new(proto), rect);
     }

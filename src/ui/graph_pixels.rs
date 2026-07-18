@@ -444,10 +444,18 @@ fn stroke_circle(c: &mut Canvas, cx: f32, cy: f32, r: f32, half: f32, color: [u8
     }
 }
 
+/// Extra transparent column rasterized to the LEFT of the graph cells, and
+/// covered by the overlay one cell before the graph column. The HEAD star is
+/// wider than a cell (left point at ~0.95·r), and a HEAD on lane 0 has no
+/// neighbouring column inside the image — without this pad the canvas edge
+/// clips the star. The text layer's leading space reserves the terminal cell.
+pub const PIXEL_LEFT_PAD_CELLS: u16 = 1;
+
 /// Rasterize a row to a transparent RGBA image of size
-/// `n_cells*cell_w` × `cell_h`. Pure and deterministic.
+/// `(PIXEL_LEFT_PAD_CELLS + n_cells)*cell_w` × `cell_h`; cell `i` draws at
+/// x-offset `(PIXEL_LEFT_PAD_CELLS + i)*cell_w`. Pure and deterministic.
 pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
-    let n = spec.cells.len().max(1) as u32;
+    let n = spec.cells.len().max(1) as u32 + PIXEL_LEFT_PAD_CELLS as u32;
     let mut canvas = Canvas::new(n * cell_w, cell_h);
     let half = (cell_h as f32 / 10.0).max(2.0) / 2.0;
     let cw = cell_w as f32;
@@ -458,7 +466,7 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     let mut stars: Vec<(f32, f32, f32, [u8; 3])> = Vec::new();
 
     for (i, cell) in spec.cells.iter().enumerate() {
-        let ox = i as f32 * cw;
+        let ox = (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw;
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
         let color = cell.color;
@@ -632,7 +640,7 @@ impl PixelGraphState {
         }
         let (cw, ch) = self.font_size;
         let img = rasterize_row(spec, cw as u32, ch as u32);
-        let n = spec.cells.len().max(1) as u16;
+        let n = spec.cells.len().max(1) as u16 + PIXEL_LEFT_PAD_CELLS;
         let dyn_img = DynamicImage::ImageRgba8(img);
         // The image is already at exactly n*cell pixels, so Fit performs no
         // scaling — it just places the pixels 1:1 in the n×1 cell area.
@@ -678,6 +686,8 @@ mod tests {
         solid(CellShape::Pipe, color, false)
     }
 
+    const PAD_X: u32 = PIXEL_LEFT_PAD_CELLS as u32 * CW;
+
     fn commit(up: bool, down: bool, style: CommitStyle, color: [u8; 3]) -> PixelCell {
         solid(
             CellShape::Commit {
@@ -693,7 +703,7 @@ mod tests {
     #[test]
     fn pipe_touches_top_and_bottom_edges() {
         let img = rasterize_row(&spec(vec![pipe([255, 0, 0])]), CW, CH);
-        let cx = CW / 2;
+        let cx = PAD_X + CW / 2;
         assert!(alpha(&img, cx, 0) > 0, "pipe should touch the top edge");
         assert!(
             alpha(&img, cx, CH - 1) > 0,
@@ -708,7 +718,7 @@ mod tests {
             CW,
             CH,
         );
-        let cx = CW / 2;
+        let cx = PAD_X + CW / 2;
         let mid = CH / 2;
         // Connectors reach both edges.
         assert!(alpha(&img, cx, 0) > 0, "connect_up should reach the top");
@@ -735,7 +745,7 @@ mod tests {
             CW,
             CH,
         );
-        let cx = CW / 2;
+        let cx = PAD_X + CW / 2;
         let mid = CH / 2;
         // Centre is the solid gold cell color (not a lane color).
         let centre = img.get_pixel(cx, mid);
@@ -763,10 +773,11 @@ mod tests {
             CH,
         );
         // Right edge, vertically centred.
-        let right_touch = (CH / 2 - 2..=CH / 2 + 2).any(|y| alpha(&img, CW - 1, y) > 0);
+        let right_touch =
+            (CH / 2 - 2..=CH / 2 + 2).any(|y| alpha(&img, PAD_X + CW - 1, y) > 0);
         assert!(right_touch, "arc should reach the right edge");
         // Bottom edge, horizontally centred.
-        let cx = CW / 2;
+        let cx = PAD_X + CW / 2;
         let bottom_touch = (cx - 2..=cx + 2).any(|x| alpha(&img, x, CH - 1) > 0);
         assert!(bottom_touch, "arc should reach the bottom edge");
     }
@@ -779,7 +790,27 @@ mod tests {
             CH,
         );
         // Top-left corner is opposite the bottom-right arc.
-        assert_eq!(alpha(&img, 0, 0), 0, "far corner must stay transparent");
+        assert_eq!(
+            alpha(&img, PAD_X, 0),
+            0,
+            "far corner must stay transparent"
+        );
+    }
+
+    #[test]
+    fn lane0_head_star_spills_into_the_pad_without_touching_the_image_edge() {
+        // Regression: a HEAD on lane 0 used to have its left points clipped by
+        // the canvas edge. The pad column absorbs the spill.
+        let img = rasterize_row(
+            &spec(vec![commit(false, false, CommitStyle::Head, [255, 200, 50])]),
+            CW,
+            CH,
+        );
+        let pad_hit =
+            (0..CH).any(|y| (0..PAD_X).any(|x| alpha(&img, x, y) > 0));
+        assert!(pad_hit, "star should spill left into the pad column");
+        let edge_clear = (0..CH).all(|y| alpha(&img, 0, y) == 0);
+        assert!(edge_clear, "image left edge must stay clear (star uncut)");
     }
 
     #[test]
