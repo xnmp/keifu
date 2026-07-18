@@ -111,7 +111,9 @@ impl Config {
 
 /// Toggleable per-row display options shown in the Shift+M menu: which
 /// right-aligned metadata columns render (a hidden column's width flows to the
-/// message), plus whether merge commits are visually muted. Defaults to all on.
+/// message), plus whether merge commits are visually muted. Defaults to all on
+/// except avatars (visual noise when most authors resolve to the same fallback
+/// disc; opt in via Shift+M).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetadataColumns {
@@ -131,7 +133,7 @@ impl Default for MetadataColumns {
             hash: true,
             date: true,
             mute_merges: true,
-            avatars: true,
+            avatars: false,
         }
     }
 }
@@ -418,8 +420,9 @@ mod tests {
         assert!(state.metadata_columns.author);
         assert!(state.metadata_columns.hash);
         assert!(state.metadata_columns.date);
-        // Avatars default on and survive an older state file lacking the key.
-        assert!(state.metadata_columns.avatars);
+        // Avatars default OFF (opt-in via Shift+M), including for an older
+        // state file lacking the key.
+        assert!(!state.metadata_columns.avatars);
     }
 
     #[test]

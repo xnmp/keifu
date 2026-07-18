@@ -345,7 +345,7 @@ impl Theme {
         };
         // Selected row band: a clear step off the background so the highlighted
         // graph/file row stands out, while keeping foreground text readable.
-        self.selection_bg = mix(bg, contrast, 0.24);
+        self.selection_bg = mix(bg, contrast, 0.32);
         // Inactive borders: present but clearly dimmer than the focused accent.
         self.border_unfocused = mix(bg, contrast, 0.30);
         // Muted text and the uncommitted node: low-key but readable.

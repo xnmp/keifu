@@ -1384,7 +1384,11 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
             .block(block)
             .highlight_style(self.theme.selection_style());
 
-        let mut filtered_state = ListState::default();
+        // Seed from last frame's offset (stored back below) so the viewport
+        // scrolls incrementally instead of being re-derived from row 0, which
+        // pinned the selection to the bottom edge. Ratatui clamps a stale
+        // offset if the item count shrank.
+        let mut filtered_state = ListState::default().with_offset(state.offset());
         filtered_state.select(self.selected_in_filtered);
         StatefulWidget::render(list, area, buf, &mut filtered_state);
         // Propagate scroll offset back to the original state

@@ -286,8 +286,6 @@ struct Canvas {
     img: RgbaImage,
     w: u32,
     h: u32,
-    /// Coverage multiplier applied to every stroke, for branch-trace dimming.
-    alpha: f32,
 }
 
 impl Canvas {
@@ -296,7 +294,6 @@ impl Canvas {
             img: RgbaImage::new(w, h),
             w,
             h,
-            alpha: 1.0,
         }
     }
 
@@ -304,7 +301,7 @@ impl Canvas {
         if coverage <= 0.0 || x < 0 || y < 0 || x as u32 >= self.w || y as u32 >= self.h {
             return;
         }
-        let sa = (coverage * self.alpha).clamp(0.0, 1.0);
+        let sa = coverage.clamp(0.0, 1.0);
         let px = self.img.get_pixel_mut(x as u32, y as u32);
         let da = px[3] as f32 / 255.0;
         let out_a = sa + da * (1.0 - sa);
@@ -464,7 +461,8 @@ pub const PIXEL_LEFT_PAD_CELLS: u16 = 1;
 /// x-offset `(PIXEL_LEFT_PAD_CELLS + i)*cell_w`. Pure and deterministic.
 pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     let n = spec.cells.len().max(1) as u32 + PIXEL_LEFT_PAD_CELLS as u32;
-    let mut canvas = Canvas::new(n * cell_w, cell_h);
+    let mut bright = Canvas::new(n * cell_w, cell_h);
+    let mut dim = Canvas::new(n * cell_w, cell_h);
     let half = (cell_h as f32 / 10.0).max(2.0) / 2.0;
     let cw = cell_w as f32;
     let ch = cell_h as f32;
@@ -474,22 +472,47 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     let mut stars: Vec<(f32, f32, f32, [u8; 3], bool)> = Vec::new();
 
     // Folded connector cells first (behind), then the row's own cells on top.
-    draw_cells(&mut canvas, &spec.underlay, half, cw, ch, &mut stars);
-    draw_cells(&mut canvas, &spec.cells, half, cw, ch, &mut stars);
+    draw_cells(&mut bright, &mut dim, &spec.underlay, half, cw, ch, &mut stars);
+    draw_cells(&mut bright, &mut dim, &spec.cells, half, cw, ch, &mut stars);
 
-    for (cx, cy, r, color, dim) in stars {
-        canvas.alpha = if dim { TRACE_DIM_ALPHA } else { 1.0 };
-        fill_star(&mut canvas, cx, cy, r, color);
+    for (cx, cy, r, color, is_dim) in stars {
+        let canvas = if is_dim { &mut dim } else { &mut bright };
+        fill_star(canvas, cx, cy, r, color);
     }
 
-    canvas.img
+    // Dim by fading the finished dim layer once, then compositing the bright
+    // layer on top. Dimming per stroke instead would re-brighten wherever
+    // draws overlap — source-over accumulates alpha, so a curve sampled as 48
+    // overlapping segments (or a disc over its connector) came out nearly
+    // opaque despite the per-stroke fade.
+    let mut out = dim.img;
+    for px in out.pixels_mut() {
+        px[3] = (px[3] as f32 * TRACE_DIM_ALPHA).round() as u8;
+    }
+    for (x, y, sp) in bright.img.enumerate_pixels() {
+        let sa = sp[3] as f32 / 255.0;
+        if sa <= 0.0 {
+            continue;
+        }
+        let dp = out.get_pixel_mut(x, y);
+        let da = dp[3] as f32 / 255.0;
+        let out_a = sa + da * (1.0 - sa);
+        for i in 0..3 {
+            let oc = (sp[i] as f32 * sa + dp[i] as f32 * da * (1.0 - sa)) / out_a;
+            dp[i] = oc.round().clamp(0.0, 255.0) as u8;
+        }
+        dp[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    out
 }
 
-/// Stroke one row of `cells` onto `canvas`. HEAD commit stars are deferred into
+/// Stroke one row of `cells` onto the bright or dim layer (per cell). HEAD
+/// commit stars are deferred into
 /// `stars` (drawn last, on top). Shared by the folded underlay and the row's own
 /// cells so they rasterize identically.
 fn draw_cells(
-    canvas: &mut Canvas,
+    bright: &mut Canvas,
+    dim: &mut Canvas,
     cells: &[PixelCell],
     half: f32,
     cw: f32,
@@ -501,8 +524,9 @@ fn draw_cells(
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
         let color = cell.color;
-        // Non-traced cells fade to a low alpha while branch tracing is active.
-        canvas.alpha = if cell.dim { TRACE_DIM_ALPHA } else { 1.0 };
+        // Non-traced cells rasterize onto the dim layer, which rasterize_row
+        // fades as a whole once drawing is done.
+        let canvas: &mut Canvas = if cell.dim { dim } else { bright };
         match cell.shape {
             CellShape::Empty => {}
             CellShape::Pipe => draw_segment(canvas, cx, 0.0, cx, ch, half, color),
@@ -896,6 +920,42 @@ mod tests {
         let cx = PAD_X + CW / 2;
         let bottom_touch = (cx - 2..=cx + 2).any(|x| alpha(&img, x, CH - 1) > 0);
         assert!(bottom_touch, "arc should reach the bottom edge");
+    }
+
+    #[test]
+    fn dimmed_cells_never_exceed_trace_dim_alpha() {
+        // Regression: dimming was a per-stroke alpha multiplier, so overlapping
+        // draws (a curve sampled as 48 segments, a disc over its connector)
+        // re-accumulated toward opaque and dimmed arcs stayed bright.
+        let mut arc = solid(CellShape::BranchRight, [0, 0, 255]);
+        arc.dim = true;
+        let mut node = commit(true, true, CommitStyle::Normal, [0, 255, 0]);
+        node.dim = true;
+        let img = rasterize_row(&spec(vec![arc, node]), CW, CH);
+        let cap = (TRACE_DIM_ALPHA * 255.0).round() as u8;
+        let max_a = img.pixels().map(|p| p[3]).max().unwrap();
+        assert!(
+            max_a <= cap,
+            "dimmed row alpha {max_a} exceeds the {cap} cap"
+        );
+    }
+
+    #[test]
+    fn dim_and_bright_cells_fade_independently() {
+        // A traced (bright) pipe next to a dimmed pipe: the bright one stays
+        // opaque, the dimmed one fades.
+        let bright_pipe = pipe([255, 0, 0]);
+        let mut dim_pipe = pipe([255, 0, 0]);
+        dim_pipe.dim = true;
+        let img = rasterize_row(&spec(vec![bright_pipe, dim_pipe]), CW, CH);
+        let mid = CH / 2;
+        assert!(alpha(&img, PAD_X + CW / 2, mid) > 200, "traced pipe opaque");
+        let dim_a = alpha(&img, PAD_X + CW + CW / 2, mid);
+        let cap = (TRACE_DIM_ALPHA * 255.0).round() as u8;
+        assert!(
+            dim_a > 0 && dim_a <= cap,
+            "dimmed pipe should fade, got alpha {dim_a}"
+        );
     }
 
     #[test]
