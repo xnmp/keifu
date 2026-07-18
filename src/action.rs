@@ -57,6 +57,9 @@ pub enum Action {
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 
+    // Toggle branch tracing (highlight selected commit's lineage) (graph)
+    ToggleTrace,
+
     // Shrink / widen the graph column width cap (graph)
     ShrinkGraphWidth,
     WidenGraphWidth,

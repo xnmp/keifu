@@ -1193,3 +1193,250 @@ fn test_single_root_commit() {
     assert!(matches!(node.cells[0], CellType::Commit(_)));
     assert!(node.cells[1..].iter().all(|c| *c == CellType::Empty));
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Branch tracing: lineage_oids / cell_is_traced / graph_has_enough_lanes
+// ─────────────────────────────────────────────────────────────────────
+
+use keifu::git::graph::{cell_is_traced, graph_has_enough_lanes, lineage_oids, GraphLayout};
+use std::collections::HashSet;
+
+/// Row index of the commit with the given short id.
+fn row_of(layout: &GraphLayout, id: &str) -> usize {
+    layout
+        .nodes
+        .iter()
+        .position(|n| n.commit.as_ref().map(|c| c.short_id.as_str()) == Some(id))
+        .unwrap_or_else(|| panic!("{id} not found"))
+}
+
+/// Lineage OID set for selecting commit `id`.
+fn lineage_of(layout: &GraphLayout, id: &str) -> HashSet<Oid> {
+    lineage_oids(layout, row_of(layout, id))
+}
+
+#[test]
+fn trace_linear_covers_the_whole_line_and_gating_is_off() {
+    // c3 -> c2 -> c1, one lane only.
+    let commits = vec![
+        make_commit("c3", vec!["c2"]),
+        make_commit("c2", vec!["c1"]),
+        make_commit("c1", vec![]),
+    ];
+    let branches = vec![make_branch("main", "c3", true)];
+    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+
+    // Selecting the middle commit lights the entire linear history: ancestor
+    // (c1, down) and descendant (c3, up).
+    let lin = lineage_of(&layout, "c2");
+    assert!(lin.contains(&make_oid("c1")));
+    assert!(lin.contains(&make_oid("c2")));
+    assert!(lin.contains(&make_oid("c3")));
+
+    // A single-lane graph is never worth tracing.
+    assert_eq!(layout.max_lane, 0);
+    assert!(!graph_has_enough_lanes(&layout));
+}
+
+#[test]
+fn trace_single_merge_excludes_the_other_branch() {
+    // c4 = merge(c3 main-first-parent, c2 feature); both c3 and c2 off c1.
+    let commits = vec![
+        make_commit("c4", vec!["c3", "c2"]),
+        make_commit("c3", vec!["c1"]),
+        make_commit("c2", vec!["c1"]),
+        make_commit("c1", vec![]),
+    ];
+    let branches = vec![make_branch("main", "c4", true)];
+    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+
+    // Selecting the main line (c3): down to c1, up to the merge c4 — but NOT the
+    // feature commit c2.
+    let main_line = lineage_of(&layout, "c3");
+    assert!(main_line.contains(&make_oid("c1")));
+    assert!(main_line.contains(&make_oid("c3")));
+    assert!(main_line.contains(&make_oid("c4")));
+    assert!(
+        !main_line.contains(&make_oid("c2")),
+        "the feature commit must not be on the main line"
+    );
+
+    // Selecting the feature (c2): just c2 and its ancestor c1 — the merge and
+    // main commits are excluded (c2 is the merge's *second* parent).
+    let feature = lineage_of(&layout, "c2");
+    assert!(feature.contains(&make_oid("c2")));
+    assert!(feature.contains(&make_oid("c1")));
+    assert!(!feature.contains(&make_oid("c3")));
+    assert!(!feature.contains(&make_oid("c4")));
+
+    // The merge row draws a curve down to the feature (c2). Selecting the
+    // feature traces that curve, but never the merge's own dot (c4 ∉ feature).
+    let merge = &layout.nodes[row_of(&layout, "c4")];
+    let feature_cols: Vec<usize> = merge
+        .cell_oids
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| cell_is_traced(**o, &feature))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !feature_cols.is_empty(),
+        "the merge's curve to the feature should be traced"
+    );
+    let dot_col = merge.lane * 2;
+    assert!(
+        !cell_is_traced(merge.cell_oids[dot_col], &feature),
+        "the merge dot itself is not on the feature line"
+    );
+}
+
+#[test]
+fn trace_does_not_leak_onto_a_reused_lane() {
+    // Two independent feature branches off the main line at different times.
+    // The second reuses the lane the first freed. Selecting one must never
+    // trace the other, even where they share a lane column.
+    let commits = vec![
+        make_commit("m2", vec!["m1", "g1"]), // merge feature G
+        make_commit("g1", vec!["mid"]),      // feature G
+        make_commit("m1", vec!["mid"]),      // main between the two merges
+        make_commit("mid", vec!["b0", "f1"]),// merge feature F
+        make_commit("f1", vec!["b0"]),       // feature F
+        make_commit("b0", vec![]),           // base
+    ];
+    let branches = vec![make_branch("main", "m2", true)];
+    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+
+    let feat_f = lineage_of(&layout, "f1");
+    let feat_g = lineage_of(&layout, "g1");
+
+    // The two feature branches are disjoint (bar the shared base, which each
+    // reaches as an ancestor — assert the feature *tips* don't cross).
+    assert!(feat_f.contains(&make_oid("f1")));
+    assert!(!feat_f.contains(&make_oid("g1")));
+    assert!(feat_g.contains(&make_oid("g1")));
+    assert!(!feat_g.contains(&make_oid("f1")));
+
+    // Prove the lanes were actually reused: f1 and g1 sit on the same lane.
+    let f_lane = layout.nodes[row_of(&layout, "f1")].lane;
+    let g_lane = layout.nodes[row_of(&layout, "g1")].lane;
+    assert_eq!(f_lane, g_lane, "the fixture must reuse the feature lane");
+    assert_ne!(f_lane, 0, "features are off the main lane");
+
+    // The occupant of the shared lane — each feature's own dot — is traced only
+    // by its own selection, never by the other feature that reused the lane.
+    // (Shared-ancestor pipes on the *main* lane may legitimately appear in both,
+    // so we check the feature lane column specifically.)
+    let g_dot = layout.nodes[row_of(&layout, "g1")].cell_oids[g_lane * 2];
+    assert!(!cell_is_traced(g_dot, &feat_f), "F must not light G's reused lane");
+    let f_dot = layout.nodes[row_of(&layout, "f1")].cell_oids[f_lane * 2];
+    assert!(!cell_is_traced(f_dot, &feat_g), "G must not light F's reused lane");
+}
+
+#[test]
+fn trace_horizontal_pipe_crossing_uses_both_oids() {
+    // A2 merges a feature (C1) whose horizontal sweep crosses branch B's
+    // in-flight pipe, producing a `┼` HorizontalPipe. Its primary OID is the
+    // merge edge (C1); its secondary is the crossed branch-B pipe (b1).
+    let commits = vec![
+        make_commit("A3", vec!["A2"]),
+        make_commit("B2", vec!["B1"]),       // branch B tip (keeps lane in flight)
+        make_commit("A2", vec!["A1", "C1"]), // merge crosses B's lane
+        make_commit("C1", vec!["R"]),        // feature merged into A2
+        make_commit("A1", vec!["R"]),
+        make_commit("B1", vec!["R"]),
+        make_commit("R", vec![]),
+    ];
+    let branches = vec![
+        make_branch("main", "A3", true),
+        make_branch("b", "B2", false),
+    ];
+    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+
+    // Find the HorizontalPipe on A2's row (both edge OIDs populated).
+    let a2 = &layout.nodes[row_of(&layout, "A2")];
+    let cross = a2
+        .cells
+        .iter()
+        .enumerate()
+        .find(|(_, c)| matches!(c, CellType::HorizontalPipe(_, _)))
+        .map(|(i, _)| i)
+        .expect("expected a HorizontalPipe crossing on the merge row");
+    let cross_oids = a2.cell_oids[cross];
+    assert!(cross_oids.0.is_some() && cross_oids.1.is_some());
+
+    let feat_c = lineage_of(&layout, "C1");
+    let branch_b = lineage_of(&layout, "B2");
+    let main_line = lineage_of(&layout, "A3");
+
+    // The crossing is traced by the merge feature (primary) and by branch B
+    // (secondary — the crossed vertical pipe), but not by the main line.
+    assert!(cell_is_traced(cross_oids, &feat_c), "primary = merge edge");
+    assert!(cell_is_traced(cross_oids, &branch_b), "secondary = crossed pipe");
+    assert!(!cell_is_traced(cross_oids, &main_line));
+}
+
+#[test]
+fn cell_is_traced_honors_primary_and_secondary() {
+    let a = make_oid("a");
+    let b = make_oid("b");
+    let other = make_oid("z");
+    let lin: HashSet<Oid> = [a].into_iter().collect();
+    assert!(cell_is_traced((Some(a), None), &lin));
+    assert!(cell_is_traced((None, Some(a)), &lin)); // secondary hit
+    assert!(cell_is_traced((Some(other), Some(a)), &lin)); // secondary hit
+    assert!(!cell_is_traced((Some(b), Some(other)), &lin));
+    assert!(!cell_is_traced((None, None), &lin));
+}
+
+#[test]
+fn trace_dim_mask_has_few_distinct_variants_per_row_shape() {
+    // As the selection moves over every commit, the per-row (shape, dim-mask)
+    // combinations must stay small — the pixel protocol cache is keyed by them,
+    // so an explosion here would mean re-rasterizing the whole graph on every
+    // selection move. Most rows are all-traced or all-dimmed; only branch/merge
+    // rows have a few partial masks.
+    let commits = vec![
+        make_commit("h", vec!["g", "e"]), // merge feature E
+        make_commit("g", vec!["f", "d"]), // merge feature D
+        make_commit("e", vec!["c"]),      // feature E
+        make_commit("f", vec!["c"]),      // main
+        make_commit("d", vec!["b"]),      // feature D
+        make_commit("c", vec!["b"]),      // main
+        make_commit("b", vec!["a"]),      // main
+        make_commit("a", vec![]),         // root
+    ];
+    let branches = vec![make_branch("main", "h", true)];
+    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+
+    // Base shapes: distinct cell-rows, independent of any selection. The
+    // rendered glyph string plus the lane color indices fully determine the
+    // non-dim part of a RowSpec, so it's a faithful shape key.
+    let shape = |n: &keifu::git::graph::GraphNode| -> String { render_cells(&n.cells) };
+    let base_shapes: HashSet<String> = layout.nodes.iter().map(shape).collect();
+
+    // (shape, mask) pairs seen across every commit selection.
+    let mut variants: HashSet<(String, Vec<bool>)> = HashSet::new();
+    for (sel, node) in layout.nodes.iter().enumerate() {
+        if node.commit.is_none() {
+            continue; // connectors aren't selectable
+        }
+        let lineage = lineage_oids(&layout, sel);
+        for n in &layout.nodes {
+            let mask: Vec<bool> = n
+                .cell_oids
+                .iter()
+                .map(|o| cell_is_traced(*o, &lineage))
+                .collect();
+            variants.insert((shape(n), mask));
+        }
+    }
+
+    // The cache stays small: well under 3x the distinct base shapes. (Observed
+    // for this fixture: 20 variants vs 9 base shapes — a 2.2x factor.)
+    assert!(
+        variants.len() <= 3 * base_shapes.len(),
+        "trace-mask variants ({}) exceeded 3x base shapes ({})",
+        variants.len(),
+        base_shapes.len()
+    );
+}

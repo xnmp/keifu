@@ -30,6 +30,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Fetch/pull/push with multi-remote support, upstream tracking, and one-key publish
 - Toast notifications for background outcomes (fetch/pull/push results, new PRs or CI-status changes) that stack in the top-right and auto-dismiss
 - Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge, colored by CI status (green pass / yellow pending / red fail, blue if no checks) with review (approved/changes-requested) and outside-comment markers; `o` opens it in the browser, `c` shows CI check details (read a failed check's log without leaving the terminal), and `v` opens the PR conversation (description, comments, reviews, and resolved/open review threads) — all require the `gh` CLI
+- Branch tracing (`t`) — selecting a commit highlights its full branch line (first-parent ancestry and descendants) and dims every other lane, the way VSCode does on hover; on by default for branchy graphs
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
@@ -119,6 +120,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 PR actions live in the commit actions menu (`Enter`): **Create pull request** (on the current branch when it has no open PR) and **Merge pull request** (on a commit with an open PR — merge / squash / rebase). All PR mutations run in the background and confirm first (except a plain review comment), requiring the `gh` CLI.
 | `Shift+M` | Toggle which metadata columns (author/hash/date) show on commit rows (persists across restarts) |
 | `<` / `>` | Shrink / widen the graph column width (caps wasted padding from wide history; `…` marks truncated rows; persists) |
+| `t` | Toggle branch tracing — highlight the selected commit's lineage (first-parent ancestry down, descendants up) and dim every other lane; on by default, only active on branchy graphs (> 2 lanes); persists |
 
 The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depending on context: checkout, create/rename/delete branch, merge into current, rebase current onto this, cherry-pick, revert, reset (soft/mixed/hard), add/delete/push tag, push, pull, prune remote-tracking refs, copy hash/message, mark/compare, and — on the uncommitted or a stash node — stash apply/pop/drop and branch-from-stash.
 

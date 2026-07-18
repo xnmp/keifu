@@ -192,6 +192,9 @@ pub struct UiState {
     /// Graph-pane share of the graph/detail split, as a percentage (clamped
     /// 20–80 when set by dragging the divider).
     pub graph_split_ratio: u16,
+    /// Branch tracing: highlight the selected commit's lineage and dim the rest.
+    /// On by default; only takes effect on branchy (>2 lane) graphs.
+    pub trace_enabled: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -201,6 +204,7 @@ impl Default for UiState {
             side_panel_layout: false,
             graph_width_cap: None,
             graph_split_ratio: DEFAULT_GRAPH_SPLIT_RATIO,
+            trace_enabled: true,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -409,6 +413,7 @@ mod tests {
             side_panel_layout: true,
             graph_width_cap: Some(8),
             graph_split_ratio: 40,
+            trace_enabled: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -421,6 +426,7 @@ mod tests {
         assert!(restored.side_panel_layout);
         assert_eq!(restored.graph_width_cap, Some(8));
         assert_eq!(restored.graph_split_ratio, 40);
+        assert!(!restored.trace_enabled);
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);

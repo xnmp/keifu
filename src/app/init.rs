@@ -131,6 +131,7 @@ impl App {
             graph_chip_hits: Vec::new(),
             graph_split_ratio: crate::mouse::clamp_split_ratio(ui_state.graph_split_ratio as i32),
             dragging_divider: false,
+            trace_enabled: ui_state.trace_enabled,
             config,
             terminal_bg,
             pixel_graph: None,

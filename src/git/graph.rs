@@ -33,7 +33,18 @@ pub struct GraphNode {
     pub uncommitted_count: Option<usize>,
     /// Render info for this row
     pub cells: Vec<CellType>,
+    /// The commit-edge identity of each cell, parallel to `cells`, for branch
+    /// tracing. `.0` is the primary edge's target OID (the lane/curve/commit it
+    /// draws); `.1` is a secondary OID for `HorizontalPipe` cells (the vertical
+    /// lane crossed underneath the horizontal stroke). Either being in the
+    /// selected commit's lineage marks the cell as traced. `None` = no lineage
+    /// (e.g. the grey uncommitted connector).
+    pub cell_oids: Vec<CellOids>,
 }
+
+/// Per-cell commit-edge identity: `(primary, secondary)` target OIDs. See
+/// [`GraphNode::cell_oids`].
+pub type CellOids = (Option<Oid>, Option<Oid>);
 
 impl GraphNode {
     /// A merge commit (2+ parents). Stash commits are excluded — their extra
@@ -131,6 +142,7 @@ pub fn build_graph(
                     stash_label: None,
                     uncommitted_count: count,
                     cells: vec![CellType::Commit(UNCOMMITTED_COLOR_INDEX)],
+                    cell_oids: vec![(None, None)],
                 }],
                 max_lane: 0,
             };
@@ -256,9 +268,10 @@ pub fn build_graph(
                 .copied()
                 .or_else(|| oid_color_index.get(&commit.oid).copied())
                 .unwrap_or(main_lane);
-            let fork_connector_cells = build_fork_connector_cells(
+            let (fork_connector_cells, fork_connector_oids) = build_fork_connector_cells(
                 main_lane,
                 main_color,
+                commit.oid,
                 &merging_lanes,
                 &lanes,
                 &oid_color_index,
@@ -277,6 +290,7 @@ pub fn build_graph(
                 stash_label: None,
                 uncommitted_count: None,
                 cells: fork_connector_cells,
+                cell_oids: fork_connector_oids,
             });
 
             // Release merging lanes
@@ -422,9 +436,10 @@ pub fn build_graph(
 
         // Build cells for this row
         // Include ALL parents to draw connections directly on the commit row
-        let cells = build_row_cells_with_colors(
+        let (cells, cell_oids) = build_row_cells_with_colors(
             lane,
             final_color_index,
+            commit.oid,
             &parent_lanes,
             &lanes,
             &oid_color_index,
@@ -456,6 +471,7 @@ pub fn build_graph(
             stash_label,
             uncommitted_count: None,
             cells,
+            cell_oids,
         });
 
         // Handle lane merging: when a parent is already tracked on a different lane
@@ -594,6 +610,9 @@ fn insert_uncommitted_node(
         while node.cells.len() < required_cells {
             node.cells.push(CellType::Empty);
         }
+        while node.cell_oids.len() < required_cells {
+            node.cell_oids.push((None, None));
+        }
     }
 
     // Add Pipe to all nodes before HEAD commit.
@@ -626,6 +645,10 @@ fn insert_uncommitted_node(
                 CellType::Pipe(pipe_lane) => {
                     nodes[head_idx].cells[col] =
                         CellType::HorizontalPipe(UNCOMMITTED_COLOR_INDEX, pipe_lane);
+                    // The grey connector isn't lineage, but the crossed lane
+                    // pipe keeps its OID so tracing still lights it up.
+                    let crossed = nodes[head_idx].cell_oids[col].0;
+                    nodes[head_idx].cell_oids[col] = (None, crossed);
                 }
                 _ => {}
             }
@@ -643,6 +666,8 @@ fn insert_uncommitted_node(
     // Build cells for the uncommitted node.
     let mut cells = vec![CellType::Empty; required_cells];
     cells[uncommitted_lane * 2] = CellType::Commit(UNCOMMITTED_COLOR_INDEX);
+    // The uncommitted row carries no commit, so nothing here is ever traced.
+    let cell_oids = vec![(None, None); required_cells];
 
     // Insert uncommitted node at the beginning.
     nodes.insert(
@@ -659,22 +684,27 @@ fn insert_uncommitted_node(
             stash_label: None,
             uncommitted_count: count,
             cells,
+            cell_oids,
         },
     );
 }
 
 /// Build cells for one row - color index version
 /// parent_lanes: (parent OID, lane, existing-tracked flag, color index, already-shown flag)
+#[allow(clippy::too_many_arguments)] // cohesive lane/color/oid inputs; a struct adds indirection
 fn build_row_cells_with_colors(
     commit_lane: usize,
     commit_color: usize,
+    commit_oid: Oid,
     parent_lanes: &[(Oid, usize, bool, usize, bool)],
     active_lanes: &[Option<Oid>],
     oid_color_index: &HashMap<Oid, usize>,
     lane_color_index: &HashMap<usize, usize>,
     max_lane: usize,
-) -> Vec<CellType> {
+) -> (Vec<CellType>, Vec<CellOids>) {
     let mut cells = vec![CellType::Empty; (max_lane + 1) * 2];
+    // Parallel per-cell edge identity for branch tracing (see GraphNode::cell_oids).
+    let mut oids: Vec<CellOids> = vec![(None, None); cells.len()];
 
     // Draw vertical lines for active lanes
     for (lane_idx, lane_oid) in active_lanes.iter().enumerate() {
@@ -689,6 +719,8 @@ fn build_row_cells_with_colors(
                         .or_else(|| oid_color_index.get(oid).copied())
                         .unwrap_or(lane_idx);
                     cells[cell_idx] = CellType::Pipe(color);
+                    // This pipe carries the edge toward `oid`.
+                    oids[cell_idx] = (Some(*oid), None);
                 }
             }
         }
@@ -698,11 +730,11 @@ fn build_row_cells_with_colors(
     let commit_cell_idx = commit_lane * 2;
     if commit_cell_idx < cells.len() {
         cells[commit_cell_idx] = CellType::Commit(commit_color);
+        oids[commit_cell_idx] = (Some(commit_oid), None);
     }
 
     // Draw connections to parents
-    for &(_parent_oid, parent_lane, was_existing, parent_color, already_shown) in
-        parent_lanes.iter()
+    for &(parent_oid, parent_lane, was_existing, parent_color, already_shown) in parent_lanes.iter()
     {
         if parent_lane == commit_lane {
             // Same lane - only a vertical line (drawn on next row)
@@ -718,8 +750,11 @@ fn build_row_cells_with_colors(
                     let existing = cells[col];
                     if let CellType::Pipe(pl) = existing {
                         cells[col] = CellType::HorizontalPipe(parent_color, pl);
+                        // Horizontal edge → parent; keep the crossed pipe's OID.
+                        oids[col] = (Some(parent_oid), oids[col].0);
                     } else if existing == CellType::Empty {
                         cells[col] = CellType::Horizontal(parent_color);
+                        oids[col] = (Some(parent_oid), None);
                     }
                 }
             }
@@ -736,6 +771,7 @@ fn build_row_cells_with_colors(
                     // New lane for parent: ╮ (branch starts here, continues down)
                     cells[end_idx] = CellType::BranchLeft(parent_color);
                 }
+                oids[end_idx] = (Some(parent_oid), None);
             }
         } else {
             // Branch end: connect to the left lane (main line)
@@ -746,8 +782,10 @@ fn build_row_cells_with_colors(
                     let existing = cells[col];
                     if let CellType::Pipe(pl) = existing {
                         cells[col] = CellType::HorizontalPipe(parent_color, pl);
+                        oids[col] = (Some(parent_oid), oids[col].0);
                     } else if existing == CellType::Empty {
                         cells[col] = CellType::Horizontal(parent_color);
+                        oids[col] = (Some(parent_oid), None);
                     }
                 }
             }
@@ -764,25 +802,31 @@ fn build_row_cells_with_colors(
                     // New lane for parent: ╭ (branch starts here, continues down)
                     cells[start_idx] = CellType::BranchRight(parent_color);
                 }
+                oids[start_idx] = (Some(parent_oid), None);
             }
         }
     }
 
-    cells
+    (cells, oids)
 }
 
 /// Build fork connector row cells (multiple branches from the same parent)
 /// Example: ├─┴─╯ (main lane connecting to multiple branch lanes)
+#[allow(clippy::too_many_arguments)] // cohesive lane/color/oid inputs; a struct adds indirection
 fn build_fork_connector_cells(
     main_lane: usize,
     main_color: usize,
+    fork_oid: Oid,
     merging_lanes: &[(usize, usize)], // (lane, color_index)
     active_lanes: &[Option<Oid>],
     oid_color_index: &HashMap<Oid, usize>,
     lane_color_index: &HashMap<usize, usize>,
     max_lane: usize,
-) -> Vec<CellType> {
+) -> (Vec<CellType>, Vec<CellOids>) {
     let mut cells = vec![CellType::Empty; (max_lane + 1) * 2];
+    // Every stroke on this connector belongs to the fork commit's lineage,
+    // except the unrelated pass-through pipes, which carry their own OID.
+    let mut oids: Vec<CellOids> = vec![(None, None); cells.len()];
 
     // Sorted list of merging lane numbers
     let mut merging_lane_nums: Vec<usize> = merging_lanes.iter().map(|(l, _)| *l).collect();
@@ -792,6 +836,7 @@ fn build_fork_connector_cells(
     let main_cell_idx = main_lane * 2;
     if main_cell_idx < cells.len() {
         cells[main_cell_idx] = CellType::TeeRight(main_color);
+        oids[main_cell_idx] = (Some(fork_oid), None);
     }
 
     // Draw vertical lines for active lanes (except main and merging lanes)
@@ -806,6 +851,7 @@ fn build_fork_connector_cells(
                         .or_else(|| oid_color_index.get(oid).copied())
                         .unwrap_or(lane_idx);
                     cells[cell_idx] = CellType::Pipe(color);
+                    oids[cell_idx] = (Some(*oid), None);
                 }
             }
         }
@@ -822,8 +868,11 @@ fn build_fork_connector_cells(
                 let existing = cells[col];
                 if let CellType::Pipe(pl) = existing {
                     cells[col] = CellType::HorizontalPipe(merge_color, pl);
+                    // Fork stroke crossing an unrelated pipe: keep both OIDs.
+                    oids[col] = (Some(fork_oid), oids[col].0);
                 } else if matches!(existing, CellType::Empty | CellType::Horizontal(_)) {
                     cells[col] = CellType::Horizontal(merge_color);
+                    oids[col] = (Some(fork_oid), None);
                 }
             }
         }
@@ -838,10 +887,95 @@ fn build_fork_connector_cells(
                 // Middle lanes use ┴
                 cells[end_idx] = CellType::TeeUp(merge_color);
             }
+            oids[end_idx] = (Some(fork_oid), None);
         }
     }
 
-    cells
+    (cells, oids)
+}
+
+/// Branch tracing needs at least this many lanes to be worth doing — a linear
+/// or single-branch graph has nothing to disambiguate, so tracing stays off.
+pub const MIN_TRACE_LANES: usize = 3;
+
+/// Whether the graph is branchy enough (`> 2` lanes) for tracing to help.
+pub fn graph_has_enough_lanes(layout: &GraphLayout) -> bool {
+    layout.max_lane + 1 >= MIN_TRACE_LANES
+}
+
+/// The set of commit OIDs forming the selected commit's branch line: the
+/// commit itself, its first-parent ancestry walking DOWN the graph, and its
+/// first-parent descendants walking UP along the same lane. Pure over the
+/// layout — never re-walks git. Returns empty for a connector/uncommitted row.
+pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<Oid> {
+    let mut set = HashSet::new();
+    let Some(sel) = layout
+        .nodes
+        .get(selected_full_idx)
+        .and_then(|n| n.commit.as_ref())
+        .map(|c| c.oid)
+    else {
+        return set;
+    };
+
+    // oid -> row index, for commit-carrying rows only.
+    let oid_row: HashMap<Oid, usize> = layout
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| n.commit.as_ref().map(|c| (c.oid, i)))
+        .collect();
+
+    set.insert(sel);
+
+    // DOWN: follow the first parent (which inherits the commit's lane) as long
+    // as it's visible in the graph.
+    let mut cur = sel;
+    while let Some(&row) = oid_row.get(&cur) {
+        let first_parent = layout.nodes[row]
+            .commit
+            .as_ref()
+            .and_then(|c| c.parent_oids.first().copied())
+            .filter(|p| oid_row.contains_key(p));
+        match first_parent {
+            Some(p) if set.insert(p) => cur = p,
+            _ => break,
+        }
+    }
+
+    // UP: follow the child that continues this lane — the one whose first parent
+    // is `cur` and which sits on the same lane (first-parent inheritance keeps
+    // the lane number, so this uniquely picks the branch-line continuation and
+    // never leaks onto a reused lane's unrelated occupant).
+    let mut cur = sel;
+    loop {
+        let Some(&cur_row) = oid_row.get(&cur) else {
+            break;
+        };
+        let cur_lane = layout.nodes[cur_row].lane;
+        let child = layout.nodes.iter().find_map(|n| {
+            let c = n.commit.as_ref()?;
+            let first_parent = c.parent_oids.first()?;
+            (*first_parent == cur && n.lane == cur_lane && !set.contains(&c.oid))
+                .then_some(c.oid)
+        });
+        match child {
+            Some(ch) => {
+                set.insert(ch);
+                cur = ch;
+            }
+            None => break,
+        }
+    }
+
+    set
+}
+
+/// Whether a cell (by its `(primary, secondary)` edge OIDs) belongs to the
+/// traced lineage. Either OID being in the lineage lights the cell — the
+/// secondary covers a lineage pipe crossed underneath a `HorizontalPipe`.
+pub fn cell_is_traced(oids: CellOids, lineage: &HashSet<Oid>) -> bool {
+    oids.0.is_some_and(|o| lineage.contains(&o)) || oids.1.is_some_and(|o| lineage.contains(&o))
 }
 
 #[cfg(test)]
@@ -874,6 +1008,7 @@ mod tests {
             stash_label: None,
             uncommitted_count: None,
             cells: Vec::new(),
+            cell_oids: Vec::new(),
         }
     }
 
@@ -918,6 +1053,7 @@ mod tests {
             stash_label: None,
             uncommitted_count: None,
             cells,
+            cell_oids: Vec::new(),
         }
     }
 

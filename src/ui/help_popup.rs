@@ -139,6 +139,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  < / >      ", key_style),
                 Span::styled("Shrink / widen the graph column (… = truncated)", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  t          ", key_style),
+                Span::styled("Toggle branch tracing (dim off-lineage lanes)", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
         ];

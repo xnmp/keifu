@@ -198,14 +198,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // so it's part of the cache key alongside the panel width.
         let needed = (app.graph_layout.max_lane + 1) * 2;
         let graph_width = graph_view::effective_graph_width(needed, app.graph_width_cap);
+        // Branch tracing bakes a per-cell dim mask into the specs, so the cache
+        // must vary by the traced selection. `None` when tracing is inactive, so
+        // moving the selection with tracing off doesn't rebuild the specs.
+        let trace_key = app.trace_selection_key();
         let reuse = app
             .pixel_specs_cache
             .as_ref()
-            .is_some_and(|(gen, filter, pa, gw, _)| {
+            .is_some_and(|(gen, filter, pa, gw, tk, _)| {
                 *gen == app.graph_generation
                     && filter == &app.commit_filter
                     && *pa as usize == panel_available
                     && *gw as usize == graph_width
+                    && *tk == trace_key
             });
         if !reuse {
             let specs = graph_view::build_pixel_row_specs(app, &theme, graph_width, panel_available);
@@ -214,12 +219,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 app.commit_filter.clone(),
                 panel_available as u16,
                 graph_width as u16,
+                trace_key,
                 specs,
             ));
         }
         // Disjoint field borrows: `specs` from pixel_specs_cache, `pg` from
         // pixel_graph. Sync transmits/evicts protocols for this frame.
-        let specs = &app.pixel_specs_cache.as_ref().unwrap().4;
+        let specs = &app.pixel_specs_cache.as_ref().unwrap().5;
         let active = app.pixel_graph.as_mut().is_some_and(|pg| {
             pg.sync_frame(specs);
             pg.is_active()
@@ -243,7 +249,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         &mut app.graph_nav.graph_list_state,
     );
     if pixel_mode {
-        if let Some((_, _, _, _, specs)) = &app.pixel_specs_cache {
+        if let Some((_, _, _, _, _, specs)) = &app.pixel_specs_cache {
             overlay_pixel_graph(frame, app, graph_area, specs);
         }
     }

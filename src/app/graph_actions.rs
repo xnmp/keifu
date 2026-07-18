@@ -84,6 +84,9 @@ impl App {
             Action::OpenMetadataMenu => {
                 self.mode = AppMode::MetadataMenu { selected: 0 };
             }
+            Action::ToggleTrace => {
+                self.toggle_trace();
+            }
             Action::ShrinkGraphWidth => {
                 self.resize_graph_width(-1);
             }

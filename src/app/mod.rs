@@ -707,6 +707,9 @@ pub struct App {
     pub graph_split_ratio: u16,
     /// Whether the divider between graph and detail is being dragged.
     pub dragging_divider: bool,
+    /// Branch tracing: when on (and the graph is branchy), the selected commit's
+    /// lineage renders at full strength and other lanes are dimmed.
+    pub trace_enabled: bool,
 
     // Config
     pub config: Config,
@@ -722,12 +725,24 @@ pub struct App {
     pub pixel_graph: Option<crate::ui::graph_pixels::PixelGraphState>,
 
     // Cached pixel-graph row specs, valid while (graph_generation, commit_filter,
-    // panel_available, graph_width) are unchanged. Theme is stable at runtime, so
-    // it's not part of the key; the graph_width component captures the resize cap.
-    // Rebuilt lazily by the render pre-pass.
-    pub pixel_specs_cache:
-        Option<(u64, String, u16, u16, Vec<crate::ui::graph_pixels::RowSpec>)>,
+    // panel_available, graph_width, trace_selection_key) are unchanged. Theme is
+    // stable at runtime, so it's not part of the key; the graph_width component
+    // captures the resize cap; the trace key is the traced selection's OID (or
+    // None when tracing is off). Rebuilt lazily by the render pre-pass.
+    pub pixel_specs_cache: Option<PixelSpecsCache>,
 }
+
+/// Cached pixel row specs plus the key they were built for:
+/// `(graph_generation, commit_filter, panel_available, graph_width,
+/// trace_selection_key, specs)`.
+pub type PixelSpecsCache = (
+    u64,
+    String,
+    u16,
+    u16,
+    Option<Oid>,
+    Vec<crate::ui::graph_pixels::RowSpec>,
+);
 
 impl App {
 
@@ -894,12 +909,53 @@ impl App {
         self.mode = AppMode::Error { message };
     }
 
+    /// Whether branch tracing is currently in effect: enabled by the user and
+    /// the graph is branchy enough (> 2 lanes) to benefit.
+    pub(crate) fn trace_active(&self) -> bool {
+        self.trace_enabled && crate::git::graph::graph_has_enough_lanes(&self.graph_layout)
+    }
+
+    /// The lineage OID set to render at full strength (dimming the rest), or
+    /// `None` when tracing is inactive or nothing selectable is selected.
+    pub(crate) fn active_trace_lineage(&self) -> Option<std::collections::HashSet<Oid>> {
+        if !self.trace_active() {
+            return None;
+        }
+        let sel = self.graph_nav.graph_list_state.selected()?;
+        let lineage = crate::git::graph::lineage_oids(&self.graph_layout, sel);
+        (!lineage.is_empty()).then_some(lineage)
+    }
+
+    /// The selected commit's OID when tracing is active, else `None` — the
+    /// pixel-spec cache key component that makes the dim mask cache-correct
+    /// without rebuilding specs as the selection moves with tracing off.
+    pub(crate) fn trace_selection_key(&self) -> Option<Oid> {
+        if !self.trace_active() {
+            return None;
+        }
+        self.graph_nav
+            .graph_list_state
+            .selected()
+            .and_then(|i| self.graph_layout.nodes.get(i))
+            .and_then(|n| n.commit.as_ref().map(|c| c.oid))
+    }
+
+    /// Toggle branch tracing (persisted). A no-op visually on linear graphs,
+    /// which never trace, but the preference is still saved.
+    pub(crate) fn toggle_trace(&mut self) {
+        self.trace_enabled = !self.trace_enabled;
+        self.save_ui_state();
+        let state = if self.trace_enabled { "on" } else { "off" };
+        self.set_message(format!("Branch tracing {state}"));
+    }
+
     /// Persist the writable UI state (panel layout + metadata columns).
     pub(crate) fn save_ui_state(&self) {
         UiState {
             side_panel_layout: self.side_panel_layout,
             graph_width_cap: self.graph_width_cap,
             graph_split_ratio: self.graph_split_ratio,
+            trace_enabled: self.trace_enabled,
             metadata_columns: self.metadata_columns,
         }
         .save();

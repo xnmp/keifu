@@ -43,6 +43,10 @@ pub struct StatusBar<'a> {
     /// Whether the graph column is capped or cappable (needs > 4 cells), so the
     /// `< >` resize hint is worth showing.
     graph_cappable: bool,
+    /// Whether the graph is branchy enough (> 2 lanes) for branch tracing, so
+    /// the `t trace` hint is worth showing; carries the current on/off state.
+    trace_traceable: bool,
+    trace_enabled: bool,
     theme: &'a Theme,
 }
 
@@ -102,6 +106,8 @@ impl<'a> StatusBar<'a> {
             pr_hint: pr_hint_label(selected_pr.map(|pr| pr.number)),
             pr_has_ci: selected_pr.is_some_and(|pr| pr.ci != crate::pr::CiStatus::None),
             graph_cappable: (app.graph_layout.max_lane + 1) * 2 > 4,
+            trace_traceable: crate::git::graph::graph_has_enough_lanes(&app.graph_layout),
+            trace_enabled: app.trace_enabled,
             theme,
         }
     }
@@ -269,6 +275,16 @@ impl<'a> Widget for StatusBar<'a> {
                             if self.graph_cappable {
                                 spans.push(Span::styled(" <> ", key_style));
                                 spans.push(Span::styled("width ", desc_style));
+                            }
+                            // Only on branchy graphs, where tracing helps.
+                            if self.trace_traceable {
+                                spans.push(Span::styled(" t ", key_style));
+                                let label = if self.trace_enabled {
+                                    "trace on "
+                                } else {
+                                    "trace off "
+                                };
+                                spans.push(Span::styled(label, desc_style));
                             }
                             spans.push(Span::styled(" ←→ ", key_style));
                             spans.push(Span::styled("panels ", desc_style));

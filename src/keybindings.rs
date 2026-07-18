@@ -189,6 +189,10 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // mark/compare, so Shift+M — mnemonic "Metadata")
         (KeyModifiers::SHIFT, KeyCode::Char('M')) => Some(Action::OpenMetadataMenu),
 
+        // Toggle branch tracing (highlight the selected commit's lineage). 't'
+        // is graph-only; the conflict-resolution 't' is Files-only.
+        (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::ToggleTrace),
+
         // Shrink / widen the graph column width cap (one lane = 2 cells). Match
         // any modifier since '<'/'>' arrive shifted on most layouts.
         (_, KeyCode::Char('<')) => Some(Action::ShrinkGraphWidth),

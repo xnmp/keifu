@@ -52,14 +52,19 @@ pub enum CellShape {
 
 /// A fully-resolved cell: shape plus concrete RGB colors. `secondary` is only
 /// meaningful for `HorizontalPipe` (the horizontal stroke color); elsewhere it
-/// equals `color`. Graph strokes always render at full strength — merge muting
-/// lives in the message text layer, never here.
+/// equals `color`. `dim` fades the cell to a low alpha when branch tracing is
+/// active and this cell is not on the selected commit's lineage. It's part of
+/// the hash/eq, so a dimmed variant is a distinct spec and caches separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PixelCell {
     pub shape: CellShape,
     pub color: [u8; 3],
     pub secondary: [u8; 3],
+    pub dim: bool,
 }
+
+/// Alpha applied to non-traced graph cells while branch tracing is active.
+pub const TRACE_DIM_ALPHA: f32 = 0.35;
 
 /// A fully-resolved, hashable description of one row's pixel content. Two rows
 /// with an identical `RowSpec` rasterize to an identical image, so protocols
@@ -180,6 +185,7 @@ fn solid(shape: CellShape, rgb: [u8; 3]) -> PixelCell {
         shape,
         color: rgb,
         secondary: rgb,
+        dim: false,
     }
 }
 
@@ -212,6 +218,7 @@ fn cell_to_pixel(
             shape: CellShape::HorizontalPipe,
             color: rgb(p),
             secondary: rgb(h),
+            dim: false,
         },
         CellType::Commit(ci) => {
             let connect_up = above
@@ -279,6 +286,8 @@ struct Canvas {
     img: RgbaImage,
     w: u32,
     h: u32,
+    /// Coverage multiplier applied to every stroke, for branch-trace dimming.
+    alpha: f32,
 }
 
 impl Canvas {
@@ -287,6 +296,7 @@ impl Canvas {
             img: RgbaImage::new(w, h),
             w,
             h,
+            alpha: 1.0,
         }
     }
 
@@ -294,7 +304,7 @@ impl Canvas {
         if coverage <= 0.0 || x < 0 || y < 0 || x as u32 >= self.w || y as u32 >= self.h {
             return;
         }
-        let sa = coverage.clamp(0.0, 1.0);
+        let sa = (coverage * self.alpha).clamp(0.0, 1.0);
         let px = self.img.get_pixel_mut(x as u32, y as u32);
         let da = px[3] as f32 / 255.0;
         let out_a = sa + da * (1.0 - sa);
@@ -461,13 +471,14 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     // HEAD stars are deferred and drawn after every cell so they sit on top of
     // horizontal strokes from neighbouring connector columns. Each carries its
     // gold fill color.
-    let mut stars: Vec<(f32, f32, f32, [u8; 3])> = Vec::new();
+    let mut stars: Vec<(f32, f32, f32, [u8; 3], bool)> = Vec::new();
 
     // Folded connector cells first (behind), then the row's own cells on top.
     draw_cells(&mut canvas, &spec.underlay, half, cw, ch, &mut stars);
     draw_cells(&mut canvas, &spec.cells, half, cw, ch, &mut stars);
 
-    for (cx, cy, r, color) in stars {
+    for (cx, cy, r, color, dim) in stars {
+        canvas.alpha = if dim { TRACE_DIM_ALPHA } else { 1.0 };
         fill_star(&mut canvas, cx, cy, r, color);
     }
 
@@ -483,13 +494,15 @@ fn draw_cells(
     half: f32,
     cw: f32,
     ch: f32,
-    stars: &mut Vec<(f32, f32, f32, [u8; 3])>,
+    stars: &mut Vec<(f32, f32, f32, [u8; 3], bool)>,
 ) {
     for (i, cell) in cells.iter().enumerate() {
         let ox = (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw;
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
         let color = cell.color;
+        // Non-traced cells fade to a low alpha while branch tracing is active.
+        canvas.alpha = if cell.dim { TRACE_DIM_ALPHA } else { 1.0 };
         match cell.shape {
             CellShape::Empty => {}
             CellShape::Pipe => draw_segment(canvas, cx, 0.0, cx, ch, half, color),
@@ -546,7 +559,7 @@ fn draw_cells(
                         // clear of the row boundary even when the terminal
                         // places the image a pixel or two off.
                         let r_s = (r * 1.7).min(ch / 2.0 - 2.5).max(3.0);
-                        stars.push((cx, cy + r_s * 0.09, r_s, color));
+                        stars.push((cx, cy + r_s * 0.09, r_s, color, cell.dim));
                     }
                     CommitStyle::Uncommitted => {
                         stroke_circle(canvas, cx, cy, r, half, color);
@@ -866,6 +879,7 @@ mod tests {
             stash_label: None,
             uncommitted_count: None,
             cells: vec![CellType::Commit(0)],
+            cell_oids: Vec::new(),
         }
     }
 
@@ -931,6 +945,7 @@ mod tests {
             stash_label: None,
             uncommitted_count: None,
             cells: vec![CellType::Commit(0)],
+            cell_oids: Vec::new(),
         };
         let head = build_row_spec(None, &n, None, &[], &theme);
         assert_eq!(head.cells[0].color, color_to_rgb(theme.head_star));

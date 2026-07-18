@@ -190,6 +190,8 @@ pub struct RenderRow<'a> {
     pub full_idx: usize,
     pub node: &'a GraphNode,
     pub underlay: Vec<CellType>,
+    /// Per-cell edge OIDs for `underlay`, folded in parallel, for branch tracing.
+    pub underlay_oids: Vec<crate::git::graph::CellOids>,
 }
 
 /// The rows the graph list renders, in list order. When `fold_connectors` is
@@ -216,6 +218,7 @@ fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<Rende
                 full_idx,
                 node,
                 underlay: Vec::new(),
+                underlay_oids: Vec::new(),
             })
             .collect();
     }
@@ -226,12 +229,13 @@ fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<Rende
         if node.is_connector() {
             pending.push((full_idx, node));
         } else {
-            let underlay = merge_connector_cells(&pending);
+            let (underlay, underlay_oids) = merge_connector_cells(&pending);
             pending.clear();
             rows.push(RenderRow {
                 full_idx,
                 node,
                 underlay,
+                underlay_oids,
             });
         }
     }
@@ -241,6 +245,7 @@ fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<Rende
             full_idx,
             node,
             underlay: Vec::new(),
+            underlay_oids: Vec::new(),
         });
     }
     rows
@@ -249,17 +254,23 @@ fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<Rende
 /// Merge one or more connector rows' cells into a single underlay row: per
 /// column, the last non-empty cell wins. `build_graph` never emits adjacent
 /// connectors, so in practice this collapses a single connector.
-fn merge_connector_cells(pending: &[(usize, &GraphNode)]) -> Vec<CellType> {
+fn merge_connector_cells(
+    pending: &[(usize, &GraphNode)],
+) -> (Vec<CellType>, Vec<crate::git::graph::CellOids>) {
     let width = pending.iter().map(|(_, n)| n.cells.len()).max().unwrap_or(0);
     let mut out = vec![CellType::Empty; width];
+    let mut out_oids = vec![(None, None); width];
     for (_, node) in pending {
         for (col, cell) in node.cells.iter().enumerate() {
             if *cell != CellType::Empty {
                 out[col] = *cell;
+                // Fold the cell's edge identity alongside it, so tracing marks
+                // folded connector strokes the same as unfolded ones.
+                out_oids[col] = node.cell_oids.get(col).copied().unwrap_or((None, None));
             }
         }
     }
-    out
+    (out, out_oids)
 }
 
 /// The effective cells physically adjacent to `rows[i]` in the given direction,
@@ -320,6 +331,9 @@ pub fn build_pixel_row_specs(
     panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
+    // The selected commit's lineage, when tracing is active; non-traced cells
+    // are dimmed. `None` = tracing off, everything full strength.
+    let trace = app.active_trace_lineage();
     // Fold connector rows into their following commit row (pixel-only): one spec
     // per rendered row, in the same order and index space as the list items.
     let rows = visible_rows(app, true);
@@ -335,6 +349,12 @@ pub fn build_pixel_row_specs(
                 &rows[i].underlay,
                 theme,
             );
+            // Mark non-lineage cells for dimming. `spec.cells`/`spec.underlay`
+            // are 1:1 with `node.cells`/`rows[i].underlay`, so their OIDs align.
+            if let Some(lineage) = &trace {
+                apply_trace_dim(&mut spec.cells, &node.cell_oids, lineage);
+                apply_trace_dim(&mut spec.underlay, &rows[i].underlay_oids, lineage);
+            }
             let budget = pixel_row_cells(node.cells.len(), graph_width, panel_available);
             spec.cells.truncate(budget);
             // Keep the underlay within the row's drawn width so it stays inside
@@ -344,6 +364,18 @@ pub fn build_pixel_row_specs(
             spec
         })
         .collect()
+}
+
+/// Set `dim` on every pixel cell whose edge OIDs are not in `lineage`.
+fn apply_trace_dim(
+    cells: &mut [crate::ui::graph_pixels::PixelCell],
+    oids: &[crate::git::graph::CellOids],
+    lineage: &std::collections::HashSet<git2::Oid>,
+) {
+    for (i, pc) in cells.iter_mut().enumerate() {
+        let cell_oids = oids.get(i).copied().unwrap_or((None, None));
+        pc.dim = !crate::git::graph::cell_is_traced(cell_oids, lineage);
+    }
 }
 
 impl<'a> GraphViewWidget<'a> {
@@ -358,6 +390,13 @@ impl<'a> GraphViewWidget<'a> {
         let remotes = &app.remotes;
         let open_prs = &app.open_prs;
         let metadata_columns = app.metadata_columns;
+        // Selected commit's lineage for tracing (Unicode dim); None = off. In
+        // pixel mode the dim lives in the row specs, not the text layer.
+        let trace = if pixel_mode {
+            None
+        } else {
+            app.active_trace_lineage()
+        };
 
         // In pixel mode, connector rows are folded into their commit row so the
         // list items match the pixel specs one-for-one (same filtered index
@@ -395,6 +434,7 @@ impl<'a> GraphViewWidget<'a> {
                 remotes,
                 open_prs,
                 metadata_columns,
+                trace.as_ref(),
             );
             items.push(ListItem::new(line));
             chip_hits.push(chips);
@@ -875,6 +915,7 @@ fn render_graph_line<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     metadata_columns: MetadataColumns,
+    trace: Option<&std::collections::HashSet<git2::Oid>>,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -898,9 +939,10 @@ fn render_graph_line<'a>(
             left_width += 1;
         }
     } else {
-        // Graph glyphs always render at full strength; merge muting lives in the
-        // message text (see render_graph_line_tail), matching the pixel renderer.
-        left_width = render_cells_unicode(&mut spans, node, theme, left_width, graph_width);
+        // Graph glyphs render bold; with tracing, non-lineage cells are dimmed.
+        // Merge muting stays in the message text (see render_graph_line_tail).
+        left_width =
+            render_cells_unicode(&mut spans, node, theme, left_width, graph_width, trace);
     }
 
     // Padding to align to the (capped) graph width. Reclaimed width flows to the
@@ -938,10 +980,20 @@ fn render_cells_unicode(
     theme: &Theme,
     mut left_width: usize,
     cap: usize,
+    trace: Option<&std::collections::HashSet<git2::Oid>>,
 ) -> usize {
     // `budget` graph columns are available for glyphs; when truncating, one more
     // column holds the `…`.
     let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
+
+    // Whether the cell at `idx` should be dimmed: tracing active and this cell
+    // is not on the selected commit's lineage.
+    let is_dim = |idx: usize| -> bool {
+        trace.is_some_and(|lineage| {
+            let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
+            !crate::git::graph::cell_is_traced(oids, lineage)
+        })
+    };
 
     // Render cells.
     //
@@ -961,9 +1013,12 @@ fn render_cells_unicode(
             if let CellType::Commit(_) = cell {
                 // The ◉ fallback uses the HEAD-star gold, matching the ⭐ / the
                 // pixel renderer's star.
-                let style = Style::default()
+                let mut style = Style::default()
                     .fg(theme.head_star)
                     .add_modifier(Modifier::BOLD);
+                if is_dim(idx) {
+                    style = style.add_modifier(Modifier::DIM);
+                }
 
                 let right_is_clear = matches!(
                     node.cells.get(idx + 1),
@@ -1010,8 +1065,11 @@ fn render_cells_unicode(
             CellType::TeeUp(color_idx) => ('┴', theme.lane_color(*color_idx)),
         };
 
-        // All line glyphs render in bold at full strength.
-        let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        // Line glyphs render bold; non-lineage cells dim while tracing.
+        let mut style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        if is_dim(idx) {
+            style = style.add_modifier(Modifier::DIM);
+        }
 
         let ch_str = ch.to_string();
         let ch_width = display_width(&ch_str);
@@ -1960,6 +2018,7 @@ mod tests {
             stash_label: None,
             uncommitted_count: None,
             cells,
+            cell_oids: Vec::new(),
         }
     }
 
@@ -1967,7 +2026,7 @@ mod tests {
     fn render_cells(node: &GraphNode, cap: usize) -> String {
         let theme = Theme::dark();
         let mut spans: Vec<Span> = Vec::new();
-        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap);
+        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, None);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         // left_width is columns emitted (started at 0); it must equal the text's
         // display width.
@@ -2061,6 +2120,7 @@ mod tests {
             stash_label: None,
             uncommitted_count: None,
             cells: vec![CellType::Commit(0)],
+            cell_oids: Vec::new(),
         }
     }
 
@@ -2087,6 +2147,7 @@ mod tests {
             &[],
             &HashMap::new(),
             cols,
+            None,
         );
         line.spans
             .iter()
@@ -2212,14 +2273,112 @@ mod tests {
         let a = commit_row(vec![CellType::Empty]);
         let b = commit_row(vec![CellType::Commit(0)]);
         let rows = vec![
-            RenderRow { full_idx: 0, node: &a, underlay: Vec::new() },
+            RenderRow { full_idx: 0, node: &a, underlay: Vec::new(), underlay_oids: Vec::new() },
             RenderRow {
                 full_idx: 2,
                 node: &b,
                 underlay: vec![CellType::TeeRight(0)],
+                underlay_oids: Vec::new(),
             },
         ];
         let above = adjacent_cells(&rows, 1, true).unwrap();
         assert_eq!(above[0], CellType::TeeRight(0), "underlay wins over neighbour");
+    }
+
+    // ── branch tracing: Unicode dim + fold + truncation ──────────────────
+
+    fn oid(b: u8) -> git2::Oid {
+        git2::Oid::from_bytes(&[b; 20]).unwrap()
+    }
+
+    #[test]
+    fn tracing_dims_non_lineage_cells_in_unicode() {
+        use std::collections::HashSet;
+        let theme = Theme::dark();
+        let (a, b) = (oid(1), oid(2));
+        let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
+        node.cell_oids = vec![(Some(a), None), (Some(b), None)];
+        let lineage: HashSet<git2::Oid> = [a].into_iter().collect();
+
+        let mut spans: Vec<Span> = Vec::new();
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lineage));
+
+        let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
+        let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
+        assert!(
+            !commit.style.add_modifier.contains(Modifier::DIM),
+            "the lineage commit stays at full strength"
+        );
+        assert!(
+            pipe.style.add_modifier.contains(Modifier::DIM),
+            "the non-lineage pipe is dimmed"
+        );
+    }
+
+    #[test]
+    fn tracing_off_dims_nothing_in_unicode() {
+        let theme = Theme::dark();
+        let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
+        node.cell_oids = vec![(Some(oid(1)), None), (Some(oid(2)), None)];
+        let mut spans: Vec<Span> = Vec::new();
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None);
+        assert!(spans
+            .iter()
+            .all(|s| !s.style.add_modifier.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn folding_carries_connector_cell_oids_into_the_underlay() {
+        let a = oid(7);
+        let mut connector = connector_node(vec![CellType::Empty, CellType::TeeRight(0)]);
+        connector.cell_oids = vec![(None, None), (Some(a), None)];
+        let commit = commit_row(vec![CellType::Commit(0), CellType::Empty]);
+        let base = vec![(0usize, &connector), (1usize, &commit)];
+
+        let rows = fold_rows(base, true);
+        assert_eq!(rows.len(), 1, "the connector folds into the commit row");
+        assert_eq!(
+            rows[0].underlay_oids.get(1).copied(),
+            Some((Some(a), None)),
+            "the connector's edge OID is preserved in the folded underlay"
+        );
+    }
+
+    #[test]
+    fn trace_dim_survives_width_truncation_in_unicode() {
+        use std::collections::HashSet;
+        let theme = Theme::dark();
+        let a = oid(1);
+        // Four cells, but a cap that only fits some: the mask must stay aligned
+        // for the rendered cells and simply drop the truncated ones.
+        let mut node = node_with_cells(
+            vec![
+                CellType::Commit(0),
+                CellType::Pipe(1),
+                CellType::Pipe(1),
+                CellType::Pipe(1),
+            ],
+            false,
+        );
+        node.cell_oids = vec![
+            (Some(a), None),
+            (Some(oid(2)), None),
+            (Some(oid(3)), None),
+            (Some(oid(4)), None),
+        ];
+        let lineage: HashSet<git2::Oid> = [a].into_iter().collect();
+
+        let mut spans: Vec<Span> = Vec::new();
+        // cap = 3 leaves room for 2 glyphs plus the `…` marker.
+        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lineage));
+
+        let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
+        assert!(!commit.style.add_modifier.contains(Modifier::DIM));
+        // The rendered pipe (col 1) is non-lineage → dimmed; nothing panicked on
+        // the truncated columns.
+        let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
+        assert!(pipe.style.add_modifier.contains(Modifier::DIM));
+        // The `…` marker means the row was truncated within the cap.
+        assert!(spans.iter().any(|s| s.content.contains('…')));
     }
 }

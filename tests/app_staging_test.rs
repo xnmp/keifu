@@ -155,6 +155,7 @@ fn make_base_app(
         graph_chip_hits: Vec::new(),
         graph_split_ratio: 65,
         dragging_divider: false,
+        trace_enabled: true,
         config: Config::default(),
         terminal_bg: None,
         pixel_graph: None,
@@ -175,6 +176,7 @@ fn make_diff_app(selected_oid: Oid, in_flight_oid: Option<Oid>) -> App {
         stash_label: None,
         uncommitted_count: None,
         cells: vec![CellType::Commit(0)],
+        cell_oids: Vec::new(),
     };
     let mut app = make_base_app(node, DiffTarget::Commit(selected_oid), None);
     app.diff_cache.diff_loading_oid = in_flight_oid;
@@ -194,6 +196,7 @@ fn make_uncommitted_app() -> App {
         stash_label: None,
         uncommitted_count: Some(1),
         cells: vec![CellType::Commit(0)],
+        cell_oids: Vec::new(),
     };
     let wts = WorkingTreeStatus {
         file_paths: vec![PathBuf::from("tracked.txt")],
