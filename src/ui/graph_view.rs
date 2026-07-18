@@ -384,23 +384,25 @@ pub fn build_pixel_row_specs(
         .collect()
 }
 
-/// Set `dim` on every pixel cell whose edge OIDs are not in `lineage`. A
+/// Set `dim` on every pixel cell whose edge is not in `lineage`. A
 /// `HorizontalPipe` crossing carries two independent edges — the horizontal
-/// stroke (primary OID, drawn in the cell's `secondary` color) and the
-/// vertical lane crossed underneath (secondary OID, the cell's `color`) — so
-/// each direction is dimmed from its own edge rather than all-or-nothing.
+/// stroke (primary edge, drawn in the cell's `secondary` color) and the
+/// vertical lane crossed underneath (secondary edge, the cell's `color`) — so
+/// each direction is dimmed from its own edge rather than all-or-nothing. An
+/// edge is traced only when both its `(child, parent)` endpoints are on the
+/// lineage (see `edge_is_traced`).
 fn apply_trace_dim(
     cells: &mut [crate::ui::graph_pixels::PixelCell],
     oids: &[crate::git::graph::CellOids],
     lineage: &std::collections::HashSet<git2::Oid>,
 ) {
+    use crate::git::graph::edge_is_traced;
     use crate::ui::graph_pixels::CellShape;
-    let traced = |o: Option<git2::Oid>| o.is_some_and(|o| lineage.contains(&o));
     for (i, pc) in cells.iter_mut().enumerate() {
         let (primary, secondary) = oids.get(i).copied().unwrap_or((None, None));
         if pc.shape == CellShape::HorizontalPipe {
-            pc.dim_secondary = !traced(primary);
-            pc.dim = !traced(secondary);
+            pc.dim_secondary = !edge_is_traced(primary, lineage);
+            pc.dim = !edge_is_traced(secondary, lineage);
         } else {
             pc.dim = !crate::git::graph::cell_is_traced((primary, secondary), lineage);
             pc.dim_secondary = pc.dim;
@@ -2348,7 +2350,8 @@ mod tests {
         let theme = Theme::dark();
         let (a, b) = (oid(1), oid(2));
         let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
-        node.cell_oids = vec![(Some(a), None), (Some(b), None)];
+        // Commit dot is a self-edge on the lineage; the pipe is a self-edge off it.
+        node.cell_oids = vec![(Some((a, a)), None), (Some((b, b)), None)];
         let lineage: HashSet<git2::Oid> = [a].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
@@ -2370,7 +2373,7 @@ mod tests {
     fn tracing_off_dims_nothing_in_unicode() {
         let theme = Theme::dark();
         let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
-        node.cell_oids = vec![(Some(oid(1)), None), (Some(oid(2)), None)];
+        node.cell_oids = vec![(Some((oid(1), oid(1))), None), (Some((oid(2), oid(2))), None)];
         let mut spans: Vec<Span> = Vec::new();
         render_cells_unicode(&mut spans, &node, &theme, 0, 8, None);
         assert!(spans
@@ -2380,9 +2383,10 @@ mod tests {
 
     #[test]
     fn folding_carries_connector_cell_oids_into_the_underlay() {
-        let a = oid(7);
+        // A fork-connector stroke's edge climbs from a feature child up to the fork.
+        let (child, fork) = (oid(7), oid(8));
         let mut connector = connector_node(vec![CellType::Empty, CellType::TeeRight(0)]);
-        connector.cell_oids = vec![(None, None), (Some(a), None)];
+        connector.cell_oids = vec![(None, None), (Some((child, fork)), None)];
         let commit = commit_row(vec![CellType::Commit(0), CellType::Empty]);
         let base = vec![(0usize, &connector), (1usize, &commit)];
 
@@ -2390,8 +2394,8 @@ mod tests {
         assert_eq!(rows.len(), 1, "the connector folds into the commit row");
         assert_eq!(
             rows[0].underlay_oids.get(1).copied(),
-            Some((Some(a), None)),
-            "the connector's edge OID is preserved in the folded underlay"
+            Some((Some((child, fork)), None)),
+            "the connector's edge is preserved in the folded underlay"
         );
     }
 
@@ -2412,10 +2416,10 @@ mod tests {
             false,
         );
         node.cell_oids = vec![
-            (Some(a), None),
-            (Some(oid(2)), None),
-            (Some(oid(3)), None),
-            (Some(oid(4)), None),
+            (Some((a, a)), None),
+            (Some((oid(2), oid(2))), None),
+            (Some((oid(3), oid(3))), None),
+            (Some((oid(4), oid(4))), None),
         ];
         let lineage: HashSet<git2::Oid> = [a].into_iter().collect();
 
