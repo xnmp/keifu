@@ -220,6 +220,24 @@ fn strip_remote<'n>(name: &'n str, remotes: &[String]) -> Option<&'n str> {
     })
 }
 
+/// Single source of truth for whether graph label chips drop the remote prefix:
+/// only when the repo has exactly one remote (the cloud icon then conveys
+/// remoteness, so `<remote>/` is redundant). Multi-remote repos keep prefixes to
+/// disambiguate which remote a ref belongs to.
+fn strip_prefix_in_labels(remotes: &[String]) -> bool {
+    remotes.len() == 1
+}
+
+/// The name shown on a branch chip: for a remote ref in a single-remote repo,
+/// the remote prefix is dropped; otherwise the full ref name is used.
+fn chip_display_name<'n>(name: &'n str, remotes: &[String]) -> &'n str {
+    if strip_prefix_in_labels(remotes) {
+        strip_remote(name, remotes).unwrap_or(name)
+    } else {
+        name
+    }
+}
+
 /// Nerd Font pull-request glyph (nf-oct-git_pull_request) for the open-PR badge.
 const PR_BADGE_ICON: char = '\u{f407}';
 
@@ -343,7 +361,9 @@ fn optimize_branch_display(
         let name = &branch_names[0];
         if strip_remote(name, remotes).is_some() {
             let prefix = format!("{} ", REMOTE_ONLY_ICON);
-            return vec![(make_label(&prefix, name, None), make_style(name))];
+            // Single-remote repos drop the "<remote>/" prefix (cloud conveys it).
+            let display = chip_display_name(name, remotes);
+            return vec![(make_label(&prefix, display, None), make_style(name))];
         }
     } else if branch_names.len() == 2 {
         let synced_local = branch_names.iter().find(|name| {
@@ -362,11 +382,19 @@ fn optimize_branch_display(
     let mut result: Vec<(String, Style)> = Vec::new();
     for name in branch_names {
         if let Some(bare) = strip_remote(name, remotes) {
-            // Remote branch: skip if matching local exists
+            // Remote branch: skip if matching local exists (dedup keeps a
+            // stripped remote-only chip from colliding with its local twin).
             if local_branches.contains(bare) {
                 continue;
             }
-            result.push((make_label("", name, None), make_style(name)));
+            if strip_prefix_in_labels(remotes) {
+                // Single remote: drop the prefix but add the cloud icon so this
+                // remote-only chip still reads as remote in a multi-branch row.
+                let prefix = format!("{} ", REMOTE_ONLY_ICON);
+                result.push((make_label(&prefix, bare, None), make_style(name)));
+            } else {
+                result.push((make_label("", name, None), make_style(name)));
+            }
         } else {
             // Local branch: show "↔ <remote>" when a remote ref points at the
             // same bare name (not just origin — any configured remote).
@@ -404,14 +432,18 @@ fn optimize_branch_display(
         let shown = SHOWN_LABELS.min(result.len());
         let extra_count = result.len() - shown;
 
-        // Helper: strip "[...]" / suffix to recover the bare branch name
+        // Helper: strip "[...]", a leading icon prefix, and any suffix to
+        // recover the bare branch name.
         let clean = |label: &str| -> String {
-            label
-                .trim_start_matches('[')
-                .split([']', ' '])
-                .next()
-                .unwrap_or(label)
-                .to_string()
+            let s = label.trim_start_matches('[');
+            // Drop a leading remote-only/synced icon (+ its trailing space) so a
+            // stripped remote-only chip resolves to its name, not the glyph.
+            let s = s
+                .strip_prefix(REMOTE_ONLY_ICON)
+                .or_else(|| s.strip_prefix(SYNCED_ICON))
+                .map(str::trim_start)
+                .unwrap_or(s);
+            s.split([']', ' ']).next().unwrap_or(label).to_string()
         };
 
         // Budget the available width across the shown labels
@@ -1071,12 +1103,14 @@ mod tests {
 
     #[test]
     fn lone_remote_ref_gets_a_cloud_icon() {
+        // Single-remote repo: the "origin/" prefix is dropped (cloud conveys it).
         let out = labels(&["origin/feature"], &["origin"]);
-        assert_eq!(out, vec![format!("[{} origin/feature]", REMOTE_ONLY_ICON)]);
+        assert_eq!(out, vec![format!("[{} feature]", REMOTE_ONLY_ICON)]);
     }
 
     #[test]
     fn lone_remote_ref_respects_non_origin_remotes() {
+        // Multi-remote repo: the prefix is kept to disambiguate the remote.
         let out = labels(&["upstream/main"], &["origin", "upstream"]);
         assert_eq!(out, vec![format!("[{} upstream/main]", REMOTE_ONLY_ICON)]);
     }
@@ -1373,4 +1407,120 @@ mod tests {
         );
     }
 
+    // ── single-remote prefix stripping on labels ─────────────────────
+
+    #[test]
+    fn single_remote_strips_prefix_and_keeps_cloud_icon() {
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["origin/feat".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(label.contains(REMOTE_ONLY_ICON), "cloud icon kept: {label:?}");
+        assert!(label.contains("feat"));
+        assert!(!label.contains("origin/"), "prefix stripped: {label:?}");
+    }
+
+    #[test]
+    fn upstream_only_remote_strips_prefix() {
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["upstream/main".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["upstream".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        assert!(out[0].0.contains("main"));
+        assert!(!out[0].0.contains("upstream/"), "{:?}", out[0].0);
+    }
+
+    #[test]
+    fn multi_remote_keeps_prefix() {
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["origin/feat".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string(), "upstream".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].0.contains("origin/feat"),
+            "multi-remote keeps prefix: {:?}",
+            out[0].0
+        );
+    }
+
+    #[test]
+    fn single_remote_synced_pair_still_collapses() {
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["main".to_string(), "origin/main".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        // The local+remote pair collapses to one ↔ chip — no duplicate [main].
+        assert_eq!(out.len(), 1);
+        assert!(out[0].0.contains("main"));
+        assert!(out[0].0.contains(SYNCED_ICON), "synced icon: {:?}", out[0].0);
+        assert!(!out[0].0.contains("origin/"));
+    }
+
+    #[test]
+    fn single_remote_multi_branch_dedups_without_duplicate_or_prefix() {
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &[
+                "foo".to_string(),
+                "origin/foo".to_string(),
+                "bar".to_string(),
+            ],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        // origin/foo is the remote twin of local foo → deduped, no duplicate and
+        // no leftover prefix; two real branches remain, so no "+N".
+        assert!(!label.contains("origin/"), "{label:?}");
+        assert!(!label.contains('+'), "no overflow marker: {label:?}");
+        assert!(label.contains("foo"));
+        assert!(label.contains("bar"));
+    }
+
+    #[test]
+    fn single_remote_remote_only_chip_in_multi_branch_resolves_to_name() {
+        let theme = Theme::dark();
+        // A remote-only ref alongside a local branch: the combined label must
+        // show the stripped name, never the bare cloud glyph.
+        let out = optimize_branch_display(
+            &["origin/lonely".to_string(), "bar".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(label.contains("lonely"), "stripped name present: {label:?}");
+        assert!(!label.contains("origin/"), "{label:?}");
+    }
 }
