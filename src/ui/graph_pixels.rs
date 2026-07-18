@@ -50,9 +50,11 @@ pub enum CellShape {
     },
 }
 
-/// A fully-resolved cell: shape plus concrete RGB colors. `secondary` is only
-/// meaningful for `HorizontalPipe` (the horizontal stroke color); elsewhere it
-/// equals `color`. `dim` fades the primary stroke to a low alpha when branch
+/// A fully-resolved cell: shape plus concrete RGB colors. `secondary` is the
+/// horizontal stroke color for `HorizontalPipe` and the connector (lane) color
+/// for `Commit` cells — a HEAD cell's `color` is the star gold while its
+/// pass-through connectors keep the lane color. Elsewhere it equals `color`.
+/// `dim` fades the primary stroke to a low alpha when branch
 /// tracing is active and its edge is not on the selected commit's lineage;
 /// `dim_secondary` does the same for the secondary stroke (`HorizontalPipe`'s
 /// horizontal), so a crossing can light one direction while the other fades.
@@ -233,16 +235,22 @@ fn cell_to_pixel(
             let connect_down = below
                 .and_then(|c| c.get(col))
                 .is_some_and(cell_touches_top);
-            // HEAD dots render as a gold star; other dots keep the lane color.
-            let color = if style == CommitStyle::Head { head_rgb } else { rgb(ci) };
-            solid(
-                CellShape::Commit {
+            // HEAD dots render as a gold star, but their pass-through connector
+            // segments keep the lane color (carried in `secondary`) so only the
+            // star itself reads gold.
+            let lane_rgb = rgb(ci);
+            let color = if style == CommitStyle::Head { head_rgb } else { lane_rgb };
+            PixelCell {
+                shape: CellShape::Commit {
                     connect_up,
                     connect_down,
                     style,
                 },
                 color,
-            )
+                secondary: lane_rgb,
+                dim: false,
+                dim_secondary: false,
+            }
         }
     }
 }
@@ -576,11 +584,13 @@ fn draw_cells(
                 connect_down,
                 style,
             } => {
+                // Connectors use the lane color (`secondary`); only the dot or
+                // star itself takes the cell color (gold for HEAD).
                 if connect_up {
-                    draw_segment(canvas, cx, 0.0, cx, cy, half, color);
+                    draw_segment(canvas, cx, 0.0, cx, cy, half, cell.secondary);
                 }
                 if connect_down {
-                    draw_segment(canvas, cx, cy, cx, ch, half, color);
+                    draw_segment(canvas, cx, cy, cx, ch, half, cell.secondary);
                 }
                 // Dots may spill slightly into the adjacent connector column;
                 // lanes are two columns wide, so the overlap is harmless.
@@ -914,6 +924,27 @@ mod tests {
         assert!(
             alpha(&img, cx, probe_y) > 0,
             "star should extend above the normal dot radius"
+        );
+    }
+
+    #[test]
+    fn head_star_connectors_keep_the_lane_color() {
+        // A HEAD on a blue lane: the star is gold, but the vertical connector
+        // passing through the cell stays lane-blue — only the star reads gold.
+        let mut cell = commit(true, true, CommitStyle::Head, [255, 200, 50]);
+        cell.secondary = [0, 0, 255];
+        let img = rasterize_row(&spec(vec![cell]), CW, CH);
+        let cx = PAD_X + CW / 2;
+        let top = img.get_pixel(cx, 0);
+        assert!(top[3] > 0, "connector should reach the top edge");
+        assert!(
+            top[2] > 200 && top[0] < 90,
+            "connector should be lane blue, got {top:?}"
+        );
+        let centre = img.get_pixel(cx, CH / 2);
+        assert!(
+            centre[0] > 230 && centre[2] < 90,
+            "star centre should be gold, got {centre:?}"
         );
     }
 
