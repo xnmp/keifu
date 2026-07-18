@@ -8,10 +8,9 @@
 //! Everything above `CheckFetch` is pure and unit-tested.
 
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::DateTime;
 use serde::Deserialize;
@@ -181,49 +180,7 @@ pub fn tail_lines(log: &str) -> Vec<String> {
 
 // ── async fetching ───────────────────────────────────────────────────────
 
-/// Captured result of a `gh` invocation.
-struct GhOutput {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-
-/// Run `gh` with `args` in `repo_path`, with a timeout. `Err` only when gh
-/// can't be run at all (missing binary, timeout, non-UTF8); a non-zero exit is
-/// returned in `GhOutput` so the caller can decide (e.g. `gh pr checks` exits
-/// non-zero when checks are pending/failing but still prints valid JSON).
-fn run_gh(repo_path: &str, args: &[&str], timeout: Duration) -> Result<GhOutput, String> {
-    let mut child = Command::new("gh")
-        .args(args)
-        .current_dir(repo_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("gh not available: {e}"))?;
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("gh timed out".to_string());
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(format!("gh failed: {e}")),
-        }
-    }
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    Ok(GhOutput {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-    })
-}
+use crate::gh::run as run_gh;
 
 /// A completed failure-log fetch: which run, and its tail lines or an error.
 type LogResult = (u64, Result<Vec<String>, String>);

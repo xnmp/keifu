@@ -45,6 +45,9 @@ pub enum Action {
     // Open the CI checks detail popup for the selected commit's PR (graph)
     OpenCiChecks,
 
+    // Open the PR conversation thread popup for the selected commit's PR (graph)
+    OpenPrThread,
+
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 

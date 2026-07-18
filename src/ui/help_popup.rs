@@ -128,6 +128,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("CI check details (see failure logs without a browser)", desc_style),
             ]),
             Line::from(vec![
+                Span::styled("  v          ", key_style),
+                Span::styled("View PR conversation (comments, reviews, threads)", desc_style),
+            ]),
+            Line::from(vec![
                 Span::styled("  M          ", key_style),
                 Span::styled("Toggle columns (author/hash/date) & muted merges", desc_style),
             ]),

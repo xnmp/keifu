@@ -51,6 +51,7 @@ pub fn map_key_to_action(
         AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
         AppMode::PullDivergence { .. } => map_pull_divergence_mode(key),
         AppMode::CiChecks => map_ci_checks_mode(key),
+        AppMode::PrThread => map_pr_thread_mode(key),
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
@@ -150,6 +151,10 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Open the CI checks detail popup ('c' is free in the graph scope; the
         // conflict-resolution 'c' is Files-only)
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::OpenCiChecks),
+
+        // Open the PR conversation thread ('v' = view; the archive 'v' is
+        // Files-only)
+        (KeyModifiers::NONE, KeyCode::Char('v')) => Some(Action::OpenPrThread),
 
         // Toggle which metadata columns show on commit rows ('m' is taken by
         // mark/compare, so Shift+M — mnemonic "Metadata")
@@ -457,6 +462,34 @@ fn map_metadata_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char(' ')) | (KeyModifiers::NONE, KeyCode::Enter) => {
             Some(Action::MenuSelect)
         }
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
+fn map_pr_thread_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {
+            Some(Action::GoToTop)
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
+            Some(Action::GoToBottom)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenPr),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }

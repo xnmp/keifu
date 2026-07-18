@@ -134,6 +134,8 @@ fn make_base_app(
         last_pull: None,
         check_fetch: keifu::checks::CheckFetch::new(),
         ci_checks: None,
+        thread_fetch: keifu::pr_thread::PrThreadFetch::new(),
+        pr_thread: None,
         watcher: None,
         pending_watcher: None,
         last_undoable_op: None,

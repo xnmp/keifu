@@ -78,6 +78,9 @@ impl App {
             Action::OpenCiChecks => {
                 self.open_ci_checks();
             }
+            Action::OpenPrThread => {
+                self.open_pr_thread();
+            }
             Action::OpenMetadataMenu => {
                 self.mode = AppMode::MetadataMenu { selected: 0 };
             }

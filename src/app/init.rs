@@ -110,6 +110,8 @@ impl App {
             last_pull: None,
             check_fetch: crate::checks::CheckFetch::new(),
             ci_checks: None,
+            thread_fetch: crate::pr_thread::PrThreadFetch::new(),
+            pr_thread: None,
             watcher,
             pending_watcher,
             last_undoable_op: None,
