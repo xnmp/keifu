@@ -143,10 +143,11 @@ impl Theme {
             diff_hunk_fg: Color::LightCyan,
             diff_hunk_bg: Color::Rgb(30, 40, 55),
 
-            // Git metadata
-            hash_color: Color::Yellow,
-            author_color: Color::Cyan,
-            // Fallback; `adapt_to_background` derives this from the real bg.
+            // Git metadata — secondary columns that recede below the graph and
+            // message. Calm muted-gray fallbacks (author brightest, hash most
+            // muted); `adapt_to_background` derives the real tinted ladder.
+            hash_color: Color::DarkGray,
+            author_color: Color::Gray,
             date_color: Color::DarkGray,
 
             // Status bar
@@ -254,9 +255,11 @@ impl Theme {
             diff_hunk_fg: Color::Blue,
             diff_hunk_bg: Color::Rgb(220, 230, 245),
 
-            // Git metadata
-            hash_color: Color::DarkGray,
-            author_color: Color::Blue,
+            // Git metadata — secondary columns, muted to recede (author darkest
+            // so it reads first, hash lightest/most muted). `adapt_to_background`
+            // derives the real tinted ladder from the terminal bg.
+            hash_color: Color::Gray,
+            author_color: Color::DarkGray,
             date_color: Color::Gray,
 
             // Status bar
@@ -352,8 +355,13 @@ impl Theme {
         self.text_secondary = mix(bg, contrast, 0.45);
         self.text_muted = mix(bg, contrast, 0.40);
         self.uncommitted_color = mix(bg, contrast, 0.40);
-        // Date column: a touch brighter so it reads at a glance.
-        self.date_color = mix(bg, contrast, 0.50);
+        // Metadata columns: one muted-gray family tinted by the terminal bg, so
+        // they recede below the graph and message and never clash with lane
+        // colors. A subtle brightness ladder keeps the columns distinguishable —
+        // author reads first, hash (least-read) is the most muted.
+        self.author_color = mix(bg, contrast, 0.55);
+        self.date_color = mix(bg, contrast, 0.47);
+        self.hash_color = mix(bg, contrast, 0.38);
         self
     }
 
@@ -372,6 +380,25 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// The single app-wide accent color: focused panel borders and titles,
+    /// status-bar keys and the repo chip all key off this one hue so "active"
+    /// reads consistently everywhere.
+    pub fn accent(&self) -> Color {
+        self.border_focused
+    }
+
+    /// Panel title emphasis: the accent (bold) when focused, muted when not, so
+    /// the focused panel's border *and* title stand out via the one accent.
+    pub fn title_style(&self, focused: bool) -> Style {
+        if focused {
+            Style::default()
+                .fg(self.accent())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(self.text_muted)
+        }
+    }
+
     pub fn focused_border_style(&self) -> Style {
         Style::default().fg(self.border_focused)
     }
@@ -388,12 +415,11 @@ impl Theme {
         }
     }
 
-    pub fn border_type(&self, focused: bool) -> BorderType {
-        if focused {
-            BorderType::Thick
-        } else {
-            BorderType::Plain
-        }
+    /// Rounded borders on every panel, focused or not — focus is signalled by
+    /// border/title *color* (the accent), not by changing the border shape, so
+    /// the frame stays visually stable as focus moves.
+    pub fn border_type(&self) -> BorderType {
+        BorderType::Rounded
     }
 
     /// Get a lane color by index (replaces graph::colors::get_color_by_index).

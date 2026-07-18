@@ -115,18 +115,20 @@ impl<'a> StatusBar<'a> {
 
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let key_style = Style::default()
-            .fg(self.theme.status_key_fg)
-            .bg(self.theme.status_key_bg)
-            .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(self.theme.text_primary);
+        // Three-tier hierarchy: accent (keys + the repo identity chip), normal
+        // text (the branch), muted text (hint labels). This collapses the old
+        // per-segment rainbow of background chips to the one app-wide accent,
+        // reserving colored backgrounds for semantic states (detached/error/mode).
+        let accent = self.theme.accent();
+        let key_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
+        let desc_style = Style::default().fg(self.theme.text_muted);
         let mode_style = Style::default()
             .fg(self.theme.status_mode_fg)
             .bg(self.theme.status_mode_bg)
             .add_modifier(Modifier::BOLD);
         let repo_style = Style::default()
             .fg(self.theme.status_repo_fg)
-            .bg(self.theme.status_repo_bg)
+            .bg(accent)
             .add_modifier(Modifier::BOLD);
 
         let mut spans: Vec<Span> = Vec::new();
@@ -152,7 +154,9 @@ impl<'a> Widget for StatusBar<'a> {
             } else {
                 spans.push(Span::styled(
                     format!(" {} ", head),
-                    Style::default().fg(self.theme.status_branch_fg).bg(self.theme.status_branch_bg),
+                    Style::default()
+                        .fg(self.theme.text_primary)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             spans.push(Span::raw(" "));
