@@ -211,6 +211,10 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Create branch. Matches any modifier since '^' arrives shifted.
         (_, KeyCode::Char('^')) => Some(Action::JumpToMergeBase),
 
+        // Undo the last reversible graph operation. Ctrl+Z is free in graph
+        // scope (the files pane has its own separate file-op undo).
+        (KeyModifiers::CONTROL, KeyCode::Char('z')) => Some(Action::UndoLastOp),
+
         // Open the selected commit's PR in the browser
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenPr),
 

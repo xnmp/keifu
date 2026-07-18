@@ -68,6 +68,10 @@ pub enum Action {
     // Jump to the merge base / fork point of the selection vs main (or HEAD) (graph)
     JumpToMergeBase,
 
+    // Undo the last reversible graph operation (branch/tag delete, merge, pull,
+    // rename) — graph scope. Distinct from the files-pane UndoLastFileOp.
+    UndoLastOp,
+
     // Load the next chunk / all remaining commits (graph)
     LoadMoreCommits,
     LoadAllCommits,

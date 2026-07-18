@@ -21,7 +21,8 @@ use crate::{
             apply_patch_cached_reverse, apply_patch_worktree_reverse, cherry_pick,
             checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
-            delete_branch, delete_remote_branch, delete_tag, get_last_commit_message,
+            create_lightweight_tag, delete_branch, delete_remote_branch, delete_tag,
+            get_last_commit_message, is_annotated_tag, reset_hard_checked,
             humanize_git_error, is_divergent_pull_error, merge_branch, prune_remote, push_tag,
             rebase_branch, rename_branch, reset_to_commit, restore_files, revert_commit, stage_all,
             stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
@@ -57,6 +58,7 @@ mod confirm_actions;
 mod compare_actions;
 mod file_history_actions;
 mod palette_actions;
+mod undo_actions;
 
 /// Copy text to system clipboard using platform-specific commands
 fn copy_to_clipboard(text: &str) -> Result<()> {
@@ -483,6 +485,8 @@ pub enum ConfirmAction {
     Checkout(String),
     /// Load the entire commit history (may be a large walk).
     LoadAllCommits,
+    /// Apply the newest undo-ledger entry (branch/tag delete, merge, pull, rename).
+    Undo,
     DeleteBranch(String),
     Merge(String),
     Rebase(String),
@@ -675,6 +679,13 @@ pub struct App {
     // The last pull's (remote, branch) so a divergence prompt can rerun it with
     // an explicit merge/rebase strategy.
     pub last_pull: Option<(Option<String>, Option<String>)>,
+    // HEAD OID snapshotted when a pull launches (it's async), so its completion
+    // can record a reset-to-here undo entry if the pull moved HEAD.
+    pub pre_pull_head: Option<Oid>,
+
+    // Session undo ledger for reversible graph ops (branch/tag delete, merge,
+    // pull, rename). Separate from the files-pane file-op undo.
+    pub undo_ledger: crate::undo::UndoLedger,
 
     // CI check details popup (AppMode::CiChecks): background fetcher + the
     // current view, `Some` only while the popup is open.

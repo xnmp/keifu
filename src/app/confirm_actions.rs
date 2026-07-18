@@ -29,12 +29,55 @@ impl App {
                         self.load_more_commits(true);
                         return Ok(());
                     }
+                    ConfirmAction::Undo => {
+                        // Re-verifies, executes the inverse, refreshes, toasts.
+                        self.confirm_undo()?;
+                        return Ok(());
+                    }
                     ConfirmAction::DeleteBranch(name) => {
+                        // Capture the tip OID before deleting, for a recreate undo.
+                        let tip = self
+                            .repo
+                            .repo()
+                            .find_branch(&name, git2::BranchType::Local)
+                            .ok()
+                            .and_then(|b| b.get().target());
                         delete_branch(self.repo.repo(), &name)?;
+                        if let Some(oid) = tip {
+                            self.record_undo(crate::undo::UndoEntry {
+                                description: format!("Delete branch '{name}'"),
+                                confirm: format!(
+                                    "Undo: delete branch '{name}' → recreate at {}?",
+                                    crate::undo::short_oid(oid)
+                                ),
+                                plan: crate::undo::UndoPlan::RecreateBranch {
+                                    name: name.clone(),
+                                    oid,
+                                },
+                                check: crate::undo::UndoCheck::BranchAbsent(name.clone()),
+                            });
+                        }
                     }
                     ConfirmAction::Merge(name) => {
+                        // Snapshot HEAD so a clean merge can be reset away.
+                        let pre_head = self.repo.head_oid();
                         let outcome = merge_branch(self.repo.repo(), &name)?;
                         op_outcome = Some((outcome, OperationState::Merge));
+                        if outcome == OpOutcome::Completed {
+                            if let (Some(pre), Some(post)) = (pre_head, self.repo.head_oid()) {
+                                if pre != post {
+                                    self.record_undo(crate::undo::UndoEntry {
+                                        description: format!("Merge '{name}'"),
+                                        confirm: format!(
+                                            "Undo: merge '{name}' → reset to {}?",
+                                            crate::undo::short_oid(pre)
+                                        ),
+                                        plan: crate::undo::UndoPlan::ResetHard { to: pre },
+                                        check: crate::undo::UndoCheck::HeadAtCleanTree(post),
+                                    });
+                                }
+                            }
+                        }
                     }
                     ConfirmAction::Rebase(name) => {
                         let outcome = rebase_branch(self.repo.repo(), &name)?;
@@ -107,8 +150,35 @@ impl App {
                         self.set_message(format!("Dropped stash@{{{}}}", index));
                     }
                     ConfirmAction::DeleteTag(name) => {
+                        // Capture the target commit + whether it's annotated,
+                        // before deletion, for a lightweight-recreate undo.
+                        let (target, annotated) = {
+                            let repo = self.repo.repo();
+                            let target = repo
+                                .find_reference(&format!("refs/tags/{name}"))
+                                .ok()
+                                .and_then(|r| r.peel_to_commit().ok())
+                                .map(|c| c.id());
+                            (target, is_annotated_tag(repo, &name))
+                        };
                         delete_tag(&self.repo_path, &name)?;
                         self.set_message(format!("Deleted tag '{}'", name));
+                        if let Some(oid) = target {
+                            let suffix = if annotated { " as a lightweight tag" } else { "" };
+                            self.record_undo(crate::undo::UndoEntry {
+                                description: format!("Delete tag '{name}'"),
+                                confirm: format!(
+                                    "Undo: delete tag '{name}' → recreate at {}{suffix}?",
+                                    crate::undo::short_oid(oid)
+                                ),
+                                plan: crate::undo::UndoPlan::RecreateTag {
+                                    name: name.clone(),
+                                    oid,
+                                    was_annotated: annotated,
+                                },
+                                check: crate::undo::UndoCheck::TagAbsent(name.clone()),
+                            });
+                        }
                     }
                     ConfirmAction::DiscardHunk {
                         patch,

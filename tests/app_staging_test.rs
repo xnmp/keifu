@@ -136,6 +136,8 @@ fn make_base_app(
         open_prs: std::collections::HashMap::new(),
         pr_fetch: keifu::pr::PrFetch::new(),
         last_pull: None,
+        pre_pull_head: None,
+        undo_ledger: keifu::undo::UndoLedger::default(),
         check_fetch: keifu::checks::CheckFetch::new(),
         ci_checks: None,
         thread_fetch: keifu::pr_thread::PrThreadFetch::new(),

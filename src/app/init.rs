@@ -114,6 +114,8 @@ impl App {
             open_prs: std::collections::HashMap::new(),
             pr_fetch: crate::pr::PrFetch::new(),
             last_pull: None,
+            pre_pull_head: None,
+            undo_ledger: crate::undo::UndoLedger::default(),
             check_fetch: crate::checks::CheckFetch::new(),
             ci_checks: None,
             thread_fetch: crate::pr_thread::PrThreadFetch::new(),

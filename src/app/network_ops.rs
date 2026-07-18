@@ -78,7 +78,26 @@ impl App {
                     return true;
                 }
                 match outcome {
-                    OpOutcome::Completed => self.toast(ToastKind::Success, "Pulled"),
+                    OpOutcome::Completed => {
+                        // If the pull (fast-forward or merge) moved HEAD, record a
+                        // reset-back undo. The pre-pull HEAD was snapshotted at
+                        // launch (the op is async).
+                        if let (Some(pre), Some(post)) = (self.pre_pull_head, self.repo.head_oid()) {
+                            if pre != post {
+                                self.record_undo(crate::undo::UndoEntry {
+                                    description: "Pull".to_string(),
+                                    confirm: format!(
+                                        "Undo: pull → reset to {}?",
+                                        crate::undo::short_oid(pre)
+                                    ),
+                                    plan: crate::undo::UndoPlan::ResetHard { to: pre },
+                                    check: crate::undo::UndoCheck::HeadAtCleanTree(post),
+                                });
+                            }
+                        }
+                        self.pre_pull_head = None;
+                        self.toast(ToastKind::Success, "Pulled");
+                    }
                     OpOutcome::Conflicts { count } => {
                         self.focus_conflict_files();
                         // Keep the workflow guidance in the status bar; toast the
@@ -263,6 +282,8 @@ impl App {
     /// prompt can rerun it with an explicit merge/rebase strategy.
     fn start_pull_with(&mut self, remote: Option<String>, branch: Option<String>, mode: PullMode) {
         self.last_pull = Some((remote.clone(), branch.clone()));
+        // Snapshot HEAD so a completed pull that moved it can record an undo.
+        self.pre_pull_head = self.repo.head_oid();
         let msg = self.network.start_pull(&self.repo_path, remote, branch, mode);
         self.set_message(msg);
     }

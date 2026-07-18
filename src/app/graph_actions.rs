@@ -93,6 +93,9 @@ impl App {
             Action::JumpToMergeBase => {
                 self.jump_to_merge_base();
             }
+            Action::UndoLastOp => {
+                self.request_undo();
+            }
             Action::LoadMoreCommits => {
                 self.load_more_commits(false);
             }

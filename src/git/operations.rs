@@ -490,6 +490,49 @@ pub fn reset_to_commit(repo_path: &str, commit_oid: Oid, mode: ResetMode) -> Res
     Ok(())
 }
 
+/// Whether the working tree is clean enough to hard-reset over: no staged or
+/// modified/deleted tracked files. Untracked and ignored files are allowed —
+/// `reset --hard` preserves them.
+pub fn is_working_tree_clean(repo: &Repository) -> Result<bool> {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(false).include_ignored(false);
+    let statuses = repo.statuses(Some(&mut opts))?;
+    Ok(statuses.iter().all(|e| e.status() == Status::CURRENT))
+}
+
+/// Hard-reset HEAD to `oid` — but only when the working tree is clean, so undo
+/// never clobbers uncommitted work. The guard lives here (not just at the call
+/// site) so every caller is protected.
+pub fn reset_hard_checked(repo: &Repository, oid: Oid) -> Result<()> {
+    if !is_working_tree_clean(repo)? {
+        bail!("working tree has uncommitted changes");
+    }
+    let obj = repo.find_object(oid, None).context("Target commit not found")?;
+    repo.reset(&obj, git2::ResetType::Hard, None)?;
+    Ok(())
+}
+
+/// Create a pure lightweight tag (a ref straight to `commit_oid`), used to
+/// restore a deleted tag. Annotated tags are downgraded to lightweight — we
+/// don't reconstruct the original tag object/message.
+pub fn create_lightweight_tag(repo: &Repository, tag_name: &str, commit_oid: Oid) -> Result<()> {
+    let obj = repo.find_object(commit_oid, None).context("Commit not found")?;
+    repo.tag_lightweight(tag_name, &obj, false)
+        .context(format!("Failed to recreate tag '{}'", tag_name))?;
+    Ok(())
+}
+
+/// Whether `refs/tags/<name>` is an annotated tag (points at a tag object) vs a
+/// lightweight tag (points straight at a commit).
+pub fn is_annotated_tag(repo: &Repository, tag_name: &str) -> bool {
+    repo.find_reference(&format!("refs/tags/{tag_name}"))
+        .ok()
+        .and_then(|r| r.target())
+        .and_then(|oid| repo.find_object(oid, None).ok())
+        .map(|o| o.kind() == Some(git2::ObjectType::Tag))
+        .unwrap_or(false)
+}
+
 /// Create a lightweight tag at the specified commit
 pub fn add_tag(repo: &Repository, tag_name: &str, commit_oid: Oid) -> Result<()> {
     let obj = repo

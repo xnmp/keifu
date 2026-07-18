@@ -147,6 +147,13 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  ^          ", key_style),
                 Span::styled("Jump to fork point (merge base with main / HEAD)", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+Z     ", key_style),
+                Span::styled(
+                    "Undo last op — branch/tag delete, merge, pull, rename",
+                    desc_style,
+                ),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
         ];

@@ -41,6 +41,19 @@ impl App {
                     InputAction::RenameBranch { old_name } => {
                         if !input.is_empty() && input != old_name {
                             rename_branch(&self.repo_path, &old_name, &input)?;
+                            // Inverse: rename the new name back to the old.
+                            self.record_undo(crate::undo::UndoEntry {
+                                description: format!("Rename '{old_name}' → '{input}'"),
+                                confirm: format!("Undo: rename → back to '{old_name}'?"),
+                                plan: crate::undo::UndoPlan::RenameBranch {
+                                    from: input.clone(),
+                                    to: old_name.clone(),
+                                },
+                                check: crate::undo::UndoCheck::RenameConsistent {
+                                    exists: input.clone(),
+                                    absent: old_name.clone(),
+                                },
+                            });
                             self.refresh(true)?;
                             self.set_message(format!("Renamed '{}' -> '{}'", old_name, input));
                         }

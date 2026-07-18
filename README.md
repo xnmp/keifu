@@ -35,6 +35,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits
 - Command palette (`Ctrl+P` / `:`) — one fuzzy list over commands, branch checkouts, and commit jumps
+- Session undo (`Ctrl+Z` in the graph) for branch/tag delete, merge, pull, and rename — verified against current state and confirmed before it runs
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
 - Full mouse support: click to select and focus, double-click to open, right-click for a context menu, clickable PR/branch chips, scroll-wheel routing, and a drag-resizable graph/detail divider
 
@@ -108,6 +109,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `Space` | Open file diff for the selected commit |
 | `]` / `[` | Jump to next/previous commit with a branch label |
 | `^` | Jump to the fork point — the merge base of the selected commit with the main branch (or, if it's on main, with the current branch); "No divergence" on linear history |
+| `Ctrl+Z` | Undo the last reversible operation — branch/tag delete, merge, pull, or rename. Verifies the ref hasn't moved since (drops the entry if it has), confirms with the exact inverse, and never resets a dirty tree. Not covered: push, rebase, stash ops, or anything done outside keifu. (The files panel keeps its own separate Ctrl+Z for file operations.) |
 | `b` | Create branch at selected commit |
 | `d` | Delete branch (local or remote, behind confirm) |
 | `f` | Fetch (resolves the remote from upstream; prompts if ambiguous) |

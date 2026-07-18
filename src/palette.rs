@@ -66,6 +66,8 @@ pub struct PaletteContext {
     pub selected_has_open_pr: bool,
     /// More commits remain to load (the walk isn't exhausted).
     pub can_load_more: bool,
+    /// The undo ledger has at least one reversible operation.
+    pub can_undo: bool,
 }
 
 /// One curated command: a label, an optional right-aligned keybind hint, the
@@ -97,6 +99,9 @@ pub fn command_registry() -> Vec<PaletteEntry> {
     fn can_load_more(c: &PaletteContext) -> bool {
         c.can_load_more
     }
+    fn can_undo(c: &PaletteContext) -> bool {
+        c.can_undo
+    }
 
     vec![
         entry("Fetch all remotes & refresh", Some("F5"), Action::FullUpdate, always),
@@ -108,6 +113,7 @@ pub fn command_registry() -> Vec<PaletteEntry> {
         entry("Create branch here", Some("b"), Action::CreateBranch, has_commit),
         entry("Mark commit for compare", Some("m"), Action::MarkForCompare, has_commit),
         entry("Jump to merge base with main", Some("^"), Action::JumpToMergeBase, has_commit),
+        entry("Undo last operation", Some("^Z"), Action::UndoLastOp, can_undo),
         entry("Create pull request", None, Action::CreatePullRequest, can_create_pr),
         entry("Merge pull request", None, Action::MergePullRequest, has_open_pr),
         entry("Open PR in browser", Some("o"), Action::OpenPr, has_open_pr),
