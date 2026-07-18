@@ -108,6 +108,8 @@ impl App {
             open_prs: std::collections::HashMap::new(),
             pr_fetch: crate::pr::PrFetch::new(),
             last_pull: None,
+            check_fetch: crate::checks::CheckFetch::new(),
+            ci_checks: None,
             watcher,
             pending_watcher,
             last_undoable_op: None,

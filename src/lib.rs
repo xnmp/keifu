@@ -9,6 +9,7 @@ pub mod files_pane_state;
 pub mod git;
 pub mod graph_nav;
 pub mod network;
+pub mod checks;
 pub mod pr;
 pub mod graph;
 pub mod keybindings;

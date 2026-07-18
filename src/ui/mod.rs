@@ -2,6 +2,7 @@
 
 pub mod branch_filter;
 pub mod commit_detail;
+pub mod ci_checks;
 pub mod commit_menu;
 pub mod dialog;
 pub mod file_diff_view;
@@ -310,6 +311,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::PullDivergence { selected } => {
             let popup_area = centered_rect_fixed(48, 8, area);
             frame.render_widget(PullDivergenceDialog::new(*selected, &theme), popup_area);
+        }
+        AppMode::CiChecks => {
+            if let Some(view) = &app.ci_checks {
+                use self::ci_checks::CiChecksWidget;
+                let popup_area = centered_rect(72, 74, area);
+                frame.render_widget(CiChecksWidget::new(view, &theme), popup_area);
+            }
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);

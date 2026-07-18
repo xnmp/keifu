@@ -132,6 +132,8 @@ fn make_base_app(
         open_prs: std::collections::HashMap::new(),
         pr_fetch: keifu::pr::PrFetch::new(),
         last_pull: None,
+        check_fetch: keifu::checks::CheckFetch::new(),
+        ci_checks: None,
         watcher: None,
         pending_watcher: None,
         last_undoable_op: None,
