@@ -34,17 +34,25 @@ pub struct GraphNode {
     /// Render info for this row
     pub cells: Vec<CellType>,
     /// The commit-edge identity of each cell, parallel to `cells`, for branch
-    /// tracing. `.0` is the primary edge's target OID (the lane/curve/commit it
-    /// draws); `.1` is a secondary OID for `HorizontalPipe` cells (the vertical
-    /// lane crossed underneath the horizontal stroke). Either being in the
-    /// selected commit's lineage marks the cell as traced. `None` = no lineage
-    /// (e.g. the grey uncommitted connector).
+    /// tracing. `.0` is the primary edge — the `(child, parent)` OID pair the
+    /// stroke draws (a lane pipe, a curve, or the commit dot as a self-edge);
+    /// `.1` is the secondary edge for `HorizontalPipe` cells (the vertical lane
+    /// crossed underneath the horizontal stroke). An edge is on the traced line
+    /// only when BOTH its endpoints are in the selected commit's lineage —
+    /// identifying a stroke by a single endpoint would light a merged feature
+    /// branch's lead-in strokes (fork commit is on the trunk lineage). A cell is
+    /// traced when either edge is. `None` = no edge (e.g. the grey uncommitted
+    /// connector).
     pub cell_oids: Vec<CellOids>,
 }
 
-/// Per-cell commit-edge identity: `(primary, secondary)` target OIDs. See
+/// A single traced stroke's identity: the `(child, parent)` commit OIDs it
+/// connects. Both endpoints must be in a lineage for the edge to be traced.
+pub type CellEdge = (Oid, Oid);
+
+/// Per-cell edge identity: `(primary, secondary)` edges. See
 /// [`GraphNode::cell_oids`].
-pub type CellOids = (Option<Oid>, Option<Oid>);
+pub type CellOids = (Option<CellEdge>, Option<CellEdge>);
 
 impl GraphNode {
     /// A merge commit (2+ parents). Stash commits are excluded — their extra
@@ -198,6 +206,12 @@ pub fn build_graph(
 
     // Lane tracking: OID tracked by each lane
     let mut lanes: Vec<Option<Oid>> = Vec::new();
+    // Parallel to `lanes`: the child commit whose edge this lane's pipe carries,
+    // i.e. the commit that placed (or continued) the lane toward `lanes[i]`. A
+    // lane pipe's traced edge is `(lane_children[i], lanes[i])` — both endpoints
+    // needed for the pair-identity trace. Kept in lock-step with every `lanes`
+    // mutation below.
+    let mut lane_children: Vec<Option<Oid>> = Vec::new();
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut max_lane: usize = 0;
 
@@ -227,6 +241,7 @@ pub fn build_graph(
                 l
             } else {
                 lanes.push(None);
+                lane_children.push(None);
                 lanes.len() - 1
             }
         };
@@ -274,6 +289,7 @@ pub fn build_graph(
                 commit.oid,
                 &merging_lanes,
                 &lanes,
+                &lane_children,
                 &oid_color_index,
                 &lane_color_index,
                 max_lane,
@@ -297,6 +313,7 @@ pub fn build_graph(
             for &(l, _) in &merging_lanes {
                 if l < lanes.len() {
                     lanes[l] = None;
+                    lane_children[l] = None;
                     color_assigner.release_lane(l);
                     lane_color_index.remove(&l);
                 }
@@ -318,9 +335,10 @@ pub fn build_graph(
         // Record lane color (to preserve colors during forks)
         lane_color_index.insert(lane, commit_color_index);
 
-        // Clear this commit lane
+        // Clear this commit lane (re-set below when a parent continues it).
         if lane < lanes.len() {
             lanes[lane] = None;
+            lane_children[lane] = None;
         }
 
         // Process parent commits
@@ -361,8 +379,10 @@ pub fn build_graph(
             let (parent_lane, was_existing, parent_color) = if let Some(pl) = existing_parent_lane {
                 // If parent is a fork point, treat as fork sibling
                 if parent_idx == 0 && fork_points.contains(parent_oid) {
-                    // Track the parent on this lane as well (same OID on multiple lanes)
+                    // Track the parent on this lane as well (same OID on multiple lanes).
+                    // This lane continues from the current commit down to the fork parent.
                     lanes[lane] = Some(*parent_oid);
+                    lane_children[lane] = Some(commit.oid);
                     is_fork_sibling = true;
                     // Keep main lane color, otherwise use commit_color_index
                     let color = if color_assigner.is_main_lane(lane) {
@@ -384,20 +404,25 @@ pub fn build_graph(
                     (pl, true, color)
                 }
             } else if parent_idx == 0 {
-                // First parent uses the same lane - inherit color
+                // First parent uses the same lane - inherit color. The lane
+                // continues from this commit down to its first parent.
                 lanes[lane] = Some(*parent_oid);
+                lane_children[lane] = Some(commit.oid);
                 oid_color_index.insert(*parent_oid, commit_color_index);
                 (lane, false, commit_color_index)
             } else {
-                // Subsequent parents use new lanes - assign fork sibling colors
+                // Subsequent parents use new lanes - assign fork sibling colors.
+                // A new lane is spawned by this (merge) commit toward the parent.
                 let empty = lanes.iter().position(|l| l.is_none());
                 let new_lane = if let Some(l) = empty {
                     l
                 } else {
                     lanes.push(None);
+                    lane_children.push(None);
                     lanes.len() - 1
                 };
                 lanes[new_lane] = Some(*parent_oid);
+                lane_children[new_lane] = Some(commit.oid);
                 let new_color = color_assigner.assign_fork_sibling_color(new_lane);
                 oid_color_index.insert(*parent_oid, new_color);
                 lane_color_index.insert(new_lane, new_color);
@@ -442,6 +467,7 @@ pub fn build_graph(
             commit.oid,
             &parent_lanes,
             &lanes,
+            &lane_children,
             &oid_color_index,
             &lane_color_index,
             max_lane,
@@ -506,13 +532,15 @@ pub fn build_graph(
                     .unwrap_or(false);
 
                 if !first_parent_on_ending_lane && !continues_down {
-                    // Move the ending lane OID into the main lane
+                    // Move the ending lane OID (and its child) into the main lane
                     if let Some(oid) = lanes[ending_lane] {
                         if lanes.get(main_lane).map(|l| l.is_none()).unwrap_or(false) {
                             lanes[main_lane] = Some(oid);
+                            lane_children[main_lane] = lane_children[ending_lane];
                         }
                     }
                     lanes[ending_lane] = None;
+                    lane_children[ending_lane] = None;
                     color_assigner.release_lane(ending_lane);
                     lane_color_index.remove(&ending_lane);
                 }
@@ -646,7 +674,7 @@ fn insert_uncommitted_node(
                     nodes[head_idx].cells[col] =
                         CellType::HorizontalPipe(UNCOMMITTED_COLOR_INDEX, pipe_lane);
                     // The grey connector isn't lineage, but the crossed lane
-                    // pipe keeps its OID so tracing still lights it up.
+                    // pipe keeps its edge so tracing still lights it up.
                     let crossed = nodes[head_idx].cell_oids[col].0;
                     nodes[head_idx].cell_oids[col] = (None, crossed);
                 }
@@ -698,6 +726,7 @@ fn build_row_cells_with_colors(
     commit_oid: Oid,
     parent_lanes: &[(Oid, usize, bool, usize, bool)],
     active_lanes: &[Option<Oid>],
+    active_lane_children: &[Option<Oid>],
     oid_color_index: &HashMap<Oid, usize>,
     lane_color_index: &HashMap<usize, usize>,
     max_lane: usize,
@@ -719,27 +748,28 @@ fn build_row_cells_with_colors(
                         .or_else(|| oid_color_index.get(oid).copied())
                         .unwrap_or(lane_idx);
                     cells[cell_idx] = CellType::Pipe(color);
-                    // This pipe carries the edge toward `oid`.
-                    oids[cell_idx] = (Some(*oid), None);
+                    // This pipe carries the edge (lane's child → awaited parent).
+                    oids[cell_idx] = (lane_edge(active_lane_children, lane_idx, *oid), None);
                 }
             }
         }
     }
 
-    // Draw commit node
+    // Draw commit node — a self-edge, traced iff the commit itself is on lineage.
     let commit_cell_idx = commit_lane * 2;
     if commit_cell_idx < cells.len() {
         cells[commit_cell_idx] = CellType::Commit(commit_color);
-        oids[commit_cell_idx] = (Some(commit_oid), None);
+        oids[commit_cell_idx] = (Some((commit_oid, commit_oid)), None);
     }
 
-    // Draw connections to parents
+    // Draw connections to parents — each stroke's edge is (commit → parent).
     for &(parent_oid, parent_lane, was_existing, parent_color, already_shown) in parent_lanes.iter()
     {
         if parent_lane == commit_lane {
             // Same lane - only a vertical line (drawn on next row)
             continue;
         }
+        let edge = (commit_oid, parent_oid);
 
         // Connection to a different lane
         if parent_lane > commit_lane {
@@ -750,11 +780,11 @@ fn build_row_cells_with_colors(
                     let existing = cells[col];
                     if let CellType::Pipe(pl) = existing {
                         cells[col] = CellType::HorizontalPipe(parent_color, pl);
-                        // Horizontal edge → parent; keep the crossed pipe's OID.
-                        oids[col] = (Some(parent_oid), oids[col].0);
+                        // Horizontal edge → parent; keep the crossed pipe's edge.
+                        oids[col] = (Some(edge), oids[col].0);
                     } else if existing == CellType::Empty {
                         cells[col] = CellType::Horizontal(parent_color);
-                        oids[col] = (Some(parent_oid), None);
+                        oids[col] = (Some(edge), None);
                     }
                 }
             }
@@ -771,7 +801,7 @@ fn build_row_cells_with_colors(
                     // New lane for parent: ╮ (branch starts here, continues down)
                     cells[end_idx] = CellType::BranchLeft(parent_color);
                 }
-                oids[end_idx] = (Some(parent_oid), None);
+                oids[end_idx] = (Some(edge), None);
             }
         } else {
             // Branch end: connect to the left lane (main line)
@@ -782,10 +812,10 @@ fn build_row_cells_with_colors(
                     let existing = cells[col];
                     if let CellType::Pipe(pl) = existing {
                         cells[col] = CellType::HorizontalPipe(parent_color, pl);
-                        oids[col] = (Some(parent_oid), oids[col].0);
+                        oids[col] = (Some(edge), oids[col].0);
                     } else if existing == CellType::Empty {
                         cells[col] = CellType::Horizontal(parent_color);
-                        oids[col] = (Some(parent_oid), None);
+                        oids[col] = (Some(edge), None);
                     }
                 }
             }
@@ -802,12 +832,27 @@ fn build_row_cells_with_colors(
                     // New lane for parent: ╭ (branch starts here, continues down)
                     cells[start_idx] = CellType::BranchRight(parent_color);
                 }
-                oids[start_idx] = (Some(parent_oid), None);
+                oids[start_idx] = (Some(edge), None);
             }
         }
     }
 
     (cells, oids)
+}
+
+/// The `(child, parent)` edge of the pass-through pipe on `lane`, whose awaited
+/// parent is `awaited`. Returns `None` when the lane has no recorded child (it
+/// then can't be a real traced edge, so it must not light up).
+fn lane_edge(
+    active_lane_children: &[Option<Oid>],
+    lane: usize,
+    awaited: Oid,
+) -> Option<CellEdge> {
+    active_lane_children
+        .get(lane)
+        .copied()
+        .flatten()
+        .map(|child| (child, awaited))
 }
 
 /// Build fork connector row cells (multiple branches from the same parent)
@@ -819,24 +864,27 @@ fn build_fork_connector_cells(
     fork_oid: Oid,
     merging_lanes: &[(usize, usize)], // (lane, color_index)
     active_lanes: &[Option<Oid>],
+    active_lane_children: &[Option<Oid>],
     oid_color_index: &HashMap<Oid, usize>,
     lane_color_index: &HashMap<usize, usize>,
     max_lane: usize,
 ) -> (Vec<CellType>, Vec<CellOids>) {
     let mut cells = vec![CellType::Empty; (max_lane + 1) * 2];
-    // Every stroke on this connector belongs to the fork commit's lineage,
-    // except the unrelated pass-through pipes, which carry their own OID.
+    // Each stroke's edge is (that lane's child → the fork commit). A merging
+    // lane's lead-in strokes therefore climb from the *feature* commit, not the
+    // fork commit, so tracing the trunk does not light them. Pass-through pipes
+    // keep their own edge.
     let mut oids: Vec<CellOids> = vec![(None, None); cells.len()];
 
     // Sorted list of merging lane numbers
     let mut merging_lane_nums: Vec<usize> = merging_lanes.iter().map(|(l, _)| *l).collect();
     merging_lane_nums.sort();
 
-    // Draw a T junction on the main lane
+    // Draw a T junction on the main lane — edge (main lane's child → fork commit).
     let main_cell_idx = main_lane * 2;
     if main_cell_idx < cells.len() {
         cells[main_cell_idx] = CellType::TeeRight(main_color);
-        oids[main_cell_idx] = (Some(fork_oid), None);
+        oids[main_cell_idx] = (lane_edge(active_lane_children, main_lane, fork_oid), None);
     }
 
     // Draw vertical lines for active lanes (except main and merging lanes)
@@ -851,7 +899,7 @@ fn build_fork_connector_cells(
                         .or_else(|| oid_color_index.get(oid).copied())
                         .unwrap_or(lane_idx);
                     cells[cell_idx] = CellType::Pipe(color);
-                    oids[cell_idx] = (Some(*oid), None);
+                    oids[cell_idx] = (lane_edge(active_lane_children, lane_idx, *oid), None);
                 }
             }
         }
@@ -862,17 +910,19 @@ fn build_fork_connector_cells(
 
     // Draw connectors to merging lanes
     for &(merge_lane, merge_color) in merging_lanes {
+        // This merging lane's stroke climbs from its own child up to the fork.
+        let merge_edge = lane_edge(active_lane_children, merge_lane, fork_oid);
         // Horizontal line from main lane to merging lane
         for col in (main_lane * 2 + 1)..(merge_lane * 2) {
             if col < cells.len() {
                 let existing = cells[col];
                 if let CellType::Pipe(pl) = existing {
                     cells[col] = CellType::HorizontalPipe(merge_color, pl);
-                    // Fork stroke crossing an unrelated pipe: keep both OIDs.
-                    oids[col] = (Some(fork_oid), oids[col].0);
+                    // Fork stroke crossing an unrelated pipe: keep both edges.
+                    oids[col] = (merge_edge, oids[col].0);
                 } else if matches!(existing, CellType::Empty | CellType::Horizontal(_)) {
                     cells[col] = CellType::Horizontal(merge_color);
-                    oids[col] = (Some(fork_oid), None);
+                    oids[col] = (merge_edge, None);
                 }
             }
         }
@@ -887,7 +937,7 @@ fn build_fork_connector_cells(
                 // Middle lanes use ┴
                 cells[end_idx] = CellType::TeeUp(merge_color);
             }
-            oids[end_idx] = (Some(fork_oid), None);
+            oids[end_idx] = (merge_edge, None);
         }
     }
 
@@ -935,11 +985,25 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
         let first_parent = layout.nodes[row]
             .commit
             .as_ref()
-            .and_then(|c| c.parent_oids.first().copied())
-            .filter(|p| oid_row.contains_key(p));
+            .and_then(|c| c.parent_oids.first().copied());
         match first_parent {
-            Some(p) if set.insert(p) => cur = p,
-            _ => break,
+            // Visible parent: keep walking the branch line down.
+            Some(p) if oid_row.contains_key(&p) => {
+                if set.insert(p) {
+                    cur = p;
+                } else {
+                    break;
+                }
+            }
+            // Terminal invisible parent: the branch line continues below the
+            // loaded/filtered window. Insert it anyway so the trunk's bottom-edge
+            // pipe — whose edge is `(visible_child, this_parent)` — still counts
+            // both endpoints as lineage and stays lit instead of wrongly dimming.
+            Some(p) => {
+                set.insert(p);
+                break;
+            }
+            None => break,
         }
     }
 
@@ -971,11 +1035,21 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     set
 }
 
-/// Whether a cell (by its `(primary, secondary)` edge OIDs) belongs to the
-/// traced lineage. Either OID being in the lineage lights the cell — the
-/// secondary covers a lineage pipe crossed underneath a `HorizontalPipe`.
+/// Whether a single `(child, parent)` edge is on the traced line: an edge lies
+/// on the lineage only when BOTH endpoints are in it. Tagging a stroke by a
+/// single endpoint would light a merged feature branch's lead-in strokes,
+/// because the fork commit sits on the trunk lineage while the stroke climbs
+/// into an off-lineage feature lane. `None` (no edge) is never traced.
+pub fn edge_is_traced(edge: Option<CellEdge>, lineage: &HashSet<Oid>) -> bool {
+    edge.is_some_and(|(child, parent)| lineage.contains(&child) && lineage.contains(&parent))
+}
+
+/// Whether a cell (by its `(primary, secondary)` edges) belongs to the traced
+/// lineage. Either edge being traced lights the cell — the secondary covers a
+/// lineage pipe crossed underneath a `HorizontalPipe`. Used by the Unicode text
+/// path; the pixel path dims the two edges independently (see `apply_trace_dim`).
 pub fn cell_is_traced(oids: CellOids, lineage: &HashSet<Oid>) -> bool {
-    oids.0.is_some_and(|o| lineage.contains(&o)) || oids.1.is_some_and(|o| lineage.contains(&o))
+    edge_is_traced(oids.0, lineage) || edge_is_traced(oids.1, lineage)
 }
 
 #[cfg(test)]
@@ -1142,6 +1216,121 @@ mod tests {
         assert_eq!(
             head_row.cells[4],
             CellType::MergeLeft(UNCOMMITTED_COLOR_INDEX)
+        );
+    }
+
+    // ── branch tracing: edge-pair identity ───────────────────────────────
+
+    fn ci(oid: Oid, parents: Vec<Oid>) -> CommitInfo {
+        let mut c = commit_with_parents(0);
+        c.oid = oid;
+        c.parent_oids = parents;
+        c
+    }
+
+    /// Trunk A—B—C (A newest) with feature F1—F2 branched off C and merged into
+    /// A: `A`'s 2nd parent is `F1`, `F2`'s first parent is `C`. `C`'s first
+    /// parent `Z` is off-graph (below the loaded window). Returns the layout and
+    /// the OIDs `[A, B, C, F1, F2, Z]`.
+    ///
+    /// Layout rows (verified): 0=A(merge) 1=B 2=F1 3=F2 4=fork-connector 5=C.
+    fn trace_fixture() -> (GraphLayout, [Oid; 6]) {
+        let (a, b, c, f1, f2, z) = (oid(1), oid(2), oid(3), oid(4), oid(5), oid(9));
+        let commits = vec![
+            ci(a, vec![b, f1]),
+            ci(b, vec![c]),
+            ci(f1, vec![f2]),
+            ci(f2, vec![c]),
+            ci(c, vec![z]),
+        ];
+        let layout = build_graph(&commits, &[], &[], &[], None, None);
+        (layout, [a, b, c, f1, f2, z])
+    }
+
+    /// Row index of the commit carrying `target`.
+    fn row_of(layout: &GraphLayout, target: Oid) -> usize {
+        layout
+            .nodes
+            .iter()
+            .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(target))
+            .expect("commit present in layout")
+    }
+
+    /// Whether the cell at `(row, col)` is on the traced lineage.
+    fn traced(layout: &GraphLayout, lineage: &HashSet<Oid>, row: usize, col: usize) -> bool {
+        cell_is_traced(
+            layout.nodes[row].cell_oids.get(col).copied().unwrap_or((None, None)),
+            lineage,
+        )
+    }
+
+    #[test]
+    fn tracing_trunk_lights_only_the_trunk_line() {
+        let (layout, [_a, b, c, _f1, _f2, _z]) = trace_fixture();
+        let lineage = lineage_oids(&layout, row_of(&layout, b));
+
+        let (a_row, b_row, c_row) = (row_of(&layout, oid(1)), row_of(&layout, b), row_of(&layout, c));
+        let conn_row = c_row - 1; // fork connector immediately precedes C
+
+        // Trunk commits and pipes are traced.
+        assert!(traced(&layout, &lineage, a_row, 0), "A's dot is on the trunk lineage");
+        assert!(traced(&layout, &lineage, b_row, 0), "B's dot");
+        assert!(traced(&layout, &lineage, c_row, 0), "C's dot");
+        assert!(traced(&layout, &lineage, row_of(&layout, oid(4)), 0), "trunk pipe B→C at F1's row");
+        assert!(traced(&layout, &lineage, row_of(&layout, oid(5)), 0), "trunk pipe B→C at F2's row");
+
+        // The merge into A (its curve/lead-in to F1) is NOT traced — the bug.
+        assert!(!traced(&layout, &lineage, a_row, 1), "merge lead-in A→F1 stays dim");
+        assert!(!traced(&layout, &lineage, a_row, 2), "merge curve A→F1 stays dim");
+        // The feature pipe (spawned by the merge, edge A→F1) is NOT traced.
+        assert!(!traced(&layout, &lineage, b_row, 2), "feature pipe at B's row stays dim");
+
+        // Fork connector: the main-lane ├ (edge B→C) is traced; the merging
+        // strokes climbing into the feature lane (edge F2→C) are NOT.
+        assert!(traced(&layout, &lineage, conn_row, 0), "fork main-lane ├ is traced");
+        assert!(!traced(&layout, &lineage, conn_row, 1), "fork merging lead-in stays dim");
+        assert!(!traced(&layout, &lineage, conn_row, 2), "fork merging curve stays dim");
+    }
+
+    #[test]
+    fn tracing_feature_lights_feature_and_fork_strokes() {
+        let (layout, [_a, _b, c, f1, f2, _z]) = trace_fixture();
+        let lineage = lineage_oids(&layout, row_of(&layout, f1));
+
+        let a_row = row_of(&layout, oid(1));
+        let b_row = row_of(&layout, oid(2));
+        let (f1_row, f2_row, c_row) = (row_of(&layout, f1), row_of(&layout, f2), row_of(&layout, c));
+        let conn_row = c_row - 1;
+
+        // The feature line and the fork parent are traced.
+        assert!(traced(&layout, &lineage, f1_row, 2), "F1's dot");
+        assert!(traced(&layout, &lineage, f2_row, 2), "F2's dot");
+        assert!(traced(&layout, &lineage, c_row, 0), "C's dot (fork parent, on the F line)");
+        // The fork commit's connector strokes for the F lane ARE traced —
+        // both endpoints (F2, C) are on the feature lineage.
+        assert!(traced(&layout, &lineage, conn_row, 1), "fork merging lead-in for F lane");
+        assert!(traced(&layout, &lineage, conn_row, 2), "fork merging curve for F lane");
+
+        // UP from F1 finds no child (A's FIRST parent is B), so A, the merge
+        // curve, and the trunk-only cells above C stay untraced.
+        assert!(!traced(&layout, &lineage, a_row, 0), "A's dot stays dim");
+        assert!(!traced(&layout, &lineage, a_row, 2), "merge curve A→F1 stays dim");
+        assert!(!traced(&layout, &lineage, b_row, 0), "B's dot (trunk-only) stays dim");
+        assert!(!traced(&layout, &lineage, conn_row, 0), "fork main-lane ├ stays dim");
+    }
+
+    #[test]
+    fn terminal_parent_rule_keeps_bottom_edge_pipe_traced() {
+        let (layout, [_a, b, c, _f1, _f2, z]) = trace_fixture();
+        let lineage = lineage_oids(&layout, row_of(&layout, b));
+
+        // The DOWN walk hits C's off-graph first parent Z and stops — but the
+        // terminal-parent rule inserts Z anyway, so a bottom-edge trunk pipe
+        // whose edge is (C, Z) still counts both endpoints as lineage.
+        assert!(lineage.contains(&z), "terminal invisible parent Z joins the lineage");
+        assert!(
+            cell_is_traced((Some((c, z)), None), &lineage),
+            "a trunk pipe into an off-graph parent stays lit, not dimmed"
         );
     }
 }

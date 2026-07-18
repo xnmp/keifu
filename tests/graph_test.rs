@@ -1198,7 +1198,9 @@ fn test_single_root_commit() {
 // Branch tracing: lineage_oids / cell_is_traced / graph_has_enough_lanes
 // ─────────────────────────────────────────────────────────────────────
 
-use keifu::git::graph::{cell_is_traced, graph_has_enough_lanes, lineage_oids, GraphLayout};
+use keifu::git::graph::{
+    cell_is_traced, edge_is_traced, graph_has_enough_lanes, lineage_oids, GraphLayout,
+};
 use std::collections::HashSet;
 
 /// Row index of the commit with the given short id.
@@ -1269,24 +1271,33 @@ fn trace_single_merge_excludes_the_other_branch() {
     assert!(!feature.contains(&make_oid("c3")));
     assert!(!feature.contains(&make_oid("c4")));
 
-    // The merge row draws a curve down to the feature (c2). Selecting the
-    // feature traces that curve, but never the merge's own dot (c4 ∉ feature).
+    // The merge row draws a curve down to the feature (c2). Under the edge
+    // model, selecting the feature must NOT light that curve — its edge is
+    // (c4 → c2) and the merge commit c4 is off the feature's first-parent line.
+    // This is the lead-in-strokes fix: a single shared endpoint (c2) no longer
+    // lights the stroke. Nothing on the merge row is traced by the feature.
     let merge = &layout.nodes[row_of(&layout, "c4")];
-    let feature_cols: Vec<usize> = merge
-        .cell_oids
-        .iter()
-        .enumerate()
-        .filter(|(_, o)| cell_is_traced(**o, &feature))
-        .map(|(i, _)| i)
-        .collect();
     assert!(
-        !feature_cols.is_empty(),
-        "the merge's curve to the feature should be traced"
+        !merge.cell_oids.iter().any(|o| cell_is_traced(*o, &feature)),
+        "selecting the feature must not light the merge row's lead-in strokes"
     );
+
+    // Selecting the main line lights the merge's own dot — both endpoints of the
+    // self-edge (c4, c4) are on the main line — while still leaving the feature
+    // curve dim (c2 ∉ main line).
     let dot_col = merge.lane * 2;
     assert!(
-        !cell_is_traced(merge.cell_oids[dot_col], &feature),
-        "the merge dot itself is not on the feature line"
+        cell_is_traced(merge.cell_oids[dot_col], &main_line),
+        "the merge dot is on the main line"
+    );
+    assert!(
+        !merge
+            .cell_oids
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != dot_col)
+            .any(|(_, o)| cell_is_traced(*o, &main_line)),
+        "the main line does not light the merge's curve to the feature"
     );
 }
 
@@ -1362,29 +1373,55 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
         .map(|(i, _)| i)
         .expect("expected a HorizontalPipe crossing on the merge row");
     let cross_oids = a2.cell_oids[cross];
-    assert!(cross_oids.0.is_some() && cross_oids.1.is_some());
+    let (primary, secondary) = cross_oids;
+    // Primary = the merge sweep edge (A2 → C1); secondary = the crossed branch-B
+    // pipe edge (B2 → B1).
+    assert!(primary.is_some() && secondary.is_some());
 
     let feat_c = lineage_of(&layout, "C1");
     let branch_b = lineage_of(&layout, "B2");
     let main_line = lineage_of(&layout, "A3");
 
-    // The crossing is traced by the merge feature (primary) and by branch B
-    // (secondary — the crossed vertical pipe), but not by the main line.
-    assert!(cell_is_traced(cross_oids, &feat_c), "primary = merge edge");
-    assert!(cell_is_traced(cross_oids, &branch_b), "secondary = crossed pipe");
+    // The secondary edge — the crossed vertical pipe — lights under branch B's
+    // selection, since both its endpoints B2, B1 are on branch B. The primary
+    // merge sweep does not.
+    assert!(edge_is_traced(secondary, &branch_b), "crossed pipe (secondary) lit by branch B");
+    assert!(!edge_is_traced(primary, &branch_b));
+    assert!(
+        cell_is_traced(cross_oids, &branch_b),
+        "so the cell is traced via its secondary edge"
+    );
+
+    // Neither the feature nor the main line lights the merge sweep: the merge
+    // commit A2 is off the feature's first-parent line and C1 is off the main
+    // line, so the (A2 → C1) edge is never fully on-lineage — the lead-in fix.
+    assert!(!edge_is_traced(primary, &feat_c));
+    assert!(!edge_is_traced(primary, &main_line));
+    assert!(!cell_is_traced(cross_oids, &feat_c));
     assert!(!cell_is_traced(cross_oids, &main_line));
+
+    // The primary merge edge lights only when BOTH its endpoints are on the
+    // lineage — the defining property of the edge-pair identity.
+    let both: HashSet<Oid> = [make_oid("A2"), make_oid("C1")].into_iter().collect();
+    assert!(edge_is_traced(primary, &both), "merge edge lit when both endpoints on-lineage");
 }
 
 #[test]
-fn cell_is_traced_honors_primary_and_secondary() {
+fn cell_is_traced_requires_both_edge_endpoints() {
     let a = make_oid("a");
     let b = make_oid("b");
     let other = make_oid("z");
-    let lin: HashSet<Oid> = [a].into_iter().collect();
-    assert!(cell_is_traced((Some(a), None), &lin));
-    assert!(cell_is_traced((None, Some(a)), &lin)); // secondary hit
-    assert!(cell_is_traced((Some(other), Some(a)), &lin)); // secondary hit
-    assert!(!cell_is_traced((Some(b), Some(other)), &lin));
+    let lin: HashSet<Oid> = [a, b].into_iter().collect();
+    // An edge lights only when BOTH (child, parent) endpoints are on the lineage.
+    assert!(edge_is_traced(Some((a, b)), &lin));
+    assert!(cell_is_traced((Some((a, b)), None), &lin));
+    assert!(cell_is_traced((None, Some((a, b))), &lin)); // secondary hit
+    assert!(cell_is_traced((Some((a, other)), Some((a, b))), &lin)); // secondary hit
+    // A single shared endpoint is not enough — this is the lead-in-strokes fix.
+    assert!(!edge_is_traced(Some((a, other)), &lin));
+    assert!(!edge_is_traced(Some((other, b)), &lin));
+    assert!(!cell_is_traced((Some((a, other)), None), &lin));
+    assert!(!cell_is_traced((Some((other, b)), None), &lin));
     assert!(!cell_is_traced((None, None), &lin));
 }
 
