@@ -225,8 +225,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
 
     // Render widgets
+    let graph_widget = GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode);
+    app.graph_chip_hits = graph_widget.chip_hits.clone();
     frame.render_stateful_widget(
-        GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode),
+        graph_widget,
         graph_area,
         &mut app.graph_nav.graph_list_state,
     );

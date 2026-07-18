@@ -19,6 +19,11 @@ impl App {
                 // user through conflicts (or confirm success) after refresh.
                 let mut op_outcome: Option<(OpOutcome, OperationState)> = None;
                 match confirm_action {
+                    ConfirmAction::Checkout(name) => {
+                        self.mode = AppMode::Normal;
+                        self.checkout_branch_by_name(&name)?;
+                        return Ok(());
+                    }
                     ConfirmAction::DeleteBranch(name) => {
                         delete_branch(self.repo.repo(), &name)?;
                     }

@@ -470,6 +470,8 @@ pub enum InputAction {
 /// Confirmation action kinds
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
+    /// Check out a branch (from clicking its chip in the graph).
+    Checkout(String),
     DeleteBranch(String),
     Merge(String),
     Rebase(String),
@@ -696,6 +698,9 @@ pub struct App {
     /// Rect of the currently open popup, recorded each frame for click-outside
     /// detection and in-popup row hit-testing.
     pub popup_rect: Option<ratatui::layout::Rect>,
+    /// Clickable chip regions per graph row (indexed by filtered row position),
+    /// recorded each frame for badge/branch-chip clicks.
+    pub graph_chip_hits: Vec<Vec<crate::mouse::ChipHit>>,
 
     // Config
     pub config: Config,

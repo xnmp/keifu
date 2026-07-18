@@ -128,6 +128,7 @@ impl App {
             files_view_offset: 0,
             menu_anchor: None,
             popup_rect: None,
+            graph_chip_hits: Vec::new(),
             config,
             terminal_bg,
             pixel_graph: None,

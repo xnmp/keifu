@@ -38,6 +38,31 @@ pub fn clamp_menu_pos(anchor: (u16, u16), w: u16, h: u16, screen: (u16, u16)) ->
     (x, y)
 }
 
+/// What a clickable chip on a commit row points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChipTarget {
+    /// The open-PR badge — opens the PR in the browser.
+    PrBadge,
+    /// A branch label — checks out that branch.
+    Branch(String),
+}
+
+/// A clickable region on a rendered commit row, in line-column space (columns
+/// measured from the start of the row's text, i.e. the panel's inner-left edge).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipHit {
+    pub x_start: u16,
+    pub x_end: u16,
+    pub target: ChipTarget,
+}
+
+/// The chip whose `[x_start, x_end)` span contains `line_col`, if any.
+pub fn chip_at(chips: &[ChipHit], line_col: u16) -> Option<&ChipHit> {
+    chips
+        .iter()
+        .find(|c| line_col >= c.x_start && line_col < c.x_end)
+}
+
 /// A prior click, for double-click detection.
 #[derive(Debug, Clone, Copy)]
 pub struct LastClick {
@@ -106,6 +131,29 @@ mod tests {
         assert_eq!(clamp_menu_pos((79, 23), 20, 8, screen), (60, 16));
         // Menu larger than screen → clamps to 0.
         assert_eq!(clamp_menu_pos((10, 5), 100, 40, screen), (0, 0));
+    }
+
+    #[test]
+    fn chip_at_finds_containing_span() {
+        let chips = vec![
+            ChipHit {
+                x_start: 4,
+                x_end: 10,
+                target: ChipTarget::Branch("main".into()),
+            },
+            ChipHit {
+                x_start: 11,
+                x_end: 16,
+                target: ChipTarget::PrBadge,
+            },
+        ];
+        assert_eq!(chip_at(&chips, 4).map(|c| &c.target), Some(&ChipTarget::Branch("main".into())));
+        assert_eq!(chip_at(&chips, 9).map(|c| &c.target), Some(&ChipTarget::Branch("main".into())));
+        assert_eq!(chip_at(&chips, 10), None, "right edge exclusive; gap between chips");
+        assert_eq!(chip_at(&chips, 11).map(|c| &c.target), Some(&ChipTarget::PrBadge));
+        assert_eq!(chip_at(&chips, 15).map(|c| &c.target), Some(&ChipTarget::PrBadge));
+        assert_eq!(chip_at(&chips, 16), None);
+        assert_eq!(chip_at(&chips, 0), None);
     }
 
     #[test]

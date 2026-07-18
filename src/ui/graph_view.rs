@@ -16,6 +16,7 @@ use crate::{
     app::App,
     config::MetadataColumns,
     git::graph::{CellType, GraphNode},
+    mouse::{ChipHit, ChipTarget},
     pr::{CiStatus, PrInfo, ReviewState},
 };
 
@@ -97,6 +98,9 @@ pub struct GraphViewWidget<'a> {
     is_focused: bool,
     title: String,
     theme: &'a Theme,
+    /// Clickable chip regions per rendered row (indexed by filtered row
+    /// position), for mouse hit-testing. Consumed by the caller before render.
+    pub chip_hits: Vec<Vec<ChipHit>>,
 }
 
 /// Number of leading blank columns before the graph glyphs on every row (the
@@ -362,6 +366,7 @@ impl<'a> GraphViewWidget<'a> {
 
         let mut selected_in_filtered = None;
         let mut items: Vec<ListItem> = Vec::new();
+        let mut chip_hits: Vec<Vec<ChipHit>> = Vec::new();
 
         for (filtered_pos, row) in rows.into_iter().enumerate() {
             let (full_idx, node) = (row.full_idx, row.node);
@@ -377,7 +382,7 @@ impl<'a> GraphViewWidget<'a> {
                         .compare_range
                         .is_some_and(|(old, new)| old == c.oid || new == c.oid)
             });
-            let line = render_graph_line(
+            let (line, chips) = render_graph_line(
                 node,
                 graph_width,
                 is_selected,
@@ -392,6 +397,7 @@ impl<'a> GraphViewWidget<'a> {
                 metadata_columns,
             );
             items.push(ListItem::new(line));
+            chip_hits.push(chips);
         }
 
         let title = if app.commit_filter_active {
@@ -408,6 +414,7 @@ impl<'a> GraphViewWidget<'a> {
             is_focused: app.focused_panel == crate::app::FocusedPanel::Graph,
             title,
             theme,
+            chip_hits,
         }
     }
 }
@@ -868,7 +875,7 @@ fn render_graph_line<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     metadata_columns: MetadataColumns,
-) -> Line<'a> {
+) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
 
     // Graph start marker (to distinguish from borders). GRAPH_LEADING_COLUMNS
@@ -1044,7 +1051,8 @@ fn render_graph_line_tail<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     metadata_columns: MetadataColumns,
-) -> Line<'a> {
+) -> (Line<'a>, Vec<ChipHit>) {
+    let mut chips: Vec<ChipHit> = Vec::new();
     // Separator between graph and commit info
     spans.push(Span::raw(" "));
     left_width += 1;
@@ -1068,13 +1076,13 @@ fn render_graph_line_tail<'a>(
         };
         let style = Style::default().fg(theme.text_primary);
         spans.push(Span::styled(text, style));
-        return Line::from(spans);
+        return (Line::from(spans), chips);
     }
 
     // Early return for connector-only rows
     let commit = match &node.commit {
         Some(c) => c,
-        None => return Line::from(spans),
+        None => return (Line::from(spans), chips),
     };
 
     // Style definitions
@@ -1149,7 +1157,17 @@ fn render_graph_line_tail<'a>(
             spans.push(Span::raw(" "));
             left_width += 1;
         }
+        let chip_start = left_width;
         left_width += display_width(label);
+        // Record a clickable region resolving to the underlying branch, so a
+        // click on the chip can check that branch out.
+        if let Some(name) = resolve_chip_branch(label, &node.branch_names, remotes) {
+            chips.push(ChipHit {
+                x_start: chip_start as u16,
+                x_end: left_width as u16,
+                target: ChipTarget::Branch(name),
+            });
+        }
         spans.push(Span::styled(label.clone(), *style));
     }
     if !branch_display.is_empty() {
@@ -1160,7 +1178,13 @@ fn render_graph_line_tail<'a>(
     // Render open-PR badge (after branch labels, before tags)
     if let Some((badge, color)) = &pr_badge {
         let style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
+        let chip_start = left_width;
         left_width += display_width(badge) + 1;
+        chips.push(ChipHit {
+            x_start: chip_start as u16,
+            x_end: (chip_start + display_width(badge)) as u16,
+            target: ChipTarget::PrBadge,
+        });
         spans.push(Span::styled(badge.clone(), style));
         spans.push(Span::raw(" "));
     }
@@ -1224,7 +1248,38 @@ fn render_graph_line_tail<'a>(
         spans.push(Span::raw(" "));
     }
 
-    Line::from(spans)
+    (Line::from(spans), chips)
+}
+
+/// Recover the branch name a rendered chip `label` refers to, matching it
+/// against the node's `branch_names`. Chip labels are decorated (`[name]`, an
+/// optional remote/synced icon prefix, a possible ` +N` overflow suffix), so we
+/// strip the decoration to a bare name and find the branch whose bare form
+/// matches (a local branch, or a remote ref bare-equal to it). Returns `None`
+/// when nothing matches (e.g. a non-branch decoration).
+fn resolve_chip_branch(label: &str, branch_names: &[String], remotes: &[String]) -> Option<String> {
+    // Strip the leading '[' and any icon prefix, then take up to the first
+    // delimiter (']', ' ', or the start of a "+N" overflow marker).
+    let s = label.trim_start_matches('[');
+    let s = s
+        .strip_prefix(REMOTE_ONLY_ICON)
+        .or_else(|| s.strip_prefix(SYNCED_ICON))
+        .map(str::trim_start)
+        .unwrap_or(s);
+    let bare = s.split([']', ' ']).next().unwrap_or(s);
+    if bare.is_empty() {
+        return None;
+    }
+    // Exact local match first, then a remote ref whose bare name matches.
+    branch_names
+        .iter()
+        .find(|n| n.as_str() == bare)
+        .or_else(|| {
+            branch_names
+                .iter()
+                .find(|n| strip_remote(n, remotes) == Some(bare))
+        })
+        .cloned()
 }
 
 impl<'a> StatefulWidget for GraphViewWidget<'a> {
@@ -1452,6 +1507,40 @@ mod tests {
         assert!(display_width(label) <= 24, "label too wide: {label:?}");
         assert!(label.starts_with('<') && label.ends_with('>'));
         assert!(label.contains('…'), "expected an ellipsis: {label:?}");
+    }
+
+    // ── chip click resolution (resolve_chip_branch) ──────────────────────
+
+    #[test]
+    fn resolve_chip_branch_recovers_the_branch_name() {
+        let remotes = vec!["origin".to_string()];
+        let names = vec!["main".to_string(), "feature/x".to_string()];
+        // Plain local label.
+        assert_eq!(
+            resolve_chip_branch("[main]", &names, &remotes).as_deref(),
+            Some("main")
+        );
+        // Label with a slash in the name.
+        assert_eq!(
+            resolve_chip_branch("[feature/x]", &names, &remotes).as_deref(),
+            Some("feature/x")
+        );
+        // Synced-icon prefix is stripped before matching.
+        let synced = format!("[{} main]", SYNCED_ICON);
+        assert_eq!(
+            resolve_chip_branch(&synced, &names, &remotes).as_deref(),
+            Some("main")
+        );
+        // A cloud-icon remote-only chip (single-remote repo drops the prefix)
+        // resolves back to the full remote ref.
+        let remote_names = vec!["origin/dev".to_string()];
+        let cloud = format!("[{} dev]", REMOTE_ONLY_ICON);
+        assert_eq!(
+            resolve_chip_branch(&cloud, &remote_names, &remotes).as_deref(),
+            Some("origin/dev")
+        );
+        // No matching branch → None.
+        assert_eq!(resolve_chip_branch("[nope]", &names, &remotes), None);
     }
 
     // ── remote classification (strip_remote / optimize_branch_display) ───
@@ -1985,7 +2074,7 @@ mod tests {
             date: false,
             mute_merges,
         };
-        let line = render_graph_line(
+        let (line, _chips) = render_graph_line(
             node,
             4,
             false,

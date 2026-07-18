@@ -6,7 +6,10 @@ use std::time::Instant;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::mouse::{is_double_click, list_row_index, point_in, LastClick, DOUBLE_CLICK_WINDOW};
+use crate::mouse::{
+    chip_at, is_double_click, list_row_index, point_in, ChipTarget, LastClick,
+    DOUBLE_CLICK_WINDOW,
+};
 
 /// The inner (border-inset) area of a panel, where its list rows render.
 fn inner_rect(r: Rect) -> Rect {
@@ -58,6 +61,12 @@ impl App {
             if let Some(list_idx) = list_row_index(inner, offset, col, row) {
                 if let Some(full_idx) = self.graph_row_full_idx(list_idx) {
                     self.select_commit_by_full_idx(full_idx);
+                    // A click landing on a chip (PR badge / branch label) acts on
+                    // that chip instead of the row's open/double-click behavior.
+                    let line_col = col.saturating_sub(inner.x);
+                    if self.handle_graph_chip_click(list_idx, line_col) {
+                        return;
+                    }
                     if double {
                         self.open_commit_menu();
                     }
@@ -99,6 +108,29 @@ impl App {
         self.graph_nav.graph_list_state.select(Some(full_idx));
         self.graph_nav.sync_branch_selection_to_node(full_idx);
         self.commit_detail_scroll = 0;
+    }
+
+    /// Act on a chip (PR badge / branch label) clicked on graph row `list_idx`
+    /// at line column `line_col`. Returns whether a chip handled the click.
+    fn handle_graph_chip_click(&mut self, list_idx: usize, line_col: u16) -> bool {
+        let Some(target) = self
+            .graph_chip_hits
+            .get(list_idx)
+            .and_then(|chips| chip_at(chips, line_col))
+            .map(|c| c.target.clone())
+        else {
+            return false;
+        };
+        match target {
+            ChipTarget::PrBadge => self.open_selected_pr(),
+            ChipTarget::Branch(name) => {
+                self.mode = AppMode::Confirm {
+                    message: format!("Checkout branch '{name}'?"),
+                    action: ConfirmAction::Checkout(name),
+                };
+            }
+        }
+        true
     }
 
     /// Right-click on a graph row: select that commit and open its context menu
