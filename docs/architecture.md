@@ -33,6 +33,8 @@
 
 **Why:** The `arboard` and `cli-clipboard` crates both pull in `openssl-sys` which fails to build with vendored OpenSSL on some systems (assembler errors with newer toolchains). Shell commands work universally and add zero dependencies.
 
+**Update (2026-07-19):** Added an OSC 52 fallback (`tui::copy_to_clipboard_osc52`) for when no shell clipboard tool is found — it emits `\x1b]52;c;<base64>\x07` directly to stdout, which works headless/over SSH with no external binary. It's a fallback rather than the primary path because not every terminal emulator supports OSC 52 (unlike xclip/wl-copy, which either work or clearly don't). The base64 encoder is a small hand-rolled function (no new dependency — `base64` only appears in `Cargo.lock` transitively). Payloads are capped at 100,000 base64 chars (matching common terminal limits, e.g. xterm's default) and truncated on a 3-byte boundary if oversized; callers surface `" (via OSC 52[, truncated])"` in the existing status-line message when the fallback fires.
+
 ## StageStatus Tracking (2026-03-25)
 
 **Decision:** `FileDiffInfo.stage_status` is set during `from_working_tree()` BEFORE the merge scan, and separate `staged_files`/`unstaged_files` vectors are stored alongside the merged `files` list.
