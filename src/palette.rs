@@ -102,6 +102,7 @@ pub fn command_registry() -> Vec<PaletteEntry> {
         entry("Commit actions menu", Some("Enter"), Action::OpenCommitMenu, has_commit),
         entry("Create branch here", Some("b"), Action::CreateBranch, has_commit),
         entry("Mark commit for compare", Some("m"), Action::MarkForCompare, has_commit),
+        entry("Jump to merge base with main", Some("^"), Action::JumpToMergeBase, has_commit),
         entry("Create pull request", None, Action::CreatePullRequest, can_create_pr),
         entry("Merge pull request", None, Action::MergePullRequest, has_open_pr),
         entry("Open PR in browser", Some("o"), Action::OpenPr, has_open_pr),
@@ -223,6 +224,8 @@ mod tests {
         assert!(!labels.contains(&"Create pull request"));
         assert!(!labels.contains(&"Merge pull request"));
         assert!(!labels.contains(&"Commit actions menu"));
+        // The merge-base jump needs a selected commit.
+        assert!(!labels.contains(&"Jump to merge base with main"));
 
         // A commit with an open PR unlocks the PR commands.
         let ctx = PaletteContext {
@@ -238,6 +241,7 @@ mod tests {
         assert!(labels.contains(&"Merge pull request"));
         assert!(labels.contains(&"Open PR in browser"));
         assert!(labels.contains(&"Commit actions menu"));
+        assert!(labels.contains(&"Jump to merge base with main"));
         assert!(!labels.contains(&"Create pull request")); // gated separately
     }
 

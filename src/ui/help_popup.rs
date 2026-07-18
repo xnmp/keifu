@@ -143,6 +143,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  t          ", key_style),
                 Span::styled("Toggle branch tracing (dim off-lineage lanes)", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  ^          ", key_style),
+                Span::styled("Jump to fork point (merge base with main / HEAD)", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Files Panel", header_style)),
         ];

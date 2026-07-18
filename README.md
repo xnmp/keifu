@@ -107,6 +107,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `Enter` | Open the commit actions menu (see below) |
 | `Space` | Open file diff for the selected commit |
 | `]` / `[` | Jump to next/previous commit with a branch label |
+| `^` | Jump to the fork point — the merge base of the selected commit with the main branch (or, if it's on main, with the current branch); "No divergence" on linear history |
 | `b` | Create branch at selected commit |
 | `d` | Delete branch (local or remote, behind confirm) |
 | `f` | Fetch (resolves the remote from upstream; prompts if ambiguous) |

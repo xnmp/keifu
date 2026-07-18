@@ -206,6 +206,11 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Mark / compare two commits
         (KeyModifiers::NONE, KeyCode::Char('m')) => Some(Action::MarkForCompare),
 
+        // Jump to the fork point (merge base with main, or HEAD). '^' — the
+        // caret points "up" to where the lines meet; lowercase 'b' is taken by
+        // Create branch. Matches any modifier since '^' arrives shifted.
+        (_, KeyCode::Char('^')) => Some(Action::JumpToMergeBase),
+
         // Open the selected commit's PR in the browser
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenPr),
 

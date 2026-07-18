@@ -4,6 +4,7 @@ pub mod action;
 pub mod app;
 pub mod avatar;
 pub mod avatar_fetch;
+pub mod merge_base;
 pub mod palette;
 pub mod config;
 pub mod diff_cache;

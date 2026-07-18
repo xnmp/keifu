@@ -65,6 +65,9 @@ pub enum Action {
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 
+    // Jump to the merge base / fork point of the selection vs main (or HEAD) (graph)
+    JumpToMergeBase,
+
     // Toggle branch tracing (highlight selected commit's lineage) (graph)
     ToggleTrace,
 

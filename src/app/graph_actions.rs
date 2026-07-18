@@ -90,6 +90,9 @@ impl App {
             Action::OpenMetadataMenu => {
                 self.mode = AppMode::MetadataMenu { selected: 0 };
             }
+            Action::JumpToMergeBase => {
+                self.jump_to_merge_base();
+            }
             Action::ToggleTrace => {
                 self.toggle_trace();
             }
@@ -439,5 +442,41 @@ impl App {
 
     fn jump_to_head(&mut self) {
         self.graph_nav.jump_to_head(self.head_name.as_deref());
+    }
+
+    /// Jump the selection to the fork point: the merge base of the selected
+    /// commit with the main branch (or, if the selection is on main, with the
+    /// current HEAD branch). Answers "where does this meet the other line of
+    /// development". No jump — with a status message — for linear history or a
+    /// merge base beyond the loaded window.
+    fn jump_to_merge_base(&mut self) {
+        use crate::merge_base::{fork_target, main_branch_tip, row_of_commit, ForkTarget};
+
+        let Some(selected) = self
+            .selected_commit_node()
+            .and_then(|n| n.commit.as_ref())
+            .map(|c| c.oid)
+        else {
+            return; // uncommitted / connector row — nothing to diverge from
+        };
+        let Some(main_tip) = main_branch_tip(&self.graph_layout) else {
+            return;
+        };
+        let head_tip = self.branches.iter().find(|b| b.is_head).map(|b| b.tip_oid);
+
+        // Resolve the target (borrows the repo immutably) before mutating self.
+        let target = {
+            let repo = self.repo.repo();
+            fork_target(selected, main_tip, head_tip, |a, b| repo.merge_base(a, b).ok())
+        };
+
+        match target {
+            ForkTarget::Jump(oid) => match row_of_commit(&self.graph_layout, oid) {
+                Some(idx) => self.select_commit_by_full_idx(idx),
+                None => self.set_message("Merge base beyond loaded history"),
+            },
+            ForkTarget::Linear => self.set_message("No divergence — linear history"),
+            ForkTarget::NoBase => self.set_message("No merge base found"),
+        }
     }
 }
