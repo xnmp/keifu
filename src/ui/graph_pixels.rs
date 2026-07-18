@@ -598,6 +598,20 @@ fn prune_over_cap<V>(map: &mut HashMap<RowSpec, V>, current: &[RowSpec], cap: us
     }
 }
 
+/// The half-open row range `[start, end)` whose protocols should be rasterized
+/// and transmitted this frame: the visible window `[offset, offset+viewport)`
+/// padded by two viewport-heights on each side, clamped to `[0, total]`. Only
+/// this slice is encoded; specs outside it aren't touched until scrolled near.
+pub fn protocol_window(offset: usize, viewport: usize, total: usize) -> (usize, usize) {
+    let pad = viewport.saturating_mul(2);
+    let start = offset.saturating_sub(pad).min(total);
+    let end = offset
+        .saturating_add(viewport)
+        .saturating_add(pad)
+        .min(total);
+    (start, end.max(start))
+}
+
 /// Where a row's avatar image comes from.
 #[derive(Debug, Clone)]
 pub enum AvatarSource {
@@ -1152,5 +1166,36 @@ mod tests {
         let mut wide = full.clone();
         wide.cells.truncate(10);
         assert_eq!(wide, full, "truncate beyond len is a no-op");
+    }
+
+    // ── windowed encoding ──────────────────────────────────────────────
+
+    #[test]
+    fn protocol_window_pads_and_clamps_to_the_edges() {
+        // Middle: visible [50,60) padded by 2*10 on each side.
+        assert_eq!(protocol_window(50, 10, 100), (30, 80));
+        // Top edge: start clamps to 0.
+        assert_eq!(protocol_window(0, 10, 100), (0, 30));
+        // Bottom edge: end clamps to total.
+        assert_eq!(protocol_window(90, 10, 100), (70, 100));
+        // Window wider than the whole list.
+        assert_eq!(protocol_window(0, 10, 5), (0, 5));
+        // Empty list.
+        assert_eq!(protocol_window(0, 10, 0), (0, 0));
+    }
+
+    #[test]
+    fn prune_retains_only_the_window_specs() {
+        // Four distinct specs in the cache; the window is a two-spec subset.
+        let all: Vec<RowSpec> = (0..4).map(|i| spec(vec![pipe([i, 0, 0])])).collect();
+        let mut map: HashMap<RowSpec, ()> = all.iter().cloned().map(|s| (s, ())).collect();
+        assert_eq!(map.len(), 4);
+
+        let window = &all[1..3];
+        // cap = 4 (map is at cap) → prune down to the window.
+        prune_over_cap(&mut map, window, 4);
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key(&all[1]) && map.contains_key(&all[2]));
+        assert!(!map.contains_key(&all[0]) && !map.contains_key(&all[3]));
     }
 }

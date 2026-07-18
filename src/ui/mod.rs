@@ -225,10 +225,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ));
         }
         // Disjoint field borrows: `specs` from pixel_specs_cache, `pg` from
-        // pixel_graph. Sync transmits/evicts protocols for this frame.
+        // pixel_graph. Only the on-screen window (± 2 viewport-heights) is
+        // rasterized/transmitted; the whole spec list stays built and cached.
         let specs = &app.pixel_specs_cache.as_ref().unwrap().5;
+        let offset = app.graph_nav.graph_list_state.offset();
+        let viewport = graph_area.height.saturating_sub(2) as usize;
+        let (win_start, win_end) = graph_pixels::protocol_window(offset, viewport, specs.len());
+        let windowed = &specs[win_start..win_end];
         let active = app.pixel_graph.as_mut().is_some_and(|pg| {
-            pg.sync_frame(specs);
+            pg.sync_frame(windowed);
             pg.is_active()
         });
         if !active {
