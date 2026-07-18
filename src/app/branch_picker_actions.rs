@@ -123,7 +123,35 @@ impl App {
         Ok(())
     }
 
+    /// Recompute the cached branch -> author map, but only when the branch
+    /// tips have changed since it was last built. Keyed on a sorted snapshot of
+    /// `(name, tip OID)` so that adding/removing branches or advancing any tip
+    /// invalidates the cache, while repeated picker opens over an unchanged
+    /// repo reuse the previous result. Attribution walks history per branch, so
+    /// this is deliberately called on picker open, not on every refresh.
+    fn ensure_branch_authors(&mut self) {
+        let mut key: Vec<(String, git2::Oid)> = self
+            .branches
+            .iter()
+            .map(|b| (b.name.clone(), b.tip_oid))
+            .collect();
+        key.sort();
+        if key != self.branch_authors_key {
+            self.branch_authors = crate::git::branch_authors(self.repo.repo(), &self.branches);
+            self.branch_authors_key = key;
+        }
+    }
+
+    /// Author name attributed to `branch`, or an empty string when unknown.
+    fn branch_author(&self, branch: &str) -> &str {
+        self.branch_authors
+            .get(branch)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
     pub(crate) fn open_branch_filter(&mut self) {
+        self.ensure_branch_authors();
         let mut all_branches: Vec<String> = self
             .branches
             .iter()
@@ -152,10 +180,13 @@ impl App {
         let selected = *selected;
         let all_branches = all_branches.clone();
 
-        // Compute filtered list for navigation
+        // Compute filtered list for navigation. A filter beginning with `@`
+        // matches the branch author; any other filter matches the name.
         let filtered: Vec<&String> = all_branches
             .iter()
-            .filter(|b| b.to_lowercase().contains(&filter.to_lowercase()))
+            .filter(|b| {
+                crate::ui::branch_filter::matches_branch_filter(b, self.branch_author(b), &filter)
+            })
             .collect();
 
         match action {
@@ -199,7 +230,13 @@ impl App {
                 };
             }
             Action::SelectAll => {
-                self.hidden_branches.clear();
+                // Show (un-hide) the currently filtered branches. With no
+                // active filter this is every branch — identical to the old
+                // "show all" — but under an `@author`/name filter it scopes to
+                // just the visible subset.
+                for b in &filtered {
+                    self.hidden_branches.remove(*b);
+                }
                 self.mode = AppMode::BranchFilter {
                     filter,
                     selected,
@@ -207,8 +244,11 @@ impl App {
                 };
             }
             Action::SelectNone => {
-                for b in &all_branches {
-                    self.hidden_branches.insert(b.clone());
+                // Hide the currently filtered branches. With no filter this
+                // hides every branch; with `@alice` it hides all of alice's
+                // branches at once — the point of the author filter.
+                for b in &filtered {
+                    self.hidden_branches.insert((*b).clone());
                 }
                 self.mode = AppMode::BranchFilter {
                     filter,

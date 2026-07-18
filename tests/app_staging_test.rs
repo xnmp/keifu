@@ -101,6 +101,8 @@ fn make_base_app(
         focused_panel: FocusedPanel::Graph,
         files_pane: FilesPaneState::new(),
         hidden_branches: HashSet::new(),
+        branch_authors: std::collections::HashMap::new(),
+        branch_authors_key: Vec::new(),
         commit_editor: TextEditor::new(),
         editing_commit_message: false,
         amending_commit: false,

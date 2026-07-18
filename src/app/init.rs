@@ -102,6 +102,8 @@ impl App {
             },
             files_pane: FilesPaneState::new(),
             hidden_branches: std::collections::HashSet::new(),
+            branch_authors: std::collections::HashMap::new(),
+            branch_authors_key: Vec::new(),
             commit_editor: crate::text_editor::TextEditor::new(),
             editing_commit_message: false,
             amending_commit: false,

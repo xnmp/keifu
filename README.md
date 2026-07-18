@@ -32,7 +32,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Toast notifications for background outcomes (fetch/pull/push results, new PRs or CI-status changes) that stack in the top-right and auto-dismiss
 - Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge, colored by CI status (green pass / yellow pending / red fail, blue if no checks) with review (approved/changes-requested) and outside-comment markers; `o` opens it in the browser, `c` shows CI check details (read a failed check's log without leaving the terminal), and `v` opens the PR conversation (description, comments, reviews, and resolved/open review threads) — all require the `gh` CLI
 - Branch tracing (`t`) — selecting a commit highlights its full branch line (first-parent ancestry and descendants) and dims every other lane, the way VSCode does on hover; on by default for branchy graphs
-- Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label; `Shift+O` hides all remote-only branches at once (remote refs with no matching local branch), composing with the per-branch filter
+- Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label; filter the picker by branch name or by author (`@name`) and bulk-hide a whole author's branches; `Shift+O` hides all remote-only branches at once (remote refs with no matching local branch), composing with the per-branch filter
 - Compare any two commits
 - Command palette (`Ctrl+P` / `:`) — one fuzzy list over commands, branch checkouts, and commit jumps
 - Session undo (`Ctrl+Z` in the graph) for branch/tag delete, merge, pull, and rename — verified against current state and confirmed before it runs
@@ -115,7 +115,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `f` | Fetch (resolves the remote from upstream; prompts if ambiguous) |
 | `p` | Pull (fetch + integrate; honors `pull.rebase`) |
 | `Shift+P` | Push current branch (publishes with `-u` if it has no upstream) |
-| `Shift+B` | Branch filter — choose which branches' commits are shown |
+| `Shift+B` | Branch filter — choose which branches' commits are shown; type to filter by name, or `@name` to filter by branch author (then `Ctrl+O` hides that whole subset) |
 | `Shift+O` | Show/hide remote-only branches — hides remote refs with no matching local branch, and their exclusive commits; persists |
 | `Ctrl+f` | Filter commits by message/author/hash |
 | `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
