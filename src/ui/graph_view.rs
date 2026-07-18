@@ -604,9 +604,15 @@ fn optimize_branch_display(
         theme.lane_color(color_index)
     };
 
-    // Helper to create style based on selection state
+    // Helper to create style based on selection state. Restraint: color is the
+    // single emphasis device for ordinary chips; only the checked-out HEAD's
+    // chips also carry bold, reserving the stronger accent for the one ref that
+    // matters most. Selection adds REVERSED on top (orthogonal affordance).
     let make_style = |branch_name: &str| -> Style {
-        let style = Style::default().fg(base_color).add_modifier(Modifier::BOLD);
+        let mut style = Style::default().fg(base_color);
+        if is_head {
+            style = style.add_modifier(Modifier::BOLD);
+        }
         if selected_branch_name == Some(branch_name) {
             // Reverse video rather than an explicit bg: when this branch's row
             // is also the highlighted row, the list's highlight_style patches a
@@ -901,9 +907,10 @@ fn abbreviate_branch_label(name: &str, max_width: usize, extra_count: usize) -> 
 fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(String, Style)> {
     // Total label width including the enclosing `<` `>` delimiters.
     const MAX_TAG_LABEL_WIDTH: usize = 24;
-    let style = Style::default()
-        .fg(theme.tag_label)
-        .add_modifier(Modifier::BOLD);
+    // Restraint: the tag color alone distinguishes the chip; no bold (bold is
+    // reserved for the HEAD branch and actionable PR badges), so tags read as
+    // one quiet, consistent family alongside non-HEAD branch chips.
+    let style = Style::default().fg(theme.tag_label);
     tag_names
         .iter()
         .map(|name| {
@@ -1376,9 +1383,10 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
 
         let block = Block::default()
             .title(self.title)
+            .title_style(self.theme.title_style(self.is_focused))
             .borders(Borders::ALL)
             .border_style(self.theme.border_style(self.is_focused))
-            .border_type(self.theme.border_type(self.is_focused));
+            .border_type(self.theme.border_type());
 
         let list = List::new(self.items)
             .block(block)

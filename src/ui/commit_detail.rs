@@ -348,9 +348,10 @@ impl<'a> Widget for CommitDetailWidget<'a> {
 
         let commit_block = Block::default()
             .title(" Commit Detail ")
+            .title_style(self.theme.title_style(self.is_focused))
             .borders(Borders::ALL)
             .border_style(self.theme.border_style(self.is_focused))
-            .border_type(self.theme.border_type(self.is_focused));
+            .border_type(self.theme.border_type());
 
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)
