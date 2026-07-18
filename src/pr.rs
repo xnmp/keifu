@@ -18,15 +18,77 @@ const PR_FETCH_INTERVAL: Duration = Duration::from_secs(300);
 /// Hard cap on a single `gh` invocation so a hung CLI can't leak a thread.
 const GH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Aggregate CI status of a PR's head commit, from `statusCheckRollup`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiStatus {
+    /// No checks reported.
+    None,
+    /// All checks succeeded (SUCCESS/SKIPPED/NEUTRAL).
+    Pass,
+    /// At least one check is still running / queued and none failed.
+    Pending,
+    /// At least one check failed (FAILURE/ERROR/CANCELLED/TIMED_OUT).
+    Fail,
+}
+
+/// PR review decision, from `reviewDecision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewState {
+    None,
+    Approved,
+    ChangesRequested,
+}
+
+impl ReviewState {
+    fn from_decision(decision: &str) -> Self {
+        match decision.to_ascii_uppercase().as_str() {
+            "APPROVED" => Self::Approved,
+            "CHANGES_REQUESTED" => Self::ChangesRequested,
+            _ => Self::None,
+        }
+    }
+}
+
 /// An open pull request associated with a head branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrInfo {
     pub number: u64,
     pub url: String,
     pub title: String,
+    pub ci: CiStatus,
+    pub review: ReviewState,
+    /// Any comment authored by someone other than the PR author.
+    pub outside_activity: bool,
 }
 
-/// Raw `gh pr list --json …` record.
+/// One `statusCheckRollup` entry. Both shapes appear: `CheckRun`
+/// (`status`/`conclusion`) and `StatusContext` (`state`); all fields optional.
+#[derive(Debug, Deserialize)]
+struct RollupEntry {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+/// A GitHub actor (comment/PR author).
+#[derive(Debug, Deserialize)]
+struct Actor {
+    #[serde(default)]
+    login: String,
+}
+
+/// One PR comment (only the author matters here).
+#[derive(Debug, Deserialize)]
+struct Comment {
+    #[serde(default)]
+    author: Option<Actor>,
+}
+
+/// Raw `gh pr list --json …` record. Heavier fields are `Option`/defaulted so a
+/// `null` or missing value degrades gracefully instead of failing the parse.
 #[derive(Debug, Deserialize)]
 struct GhPr {
     number: u64,
@@ -37,24 +99,99 @@ struct GhPr {
     title: String,
     #[serde(default)]
     state: String,
+    #[serde(default, rename = "statusCheckRollup")]
+    status_check_rollup: Option<Vec<RollupEntry>>,
+    #[serde(default, rename = "reviewDecision")]
+    review_decision: Option<String>,
+    #[serde(default)]
+    comments: Option<Vec<Comment>>,
+    #[serde(default)]
+    author: Option<Actor>,
 }
 
-/// Parse `gh pr list --json number,url,headRefName,title,state` output into a
-/// map from head branch name to PR. Malformed JSON yields an empty map. Only
-/// open PRs are kept (defensive — `gh pr list` already defaults to open). When
-/// two PRs share a head branch the later record wins.
+/// Map a single verdict token to pass / pending / fail.
+fn classify_verdict(verdict: &str) -> CiStatus {
+    match verdict.to_ascii_uppercase().as_str() {
+        "FAILURE" | "ERROR" | "CANCELLED" | "TIMED_OUT" => CiStatus::Fail,
+        "SUCCESS" | "SKIPPED" | "NEUTRAL" => CiStatus::Pass,
+        // PENDING / IN_PROGRESS / QUEUED / empty / unknown → not-yet-green.
+        _ => CiStatus::Pending,
+    }
+}
+
+/// Classify one rollup entry into pass / pending / fail (order-independent, so
+/// the aggregate doesn't depend on entry order). `StatusContext` carries its
+/// verdict in `state`; a `CheckRun` that hasn't COMPLETED is pending regardless,
+/// otherwise its `conclusion` decides (empty/null ⇒ pending).
+fn classify_entry(e: &RollupEntry) -> CiStatus {
+    if let Some(state) = e.state.as_deref().filter(|s| !s.is_empty()) {
+        return classify_verdict(state);
+    }
+    if let Some(status) = e.status.as_deref().filter(|s| !s.is_empty()) {
+        if !status.eq_ignore_ascii_case("COMPLETED") {
+            return CiStatus::Pending;
+        }
+    }
+    classify_verdict(e.conclusion.as_deref().unwrap_or_default())
+}
+
+/// Aggregate a rollup: any fail ⇒ Fail; else any pending ⇒ Pending; else Pass;
+/// empty/missing ⇒ None.
+fn aggregate_ci(rollup: &[RollupEntry]) -> CiStatus {
+    if rollup.is_empty() {
+        return CiStatus::None;
+    }
+    let mut pending = false;
+    for e in rollup {
+        match classify_entry(e) {
+            CiStatus::Fail => return CiStatus::Fail,
+            CiStatus::Pending => pending = true,
+            CiStatus::Pass | CiStatus::None => {}
+        }
+    }
+    if pending {
+        CiStatus::Pending
+    } else {
+        CiStatus::Pass
+    }
+}
+
+/// True if any comment was authored by someone other than the PR author.
+/// Comments with a missing/empty author login are skipped.
+fn has_outside_activity(pr_author: &str, comments: &[Comment]) -> bool {
+    comments.iter().any(|c| {
+        c.author
+            .as_ref()
+            .map(|a| a.login.as_str())
+            .filter(|l| !l.is_empty())
+            .is_some_and(|login| login != pr_author)
+    })
+}
+
+/// Parse `gh pr list --json …` output into a map from head branch name to PR.
+/// Malformed JSON yields an empty map. Only open PRs are kept (defensive — `gh
+/// pr list` already defaults to open). When two PRs share a head branch the
+/// later record wins.
 pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
     let records: Vec<GhPr> = serde_json::from_str(json).unwrap_or_default();
     records
         .into_iter()
         .filter(|p| p.state.is_empty() || p.state.eq_ignore_ascii_case("open"))
         .map(|p| {
+            let ci = aggregate_ci(p.status_check_rollup.as_deref().unwrap_or_default());
+            let review = ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
+            let pr_author = p.author.as_ref().map(|a| a.login.as_str()).unwrap_or_default();
+            let outside_activity =
+                has_outside_activity(pr_author, p.comments.as_deref().unwrap_or_default());
             (
                 p.head_ref_name,
                 PrInfo {
                     number: p.number,
                     url: p.url,
                     title: p.title,
+                    ci,
+                    review,
+                    outside_activity,
                 },
             )
         })
@@ -80,7 +217,7 @@ fn run_gh_pr_list(repo_path: &str) -> Option<std::process::Output> {
             "pr",
             "list",
             "--json",
-            "number,url,headRefName,title,state",
+            "number,url,headRefName,title,state,statusCheckRollup,reviewDecision,comments,author",
             "--limit",
             "100",
         ])
@@ -195,6 +332,9 @@ mod tests {
                 number: 12,
                 url: "https://github.com/o/r/pull/12".to_string(),
                 title: "Add X".to_string(),
+                ci: CiStatus::None,
+                review: ReviewState::None,
+                outside_activity: false,
             })
         );
         assert_eq!(map.get("fix/y").map(|p| p.number), Some(7));
@@ -232,5 +372,129 @@ mod tests {
     #[test]
     fn empty_array_yields_empty_map() {
         assert!(parse_pr_list("[]").is_empty());
+    }
+
+    // ── CI aggregation ───────────────────────────────────────────────
+
+    /// Parse a single-PR fixture and return its PrInfo.
+    fn one(extra_fields: &str) -> PrInfo {
+        let json = format!(
+            r#"[{{"number":1,"url":"u","headRefName":"b","title":"t","state":"OPEN"{extra_fields}}}]"#
+        );
+        parse_pr_list(&json).remove("b").expect("PR present")
+    }
+
+    #[test]
+    fn ci_checkrun_shape_mixed_fail_and_pending_is_fail() {
+        // Real CheckRun shape (status/conclusion). Fail beats pending.
+        let pr = one(
+            r#","statusCheckRollup":[
+                {"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null},
+                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"},
+                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}
+            ]"#,
+        );
+        assert_eq!(pr.ci, CiStatus::Fail);
+    }
+
+    #[test]
+    fn ci_checkrun_running_is_pending() {
+        // A null conclusion (still running) with no failures → Pending.
+        let pr = one(
+            r#","statusCheckRollup":[
+                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+                {"__typename":"CheckRun","status":"QUEUED","conclusion":null}
+            ]"#,
+        );
+        assert_eq!(pr.ci, CiStatus::Pending);
+    }
+
+    #[test]
+    fn ci_statuscontext_shape_is_handled() {
+        // Legacy StatusContext shape (state), as emitted by e.g. Prow/tide.
+        let pending = one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING"}]"#);
+        assert_eq!(pending.ci, CiStatus::Pending);
+        let failed = one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"FAILURE"}]"#);
+        assert_eq!(failed.ci, CiStatus::Fail);
+        let ok = one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"SUCCESS"}]"#);
+        assert_eq!(ok.ci, CiStatus::Pass);
+    }
+
+    #[test]
+    fn ci_all_success_is_pass_including_skipped_and_neutral() {
+        let pr = one(
+            r#","statusCheckRollup":[
+                {"status":"COMPLETED","conclusion":"SUCCESS"},
+                {"status":"COMPLETED","conclusion":"SKIPPED"},
+                {"status":"COMPLETED","conclusion":"NEUTRAL"}
+            ]"#,
+        );
+        assert_eq!(pr.ci, CiStatus::Pass);
+    }
+
+    #[test]
+    fn ci_fail_precedence_over_everything() {
+        // FAILURE / ERROR / CANCELLED / TIMED_OUT all count as Fail.
+        for c in ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"] {
+            let pr = one(&format!(
+                r#","statusCheckRollup":[
+                    {{"status":"COMPLETED","conclusion":"SUCCESS"}},
+                    {{"status":"COMPLETED","conclusion":"PENDING"}},
+                    {{"status":"COMPLETED","conclusion":"{c}"}}
+                ]"#
+            ));
+            assert_eq!(pr.ci, CiStatus::Fail, "{c} should be Fail");
+        }
+    }
+
+    #[test]
+    fn ci_empty_or_missing_rollup_is_none() {
+        assert_eq!(one(r#","statusCheckRollup":[]"#).ci, CiStatus::None);
+        assert_eq!(one(r#","statusCheckRollup":null"#).ci, CiStatus::None);
+        assert_eq!(one("").ci, CiStatus::None); // field absent entirely
+    }
+
+    // ── review decision ──────────────────────────────────────────────
+
+    #[test]
+    fn review_decision_mapping() {
+        assert_eq!(one(r#","reviewDecision":"APPROVED""#).review, ReviewState::Approved);
+        assert_eq!(
+            one(r#","reviewDecision":"CHANGES_REQUESTED""#).review,
+            ReviewState::ChangesRequested
+        );
+        assert_eq!(one(r#","reviewDecision":"REVIEW_REQUIRED""#).review, ReviewState::None);
+        assert_eq!(one(r#","reviewDecision":"""#).review, ReviewState::None);
+        assert_eq!(one(r#","reviewDecision":null"#).review, ReviewState::None);
+        assert_eq!(one("").review, ReviewState::None);
+    }
+
+    // ── outside activity ─────────────────────────────────────────────
+
+    #[test]
+    fn outside_activity_detects_non_author_comments() {
+        let author_only = one(
+            r#","author":{"login":"me"},"comments":[{"author":{"login":"me"}},{"author":{"login":"me"}}]"#,
+        );
+        assert!(!author_only.outside_activity, "only the author commented");
+
+        let mixed = one(
+            r#","author":{"login":"me"},"comments":[{"author":{"login":"me"}},{"author":{"login":"someone"}}]"#,
+        );
+        assert!(mixed.outside_activity, "a non-author commented");
+
+        let none = one(r#","author":{"login":"me"},"comments":[]"#);
+        assert!(!none.outside_activity, "zero comments");
+    }
+
+    #[test]
+    fn outside_activity_skips_malformed_comment_entries() {
+        // Missing author / empty login entries are skipped, not errored.
+        let pr = one(
+            r#","author":{"login":"me"},"comments":[{},{"author":{"login":""}},{"author":{"login":"me"}}]"#,
+        );
+        assert!(!pr.outside_activity);
+        // Whole parse still succeeds and yields the PR.
+        assert_eq!(pr.number, 1);
     }
 }

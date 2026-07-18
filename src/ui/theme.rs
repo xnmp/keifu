@@ -77,8 +77,12 @@ pub struct Theme {
     pub branch_head: Color,
     // Tag labels in graph (distinct from branch labels)
     pub tag_label: Color,
-    // Open-PR badge in graph (distinct from branch/tag labels)
+    // Open-PR badge in graph (distinct from branch/tag labels). `pr_badge` is
+    // the default (no CI); the `pr_ci_*` set colors the badge by check status.
     pub pr_badge: Color,
+    pub pr_ci_pass: Color,
+    pub pr_ci_pending: Color,
+    pub pr_ci_fail: Color,
     // HEAD marker gold (pixel star fill + Unicode ◉ fallback), matching the ⭐.
     pub head_star: Color,
 
@@ -180,6 +184,9 @@ impl Theme {
             tag_label: Color::LightYellow,
             // Open-PR badge — GitHub link blue, distinct from green/gold labels.
             pr_badge: Color::Rgb(88, 166, 255),
+            pr_ci_pass: Color::Rgb(63, 185, 80),
+            pr_ci_pending: Color::Rgb(210, 153, 34),
+            pr_ci_fail: Color::Rgb(248, 81, 73),
             head_star: Color::Rgb(255, 200, 50),
 
             // Editor selection
@@ -286,6 +293,9 @@ impl Theme {
             tag_label: Color::Rgb(150, 110, 0),
             // Open-PR badge — GitHub link blue, darkened for light backgrounds.
             pr_badge: Color::Rgb(9, 105, 218),
+            pr_ci_pass: Color::Rgb(26, 127, 55),
+            pr_ci_pending: Color::Rgb(154, 103, 0),
+            pr_ci_fail: Color::Rgb(207, 34, 46),
             head_star: Color::Rgb(184, 134, 11),
 
             // Editor selection

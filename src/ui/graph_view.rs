@@ -16,7 +16,7 @@ use crate::{
     app::App,
     config::MetadataColumns,
     git::graph::{CellType, GraphNode},
-    pr::PrInfo,
+    pr::{CiStatus, PrInfo, ReviewState},
 };
 
 /// Fixed display width for the compact date field (fits "11mo", "now", "59m").
@@ -305,8 +305,11 @@ fn chip_display_name<'n>(name: &'n str, remotes: &[String]) -> &'n str {
     }
 }
 
-/// Nerd Font pull-request glyph (nf-oct-git_pull_request) for the open-PR badge.
-const PR_BADGE_ICON: char = '\u{f407}';
+/// Nerd Font octicons for the open-PR badge and its actioned markers.
+const PR_BADGE_ICON: char = '\u{f407}'; // nf-oct-git_pull_request
+const PR_APPROVED_ICON: char = '\u{f42e}'; // nf-oct-check
+const PR_CHANGES_ICON: char = '\u{f440}'; // nf-oct-diff (±)
+const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
 
 /// The first open PR (in branch-label order) whose head branch matches one of
 /// this node's branch labels. Remote refs are matched by their stripped name
@@ -323,9 +326,37 @@ pub fn pr_for_branch_labels<'p>(
     })
 }
 
-/// Compact badge text for an open PR, e.g. " #12".
+/// Compact badge text for an open PR, e.g. ` #12 ✓ ` (approved with outside
+/// comments). Review marker first (approved / changes-requested), then a
+/// comment marker when a non-author has commented.
 fn pr_badge_text(pr: &PrInfo) -> String {
-    format!("{} #{}", PR_BADGE_ICON, pr.number)
+    let mut s = format!("{} #{}", PR_BADGE_ICON, pr.number);
+    match pr.review {
+        ReviewState::Approved => {
+            s.push(' ');
+            s.push(PR_APPROVED_ICON);
+        }
+        ReviewState::ChangesRequested => {
+            s.push(' ');
+            s.push(PR_CHANGES_ICON);
+        }
+        ReviewState::None => {}
+    }
+    if pr.outside_activity {
+        s.push(' ');
+        s.push(PR_COMMENT_ICON);
+    }
+    s
+}
+
+/// Badge chip color: by CI status, falling back to the neutral badge blue.
+fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
+    match pr.ci {
+        CiStatus::None => theme.pr_badge,
+        CiStatus::Pass => theme.pr_ci_pass,
+        CiStatus::Pending => theme.pr_ci_pending,
+        CiStatus::Fail => theme.pr_ci_fail,
+    }
 }
 
 /// Nerd Font cloud glyph marking a branch that only exists on a remote.
@@ -958,10 +989,11 @@ fn render_graph_line_tail<'a>(
     let tag_display = build_tag_labels(&node.tag_names, theme);
 
     // Open-PR badge: chip after the branch labels when one of this node's
-    // branches has an open PR.
-    let pr_badge = pr_for_branch_labels(&node.branch_names, remotes, open_prs).map(pr_badge_text);
+    // branches has an open PR. Colored by CI status, with review/comment markers.
+    let pr_badge = pr_for_branch_labels(&node.branch_names, remotes, open_prs)
+        .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
     // Chip plus a trailing space.
-    let pr_badge_width = pr_badge.as_ref().map_or(0, |b| display_width(b) + 1);
+    let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
 
     // === Right-aligned: date author hash (fixed width) ===
     let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
@@ -1007,10 +1039,8 @@ fn render_graph_line_tail<'a>(
     }
 
     // Render open-PR badge (after branch labels, before tags)
-    if let Some(badge) = &pr_badge {
-        let style = Style::default()
-            .fg(theme.pr_badge)
-            .add_modifier(Modifier::BOLD);
+    if let Some((badge, color)) = &pr_badge {
+        let style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
         left_width += display_width(badge) + 1;
         spans.push(Span::styled(badge.clone(), style));
         spans.push(Span::raw(" "));
@@ -1367,6 +1397,20 @@ mod tests {
             number,
             url: format!("https://github.com/o/r/pull/{number}"),
             title: "t".to_string(),
+            ci: CiStatus::None,
+            review: ReviewState::None,
+            outside_activity: false,
+        }
+    }
+
+    fn pr_with(number: u64, ci: CiStatus, review: ReviewState, outside: bool) -> PrInfo {
+        PrInfo {
+            number,
+            url: "u".to_string(),
+            title: "t".to_string(),
+            ci,
+            review,
+            outside_activity: outside,
         }
     }
 
@@ -1423,6 +1467,41 @@ mod tests {
         assert!(text.starts_with(PR_BADGE_ICON));
         // Icon(1) + space(1) + "#42"(3) = 5 display columns.
         assert_eq!(display_width(&text), 5);
+    }
+
+    #[test]
+    fn pr_badge_appends_review_then_comment_markers() {
+        // Plain: no markers.
+        let plain = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::None, false));
+        assert!(!plain.contains(PR_APPROVED_ICON));
+        assert!(!plain.contains(PR_COMMENT_ICON));
+
+        // Approved → check glyph; changes-requested → diff glyph (mutually exclusive).
+        let approved = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::Approved, false));
+        assert!(approved.contains(PR_APPROVED_ICON));
+        assert!(!approved.contains(PR_CHANGES_ICON));
+        let changes =
+            pr_badge_text(&pr_with(1, CiStatus::Fail, ReviewState::ChangesRequested, false));
+        assert!(changes.contains(PR_CHANGES_ICON));
+        assert!(!changes.contains(PR_APPROVED_ICON));
+
+        // Outside comment → comment glyph, appended after the review marker.
+        let both = pr_badge_text(&pr_with(12, CiStatus::Pass, ReviewState::Approved, true));
+        assert!(both.contains(PR_APPROVED_ICON) && both.contains(PR_COMMENT_ICON));
+        let check_at = both.find(PR_APPROVED_ICON).unwrap();
+        let comment_at = both.find(PR_COMMENT_ICON).unwrap();
+        assert!(check_at < comment_at, "review marker precedes comment: {both:?}");
+        // Icon(1)+" #12"(4) + " ✓"(2) + " ⌘"(2) = 9 columns.
+        assert_eq!(display_width(&both), 9);
+    }
+
+    #[test]
+    fn pr_badge_color_follows_ci_status() {
+        let theme = Theme::dark();
+        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::None, ReviewState::None, false), &theme), theme.pr_badge);
+        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pass, ReviewState::None, false), &theme), theme.pr_ci_pass);
+        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pending, ReviewState::None, false), &theme), theme.pr_ci_pending);
+        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Fail, ReviewState::None, false), &theme), theme.pr_ci_fail);
     }
 
     // ── metadata column visibility / width budget ────────────────────

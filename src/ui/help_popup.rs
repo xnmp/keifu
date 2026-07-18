@@ -118,7 +118,10 @@ impl<'a> Widget for HelpPopup<'a> {
             ]),
             Line::from(vec![
                 Span::styled("  o          ", key_style),
-                Span::styled("Open the commit's PR in the browser (if any)", desc_style),
+                Span::styled(
+                    "Open PR in browser (badge color = CI: green/yellow/red)",
+                    desc_style,
+                ),
             ]),
             Line::from(vec![
                 Span::styled("  M          ", key_style),
