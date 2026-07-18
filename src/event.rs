@@ -35,3 +35,12 @@ pub fn get_mouse_scroll(event: &Event) -> Option<i32> {
         None
     }
 }
+
+/// Extract the full mouse event (button, position) for the input layer.
+pub fn get_mouse_event(event: &Event) -> Option<MouseEvent> {
+    if let Event::Mouse(m) = event {
+        Some(*m)
+    } else {
+        None
+    }
+}

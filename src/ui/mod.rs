@@ -164,6 +164,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let files_area = detail_chunks[0];
     let commit_area = detail_chunks[1];
 
+    // Record panel rects for mouse hit-testing.
+    app.mouse_layout = crate::app::MouseLayout {
+        graph: graph_area,
+        files: files_area,
+        commit: commit_area,
+        side_layout: app.side_panel_layout,
+    };
+
     // Pre-render pass: compute layout metrics that update App scroll state
     let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
 
@@ -227,14 +235,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             overlay_pixel_graph(frame, app, graph_area, specs);
         }
     }
-    frame.render_stateful_widget(
-        FilesPaneWidget::new(app, &theme),
-        files_area,
-        &mut FilesPaneState {
-            selected: Some(app.file_selected_index()),
-            offset: 0,
-        },
-    );
+    let mut files_state = FilesPaneState {
+        selected: Some(app.file_selected_index()),
+        offset: 0,
+    };
+    frame.render_stateful_widget(FilesPaneWidget::new(app, &theme), files_area, &mut files_state);
+    // The widget windows around the selection; keep the resulting offset for
+    // mouse hit-testing.
+    app.files_view_offset = files_state.offset;
     frame.render_widget(
         CommitDetailWidget::new(app, commit_area, &theme, commit_lines),
         commit_area,

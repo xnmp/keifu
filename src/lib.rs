@@ -16,6 +16,7 @@ pub mod pr_action;
 pub mod pr_thread;
 pub mod graph;
 pub mod keybindings;
+pub mod mouse;
 pub mod search;
 pub mod text_editor;
 pub mod toast;

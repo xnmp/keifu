@@ -139,6 +139,13 @@ pub enum Action {
     SearchSelectUpQuiet,   // Tab navigation (no graph jump)
     SearchSelectDownQuiet, // Tab navigation (no graph jump)
 
+    // Mouse (coordinates in terminal cells; hit-testing lives on App)
+    MouseClick { col: u16, row: u16 },
+    MouseRightClick { col: u16, row: u16 },
+    MouseScroll { col: u16, row: u16, down: bool },
+    MouseDrag { col: u16, row: u16 },
+    MouseUp { col: u16, row: u16 },
+
     // Layout
     ToggleLayout,
 

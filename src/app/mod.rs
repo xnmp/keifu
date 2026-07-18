@@ -46,6 +46,7 @@ mod graph_actions;
 mod ci_checks_actions;
 mod pr_thread_actions;
 mod pr_action_actions;
+mod mouse_actions;
 mod file_ops;
 mod commit_editor_actions;
 mod commit_menu_actions;
@@ -413,6 +414,18 @@ pub enum ThreadViewState {
     Error(String),
 }
 
+/// Panel rectangles recorded during render, for mouse hit-testing. All are the
+/// outer panel rects (including borders); the inner list area is inset by 1.
+/// The divider fields are the borders between panels (for drag-resize).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MouseLayout {
+    pub graph: ratatui::layout::Rect,
+    pub files: ratatui::layout::Rect,
+    pub commit: ratatui::layout::Rect,
+    /// True when graph is on the right and detail on the left (side layout).
+    pub side_layout: bool,
+}
+
 /// What the `PrCompose` editor is composing. The editor's first line is the
 /// PR title (Create); for reviews the whole buffer is the body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -671,6 +684,13 @@ pub struct App {
     // Debug mode
     pub debug_keys: bool,
 
+    // Mouse: panel rectangles recorded each frame for hit-testing, plus the
+    // last left click (for double-click detection).
+    pub mouse_layout: MouseLayout,
+    pub last_click: Option<crate::mouse::LastClick>,
+    /// Files-pane scroll offset from the last render, for mouse hit-testing.
+    pub files_view_offset: usize,
+
     // Config
     pub config: Config,
 
@@ -812,6 +832,18 @@ impl App {
         // only emits it in Normal mode.
         if matches!(action, Action::FullUpdate) {
             self.full_update();
+            return Ok(());
+        }
+        // Mouse actions hit-test the recorded layout regardless of mode.
+        if matches!(
+            action,
+            Action::MouseClick { .. }
+                | Action::MouseRightClick { .. }
+                | Action::MouseScroll { .. }
+                | Action::MouseDrag { .. }
+                | Action::MouseUp { .. }
+        ) {
+            self.handle_mouse_action(action);
             return Ok(());
         }
 

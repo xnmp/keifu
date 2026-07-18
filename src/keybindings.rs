@@ -2,10 +2,34 @@
 
 #[cfg(windows)]
 use crossterm::event::KeyEventKind;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::action::Action;
 use crate::app::{AppMode, FocusedPanel};
+
+/// Map a raw mouse event to an `Action`, passing coordinates through. All
+/// hit-testing (which panel / row / chip / menu the point lands on) happens in
+/// the App handler, not here.
+pub fn map_mouse_to_action(mouse: MouseEvent) -> Option<Action> {
+    let (col, row) = (mouse.column, mouse.row);
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => Some(Action::MouseClick { col, row }),
+        MouseEventKind::Down(MouseButton::Right) => Some(Action::MouseRightClick { col, row }),
+        MouseEventKind::ScrollDown => Some(Action::MouseScroll {
+            col,
+            row,
+            down: true,
+        }),
+        MouseEventKind::ScrollUp => Some(Action::MouseScroll {
+            col,
+            row,
+            down: false,
+        }),
+        MouseEventKind::Drag(MouseButton::Left) => Some(Action::MouseDrag { col, row }),
+        MouseEventKind::Up(MouseButton::Left) => Some(Action::MouseUp { col, row }),
+        _ => None,
+    }
+}
 
 pub fn map_key_to_action(
     key: KeyEvent,

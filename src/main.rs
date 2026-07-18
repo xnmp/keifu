@@ -6,10 +6,10 @@ use clap::Parser;
 use std::time::{Duration, Instant};
 
 use keifu::{
-    app::{App, AppMode},
-    event::{get_key_event, get_mouse_scroll, poll_event_with_timeout},
+    app::App,
+    event::{get_key_event, get_mouse_event, poll_event_with_timeout},
     git::configure_git_extensions,
-    keybindings::map_key_to_action,
+    keybindings::{map_key_to_action, map_mouse_to_action},
     tui, ui,
 };
 
@@ -98,29 +98,10 @@ fn main() -> Result<()> {
                         app.show_error(format!("{}", e));
                     }
                 }
-            } else if let Some(scroll) = get_mouse_scroll(&event) {
-                let (action, multiplier) = match &app.mode {
-                    AppMode::FileDiff { .. } => {
-                        let a = if scroll > 0 {
-                            keifu::action::Action::ScrollDown
-                        } else {
-                            keifu::action::Action::ScrollUp
-                        };
-                        (a, 3)
-                    }
-                    _ => {
-                        let a = if scroll > 0 {
-                            keifu::action::Action::MoveDown
-                        } else {
-                            keifu::action::Action::MoveUp
-                        };
-                        (a, 1)
-                    }
-                };
-                for _ in 0..multiplier {
-                    if let Err(e) = app.handle_action(action.clone()) {
+            } else if let Some(mouse) = get_mouse_event(&event) {
+                if let Some(action) = map_mouse_to_action(mouse) {
+                    if let Err(e) = app.handle_action(action) {
                         app.show_error(format!("{}", e));
-                        break;
                     }
                 }
             }
