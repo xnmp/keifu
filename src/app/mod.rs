@@ -727,6 +727,10 @@ pub struct App {
     // Debug mode
     pub debug_keys: bool,
 
+    // Performance counters. Recorded on the render/refresh paths; a summary is
+    // logged on exit (only visible with --log-file).
+    pub perf: crate::perf::PerfStats,
+
     // Mouse: panel rectangles recorded each frame for hit-testing, plus the
     // last left click (for double-click detection).
     pub mouse_layout: MouseLayout,

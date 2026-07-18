@@ -131,6 +131,7 @@ impl App {
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,
+            perf: crate::perf::PerfStats::default(),
             mouse_layout: MouseLayout::default(),
             last_click: None,
             files_view_offset: 0,

@@ -3,14 +3,16 @@
 use anyhow::Result;
 use clap::Parser;
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use keifu::{
     app::App,
+    debug_server,
     event::{get_key_event, get_mouse_event, poll_event_with_timeout},
     git::configure_git_extensions,
     keybindings::{map_key_to_action, map_mouse_to_action},
-    tui, ui,
+    logging, tui, ui,
 };
 
 #[derive(Parser)]
@@ -19,10 +21,28 @@ use keifu::{
     version,
     about = "A TUI tool to visualize Git commit graphs with branch genealogy"
 )]
-struct Cli {}
+struct Cli {
+    /// Append debug logs and a perf summary on exit to this file
+    /// (level via KEIFU_LOG, default "debug")
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<PathBuf>,
+
+    /// Listen for debug commands (NDJSON over TCP, e.g. 127.0.0.1:7167)
+    #[arg(long, value_name = "ADDR")]
+    debug_listen: Option<String>,
+}
 
 fn main() -> Result<()> {
-    Cli::parse();
+    let cli = Cli::parse();
+
+    if let Some(path) = &cli.log_file {
+        logging::init(path)?;
+    }
+    let debug_rx = match &cli.debug_listen {
+        Some(addr) => Some(debug_server::spawn(addr)?),
+        None => None,
+    };
+
     // Restore the terminal on panic
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -52,9 +72,11 @@ fn main() -> Result<()> {
     loop {
         // Render only when state has changed
         if needs_render {
+            let draw_started = Instant::now();
             terminal.draw(|frame| {
                 ui::draw(frame, &mut app);
             })?;
+            app.perf.record("draw", draw_started.elapsed());
             needs_render = false;
         }
 
@@ -123,6 +145,31 @@ fn main() -> Result<()> {
         needs_render |= app.update_avatars();
         needs_render |= app.maybe_autoload_commits();
 
+        // Process pending debug commands (only when --debug-listen is active).
+        // Injected keys/mouse go through the same mapping as real input, so a
+        // mutating command must trigger a redraw of the live terminal.
+        if let Some(rx) = &debug_rx {
+            while let Ok(command) = rx.try_recv() {
+                let size = terminal.size()?;
+                let mutates = matches!(
+                    command.request,
+                    debug_server::DebugRequest::Keys { .. }
+                        | debug_server::DebugRequest::Mouse { .. }
+                );
+                let response = debug_server::handle_request(
+                    &mut app,
+                    size.width,
+                    size.height,
+                    command.request,
+                );
+                let _ = command.reply.send(response);
+                needs_render |= mutates;
+                if app.should_quit {
+                    break;
+                }
+            }
+        }
+
         // Drop expired toasts (redraw only when the visible set actually changes,
         // so an active-but-unexpired toast doesn't force per-frame repaints).
         needs_render |= app.toasts.evict(Instant::now());
@@ -131,6 +178,9 @@ fn main() -> Result<()> {
         // still capped at 33ms, so the idle loop never busy-spins).
         render_deadline = app.next_render_deadline();
     }
+
+    // Log an aggregate perf summary (only visible with --log-file)
+    app.perf.log_summary();
 
     // Restore terminal
     tui::restore()?;

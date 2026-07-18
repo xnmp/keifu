@@ -162,7 +162,16 @@ impl App {
     /// Refresh repository data
     /// If `force` is true, always clears diff cache (for manual refresh)
     /// If `force` is false, keeps cache when the same content is selected (for auto-refresh)
+    /// Reload git state (branches, commits, graph). Timed as `refresh` on the
+    /// perf path; the actual work lives in `refresh_inner`.
     pub fn refresh(&mut self, force: bool) -> Result<()> {
+        let started = std::time::Instant::now();
+        let result = self.refresh_inner(force);
+        self.perf.record("refresh", started.elapsed());
+        result
+    }
+
+    fn refresh_inner(&mut self, force: bool) -> Result<()> {
         // Save the current selection state for restoration
         let was_uncommitted_selected = self
             .graph_nav.graph_list_state

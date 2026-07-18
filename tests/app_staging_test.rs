@@ -153,6 +153,7 @@ fn make_base_app(
         metadata_columns: keifu::config::MetadataColumns::default(),
         graph_width_cap: None,
         debug_keys: false,
+        perf: keifu::perf::PerfStats::default(),
         mouse_layout: Default::default(),
         last_click: None,
         files_view_offset: 0,
