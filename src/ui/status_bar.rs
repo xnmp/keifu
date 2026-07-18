@@ -38,6 +38,8 @@ pub struct StatusBar<'a> {
     conflict_count: usize,
     /// Open-PR hint for the selected commit (`o: open PR #N`), when it has one.
     pr_hint: Option<String>,
+    /// Whether the selected commit's PR has CI checks (`c checks` hint).
+    pr_has_ci: bool,
     /// Whether the graph column is capped or cappable (needs > 4 cells), so the
     /// `< >` resize hint is worth showing.
     graph_cappable: bool,
@@ -50,6 +52,15 @@ impl<'a> StatusBar<'a> {
             AppMode::Error { message } => Some(message.as_str()),
             _ => None,
         };
+
+        // The selected commit's open PR, if any — drives the o/c hints.
+        let selected_pr = app.selected_commit_node().and_then(|node| {
+            crate::ui::graph_view::pr_for_branch_labels(
+                &node.branch_names,
+                &app.remotes,
+                &app.open_prs,
+            )
+        });
 
         // Generate search status message
         let search_info = match &app.mode {
@@ -88,17 +99,8 @@ impl<'a> StatusBar<'a> {
             search_info,
             op_state: app.op_state,
             conflict_count: app.conflict_count,
-            pr_hint: pr_hint_label(
-                app.selected_commit_node()
-                    .and_then(|node| {
-                        crate::ui::graph_view::pr_for_branch_labels(
-                            &node.branch_names,
-                            &app.remotes,
-                            &app.open_prs,
-                        )
-                    })
-                    .map(|pr| pr.number),
-            ),
+            pr_hint: pr_hint_label(selected_pr.map(|pr| pr.number)),
+            pr_has_ci: selected_pr.is_some_and(|pr| pr.ci != crate::pr::CiStatus::None),
             graph_cappable: (app.graph_layout.max_lane + 1) * 2 > 4,
             theme,
         }
@@ -255,6 +257,13 @@ impl<'a> Widget for StatusBar<'a> {
                             if let Some(hint) = &self.pr_hint {
                                 spans.push(Span::styled(" o ", key_style));
                                 spans.push(Span::styled(format!("{hint} "), desc_style));
+                                // ...and a CI checks hint when the PR reports checks.
+                                if self.pr_has_ci {
+                                    spans.push(Span::styled(" c ", key_style));
+                                    spans.push(Span::styled("checks ", desc_style));
+                                }
+                                spans.push(Span::styled(" v ", key_style));
+                                spans.push(Span::styled("thread ", desc_style));
                             }
                             // Only when the graph is wide enough to be capped.
                             if self.graph_cappable {
@@ -401,6 +410,24 @@ impl<'a> Widget for StatusBar<'a> {
                 spans.push(Span::styled(" Esc ", key_style));
                 spans.push(Span::styled("cancel", desc_style));
             }
+            AppMode::CiChecks => {
+                spans.push(Span::styled(" ↑↓ ", key_style));
+                spans.push(Span::styled("nav ", desc_style));
+                spans.push(Span::styled(" Enter ", key_style));
+                spans.push(Span::styled("details ", desc_style));
+                spans.push(Span::styled(" o ", key_style));
+                spans.push(Span::styled("open ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("back", desc_style));
+            }
+            AppMode::PrThread => {
+                spans.push(Span::styled(" ↑↓ ", key_style));
+                spans.push(Span::styled("scroll ", desc_style));
+                spans.push(Span::styled(" o ", key_style));
+                spans.push(Span::styled("open PR ", desc_style));
+                spans.push(Span::styled(" Esc ", key_style));
+                spans.push(Span::styled("close", desc_style));
+            }
             AppMode::BranchFilter { .. } => {
                 spans.push(Span::styled(" Space ", key_style));
                 spans.push(Span::styled("toggle ", desc_style));
@@ -434,6 +461,8 @@ impl<'a> Widget for StatusBar<'a> {
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::MetadataMenu { .. } => Some(" COLUMNS "),
             AppMode::PullDivergence { .. } => Some(" PULL "),
+            AppMode::CiChecks => Some(" CHECKS "),
+            AppMode::PrThread => Some(" PR THREAD "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::TagPicker { .. } => Some(" TAG "),

@@ -43,6 +43,8 @@ mod remote_ops;
 mod status_message;
 mod search_ops;
 mod graph_actions;
+mod ci_checks_actions;
+mod pr_thread_actions;
 mod file_ops;
 mod commit_editor_actions;
 mod commit_menu_actions;
@@ -270,6 +272,12 @@ pub enum AppMode {
     PullDivergence {
         selected: usize,
     },
+    /// CI check details for the selected commit's PR. The data lives on
+    /// `App.ci_checks` (filled asynchronously); this variant just routes keys.
+    CiChecks,
+    /// The selected commit's PR conversation (description, comments, reviews,
+    /// review threads). Data on `App.pr_thread`.
+    PrThread,
     BranchFilter {
         filter: String,
         selected: usize,
@@ -328,6 +336,60 @@ pub struct FileHistoryEntry {
     pub short_id: String,
     pub date: String,
     pub subject: String,
+}
+
+/// State of the CI checks popup for one PR.
+pub struct CiChecksView {
+    pub pr_number: u64,
+    /// PR URL, opened when no specific check URL is available.
+    pub pr_url: String,
+    pub checks: ChecksState,
+    /// Selected row in the check list.
+    pub selected: usize,
+    /// `Some` when drilled into a check's log/detail (list is hidden).
+    pub log: Option<LogView>,
+}
+
+/// The check-list fetch state.
+pub enum ChecksState {
+    Loading,
+    Loaded(Vec<crate::checks::CheckRun>),
+    Error(String),
+}
+
+/// A drilled-in check detail: a failed run's log tail, an external URL, or an
+/// error/loading placeholder.
+pub struct LogView {
+    pub title: String,
+    /// The Actions run this log is for, so the async poll can match it.
+    pub run_id: Option<u64>,
+    pub content: LogContent,
+    pub scroll: usize,
+}
+
+pub enum LogContent {
+    Loading,
+    Lines(Vec<String>),
+    /// A non-Actions check: only a URL to open in the browser.
+    External(String),
+    Error(String),
+}
+
+/// State of the PR conversation popup.
+pub struct PrThreadView {
+    pub pr_number: u64,
+    /// PR URL, opened with `o`.
+    pub pr_url: String,
+    pub state: ThreadViewState,
+    /// Scroll offset in wrapped rows; clamped to `max_scroll` each frame.
+    pub scroll: usize,
+    pub max_scroll: usize,
+}
+
+pub enum ThreadViewState {
+    Loading,
+    Loaded(crate::pr_thread::PrThread),
+    Error(String),
 }
 
 /// Which tag operation a [`AppMode::TagPicker`] resolves to.
@@ -535,6 +597,15 @@ pub struct App {
     // an explicit merge/rebase strategy.
     pub last_pull: Option<(Option<String>, Option<String>)>,
 
+    // CI check details popup (AppMode::CiChecks): background fetcher + the
+    // current view, `Some` only while the popup is open.
+    pub check_fetch: crate::checks::CheckFetch,
+    pub ci_checks: Option<CiChecksView>,
+
+    // PR conversation popup (AppMode::PrThread): background fetcher + view.
+    pub thread_fetch: crate::pr_thread::PrThreadFetch,
+    pub pr_thread: Option<PrThreadView>,
+
     // Filesystem watcher
     pub watcher: Option<crate::watcher::FsWatcher>,
     // Watcher still being built on a background thread; installed into
@@ -710,6 +781,8 @@ impl App {
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
             AppMode::PullDivergence { .. } => self.handle_pull_divergence_action(action),
+            AppMode::CiChecks => self.handle_ci_checks_action(action),
+            AppMode::PrThread => self.handle_pr_thread_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,

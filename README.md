@@ -28,7 +28,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Merge-conflict handling: accept ours/theirs, continue/abort a merge, rebase, cherry-pick, or revert
 - Git operations: checkout, create/rename/delete branch, merge, rebase, cherry-pick, revert, reset (soft/mixed/hard), tag add/delete/push, stash (apply/pop/drop, staged/all/all+untracked push, branch-from-stash)
 - Fetch/pull/push with multi-remote support, upstream tracking, and one-key publish
-- Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge, colored by CI status (green pass / yellow pending / red fail, blue if no checks) with review (approved/changes-requested) and outside-comment markers; `o` opens it in the browser (requires the `gh` CLI)
+- Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge, colored by CI status (green pass / yellow pending / red fail, blue if no checks) with review (approved/changes-requested) and outside-comment markers; `o` opens it in the browser, `c` shows CI check details (read a failed check's log without leaving the terminal), and `v` opens the PR conversation (description, comments, reviews, and resolved/open review threads) — all require the `gh` CLI
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label
 - Compare any two commits
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
@@ -111,6 +111,8 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `Ctrl+f` | Filter commits by message/author/hash |
 | `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
 | `o` | Open the selected commit's PR in the browser (needs `gh`; badge shown on commits with an open PR) |
+| `c` | CI check details for the selected commit's PR — list checks and read a failed check's log tail in a popup (needs `gh`) |
+| `v` | View the selected commit's PR conversation — description, comments, reviews, and review threads (resolved/open) in a scrollable popup (needs `gh`) |
 | `Shift+M` | Toggle which metadata columns (author/hash/date) show on commit rows (persists across restarts) |
 | `<` / `>` | Shrink / widen the graph column width (caps wasted padding from wide history; `…` marks truncated rows; persists) |
 

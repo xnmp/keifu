@@ -2,6 +2,7 @@
 
 pub mod branch_filter;
 pub mod commit_detail;
+pub mod ci_checks;
 pub mod commit_menu;
 pub mod dialog;
 pub mod file_diff_view;
@@ -11,6 +12,7 @@ pub mod graph_pixels;
 pub mod graph_view;
 pub mod help_popup;
 pub mod metadata_menu;
+pub mod pr_thread;
 pub mod search_dropdown;
 pub mod status_bar;
 pub mod theme;
@@ -19,7 +21,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget, Wrap},
     Frame,
 };
 
@@ -49,6 +51,10 @@ const MIN_HEIGHT: u16 = 6;
 /// Minimum widget dimensions for safe rendering
 pub const MIN_WIDGET_WIDTH: u16 = 12;
 pub const MIN_WIDGET_HEIGHT: u16 = 3;
+
+/// PR-thread popup size (% of screen). Shared by the scroll pre-pass and the
+/// render so their geometry matches.
+const PR_THREAD_POPUP_PCT: (u16, u16) = (80, 80);
 
 /// Render a placeholder block when widget area is too small
 pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -248,6 +254,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    // PR-thread pre-pass: clamp the conversation scroll to its wrapped height
+    // (needs &mut app before the immutable borrow in the popup match below).
+    if matches!(app.mode, AppMode::PrThread) {
+        let popup = centered_rect(PR_THREAD_POPUP_PCT.0, PR_THREAD_POPUP_PCT.1, area);
+        let inner_w = popup.width.saturating_sub(2);
+        // 2 border rows + 1 footer row.
+        let body_h = popup.height.saturating_sub(3) as usize;
+        let total = app.pr_thread.as_ref().map(|v| {
+            let lines = pr_thread::build_lines(&v.state, &theme);
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .line_count(inner_w)
+        });
+        if let (Some(total), Some(v)) = (total, app.pr_thread.as_mut()) {
+            v.max_scroll = total.saturating_sub(body_h);
+            v.scroll = v.scroll.min(v.max_scroll);
+        }
+    }
+
     // Popups
     match &app.mode {
         AppMode::Help => {
@@ -310,6 +335,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::PullDivergence { selected } => {
             let popup_area = centered_rect_fixed(48, 8, area);
             frame.render_widget(PullDivergenceDialog::new(*selected, &theme), popup_area);
+        }
+        AppMode::CiChecks => {
+            if let Some(view) = &app.ci_checks {
+                use self::ci_checks::CiChecksWidget;
+                let popup_area = centered_rect(72, 74, area);
+                frame.render_widget(CiChecksWidget::new(view, &theme), popup_area);
+            }
+        }
+        AppMode::PrThread => {
+            if let Some(view) = &app.pr_thread {
+                use self::pr_thread::PrThreadWidget;
+                let popup_area = centered_rect(PR_THREAD_POPUP_PCT.0, PR_THREAD_POPUP_PCT.1, area);
+                frame.render_widget(PrThreadWidget::new(view, &theme), popup_area);
+            }
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
