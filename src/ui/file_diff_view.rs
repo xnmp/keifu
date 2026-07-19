@@ -13,10 +13,17 @@ use similar::{ChangeTag, TextDiff};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
+use unicode_width::UnicodeWidthChar;
 
 use crate::git::{DiffLineContent, DiffLineOrigin, FileDiffContent};
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
+
+/// Display width of the diff gutter produced by [`make_diff_line`]:
+/// old-lineno (4) + space (1) + new-lineno (4) + space (1) + prefix (1).
+/// Continuation rows of a soft-wrapped line pad this many blank columns so the
+/// wrapped text stays aligned under the first row's content.
+const GUTTER_COLS: usize = 11;
 
 // Syntax highlighting resources (initialized once)
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
@@ -334,7 +341,204 @@ fn merge_syntax_and_emphasis(
 
 // --- Line rendering helpers ---
 
-fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme: &Theme) -> Line<'static> {
+/// A single logical diff row, kept with its gutter and content spans separate so
+/// it can be soft-wrapped on demand: the gutter (line numbers + change prefix)
+/// renders only on the first display row, while continuation rows pad the gutter
+/// width and carry the remaining content (with its add/delete backgrounds).
+///
+/// Rows without a gutter (hunk headers, blank separators, status messages) have
+/// an empty `gutter` and `gutter_cols == 0`.
+#[derive(Debug, Clone)]
+pub struct DiffRow {
+    gutter: Vec<Span<'static>>,
+    content: Vec<Span<'static>>,
+    gutter_cols: usize,
+}
+
+/// Unwrapped source rows for the active file-diff viewer, held on `App` beside
+/// the `FileDiff` mode (like `diff_viewport_*`) rather than inside the AppMode
+/// enum, so soft-wrapping's re-layout inputs don't bloat the enum. Retained so
+/// the viewer can re-lay-out `rendered_lines` when the wrap toggle or the pane
+/// width changes.
+#[derive(Debug, Clone, Default)]
+pub struct DiffSource {
+    pub rows: Vec<DiffRow>,
+    /// Hunk-header positions into `rows` (wrap-independent).
+    pub hunk_positions: Vec<usize>,
+    /// (wrap enabled, content width) the mode's `rendered_lines` were last laid
+    /// out for. `ensure_diff_layout` re-wraps when either drifts.
+    pub layout_wrap: bool,
+    pub layout_width: usize,
+}
+
+impl DiffRow {
+    /// A gutter-less row (hunk header, blank separator, status message).
+    fn plain(spans: Vec<Span<'static>>) -> Self {
+        Self {
+            gutter: Vec::new(),
+            content: spans,
+            gutter_cols: 0,
+        }
+    }
+
+    /// The unwrapped, single-line rendering (gutter followed by content).
+    fn to_line(&self) -> Line<'static> {
+        let mut spans = self.gutter.clone();
+        spans.extend(self.content.iter().cloned());
+        Line::from(spans)
+    }
+
+    /// Soft-wrap this row to `avail_width` display columns, returning one display
+    /// line per wrapped row. Word boundaries are preferred; overlong tokens are
+    /// hard-broken (see [`wrap_offsets`]). The gutter appears only on the first
+    /// row; continuation rows are padded to `gutter_cols` so content stays
+    /// aligned, and each content span keeps its syntax/diff-background style.
+    fn wrap(&self, avail_width: usize) -> Vec<Line<'static>> {
+        let content_width = avail_width.saturating_sub(self.gutter_cols);
+        // Degenerate widths can't wrap meaningfully — fall back to one line.
+        if content_width == 0 {
+            return vec![self.to_line()];
+        }
+
+        let text: String = self.content.iter().map(|s| s.content.as_ref()).collect();
+        let offsets = wrap_offsets(&text, content_width);
+
+        offsets
+            .iter()
+            .enumerate()
+            .map(|(row, &start)| {
+                let end = offsets.get(row + 1).copied().unwrap_or(text.len());
+                let mut spans = if row == 0 {
+                    self.gutter.clone()
+                } else if self.gutter_cols > 0 {
+                    vec![Span::raw(" ".repeat(self.gutter_cols))]
+                } else {
+                    Vec::new()
+                };
+                spans.extend(spans_in_byte_range(&self.content, start, end));
+                Line::from(spans)
+            })
+            .collect()
+    }
+}
+
+/// Char-index (byte offset) start of each display row when word-wrapping `text`
+/// to `width` columns. The first offset is always `0`; the number of offsets is
+/// the wrapped row count. Breaks are taken at whitespace where possible; a token
+/// longer than `width` is hard-broken at the column limit. A `width` of 0 yields
+/// a single row (nothing to wrap into).
+pub fn wrap_offsets(text: &str, width: usize) -> Vec<usize> {
+    let mut offsets = vec![0usize];
+    if width == 0 || text.is_empty() {
+        return offsets;
+    }
+
+    let chars: Vec<(usize, char, usize)> = text
+        .char_indices()
+        .map(|(b, c)| (b, c, UnicodeWidthChar::width(c).unwrap_or(0)))
+        .collect();
+
+    let mut row_start = 0usize; // index into `chars` where the current row began
+    let mut cur_width = 0usize;
+    let mut last_break: Option<usize> = None; // char index just after a whitespace
+    let mut i = 0usize;
+    while i < chars.len() {
+        let (_, ch, w) = chars[i];
+        if cur_width + w > width && i > row_start {
+            // Prefer the most recent whitespace break within this row; otherwise
+            // hard-break before the current char.
+            let break_idx = match last_break {
+                Some(b) if b > row_start => b,
+                _ => i,
+            };
+            offsets.push(chars[break_idx].0);
+            row_start = break_idx;
+            cur_width = 0;
+            last_break = None;
+            i = break_idx;
+            continue;
+        }
+        cur_width += w;
+        if ch.is_whitespace() {
+            last_break = Some(i + 1);
+        }
+        i += 1;
+    }
+    offsets
+}
+
+/// Slice `spans` to the concatenated-text byte range `[start, end)`, preserving
+/// each source span's style. `start`/`end` must fall on char boundaries (they
+/// come from [`wrap_offsets`], which only ever splits at `char_indices`).
+fn spans_in_byte_range(
+    spans: &[Span<'static>],
+    start: usize,
+    end: usize,
+) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    for sp in spans {
+        let s = sp.content.as_ref();
+        let sp_start = pos;
+        let sp_end = pos + s.len();
+        pos = sp_end;
+        let a = start.max(sp_start);
+        let b = end.min(sp_end);
+        if a < b {
+            out.push(Span::styled(s[a - sp_start..b - sp_start].to_string(), sp.style));
+        }
+    }
+    out
+}
+
+/// Prefix-sum the per-source-row display-row `counts` into the display-row index
+/// at which each source row begins. `starts[i]` is where source row `i` starts;
+/// used to translate hunk-header source positions into wrapped-row positions.
+pub fn source_row_starts(counts: &[usize]) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(counts.len());
+    let mut acc = 0usize;
+    for &c in counts {
+        starts.push(acc);
+        acc += c;
+    }
+    starts
+}
+
+/// Lay out source diff rows into the display lines the viewer renders.
+///
+/// When `wrap` is false this is a 1:1 mapping (hunk positions unchanged). When
+/// `wrap` is true each row is soft-wrapped to `avail_width` and the hunk-header
+/// positions are re-mapped into wrapped-row space so scrolling, the scrollbar,
+/// and hunk navigation/staging all operate on the same coordinate system.
+pub fn layout_diff_rows(
+    rows: &[DiffRow],
+    hunk_src_positions: &[usize],
+    wrap: bool,
+    avail_width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
+    if !wrap {
+        return (
+            rows.iter().map(DiffRow::to_line).collect(),
+            hunk_src_positions.to_vec(),
+        );
+    }
+
+    let mut lines = Vec::new();
+    let mut counts = Vec::with_capacity(rows.len());
+    for row in rows {
+        let wrapped = row.wrap(avail_width);
+        counts.push(wrapped.len());
+        lines.extend(wrapped);
+    }
+    let starts = source_row_starts(&counts);
+    let hunk_positions = hunk_src_positions
+        .iter()
+        .map(|&p| starts.get(p).copied().unwrap_or(0))
+        .collect();
+    (lines, hunk_positions)
+}
+
+fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme: &Theme) -> DiffRow {
     let lineno_style = Style::default().fg(theme.text_muted);
 
     let old_no = dl
@@ -357,16 +561,19 @@ fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme
         _ => Style::default(),
     };
 
-    let mut spans = vec![
+    let gutter = vec![
         Span::styled(old_no, lineno_style),
         Span::styled(" ", lineno_style),
         Span::styled(new_no, lineno_style),
         Span::raw(" "),
         Span::styled(prefix.to_string(), prefix_style),
     ];
-    spans.extend(content_spans);
 
-    Line::from(spans)
+    DiffRow {
+        gutter,
+        content: content_spans,
+        gutter_cols: GUTTER_COLS,
+    }
 }
 
 fn determine_syntax(path: &std::path::Path) -> &'static SyntaxReference {
@@ -392,26 +599,30 @@ fn determine_syntax(path: &std::path::Path) -> &'static SyntaxReference {
 
 // --- Public: pre-compute highlighted lines (called once on mode entry) ---
 
-/// Build pre-computed highlighted lines and hunk header positions.
-/// Returns `(rendered_lines, hunk_positions)` so that hunk navigation
-/// positions are always in sync with the actual rendered output.
-pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (Vec<Line<'static>>, Vec<usize>) {
+/// Build the pre-computed source diff rows and hunk-header positions.
+///
+/// Returns `(rows, hunk_positions)` where each [`DiffRow`] is one logical diff
+/// line (gutter + content, still separable for soft-wrapping) and
+/// `hunk_positions` indexes the rows at which each hunk header sits. The caller
+/// lays these out into display lines via [`layout_diff_rows`] (optionally
+/// wrapping), keeping hunk navigation in sync with the rendered output.
+pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (Vec<DiffRow>, Vec<usize>) {
     if content.is_binary {
         return (
-            vec![Line::from(Span::styled(
+            vec![DiffRow::plain(vec![Span::styled(
                 "(Binary file - no diff available)",
                 Style::default().fg(ui_theme.text_muted),
-            ))],
+            )])],
             Vec::new(),
         );
     }
 
     if content.hunks.is_empty() {
         return (
-            vec![Line::from(Span::styled(
+            vec![DiffRow::plain(vec![Span::styled(
                 "(No textual changes)",
                 Style::default().fg(ui_theme.text_muted),
-            ))],
+            )])],
             Vec::new(),
         );
     }
@@ -422,7 +633,7 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
         .get(ui_theme.syntect_theme)
         .or_else(|| THEME_SET.themes.values().next())
         .expect("syntect must have at least one built-in theme");
-    let mut lines = Vec::new();
+    let mut rows: Vec<DiffRow> = Vec::new();
     let mut hunk_positions = Vec::new();
 
     // Maintain highlight state across hunks so multi-line constructs
@@ -433,16 +644,16 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
 
     for hunk in &content.hunks {
         // Blank line before each hunk header for readability
-        lines.push(Line::from(""));
+        rows.push(DiffRow::plain(Vec::new()));
 
-        hunk_positions.push(lines.len());
-        lines.push(Line::from(Span::styled(
+        hunk_positions.push(rows.len());
+        rows.push(DiffRow::plain(vec![Span::styled(
             hunk.header.clone(),
             Style::default()
                 .fg(ui_theme.diff_hunk_fg)
                 .bg(ui_theme.diff_hunk_bg)
                 .add_modifier(Modifier::BOLD),
-        )));
+        )]));
 
         let groups = group_diff_lines(&hunk.lines);
 
@@ -453,7 +664,7 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                     let _ = highlight_line_owned(&mut new_hl, &dl.content);
                     let dark_fg = ui_theme.syntax_use_dark_colors;
                     let spans = syntax_to_ratatui(&syn, None, dark_fg);
-                    lines.push(make_diff_line(dl, spans, ui_theme));
+                    rows.push(make_diff_line(dl, spans, ui_theme));
                 }
                 LineGroup::Change {
                     deletions,
@@ -469,7 +680,7 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                         } else {
                             syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg), dark_fg)
                         };
-                        lines.push(make_diff_line(dl, spans, ui_theme));
+                        rows.push(make_diff_line(dl, spans, ui_theme));
                     }
 
                     for (i, dl) in additions.iter().enumerate() {
@@ -479,20 +690,20 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                         } else {
                             syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg), dark_fg)
                         };
-                        lines.push(make_diff_line(dl, spans, ui_theme));
+                        rows.push(make_diff_line(dl, spans, ui_theme));
                     }
                 }
                 LineGroup::NoNewline => {
-                    lines.push(Line::from(Span::styled(
+                    rows.push(DiffRow::plain(vec![Span::styled(
                         "\\ No newline at end of file",
                         Style::default().fg(ui_theme.text_muted),
-                    )));
+                    )]));
                 }
             }
         }
     }
 
-    (lines, hunk_positions)
+    (rows, hunk_positions)
 }
 
 // --- Widget (renders pre-computed lines) ---
@@ -577,5 +788,140 @@ impl<'a> Widget for FileDiffViewWidget<'a> {
             .scroll((0, h_offset));
 
         Widget::render(paragraph, area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reconstruct a display line's visible text (all span contents joined).
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn wrap_offsets_breaks_at_word_boundaries() {
+        // "hello world foo" at width 8 wraps as "hello " | "world " | "foo",
+        // breaking after the whitespace rather than mid-word.
+        let offsets = wrap_offsets("hello world foo", 8);
+        assert_eq!(offsets, vec![0, 6, 12]);
+        assert_eq!(offsets.len(), 3, "three wrapped rows");
+    }
+
+    #[test]
+    fn wrap_offsets_hard_breaks_an_overlong_token() {
+        // A single token longer than the width has no whitespace to break at,
+        // so it is hard-broken every `width` columns.
+        let offsets = wrap_offsets("abcdefghij", 4);
+        assert_eq!(offsets, vec![0, 4, 8]);
+        assert_eq!(offsets.len(), 3);
+    }
+
+    #[test]
+    fn wrap_offsets_leaves_short_lines_untouched() {
+        assert_eq!(wrap_offsets("short", 20), vec![0]);
+        // Exactly filling the width does not force a second row.
+        assert_eq!(wrap_offsets("abcd", 4), vec![0]);
+    }
+
+    #[test]
+    fn wrap_offsets_degenerate_inputs_yield_single_row() {
+        assert_eq!(wrap_offsets("anything", 0), vec![0]);
+        assert_eq!(wrap_offsets("", 8), vec![0]);
+    }
+
+    #[test]
+    fn wrap_offsets_row_count_matches_a_worked_example() {
+        // Mixed words and a break opportunity: "the quick brown" at width 6.
+        // "the " (4) + "quick " overflows -> break after "the "; "quick " (6) +
+        // "brown" overflows -> break; "brown" fits. Three rows.
+        let offsets = wrap_offsets("the quick brown", 6);
+        assert_eq!(offsets.len(), 3);
+        assert_eq!(offsets, vec![0, 4, 10]);
+    }
+
+    #[test]
+    fn source_row_starts_is_a_prefix_sum() {
+        assert_eq!(source_row_starts(&[1, 3, 1, 2]), vec![0, 1, 4, 5]);
+        assert_eq!(source_row_starts(&[]), Vec::<usize>::new());
+        assert_eq!(source_row_starts(&[1, 1, 1]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn layout_without_wrap_is_a_one_to_one_mapping() {
+        let rows = vec![
+            DiffRow::plain(vec![Span::raw("aa")]),
+            DiffRow::plain(vec![Span::raw("this is a long header")]),
+            DiffRow::plain(vec![Span::raw("bb")]),
+        ];
+        let (lines, hunks) = layout_diff_rows(&rows, &[1], false, 4);
+        assert_eq!(lines.len(), 3, "no wrapping: one display line per row");
+        assert_eq!(hunks, vec![1], "hunk positions pass through unchanged");
+    }
+
+    #[test]
+    fn layout_with_wrap_remaps_hunk_positions_into_wrapped_space() {
+        // Row 1 ("abcdefgh" at width 4) wraps into two display rows, pushing the
+        // hunk header at source row 2 down to wrapped-row index 3.
+        let rows = vec![
+            DiffRow::plain(vec![Span::raw("xx")]),       // 1 display row
+            DiffRow::plain(vec![Span::raw("abcdefgh")]), // 2 display rows at width 4
+            DiffRow::plain(vec![Span::raw("yy")]),       // 1 display row (hunk header)
+        ];
+        let (lines, hunks) = layout_diff_rows(&rows, &[2], true, 4);
+        assert_eq!(lines.len(), 4, "one row wraps into two -> four display rows");
+        assert_eq!(hunks, vec![3], "hunk header remapped to wrapped-row index");
+    }
+
+    #[test]
+    fn wrapping_keeps_the_gutter_on_the_first_row_only() {
+        // gutter "GUT" (3 cols) + content that wraps; avail width leaves 8 cols
+        // for content, so "hello world foo" wraps into three rows.
+        let row = DiffRow {
+            gutter: vec![Span::raw("GUT")],
+            content: vec![Span::raw("hello world foo")],
+            gutter_cols: 3,
+        };
+        let lines = row.wrap(11);
+        assert_eq!(lines.len(), 3);
+
+        // First row carries the real gutter; continuation rows pad it with spaces.
+        assert_eq!(lines[0].spans[0].content.as_ref(), "GUT");
+        assert_eq!(lines[1].spans[0].content.as_ref(), "   ");
+        assert_eq!(lines[2].spans[0].content.as_ref(), "   ");
+
+        // Concatenating each row's content (dropping the 3-col gutter) rebuilds
+        // the original text exactly — no characters lost or duplicated.
+        let reassembled: String = lines
+            .iter()
+            .map(|l| {
+                let full = line_text(l);
+                full[3..].to_string()
+            })
+            .collect();
+        assert_eq!(reassembled, "hello world foo");
+    }
+
+    #[test]
+    fn wrapping_preserves_per_span_styles_across_continuation_rows() {
+        // Two styled content spans; after wrapping, each display row's content
+        // must keep the original style of whatever span it came from.
+        let red = Style::default().fg(Color::Red);
+        let blue = Style::default().fg(Color::Blue);
+        let row = DiffRow {
+            gutter: Vec::new(),
+            content: vec![
+                Span::styled("aaaa", red),
+                Span::styled("bbbb", blue),
+            ],
+            gutter_cols: 0,
+        };
+        let lines = row.wrap(4);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].spans[0].content.as_ref(), "aaaa");
+        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(lines[1].spans[0].content.as_ref(), "bbbb");
+        assert_eq!(lines[1].spans[0].style.fg, Some(Color::Blue));
     }
 }

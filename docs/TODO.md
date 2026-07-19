@@ -194,3 +194,19 @@ dependency. Payload capped at 100,000 base64 chars (typical terminal limit),
 truncated on a 3-byte boundary if oversized. Status-line messages append
 "(via OSC 52[, truncated])" when the fallback fires, unchanged otherwise.
 See `docs/architecture.md` "Clipboard via Shell Commands" for details.
+
+### [DONE] 2026-07-19 Diff viewer soft line-wrap toggle
+`Ctrl+Alt+W` in the full-screen file-diff viewer (`AppMode::FileDiff`) toggles
+soft word-wrapping of long lines (default off: horizontal truncation/scroll,
+unchanged). Wrapping breaks at whitespace where possible and hard-breaks tokens
+longer than the pane width. The gutter (line numbers + change prefix) renders
+only on the first row of a wrapped line; continuation rows pad the gutter width
+and keep each span's syntax/diff-background style. Scrolling, the scrollbar, and
+hunk navigation/staging all operate on wrapped-row coordinates (hunk-header
+positions are re-mapped into wrapped space, so hunk ops keep working while
+wrapped). State persists in `UiState.diff_word_wrap`. The pure wrapping math
+(`wrap_offsets`, `source_row_starts`, `layout_diff_rows`, `DiffRow::wrap`) lives
+in `ui/file_diff_view.rs` with unit tests (word-boundary + unbreakable-token
+cases). Source rows are held on `App.diff_source` beside the mode (like
+`diff_viewport_*`) to avoid bloating the AppMode enum. Debug harness gained a
+`<c-a-w>` (Ctrl+Alt) key token for headless verification.

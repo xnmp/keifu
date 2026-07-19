@@ -174,6 +174,7 @@ impl App {
                     }
                 }
             }
+            Action::ToggleDiffWrap => self.toggle_diff_word_wrap(),
             Action::StageHunk => self.stage_hunk_under_cursor()?,
             Action::UnstageHunk => self.unstage_hunk_under_cursor()?,
             Action::DiscardHunk => self.prompt_discard_hunk_under_cursor()?,
@@ -361,6 +362,7 @@ impl App {
             .unwrap_or(DiffTarget::Uncommitted);
         let new_file_list = self.files_pane.display_file_list();
         if new_file_list.is_empty() {
+            self.diff_source = None;
             self.mode = AppMode::Normal;
             self.focused_panel = FocusedPanel::Files;
             self.set_message("No changes remaining");
@@ -391,16 +393,32 @@ impl App {
         file_list: Vec<FileDiffInfo>,
         file_path: &std::path::Path,
     ) -> Result<()> {
-        use crate::ui::file_diff_view::build_highlighted_lines;
+        use crate::ui::file_diff_view::{build_highlighted_lines, layout_diff_rows};
 
         // NOTE: Runs synchronously on the UI thread. For very large diffs (e.g. generated
         // files, large refactors) this may briefly block input. If this becomes a problem,
         // consider moving to a background task with a loading state, similar to commit diff summaries.
         let content = self.load_file_diff_content(file_path, target)?;
         let ui_theme = self.theme();
-        let (rendered_lines, hunk_positions) = build_highlighted_lines(&content, &ui_theme);
+        let (source_rows, hunk_src_positions) = build_highlighted_lines(&content, &ui_theme);
+
+        // Lay out for the current wrap state / pane width. `diff_viewport_width`
+        // reflects the previous frame (0 before the viewer has ever rendered);
+        // `ensure_diff_layout` re-wraps on the first render once it is known.
+        let wrap = self.diff_word_wrap;
+        let width = self.diff_viewport_width as usize;
+        let (rendered_lines, hunk_positions) =
+            layout_diff_rows(&source_rows, &hunk_src_positions, wrap, width);
         let total_lines = rendered_lines.len();
         let max_line_width = rendered_lines.iter().map(|l| l.width()).max().unwrap_or(0);
+
+        // Source rows live beside the mode so re-wrapping doesn't bloat AppMode.
+        self.diff_source = Some(crate::ui::file_diff_view::DiffSource {
+            rows: source_rows,
+            hunk_positions: hunk_src_positions,
+            layout_wrap: wrap,
+            layout_width: width,
+        });
 
         self.mode = AppMode::FileDiff {
             diff_target: target,
@@ -532,6 +550,7 @@ impl App {
 
         if new_files.is_empty() {
             if matches!(self.mode, AppMode::FileDiff { .. }) {
+                self.diff_source = None;
                 self.mode = AppMode::Normal;
                 self.set_message("No changed files in this diff");
             }
@@ -557,6 +576,8 @@ impl App {
     }
 
     fn return_to_normal(&mut self) {
+        // Release the (potentially large) diff source rows on close.
+        self.diff_source = None;
         self.mode = AppMode::Normal;
         if self.pending_refresh {
             self.pending_refresh = false;

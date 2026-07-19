@@ -130,6 +130,8 @@ fn make_base_app(
         pending_refresh: false,
         diff_viewport_height: 40,
         diff_viewport_width: 80,
+        diff_word_wrap: false,
+        diff_source: None,
         message: None,
         message_time: None,
         toasts: keifu::toast::ToastQueue::new(),

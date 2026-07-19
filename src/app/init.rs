@@ -126,6 +126,8 @@ impl App {
             pending_refresh: false,
             diff_viewport_height: 40,
             diff_viewport_width: 80,
+            diff_word_wrap: ui_state.diff_word_wrap,
+            diff_source: None,
             message: initial_message,
             message_time: initial_message_time,
             toasts: crate::toast::ToastQueue::new(),

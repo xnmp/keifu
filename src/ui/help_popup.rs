@@ -259,6 +259,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 Span::styled("  x          ", key_style),
                 Span::styled("Discard hunk (working tree)", desc_style),
             ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+Alt+W ", key_style),
+                Span::styled("Toggle soft line wrap", desc_style),
+            ]),
             Line::from(""),
             Line::from(Span::styled("Commit Panel", header_style)),
             Line::from(vec![
