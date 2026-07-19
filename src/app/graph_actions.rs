@@ -34,6 +34,20 @@ impl App {
                 }
                 return Ok(());
             }
+            // The issue list opens from any panel in Normal mode.
+            Action::OpenIssueList => {
+                self.open_issue_list();
+                return Ok(());
+            }
+            // Palette shortcut: open (or reuse) the list, then the new-issue
+            // compose on top, so cancelling returns to a populated list.
+            Action::NewIssue => {
+                if self.issue_list.is_none() {
+                    self.open_issue_list();
+                }
+                self.open_new_issue_compose();
+                return Ok(());
+            }
             _ => {}
         }
 

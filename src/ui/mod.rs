@@ -12,6 +12,9 @@ pub mod files_pane;
 pub mod graph_pixels;
 pub mod graph_view;
 pub mod help_popup;
+pub mod issue_compose;
+pub mod issue_detail;
+pub mod issue_list;
 pub mod metadata_menu;
 pub mod pr_compose;
 pub mod pr_thread;
@@ -62,6 +65,10 @@ pub const MIN_WIDGET_HEIGHT: u16 = 3;
 /// PR-thread popup size (% of screen). Shared by the scroll pre-pass and the
 /// render so their geometry matches.
 const PR_THREAD_POPUP_PCT: (u16, u16) = (80, 80);
+
+/// Issue list/detail popup size (% of screen). Shared by the scroll pre-pass
+/// and the render so their geometry matches.
+const ISSUE_POPUP_PCT: (u16, u16) = (80, 80);
 
 /// Render a placeholder block when widget area is too small
 pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -424,6 +431,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    // Issue-detail pre-pass: clamp the scroll to its wrapped height (same as the
+    // PR-thread pre-pass), before the immutable borrow in the popup match below.
+    if matches!(app.mode, AppMode::IssueDetail) {
+        let popup = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
+        let inner_w = popup.width.saturating_sub(4);
+        let body_h = popup.height.saturating_sub(3) as usize;
+        let total = app.issue_detail.as_ref().map(|v| {
+            let lines = issue_detail::build_lines(&v.state, &theme);
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .line_count(inner_w)
+        });
+        if let (Some(total), Some(v)) = (total, app.issue_detail.as_mut()) {
+            v.max_scroll = total.saturating_sub(body_h);
+            v.scroll = v.scroll.min(v.max_scroll);
+        }
+    }
+
     // Popups. Each interactive popup records its rect for mouse hit-testing
     // (click-inside routes, click-outside closes).
     let mut rendered_popup: Option<Rect> = None;
@@ -561,6 +586,52 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
             rendered_popup = Some(popup_area);
+        }
+        AppMode::IssueList => {
+            if let Some(view) = &app.issue_list {
+                use self::issue_list::IssueListWidget;
+                let popup_area = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
+                frame.render_widget(IssueListWidget::new(view, &theme), popup_area);
+                rendered_popup = Some(popup_area);
+            }
+        }
+        AppMode::IssueDetail => {
+            if let Some(view) = &app.issue_detail {
+                use self::issue_detail::IssueDetailWidget;
+                let popup_area = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
+                frame.render_widget(IssueDetailWidget::new(view, &theme), popup_area);
+                rendered_popup = Some(popup_area);
+            }
+        }
+        AppMode::IssueCompose { purpose } => {
+            use self::issue_compose::IssueComposeWidget;
+            use self::pr_compose::text_area;
+            let popup_area = centered_rect(64, 60, area);
+            rendered_popup = Some(popup_area);
+            frame.render_widget(
+                IssueComposeWidget::new(&app.issue_editor, *purpose, &theme),
+                popup_area,
+            );
+            // Place the terminal cursor at the editor position.
+            let (row, col) = app.issue_editor.cursor_position();
+            let body = text_area(popup_area);
+            let cx = body.x + col as u16;
+            let cy = body.y + row as u16;
+            if cx < body.x + body.width && cy < body.y + body.height {
+                frame.set_cursor_position((cx, cy));
+            }
+        }
+        AppMode::IssueLabelPicker { selected, .. } => {
+            if let Some(picker) = &app.issue_label_picker {
+                use self::issue_detail::IssueLabelPickerWidget;
+                let rows = (picker.labels.len() + 3).clamp(6, 24) as u16;
+                let popup_area = centered_rect_fixed(48, rows, area);
+                frame.render_widget(
+                    IssueLabelPickerWidget::new(picker, *selected, &theme),
+                    popup_area,
+                );
+                rendered_popup = Some(popup_area);
+            }
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
@@ -761,12 +832,33 @@ fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
 }
 
 /// Truncate to `max` display columns with an ellipsis.
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+/// Truncate `s` to at most `max` display columns, appending `…` when it
+/// overflows. Uses Unicode display width (not char count) so wide CJK/emoji
+/// glyphs are measured correctly and the result — including the ellipsis — never
+/// exceeds `max` columns. Shared by widgets that write with `Buffer::set_string`,
+/// which does not clip.
+pub(crate) fn truncate_str(s: &str, max: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if UnicodeWidthStr::width(s) <= max {
+        return s.to_string();
     }
+    if max == 0 {
+        return String::new();
+    }
+    // Reserve one column for the ellipsis.
+    let budget = max - 1;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 /// Overlay pixel-rendered graph images on top of the (blank) graph column.
@@ -957,6 +1049,36 @@ mod tests {
         let buf = term.backend().buffer();
         let painted = (0..8).any(|y| (0..10).any(|x| buf[(x, y)].symbol() != " "));
         assert!(!painted, "a pane whose content fits draws no scrollbar");
+    }
+
+    #[test]
+    fn truncate_str_measures_display_width() {
+        use unicode_width::UnicodeWidthStr;
+
+        // ASCII: fits untouched, exact-fit untouched, overflow gets an ellipsis.
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello", 5), "hello");
+        assert_eq!(truncate_str("hello world", 5), "hell…");
+        assert_eq!(UnicodeWidthStr::width(truncate_str("hello world", 5).as_str()), 5);
+
+        // CJK glyphs are 2 columns each: 3 chars = 6 columns.
+        assert_eq!(truncate_str("日本語", 6), "日本語");
+        // max 5 can't fit the third wide glyph (2 cols) + ellipsis, so one glyph
+        // + ellipsis = 3 columns, never exceeding 5.
+        let cjk = truncate_str("日本語テスト", 5);
+        assert!(UnicodeWidthStr::width(cjk.as_str()) <= 5, "got {cjk:?}");
+        assert!(cjk.ends_with('…'));
+
+        // Emoji (width 2) never overflow the budget.
+        let emoji = truncate_str("🐛🐛🐛🐛", 5);
+        assert!(UnicodeWidthStr::width(emoji.as_str()) <= 5, "got {emoji:?}");
+        assert!(emoji.ends_with('…'));
+
+        // Zero max yields empty (can't even fit the ellipsis).
+        assert_eq!(truncate_str("anything", 0), "");
+        // Empty input stays empty regardless of max.
+        assert_eq!(truncate_str("", 0), "");
+        assert_eq!(truncate_str("", 5), "");
     }
 
     #[test]

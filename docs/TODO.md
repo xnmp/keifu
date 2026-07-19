@@ -131,6 +131,26 @@ j/k removed from graph panel movement (arrow keys only). j/k retained in FileSel
 
 ---
 
+## GitHub Integration
+
+### [DONE] 2026-07-19 GitHub issue viewing/management (issue #37)
+Issues from the TUI, mirroring the PR feature's architecture 1:1: `Shift+I`
+opens the list popup (open/closed/all filter via Tab, `r` refresh, `n` new,
+`o` browser), Enter opens detail with the comment thread; from detail `c`
+comments, `x` close/reopen (confirmed), `l` label checkbox picker, `a`
+assignee input (comma-separated logins, set-diffed against current). Backend
+is the `gh` CLI via `crate::gh::run`: `src/issue.rs` (models + parsing +
+on-demand `IssueFetch` — list, per-number detail cache, one-shot label list),
+`src/issue_action.rs` (pure tested `build_args`, bodies via `--body-file`,
+`IssueActionRunner`). View state lives in `Option<IssueListView/DetailView>`
+on `App` with Loading/Ready/Error rendered inline (soft-fail, never
+`AppMode::Error`). Compose (new issue: first line = title; comment: body)
+uses `App.issue_editor`; `Ctrl+E` in any compose (issue + PR) pops out to
+`$VISUAL`/`$EDITOR` via `src/external_edit.rs` — App only records intent,
+main.rs owns terminal suspend/resume, debug/headless path never suspends.
+
+---
+
 ## Maintenance Sweeps
 
 ### [DONE] 2026-07-13 comprehensive perf/bug/architecture sweep

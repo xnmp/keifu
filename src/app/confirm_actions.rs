@@ -197,6 +197,11 @@ impl App {
                         self.run_pr_action(action);
                         return Ok(());
                     }
+                    ConfirmAction::IssueAction(action) => {
+                        // Runs asynchronously; skip the synchronous refresh below.
+                        self.run_issue_action(action);
+                        return Ok(());
+                    }
                 }
                 self.refresh(true)?;
                 self.mode = AppMode::Normal;

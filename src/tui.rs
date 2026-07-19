@@ -29,6 +29,18 @@ pub fn restore() -> Result<()> {
     Ok(())
 }
 
+/// Re-enter raw mode and the alternate screen after the TUI was suspended (via
+/// [`restore`]) to hand the terminal to a child process such as an external
+/// `$EDITOR`. Mirrors the enabling half of [`init`] with the same flags, so the
+/// terminal is restored to exactly the startup state. The caller keeps its
+/// existing [`Tui`] and should `clear()` it to force a full repaint over
+/// whatever the child process left on screen.
+pub fn resume() -> Result<()> {
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    Ok(())
+}
+
 /// Terminals commonly cap the base64 payload of an OSC 52 sequence around
 /// 100KB (e.g. xterm's default `set-selection` limit); some are stricter.
 /// Payloads larger than this are truncated so the escape sequence doesn't

@@ -119,6 +119,8 @@ pub fn command_registry() -> Vec<PaletteEntry> {
         entry("Open PR in browser", Some("o"), Action::OpenPr, has_open_pr),
         entry("View CI checks", Some("c"), Action::OpenCiChecks, has_open_pr),
         entry("View PR conversation", Some("v"), Action::OpenPrThread, has_open_pr),
+        entry("Issues: list", Some("I"), Action::OpenIssueList, always),
+        entry("Issues: new issue", None, Action::NewIssue, always),
         entry("Toggle branch tracing", Some("t"), Action::ToggleTrace, always),
         entry("Display columns menu", Some("M"), Action::OpenMetadataMenu, always),
         entry("Filter branches", Some("B"), Action::OpenBranchFilter, always),

@@ -96,7 +96,7 @@ impl<'a> Widget for PrComposeWidget<'a> {
         }
 
         // Hint (bottom row).
-        let hint = " Ctrl+S submit   Esc cancel ";
+        let hint = " Ctrl+S submit   Ctrl+E editor   Esc cancel ";
         let fy = inner.y + inner.height - 1;
         buf.set_string(
             inner.x,

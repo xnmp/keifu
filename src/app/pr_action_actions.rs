@@ -194,6 +194,10 @@ impl App {
                 self.mode = AppMode::Normal;
             }
             Action::SubmitCompose => self.submit_pr_compose(),
+            Action::ExternalEdit => {
+                self.pending_external_edit =
+                    Some(crate::external_edit::ExternalEditTarget::Pr);
+            }
             other => {
                 super::commit_editor_actions::apply_editor_edit(&mut self.pr_editor, &other);
             }

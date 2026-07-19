@@ -47,6 +47,7 @@ mod graph_actions;
 mod ci_checks_actions;
 mod pr_thread_actions;
 mod pr_action_actions;
+mod issue_actions;
 mod mouse_actions;
 mod file_ops;
 mod commit_editor_actions;
@@ -341,6 +342,20 @@ pub enum AppMode {
         number: u64,
         selected: usize,
     },
+    /// GitHub issue list. Data on `App.issue_list` (filled asynchronously).
+    IssueList,
+    /// A single issue's detail (body + comments). Data on `App.issue_detail`.
+    IssueDetail,
+    /// Compose a new issue (title + body) or a comment in `App.issue_editor`.
+    IssueCompose {
+        purpose: IssueComposePurpose,
+    },
+    /// Toggle labels on an issue. The label set + chosen state live on
+    /// `App.issue_label_picker`; this variant carries only the cursor row.
+    IssueLabelPicker {
+        number: u64,
+        selected: usize,
+    },
     BranchFilter {
         filter: String,
         selected: usize,
@@ -461,6 +476,63 @@ pub enum ThreadViewState {
     Error(String),
 }
 
+/// State of the GitHub issue-list popup. Errors render inline (never
+/// `AppMode::Error`), mirroring `CiChecksView`/`PrThreadView`.
+pub struct IssueListView {
+    pub state: IssueListState,
+    /// Selected row (index into the `Ready` list).
+    pub selected: usize,
+    pub filter: crate::issue::IssueFilter,
+    /// First visible row, kept in range each frame by the widget.
+    pub scroll: usize,
+    /// Issue number to reselect once a refetch completes, captured when the view
+    /// transitions to `Loading` so a refresh/mutation doesn't jump to row 0.
+    pub pending_reselect: Option<u64>,
+}
+
+pub enum IssueListState {
+    Loading,
+    Ready(Vec<crate::issue::IssueInfo>),
+    Error(String),
+}
+
+/// State of the issue-detail popup.
+pub struct IssueDetailView {
+    pub number: u64,
+    pub state: IssueDetailState,
+    /// Scroll offset in wrapped rows; clamped to `max_scroll` each frame.
+    pub scroll: usize,
+    pub max_scroll: usize,
+}
+
+pub enum IssueDetailState {
+    Loading,
+    /// Boxed to keep the enum small (`IssueDetail` is large vs the other
+    /// variants), which also keeps `IssueDetailView` cheap to move.
+    Ready(Box<crate::issue::IssueDetail>),
+    Error(String),
+}
+
+/// What the issue-compose editor is composing. For `NewIssue` the first editor
+/// line is the title and the rest is the body; for `Comment` the whole buffer
+/// is the comment body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueComposePurpose {
+    NewIssue,
+    Comment { number: u64 },
+}
+
+/// Live label-picker data (on `App`), so the `IssueLabelPicker` mode variant can
+/// stay unit-ish (cursor only). `labels` is the repo's full label set;
+/// `original` is which were on the issue when the picker opened; `chosen` is the
+/// current toggle state. The apply set-diff compares `chosen` against `original`.
+pub struct IssueLabelPicker {
+    pub number: u64,
+    pub labels: Vec<crate::issue::IssueLabel>,
+    pub original: Vec<bool>,
+    pub chosen: Vec<bool>,
+}
+
 /// Panel rectangles recorded during render, for mouse hit-testing. All are the
 /// outer panel rects (including borders); the inner list area is inset by 1.
 /// The divider fields are the borders between panels (for drag-resize).
@@ -514,6 +586,10 @@ pub enum InputAction {
     BranchFromStash { index: usize },
     /// Stash the working tree with the typed (optional) message.
     StashPush { scope: StashScope },
+    /// Edit an issue's assignees: the typed comma-separated logins become the
+    /// desired final set; the handler diffs it against the issue's current
+    /// assignees to compute add/remove.
+    EditIssueAssignees { number: u64 },
 }
 
 /// Confirmation action kinds
@@ -553,6 +629,9 @@ pub enum ConfirmAction {
     /// Confirm a mutating PR action (create / merge / approve / request-changes)
     /// before it runs asynchronously.
     PrAction(crate::pr_action::PrAction),
+    /// Confirm a mutating issue action (close / reopen) before it runs
+    /// asynchronously.
+    IssueAction(crate::issue_action::IssueAction),
 }
 
 /// Search state for branch search feature
@@ -752,6 +831,23 @@ pub struct App {
     pub pr_editor: crate::text_editor::TextEditor,
     pub pr_action_runner: crate::pr_action::PrActionRunner,
 
+    // GitHub Issues: on-demand fetcher + async action runner, the list/detail
+    // popup views (`Some` only while open), the compose editor, and the live
+    // label-picker data.
+    pub issue_fetch: crate::issue::IssueFetch,
+    pub issue_action_runner: crate::issue_action::IssueActionRunner,
+    pub issue_list: Option<IssueListView>,
+    pub issue_detail: Option<IssueDetailView>,
+    pub issue_editor: crate::text_editor::TextEditor,
+    pub issue_label_picker: Option<IssueLabelPicker>,
+
+    // A pending request (set by a compose handler on Ctrl+E) to pop the compose
+    // buffer out into the user's $EDITOR. `main.rs` — the sole owner of the
+    // terminal — drains this after `handle_action`, suspends the TUI, runs the
+    // editor, and restores. Kept off the terminal-owning path so headless/debug
+    // runs never try to suspend a real terminal.
+    pub pending_external_edit: Option<crate::external_edit::ExternalEditTarget>,
+
     // Author avatars (pixel mode): background downloader + the graph generation
     // whose author emails have already been enqueued (re-enqueue on reload).
     pub avatar_fetch: crate::avatar_fetch::AvatarFetch,
@@ -944,6 +1040,32 @@ impl App {
     }
 
     /// Handle an action
+    /// The compose text a pending external edit should hand to the editor.
+    pub fn external_edit_source_text(
+        &self,
+        target: crate::external_edit::ExternalEditTarget,
+    ) -> String {
+        match target {
+            crate::external_edit::ExternalEditTarget::Pr => self.pr_editor.text.clone(),
+            crate::external_edit::ExternalEditTarget::Issue => self.issue_editor.text.clone(),
+        }
+    }
+
+    /// Replace the targeted compose buffer with the editor's output, cursor at
+    /// end. Called by `main.rs` after the external editor returns successfully.
+    pub fn apply_external_edit(
+        &mut self,
+        target: crate::external_edit::ExternalEditTarget,
+        text: String,
+    ) {
+        let mut editor = crate::text_editor::TextEditor::from_text(&text);
+        editor.move_text_end(false);
+        match target {
+            crate::external_edit::ExternalEditTarget::Pr => self.pr_editor = editor,
+            crate::external_edit::ExternalEditTarget::Issue => self.issue_editor = editor,
+        }
+    }
+
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         // Ctrl+Q always quits
         if matches!(action, Action::ForceQuit) {
@@ -1002,6 +1124,10 @@ impl App {
             AppMode::PrCompose { .. } => self.handle_pr_compose_action(action),
             AppMode::PrMergePicker { .. } => self.handle_pr_merge_picker_action(action),
             AppMode::PrReviewPicker { .. } => self.handle_pr_review_picker_action(action),
+            AppMode::IssueList => self.handle_issue_list_action(action),
+            AppMode::IssueDetail => self.handle_issue_detail_action(action),
+            AppMode::IssueCompose { .. } => self.handle_issue_compose_action(action),
+            AppMode::IssueLabelPicker { .. } => self.handle_issue_label_picker_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,

@@ -64,6 +64,34 @@ pub enum Action {
     // Submit the PR-compose editor (create PR / review body)
     SubmitCompose,
 
+    // Pop the current compose buffer out into the user's $EDITOR (Ctrl+E),
+    // shared by the PR- and issue-compose modes.
+    ExternalEdit,
+
+    // GitHub Issues
+    /// Open the issue list popup (Normal mode, any panel).
+    OpenIssueList,
+    /// Re-fetch the current issue list / detail.
+    RefreshIssues,
+    /// Cycle the list filter Open → Closed → All.
+    CycleIssueFilter,
+    /// Open the selected issue's detail popup.
+    OpenIssueDetail,
+    /// Start composing a new issue.
+    NewIssue,
+    /// Start composing a comment on the current issue.
+    CommentOnIssue,
+    /// Close an open issue / reopen a closed one (via Confirm).
+    ToggleIssueState,
+    /// Open the label picker for the current issue.
+    EditIssueLabels,
+    /// Edit the current issue's assignees (via Input).
+    EditIssueAssignees,
+    /// Toggle the label under the cursor in the label picker.
+    ToggleIssueLabel,
+    /// Open the current issue in the browser.
+    OpenIssueInBrowser,
+
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 
