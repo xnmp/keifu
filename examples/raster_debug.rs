@@ -56,22 +56,69 @@ fn main() {
     );
 
     let theme = Theme::dark();
-    let start = target_idx.saturating_sub(n_rows / 2);
-    let end = (start + n_rows).min(layout.nodes.len());
+
+    // Optional folding: collapse standalone connector rows into the following
+    // commit row's underlay, replicating the real pixel pipeline
+    // (build_pixel_row_specs / fold_rows). Produces (node_idx, underlay) rows.
+    let fold = std::env::var("FOLD").is_ok();
+    let folded: Vec<(usize, Vec<keifu::git::graph::CellType>)> = if fold {
+        let mut out = Vec::new();
+        let mut pending: Vec<usize> = Vec::new();
+        for (i, node) in layout.nodes.iter().enumerate() {
+            if node.is_connector() {
+                pending.push(i);
+            } else {
+                let width = pending
+                    .iter()
+                    .map(|&p| layout.nodes[p].cells.len())
+                    .max()
+                    .unwrap_or(0);
+                let mut underlay = vec![keifu::git::graph::CellType::Empty; width];
+                for &p in &pending {
+                    for (col, cell) in layout.nodes[p].cells.iter().enumerate() {
+                        if *cell != keifu::git::graph::CellType::Empty {
+                            underlay[col] = *cell;
+                        }
+                    }
+                }
+                pending.clear();
+                out.push((i, underlay));
+            }
+        }
+        out
+    } else {
+        (0..layout.nodes.len()).map(|i| (i, Vec::new())).collect()
+    };
+    let target_row = folded
+        .iter()
+        .position(|(i, _)| *i == target_idx)
+        .unwrap_or(0);
+    let start = target_row.saturating_sub(n_rows / 2);
+    let end = (start + n_rows).min(folded.len());
 
     // Rasterize each row (unfolded: connector rows render as their own rows,
     // which matches stroke geometry; folding only merges images).
     let mut row_imgs: Vec<RgbaImage> = Vec::new();
     let mut max_w = 0u32;
     for i in start..end {
-        let node = &layout.nodes[i];
+        let (node_idx, underlay) = &folded[i];
+        let node = &layout.nodes[*node_idx];
         let above = if i > 0 {
-            Some(layout.nodes[i - 1].cells.clone())
+            Some(layout.nodes[folded[i - 1].0].cells.clone())
         } else {
             None
         };
-        let below = layout.nodes.get(i + 1).map(|n| n.cells.clone());
-        let mut spec = build_row_spec(above.as_deref(), node, below.as_deref(), &[], &theme);
+        let below = folded
+            .get(i + 1)
+            .map(|(ni, _)| layout.nodes[*ni].cells.clone());
+        let mut spec =
+            build_row_spec(above.as_deref(), node, below.as_deref(), underlay, &theme);
+        if std::env::var("NODIM").is_ok() {
+            let img = rasterize_row(&spec, cw, ch);
+            max_w = max_w.max(img.width());
+            row_imgs.push(img);
+            continue;
+        }
         // Replicate apply_trace_dim (private in graph_view), incl. recolor.
         let lit = keifu::git::graph::trace_lit_edges(&layout, &lineage);
         let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = layout
@@ -141,7 +188,7 @@ fn main() {
     let total_h = row_imgs.len() as u32 * ch;
     let mut canvas = RgbaImage::from_pixel(max_w, total_h, image::Rgba([bg[0], bg[1], bg[2], 255]));
     for (ri, img) in row_imgs.iter().enumerate() {
-        let is_target = start + ri == target_idx;
+        let is_target = folded[start + ri].0 == target_idx;
         for y in 0..img.height() {
             for x in 0..img.width() {
                 let p = img.get_pixel(x, y);
@@ -171,14 +218,17 @@ fn main() {
     eprintln!("wrote {out} ({max_w}x{total_h})");
 
     if std::env::var("DUMP_CELLS").is_ok() {
-        for i in start..end {
-            let n = &layout.nodes[i];
+        for (ni, underlay) in &folded[start..end] {
+            let n = &layout.nodes[*ni];
             let label = n
                 .commit
                 .as_ref()
                 .map(|c| c.short_id.clone())
                 .unwrap_or_else(|| "connector".into());
-            eprintln!("row {i} ({label}): {:?}", n.cells);
+            eprintln!("row {ni} ({label}): {:?}", n.cells);
+            if !underlay.is_empty() {
+                eprintln!("     underlay: {underlay:?}");
+            }
         }
     }
 }
