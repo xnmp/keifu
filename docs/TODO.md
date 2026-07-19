@@ -211,10 +211,27 @@ cases). Source rows are held on `App.diff_source` beside the mode (like
 `diff_viewport_*`) to avoid bloating the AppMode enum. Debug harness gained a
 `<c-a-w>` (Ctrl+Alt) key token for headless verification.
 
-### [TODO] 2026-07-19 Merge-conflict UX batch (issue #36)
+### [DONE] 2026-07-19 Merge-conflict UX batch (issue #36)
 Three tracks: (1) stash pop/apply through `run_git_allow_conflict` → typed
 `OpOutcome::Conflicts` guided flow (stash kept on conflict, no continue step,
-op_state stays Clean); (2) app-level guardrails while an operation is in
-progress / conflicts outstanding (checkout, second op, stash pop, commit get a
-friendly redirect instead of raw git errors); (3) conflict navigation — jump
-between conflicted files and conflict hunks, highlight conflict markers.
+op_state stays Clean; guidance points at the stash-menu Drop, not the merge
+Continue/Abort keys); (2) app-level guardrails while an operation is in
+progress / conflicts outstanding — checkout, merge/rebase/cherry-pick/revert
+initiation, pull, and stash pop/apply are intercepted with a guided message
+(pure predicates `op_guard_message`/`commit_guard_message` in
+`app/conflict_actions.rs`); commit is blocked only while unmerged paths remain,
+so resolving re-enables it; (3) conflict navigation — `]`/`[` in the files pane
+jump between conflicted files (wrap-around), literal conflict-marker lines are
+highlighted in diffs (`src/conflict.rs`). In-viewer conflict-block jumping was
+deliberately dropped: libgit2 emits no hunks for unmerged paths, so marker
+content never reaches the diff viewer during a live conflict (a 3-way/conflict
+view remains the XL follow-up in docs/vscode-parity.md).
+
+### [DONE] 2026-07-19 Popup chrome polish
+All popups route through `Theme::popup_block` (rounded borders matching the
+panes, bold border-colored title, one column of horizontal padding); the help
+sheet is data-driven (`HelpEntry`) with a computed fixed key column (fixes the
+"Tab / S-Tab" collision); Commit Detail gets the same one-space inset plus
+muted field labels; empty states show muted placeholders ("no changes",
+"empty commit", "no matching branches" — the branch-filter popup also no
+longer collapses to zero body rows when nothing matches).
