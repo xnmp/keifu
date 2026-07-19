@@ -383,3 +383,16 @@ whether same-run or split across cells/underlay. Endpoints unchanged (tiling +
 protocol cache unaffected). raster_debug now folds `cell_oids` and dims the
 underlay app-faithfully. Regression tests: cross-layer bury case, fan bury
 case, hub-handle geometry.
+
+### [DONE] 2026-07-19 Trace identity: co-routed edge no longer recolors sibling lead-ins
+The final piece of the trace-bleed saga (user: "the color was actually correct
+before, the lead-ins of other branches just need to be dimmed"). Fork
+connectors co-route a farther merging lane's edge through a nearer arm's `┴`
+cell (secondary oid slot) — correct data for the old straight-run renderer
+where one stroke served both branches, but `apply_trace_dim` lit and recolored
+a non-pipe cell if EITHER edge was traced, so a sibling's lead-in rendered
+bright in the traced branch's color. Non-pipe, non-dot cells now dim/recolor
+from their primary (own) edge only; HorizontalPipe keeps two-channel handling;
+dots still light via either edge. Regression test modeled cell-for-cell on the
+real junction. Note: the Unicode renderer still lights via either edge (a
+single glyph can't split colors) — acceptable there.
