@@ -179,13 +179,46 @@ fn main() {
                 pc.dim = !(is_lit(primary) || is_lit(secondary));
                 pc.dim_secondary = pc.dim;
             } else {
-                pc.dim = !(is_lit(primary) || is_lit(secondary));
+                // Own stroke = primary edge only; a secondary edge is a
+                // co-routed sibling drawn by its own curve (see graph_view).
+                pc.dim = !is_lit(primary);
                 pc.dim_secondary = pc.dim;
-                if let Some(rgb) = color_of(primary).or_else(|| color_of(secondary)) {
+                if let Some(rgb) = color_of(primary) {
                     pc.color = rgb;
                 }
             }
         }
+        }
+        if std::env::var("DUMP_OIDS").is_ok() {
+            let sid = |o: git2::Oid| o.to_string()[..7].to_string();
+            let node_label = node
+                .commit
+                .as_ref()
+                .map(|c| sid(c.oid))
+                .unwrap_or_else(|| "connector".into());
+            eprintln!(
+                "row {i} {node_label} lane={} color_index={}",
+                node.lane, node.color_index
+            );
+            for (layer, oids_l) in [("cells", &node.cell_oids), ("underlay", underlay_oids)]
+            {
+                for (ci, (pe, se)) in oids_l.iter().enumerate() {
+                    if pe.is_none() && se.is_none() {
+                        continue;
+                    }
+                    let fmt = |e: &Option<keifu::git::graph::CellEdge>| {
+                        e.map(|(c2, p2)| {
+                            let hit = lit
+                                .get(&(c2, p2))
+                                .map(|v| format!(" LIT->{}", sid(*v)))
+                                .unwrap_or_default();
+                            format!("({}->{}{hit})", sid(c2), sid(p2))
+                        })
+                        .unwrap_or_else(|| "-".into())
+                    };
+                    eprintln!("  {layer} col {ci}: p={} s={}", fmt(pe), fmt(se));
+                }
+            }
         }
         let img = rasterize_row(&spec, cw, ch);
         if std::env::var("DUMP_CELLS").is_ok() {

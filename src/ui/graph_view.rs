@@ -405,13 +405,17 @@ pub fn build_pixel_row_specs(
         .collect()
 }
 
-/// Set `dim` on every pixel cell whose edge is not in `lineage`. A
+/// Set `dim` on every pixel cell whose OWN edge is not in `lineage`. A
 /// `HorizontalPipe` crossing carries two independent edges — the horizontal
 /// stroke (primary edge, drawn in the cell's `secondary` color) and the
 /// vertical lane crossed underneath (secondary edge, the cell's `color`) — so
-/// each direction is dimmed from its own edge rather than all-or-nothing. An
-/// edge is traced only when both its `(child, parent)` endpoints are on the
-/// lineage (see `edge_is_traced`).
+/// each direction is dimmed from its own edge rather than all-or-nothing.
+/// Every other shape's stroke belongs to its PRIMARY edge alone: a secondary
+/// edge there is a different branch co-routed through the column, drawn by
+/// that branch's own curve, so it neither lights nor recolors this cell
+/// (commit dots are the exception — they light via either edge, keeping
+/// their own color). An edge is traced only when both its `(child, parent)`
+/// endpoints are on the lineage (see `edge_is_traced`).
 fn apply_trace_dim(
     cells: &mut [crate::ui::graph_pixels::PixelCell],
     oids: &[crate::git::graph::CellOids],
@@ -446,9 +450,16 @@ fn apply_trace_dim(
             pc.dim = !(is_lit(primary) || is_lit(secondary));
             pc.dim_secondary = pc.dim;
         } else {
-            pc.dim = !(is_lit(primary) || is_lit(secondary));
+            // The cell's own stroke is its PRIMARY edge. A secondary edge here
+            // is another branch co-routed through this column (a farther fork
+            // arm passing a nearer arm's ┴, or a shared run) — under the curve
+            // renderer that branch draws its own curve from its own spoke
+            // cell, so the co-routed edge must not light or recolor THIS
+            // cell's stroke: doing so painted a sibling's lead-in bright in
+            // the traced branch's color.
+            pc.dim = !is_lit(primary);
             pc.dim_secondary = pc.dim;
-            if let Some(rgb) = color_of(primary).or_else(|| color_of(secondary)) {
+            if let Some(rgb) = color_of(primary) {
                 pc.color = rgb;
             }
         }
@@ -2444,6 +2455,60 @@ mod tests {
             Some((Some((child, fork)), None)),
             "the connector's edge is preserved in the folded underlay"
         );
+    }
+
+    #[test]
+    fn co_routed_traced_edge_does_not_light_or_recolor_a_sibling_spoke() {
+        use crate::ui::graph_pixels::{CellShape, PixelCell};
+        // The fdcc78b junction shape: tracing a branch whose fork stroke is
+        // co-routed through a nearer sibling arm's ┴ (TeeUp). The sibling's
+        // riser must stay dim in its OWN color — before this fix the co-routed
+        // lit edge in the secondary slot lit the whole cell and recolored it
+        // to the traced branch's lane color ("pink lead-in rendered yellow").
+        let sibling_child = oid(1);
+        let traced_child = oid(2);
+        let fork = oid(3);
+        let traced_edge = (traced_child, fork);
+        let sibling_edge = (sibling_child, fork);
+        let yellow = [205u8, 205, 0];
+        let red = [205u8, 0, 0];
+        let solid = |shape: CellShape, rgb: [u8; 3]| PixelCell {
+            shape,
+            color: rgb,
+            secondary: rgb,
+            dim: false,
+            dim_secondary: false,
+        };
+        let mut cells = vec![
+            solid(CellShape::TeeRight, [92, 92, 255]),
+            solid(CellShape::Horizontal, red),
+            solid(CellShape::TeeUp, yellow),
+            solid(CellShape::Horizontal, red),
+            solid(CellShape::MergeLeft, red),
+        ];
+        let oids: Vec<crate::git::graph::CellOids> = vec![
+            (Some((oid(4), fork)), None),
+            (Some(traced_edge), Some(sibling_edge)),
+            (Some(sibling_edge), Some(traced_edge)), // ┴: own riser + co-route
+            (Some(traced_edge), None),
+            (Some(traced_edge), None),
+        ];
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [(traced_edge, traced_child)].into_iter().collect();
+        let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> =
+            [(traced_child, red)].into_iter().collect();
+
+        apply_trace_dim(&mut cells, &oids, &lit, &lane_rgb);
+
+        assert!(cells[2].dim, "sibling ┴ riser must dim: its own edge is unlit");
+        assert_eq!(
+            cells[2].color, yellow,
+            "sibling ┴ riser keeps its own color, not the traced branch's"
+        );
+        assert!(!cells[4].dim, "the traced branch's own turn stays lit");
+        assert_eq!(cells[4].color, red, "lit stroke takes the traced lane color");
+        assert!(!cells[1].dim, "shared run cell: primary (traced) edge lights it");
+        assert!(cells[0].dim, "the trunk tee is off-lineage here and dims");
     }
 
     #[test]
