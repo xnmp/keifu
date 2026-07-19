@@ -377,6 +377,9 @@ impl App {
     }
 
     pub(crate) fn do_checkout(&mut self) -> Result<()> {
+        if self.block_if_op_in_progress("checkout") {
+            return Ok(());
+        }
         let branches: Vec<String> = self
             .selected_node_branches()
             .iter()
@@ -406,6 +409,9 @@ impl App {
     }
 
     pub(crate) fn checkout_branch_by_name(&mut self, branch_name: &str) -> Result<()> {
+        if self.block_if_op_in_progress("checkout") {
+            return Ok(());
+        }
         if branch_name.starts_with("origin/") {
             checkout_remote_branch(self.repo.repo(), branch_name)?;
         } else {
