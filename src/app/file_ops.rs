@@ -117,6 +117,12 @@ impl App {
             Action::AbortOperation => {
                 self.prompt_abort_operation();
             }
+            Action::NextConflict => {
+                self.jump_to_conflict(true);
+            }
+            Action::PrevConflict => {
+                self.jump_to_conflict(false);
+            }
             Action::UndoLastFileOp => {
                 self.undo_last_file_op()?;
             }
@@ -167,6 +173,14 @@ impl App {
 
     fn move_file_selection(&mut self, delta: i32) {
         self.files_pane.move_file_selection(delta);
+    }
+
+    /// Move the files-pane selection to the next/previous conflicted file
+    /// (wrap-around), or report that there are none.
+    fn jump_to_conflict(&mut self, forward: bool) {
+        if !self.files_pane.select_conflict(forward) {
+            self.set_message("No conflicted files");
+        }
     }
 
     fn toggle_stage_selected_file(&mut self) -> Result<()> {

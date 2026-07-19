@@ -312,6 +312,12 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Restore all changes (discard)
         (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RestoreFile),
 
+        // Jump to next / previous conflicted file (Merge Changes section). Free
+        // in this scope and mirrors the graph's ]/[ (next/prev branch) and the
+        // diff viewer's ]/[ (next/prev hunk).
+        (_, KeyCode::Char(']')) => Some(Action::NextConflict),
+        (_, KeyCode::Char('[')) => Some(Action::PrevConflict),
+
         // Merge-conflict resolution (active only when an operation is in progress)
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::AcceptOurs),
         (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::AcceptTheirs),

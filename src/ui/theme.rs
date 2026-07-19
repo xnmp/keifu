@@ -445,6 +445,17 @@ impl Theme {
         self.lane_colors[color_index % self.lane_colors.len()]
     }
 
+    /// Style for git conflict-marker lines (`<<<<<<<`, `=======`, `>>>>>>>`,
+    /// `|||||||`) in the diff viewer: a bold error-colored bar, reusing the
+    /// status-bar error palette so "conflict" reads with the same severity
+    /// everywhere without adding a new palette entry.
+    pub fn conflict_marker_style(&self) -> Style {
+        Style::default()
+            .fg(self.status_error_fg)
+            .bg(self.status_error_bg)
+            .add_modifier(Modifier::BOLD)
+    }
+
     pub fn file_change_style(&self, kind: &crate::git::FileChangeKind) -> (& 'static str, Color) {
         use crate::git::FileChangeKind;
         match kind {

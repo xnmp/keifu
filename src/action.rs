@@ -112,6 +112,10 @@ pub enum Action {
     ContinueOperation,
     AbortOperation,
 
+    // Jump to next / previous conflicted file in the files pane (wrap-around)
+    NextConflict,
+    PrevConflict,
+
     // Commit filter (graph panel)
     StartCommitFilter,
     CommitFilterChar(char),
