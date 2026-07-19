@@ -210,3 +210,11 @@ in `ui/file_diff_view.rs` with unit tests (word-boundary + unbreakable-token
 cases). Source rows are held on `App.diff_source` beside the mode (like
 `diff_viewport_*`) to avoid bloating the AppMode enum. Debug harness gained a
 `<c-a-w>` (Ctrl+Alt) key token for headless verification.
+
+### [TODO] 2026-07-19 Merge-conflict UX batch (issue #36)
+Three tracks: (1) stash pop/apply through `run_git_allow_conflict` → typed
+`OpOutcome::Conflicts` guided flow (stash kept on conflict, no continue step,
+op_state stays Clean); (2) app-level guardrails while an operation is in
+progress / conflicts outstanding (checkout, second op, stash pop, commit get a
+friendly redirect instead of raw git errors); (3) conflict navigation — jump
+between conflicted files and conflict hunks, highlight conflict markers.
