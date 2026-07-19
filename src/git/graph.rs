@@ -785,6 +785,10 @@ fn build_row_cells_with_colors(
                     } else if existing == CellType::Empty {
                         cells[col] = CellType::Horizontal(parent_color);
                         oids[col] = (Some(edge), None);
+                    } else if oids[col].1.is_none() {
+                        // Another connection already drew this column; co-route
+                        // our edge so tracing either parent lights it.
+                        oids[col].1 = Some(edge);
                     }
                 }
             }
@@ -816,6 +820,10 @@ fn build_row_cells_with_colors(
                     } else if existing == CellType::Empty {
                         cells[col] = CellType::Horizontal(parent_color);
                         oids[col] = (Some(edge), None);
+                    } else if oids[col].1.is_none() {
+                        // Another connection already drew this column; co-route
+                        // our edge so tracing either parent lights it.
+                        oids[col].1 = Some(edge);
                     }
                 }
             }
@@ -920,9 +928,19 @@ fn build_fork_connector_cells(
                     cells[col] = CellType::HorizontalPipe(merge_color, pl);
                     // Fork stroke crossing an unrelated pipe: keep both edges.
                     oids[col] = (merge_edge, oids[col].0);
-                } else if matches!(existing, CellType::Empty | CellType::Horizontal(_)) {
+                } else if existing == CellType::Empty {
                     cells[col] = CellType::Horizontal(merge_color);
                     oids[col] = (merge_edge, None);
+                } else if matches!(existing, CellType::Horizontal(_)) {
+                    // Shared run: a nearer merging lane already drew this
+                    // column. Redraw in this lane's color but keep the earlier
+                    // lane's edge, so tracing either branch lights the stroke.
+                    cells[col] = CellType::Horizontal(merge_color);
+                    oids[col] = (merge_edge, oids[col].0.or(oids[col].1));
+                } else if oids[col].1.is_none() {
+                    // A junction marker we can't redraw (a nearer lane's ┴):
+                    // co-route this lane's edge through it for tracing.
+                    oids[col].1 = merge_edge;
                 }
             }
         }
@@ -1023,21 +1041,57 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     set
 }
 
-/// Whether a single `(child, parent)` edge is on the traced line: an edge lies
-/// on the lineage only when BOTH endpoints are in it. Tagging a stroke by a
-/// single endpoint would light a merged feature branch's lead-in strokes,
-/// because the fork commit sits on the trunk lineage while the stroke climbs
-/// into an off-lineage feature lane. `None` (no edge) is never traced.
-pub fn edge_is_traced(edge: Option<CellEdge>, lineage: &HashSet<Oid>) -> bool {
-    edge.is_some_and(|(child, parent)| lineage.contains(&child) && lineage.contains(&parent))
+/// The set of edges lit by tracing `lineage`, mapped to the commit whose lane
+/// color the lit stroke should take.
+///
+/// An edge `(child, parent)` lights when:
+/// - BOTH endpoints are on the lineage (the branch line itself) — colored by
+///   the child, so each stroke matches the line it belongs to; or
+/// - the PARENT is on the lineage and it is a non-first parent of the child —
+///   a merge absorbing the traced branch. Colored by the on-line parent, so
+///   the branch's merge arc reads in the branch's own color.
+///
+/// A single on-line endpoint is otherwise NOT enough: the fork commit sits on
+/// the trunk lineage while another branch's lead-in stroke climbs into an
+/// off-lineage lane (`first parent == on-line parent` distinguishes that
+/// lead-in from a merge arc). Commit dots light via their `(oid, oid)` self
+/// edge.
+pub fn trace_lit_edges(
+    layout: &GraphLayout,
+    lineage: &HashSet<Oid>,
+) -> HashMap<CellEdge, Oid> {
+    let mut lit = HashMap::new();
+    for node in &layout.nodes {
+        let Some(c) = node.commit.as_ref() else {
+            continue;
+        };
+        if lineage.contains(&c.oid) {
+            lit.insert((c.oid, c.oid), c.oid);
+        }
+        for (i, p) in c.parent_oids.iter().enumerate() {
+            if lineage.contains(&c.oid) && lineage.contains(p) {
+                lit.insert((c.oid, *p), c.oid);
+            } else if lineage.contains(p) && i > 0 {
+                lit.insert((c.oid, *p), *p);
+            }
+        }
+    }
+    lit
 }
 
-/// Whether a cell (by its `(primary, secondary)` edges) belongs to the traced
-/// lineage. Either edge being traced lights the cell — the secondary covers a
-/// lineage pipe crossed underneath a `HorizontalPipe`. Used by the Unicode text
-/// path; the pixel path dims the two edges independently (see `apply_trace_dim`).
-pub fn cell_is_traced(oids: CellOids, lineage: &HashSet<Oid>) -> bool {
-    edge_is_traced(oids.0, lineage) || edge_is_traced(oids.1, lineage)
+/// Whether a single `(child, parent)` edge is lit by the trace. `None` (no
+/// edge) is never lit. See [`trace_lit_edges`] for the rules.
+pub fn edge_is_traced(edge: Option<CellEdge>, lit: &HashMap<CellEdge, Oid>) -> bool {
+    edge.is_some_and(|e| lit.contains_key(&e))
+}
+
+/// Whether a cell (by its `(primary, secondary)` edges) is lit by the trace.
+/// Either edge lights the cell — the secondary covers a lineage pipe crossed
+/// underneath a `HorizontalPipe` or a co-routed shared horizontal. Used by the
+/// Unicode text path; the pixel path handles the two edges independently (see
+/// `apply_trace_dim`).
+pub fn cell_is_traced(oids: CellOids, lit: &HashMap<CellEdge, Oid>) -> bool {
+    edge_is_traced(oids.0, lit) || edge_is_traced(oids.1, lit)
 }
 
 #[cfg(test)]
@@ -1244,18 +1298,18 @@ mod tests {
             .expect("commit present in layout")
     }
 
-    /// Whether the cell at `(row, col)` is on the traced lineage.
-    fn traced(layout: &GraphLayout, lineage: &HashSet<Oid>, row: usize, col: usize) -> bool {
+    /// Whether the cell at `(row, col)` is lit by the trace.
+    fn traced(layout: &GraphLayout, lit: &HashMap<CellEdge, Oid>, row: usize, col: usize) -> bool {
         cell_is_traced(
             layout.nodes[row].cell_oids.get(col).copied().unwrap_or((None, None)),
-            lineage,
+            lit,
         )
     }
 
     #[test]
     fn tracing_trunk_lights_only_the_trunk_line() {
         let (layout, [_a, b, c, _f1, _f2, _z]) = trace_fixture();
-        let lineage = lineage_oids(&layout, row_of(&layout, b));
+        let lineage = trace_lit_edges(&layout, &lineage_oids(&layout, row_of(&layout, b)));
 
         let (a_row, b_row, c_row) = (row_of(&layout, oid(1)), row_of(&layout, b), row_of(&layout, c));
         let conn_row = c_row - 1; // fork connector immediately precedes C
@@ -1283,7 +1337,7 @@ mod tests {
     #[test]
     fn tracing_feature_lights_feature_and_fork_strokes() {
         let (layout, [_a, _b, c, f1, f2, _z]) = trace_fixture();
-        let lineage = lineage_oids(&layout, row_of(&layout, f1));
+        let lineage = trace_lit_edges(&layout, &lineage_oids(&layout, row_of(&layout, f1)));
 
         let a_row = row_of(&layout, oid(1));
         let b_row = row_of(&layout, oid(2));
@@ -1299,10 +1353,15 @@ mod tests {
         assert!(traced(&layout, &lineage, conn_row, 1), "fork merging lead-in for F lane");
         assert!(traced(&layout, &lineage, conn_row, 2), "fork merging curve for F lane");
 
-        // UP from F1 finds no child (A's FIRST parent is B), so A, the merge
-        // curve, and the trunk-only cells above C stay untraced.
+        // The merge arc absorbing the feature (edge A→F1, F1 a non-first
+        // parent) lights from the branch side, completing the branch's arc.
+        assert!(traced(&layout, &lineage, a_row, 1), "merge lead-in A→F1 lights");
+        assert!(traced(&layout, &lineage, a_row, 2), "merge curve A→F1 lights");
+        assert!(traced(&layout, &lineage, b_row, 2), "feature pipe above F1 lights");
+
+        // UP from F1 finds no child (A's FIRST parent is B), so A's own dot
+        // and the trunk-only cells stay untraced.
         assert!(!traced(&layout, &lineage, a_row, 0), "A's dot stays dim");
-        assert!(!traced(&layout, &lineage, a_row, 2), "merge curve A→F1 stays dim");
         assert!(!traced(&layout, &lineage, b_row, 0), "B's dot (trunk-only) stays dim");
         assert!(!traced(&layout, &lineage, conn_row, 0), "fork main-lane ├ stays dim");
     }

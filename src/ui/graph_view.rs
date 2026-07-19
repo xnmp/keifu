@@ -349,9 +349,30 @@ pub fn build_pixel_row_specs(
     panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
-    // The selected commit's lineage, when tracing is active; non-traced cells
+    // The selected commit's lineage, when tracing is active; non-lit cells
     // are dimmed. `None` = tracing off, everything full strength.
     let trace = app.active_trace_lineage();
+    let trace_lit = trace
+        .as_ref()
+        .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, l));
+    // Commit → its lane color, for recoloring lit strokes by the commit the
+    // lit-edge relation picked (see apply_trace_dim). Only needed while tracing.
+    let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = if trace.is_some() {
+        app.graph_layout
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                n.commit.as_ref().map(|c| {
+                    let rgb = crate::ui::graph_pixels::color_to_rgb(
+                        theme.lane_color(n.color_index),
+                    );
+                    (c.oid, rgb)
+                })
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
     // Fold connector rows into their following commit row (pixel-only): one spec
     // per rendered row, in the same order and index space as the list items.
     let rows = visible_rows(app, true);
@@ -367,11 +388,11 @@ pub fn build_pixel_row_specs(
                 &rows[i].underlay,
                 theme,
             );
-            // Mark non-lineage cells for dimming. `spec.cells`/`spec.underlay`
+            // Mark non-lit cells for dimming. `spec.cells`/`spec.underlay`
             // are 1:1 with `node.cells`/`rows[i].underlay`, so their OIDs align.
-            if let Some(lineage) = &trace {
-                apply_trace_dim(&mut spec.cells, &node.cell_oids, lineage);
-                apply_trace_dim(&mut spec.underlay, &rows[i].underlay_oids, lineage);
+            if let Some(lit) = &trace_lit {
+                apply_trace_dim(&mut spec.cells, &node.cell_oids, lit, &lane_rgb);
+                apply_trace_dim(&mut spec.underlay, &rows[i].underlay_oids, lit, &lane_rgb);
             }
             let budget = pixel_row_cells(node.cells.len(), graph_width, panel_available);
             spec.cells.truncate(budget);
@@ -394,18 +415,42 @@ pub fn build_pixel_row_specs(
 fn apply_trace_dim(
     cells: &mut [crate::ui::graph_pixels::PixelCell],
     oids: &[crate::git::graph::CellOids],
-    lineage: &std::collections::HashSet<git2::Oid>,
+    lit: &std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>,
+    lane_rgb: &std::collections::HashMap<git2::Oid, [u8; 3]>,
 ) {
-    use crate::git::graph::edge_is_traced;
+    use crate::git::graph::CellEdge;
     use crate::ui::graph_pixels::CellShape;
+    let is_lit = |edge: Option<CellEdge>| edge.is_some_and(|e| lit.contains_key(&e));
+    // A lit stroke takes the lane color of the commit the lit-edge relation
+    // picked (the branch line's own commit), so a traced route reads as one
+    // continuous color even through cells a different branch drew (shared fork
+    // runs, crossings, its merge arc into the trunk).
+    let color_of = |edge: Option<CellEdge>| -> Option<[u8; 3]> {
+        edge.and_then(|e| lit.get(&e))
+            .and_then(|oid| lane_rgb.get(oid))
+            .copied()
+    };
     for (i, pc) in cells.iter_mut().enumerate() {
         let (primary, secondary) = oids.get(i).copied().unwrap_or((None, None));
         if pc.shape == CellShape::HorizontalPipe {
-            pc.dim_secondary = !edge_is_traced(primary, lineage);
-            pc.dim = !edge_is_traced(secondary, lineage);
-        } else {
-            pc.dim = !crate::git::graph::cell_is_traced((primary, secondary), lineage);
+            pc.dim_secondary = !is_lit(primary);
+            pc.dim = !is_lit(secondary);
+            if let Some(rgb) = color_of(primary) {
+                pc.secondary = rgb;
+            }
+            if let Some(rgb) = color_of(secondary) {
+                pc.color = rgb;
+            }
+        } else if matches!(pc.shape, CellShape::Commit { .. }) {
+            // Dots keep their own color (including the gold HEAD star).
+            pc.dim = !(is_lit(primary) || is_lit(secondary));
             pc.dim_secondary = pc.dim;
+        } else {
+            pc.dim = !(is_lit(primary) || is_lit(secondary));
+            pc.dim_secondary = pc.dim;
+            if let Some(rgb) = color_of(primary).or_else(|| color_of(secondary)) {
+                pc.color = rgb;
+            }
         }
     }
 }
@@ -422,12 +467,14 @@ impl<'a> GraphViewWidget<'a> {
         let remotes = &app.remotes;
         let open_prs = &app.open_prs;
         let metadata_columns = app.metadata_columns;
-        // Selected commit's lineage for tracing (Unicode dim); None = off. In
-        // pixel mode the dim lives in the row specs, not the text layer.
+        // Selected commit's lit-edge set for tracing (Unicode dim); None =
+        // off. In pixel mode the dim lives in the row specs, not the text
+        // layer.
         let trace = if pixel_mode {
             None
         } else {
             app.active_trace_lineage()
+                .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, &l))
         };
 
         // In pixel mode, connector rows are folded into their commit row so the
@@ -954,7 +1001,7 @@ fn render_graph_line<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     metadata_columns: MetadataColumns,
-    trace: Option<&std::collections::HashSet<git2::Oid>>,
+    trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -1026,18 +1073,18 @@ fn render_cells_unicode(
     theme: &Theme,
     mut left_width: usize,
     cap: usize,
-    trace: Option<&std::collections::HashSet<git2::Oid>>,
+    trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
 ) -> usize {
     // `budget` graph columns are available for glyphs; when truncating, one more
     // column holds the `…`.
     let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
 
     // Whether the cell at `idx` should be dimmed: tracing active and this cell
-    // is not on the selected commit's lineage.
+    // is not lit by the selected commit's trace.
     let is_dim = |idx: usize| -> bool {
-        trace.is_some_and(|lineage| {
+        trace.is_some_and(|lit| {
             let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
-            !crate::git::graph::cell_is_traced(oids, lineage)
+            !crate::git::graph::cell_is_traced(oids, lit)
         })
     };
 
@@ -2346,16 +2393,16 @@ mod tests {
 
     #[test]
     fn tracing_dims_non_lineage_cells_in_unicode() {
-        use std::collections::HashSet;
         let theme = Theme::dark();
         let (a, b) = (oid(1), oid(2));
         let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
         // Commit dot is a self-edge on the lineage; the pipe is a self-edge off it.
         node.cell_oids = vec![(Some((a, a)), None), (Some((b, b)), None)];
-        let lineage: HashSet<git2::Oid> = [a].into_iter().collect();
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [((a, a), a)].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lineage));
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit));
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
@@ -2401,7 +2448,6 @@ mod tests {
 
     #[test]
     fn trace_dim_survives_width_truncation_in_unicode() {
-        use std::collections::HashSet;
         let theme = Theme::dark();
         let a = oid(1);
         // Four cells, but a cap that only fits some: the mask must stay aligned
@@ -2421,11 +2467,12 @@ mod tests {
             (Some((oid(3), oid(3))), None),
             (Some((oid(4), oid(4))), None),
         ];
-        let lineage: HashSet<git2::Oid> = [a].into_iter().collect();
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [((a, a), a)].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
         // cap = 3 leaves room for 2 glyphs plus the `…` marker.
-        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lineage));
+        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lit));
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         assert!(!commit.style.add_modifier.contains(Modifier::DIM));

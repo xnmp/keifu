@@ -87,3 +87,22 @@ printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' | nc -q1 127.0.0.1 7167  # Ctrl+Q 
 `<c-q>` (Ctrl+Q) force-quits from any mode; `<esc>` quits from the graph pane
 once nothing is pending to dismiss. Quitting cleanly (not a killed process) is
 what flushes the exit-time `perf summary` to the log.
+
+## Pixel-graph debugging (headless PNG rendering)
+
+The debug server cannot exercise graphics-protocol output. To reproduce
+pixel-mode bug reports, `examples/raster_debug.rs` renders real graph rows
+through the real rasterizer + trace logic into a PNG:
+
+```bash
+cargo run --example raster_debug -- <repo> <commit_prefix> <cell_w> <cell_h> out.png [rows]
+DUMP_CELLS=1 ... # also dumps CellType rows and crossing dim flags
+```
+
+`examples/gap_scan.rs` scans such a PNG for hairline gaps (short background
+runs between strokes) and can crop+magnify a region:
+
+```bash
+cargo run --example gap_scan -- out.png 5            # report gaps ≤5px
+cargo run --example gap_scan -- out.png crop X Y W H SCALE zoom.png
+```

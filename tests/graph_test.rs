@@ -1199,7 +1199,8 @@ fn test_single_root_commit() {
 // ─────────────────────────────────────────────────────────────────────
 
 use keifu::git::graph::{
-    cell_is_traced, edge_is_traced, graph_has_enough_lanes, lineage_oids, GraphLayout,
+    cell_is_traced, edge_is_traced, graph_has_enough_lanes, lineage_oids, trace_lit_edges,
+    GraphLayout,
 };
 use std::collections::HashSet;
 
@@ -1271,23 +1272,39 @@ fn trace_single_merge_excludes_the_other_branch() {
     assert!(!feature.contains(&make_oid("c3")));
     assert!(!feature.contains(&make_oid("c4")));
 
-    // The merge row draws a curve down to the feature (c2). Under the edge
-    // model, selecting the feature must NOT light that curve — its edge is
-    // (c4 → c2) and the merge commit c4 is off the feature's first-parent line.
-    // This is the lead-in-strokes fix: a single shared endpoint (c2) no longer
-    // lights the stroke. Nothing on the merge row is traced by the feature.
+    // The merge row draws a curve down to the feature (c2): the edge (c4 → c2)
+    // is the merge arc absorbing the feature. Selecting the FEATURE lights it
+    // (c2 is the merge's non-first parent, completing the branch's arc), but
+    // the merge's own dot (self-edge c4) stays dim.
     let merge = &layout.nodes[row_of(&layout, "c4")];
+    let feature_lit = trace_lit_edges(&layout, &feature);
+    let dot_col = merge.lane * 2;
     assert!(
-        !merge.cell_oids.iter().any(|o| cell_is_traced(*o, &feature)),
-        "selecting the feature must not light the merge row's lead-in strokes"
+        !cell_is_traced(merge.cell_oids[dot_col], &feature_lit),
+        "the merge dot is off the feature line"
+    );
+    assert!(
+        merge
+            .cell_oids
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != dot_col)
+            .any(|(_, o)| cell_is_traced(*o, &feature_lit)),
+        "the feature lights its merge arc into the trunk"
+    );
+    // The lit relation colors that arc by the feature side (c2), not the merge.
+    assert_eq!(
+        feature_lit.get(&(make_oid("c4"), make_oid("c2"))),
+        Some(&make_oid("c2")),
+        "merge arc takes the absorbed branch's color"
     );
 
     // Selecting the main line lights the merge's own dot — both endpoints of the
     // self-edge (c4, c4) are on the main line — while still leaving the feature
-    // curve dim (c2 ∉ main line).
-    let dot_col = merge.lane * 2;
+    // curve dim (c2 ∉ main line, and lead-ins never light from one endpoint).
+    let main_lit = trace_lit_edges(&layout, &main_line);
     assert!(
-        cell_is_traced(merge.cell_oids[dot_col], &main_line),
+        cell_is_traced(merge.cell_oids[dot_col], &main_lit),
         "the merge dot is on the main line"
     );
     assert!(
@@ -1296,7 +1313,7 @@ fn trace_single_merge_excludes_the_other_branch() {
             .iter()
             .enumerate()
             .filter(|(i, _)| *i != dot_col)
-            .any(|(_, o)| cell_is_traced(*o, &main_line)),
+            .any(|(_, o)| cell_is_traced(*o, &main_lit)),
         "the main line does not light the merge's curve to the feature"
     );
 }
@@ -1338,9 +1355,11 @@ fn trace_does_not_leak_onto_a_reused_lane() {
     // (Shared-ancestor pipes on the *main* lane may legitimately appear in both,
     // so we check the feature lane column specifically.)
     let g_dot = layout.nodes[row_of(&layout, "g1")].cell_oids[g_lane * 2];
-    assert!(!cell_is_traced(g_dot, &feat_f), "F must not light G's reused lane");
+    let f_lit = trace_lit_edges(&layout, &feat_f);
+    let g_lit = trace_lit_edges(&layout, &feat_g);
+    assert!(!cell_is_traced(g_dot, &f_lit), "F must not light G's reused lane");
     let f_dot = layout.nodes[row_of(&layout, "f1")].cell_oids[f_lane * 2];
-    assert!(!cell_is_traced(f_dot, &feat_g), "G must not light F's reused lane");
+    assert!(!cell_is_traced(f_dot, &g_lit), "G must not light F's reused lane");
 }
 
 #[test]
@@ -1378,9 +1397,9 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
     // pipe edge (B2 → B1).
     assert!(primary.is_some() && secondary.is_some());
 
-    let feat_c = lineage_of(&layout, "C1");
-    let branch_b = lineage_of(&layout, "B2");
-    let main_line = lineage_of(&layout, "A3");
+    let feat_c = trace_lit_edges(&layout, &lineage_of(&layout, "C1"));
+    let branch_b = trace_lit_edges(&layout, &lineage_of(&layout, "B2"));
+    let main_line = trace_lit_edges(&layout, &lineage_of(&layout, "A3"));
 
     // The secondary edge — the crossed vertical pipe — lights under branch B's
     // selection, since both its endpoints B2, B1 are on branch B. The primary
@@ -1392,37 +1411,50 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
         "so the cell is traced via its secondary edge"
     );
 
-    // Neither the feature nor the main line lights the merge sweep: the merge
-    // commit A2 is off the feature's first-parent line and C1 is off the main
-    // line, so the (A2 → C1) edge is never fully on-lineage — the lead-in fix.
-    assert!(!edge_is_traced(primary, &feat_c));
+    // The merge sweep (A2 → C1) is C1's merge arc: it lights when tracing the
+    // FEATURE (C1 is A2's non-first parent), colored by the feature side —
+    // but never from the main line (C1 ∉ main line; the lead-in fix).
+    assert!(edge_is_traced(primary, &feat_c), "merge sweep lights from the feature side");
+    assert_eq!(
+        feat_c.get(&(make_oid("A2"), make_oid("C1"))),
+        Some(&make_oid("C1")),
+        "and takes the feature's color"
+    );
     assert!(!edge_is_traced(primary, &main_line));
-    assert!(!cell_is_traced(cross_oids, &feat_c));
     assert!(!cell_is_traced(cross_oids, &main_line));
-
-    // The primary merge edge lights only when BOTH its endpoints are on the
-    // lineage — the defining property of the edge-pair identity.
-    let both: HashSet<Oid> = [make_oid("A2"), make_oid("C1")].into_iter().collect();
-    assert!(edge_is_traced(primary, &both), "merge edge lit when both endpoints on-lineage");
 }
 
 #[test]
-fn cell_is_traced_requires_both_edge_endpoints() {
-    let a = make_oid("a");
-    let b = make_oid("b");
-    let other = make_oid("z");
-    let lin: HashSet<Oid> = [a, b].into_iter().collect();
-    // An edge lights only when BOTH (child, parent) endpoints are on the lineage.
-    assert!(edge_is_traced(Some((a, b)), &lin));
-    assert!(cell_is_traced((Some((a, b)), None), &lin));
-    assert!(cell_is_traced((None, Some((a, b))), &lin)); // secondary hit
-    assert!(cell_is_traced((Some((a, other)), Some((a, b))), &lin)); // secondary hit
-    // A single shared endpoint is not enough — this is the lead-in-strokes fix.
-    assert!(!edge_is_traced(Some((a, other)), &lin));
-    assert!(!edge_is_traced(Some((other, b)), &lin));
-    assert!(!cell_is_traced((Some((a, other)), None), &lin));
-    assert!(!cell_is_traced((Some((other, b)), None), &lin));
-    assert!(!cell_is_traced((None, None), &lin));
+fn trace_lit_edges_classifies_line_merge_and_lead_in_edges() {
+    // A merges F into the trunk (A's parents: [B, F]); F forked off B.
+    let commits = vec![
+        make_commit("A", vec!["B", "F"]),
+        make_commit("F", vec!["B"]),
+        make_commit("B", vec![]),
+    ];
+    let branches = vec![make_branch("main", "A", true)];
+    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let (a, b, f) = (make_oid("A"), make_oid("B"), make_oid("F"));
+
+    // Tracing the feature F: its own line lights colored by the child, its
+    // merge arc (A → F) lights colored by the on-line parent F, and nothing
+    // lights the trunk-only edges.
+    let f_lit = trace_lit_edges(&layout, &lineage_of(&layout, "F"));
+    assert_eq!(f_lit.get(&(f, b)), Some(&f), "on-line edge colored by its child");
+    assert_eq!(f_lit.get(&(f, f)), Some(&f), "dot self-edge");
+    assert_eq!(f_lit.get(&(a, f)), Some(&f), "merge arc colored by the branch side");
+    assert!(!f_lit.contains_key(&(a, b)), "trunk edge A→B not lit by the feature");
+    assert!(!f_lit.contains_key(&(a, a)), "A's dot not lit by the feature");
+    assert!(!edge_is_traced(None, &f_lit), "no edge is never lit");
+    assert!(!cell_is_traced((None, None), &f_lit));
+
+    // Tracing the trunk: F's fork lead-in (F → B) must NOT light from its
+    // single on-line endpoint B (B is F's FIRST parent — a lead-in, not a
+    // merge arc), and neither does the merge arc (F ∉ trunk line).
+    let trunk_lit = trace_lit_edges(&layout, &lineage_of(&layout, "B"));
+    assert!(trunk_lit.contains_key(&(a, b)), "trunk edge lit");
+    assert!(!trunk_lit.contains_key(&(f, b)), "feature lead-in not lit by the trunk");
+    assert!(!trunk_lit.contains_key(&(a, f)), "merge arc not lit by the trunk");
 }
 
 #[test]
@@ -1457,12 +1489,12 @@ fn trace_dim_mask_has_few_distinct_variants_per_row_shape() {
         if node.commit.is_none() {
             continue; // connectors aren't selectable
         }
-        let lineage = lineage_oids(&layout, sel);
+        let lit = trace_lit_edges(&layout, &lineage_oids(&layout, sel));
         for n in &layout.nodes {
             let mask: Vec<bool> = n
                 .cell_oids
                 .iter()
-                .map(|o| cell_is_traced(*o, &lineage))
+                .map(|o| cell_is_traced(*o, &lit))
                 .collect();
             variants.insert((shape(n), mask));
         }
