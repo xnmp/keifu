@@ -30,6 +30,10 @@
           # chafa by policy (see Cargo.toml comments); libgit2 builds via the
           # bundled cc path.
 
+          # Tests assume a real environment (HOME, git identity/repos) that the
+          # nix sandbox doesn't provide — they run in CI, not here.
+          doCheck = false;
+
           meta = {
             description = "A TUI tool to visualize Git commit graphs with branch genealogy";
             homepage = "https://github.com/xnmp/keifu";
