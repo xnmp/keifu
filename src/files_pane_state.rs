@@ -59,10 +59,19 @@ impl FileSelection {
                 }
             }
         }
-        // Fall back to first non-section-header item
+        // Fall back to the first file, only then any non-section header. A
+        // cold (never-navigated) selection must land on a single file: parking
+        // it on a folder header would make the next stage/restore silently act
+        // on the whole folder. Deliberate folder selection still resolves via
+        // the section-only branch above.
         items
             .iter()
-            .position(|item| !matches!(item, FilesPaneItem::SectionHeader(_)))
+            .position(|item| matches!(item, FilesPaneItem::File(_)))
+            .or_else(|| {
+                items
+                    .iter()
+                    .position(|item| !matches!(item, FilesPaneItem::SectionHeader(_)))
+            })
             .unwrap_or(0)
     }
 
@@ -656,6 +665,58 @@ mod tests {
     #[test]
     fn section_of_empty_items() {
         assert_eq!(section_of(&[], 0), None);
+    }
+
+    // ─── cold selection (regression: one `s` staged a whole folder) ──
+
+    #[test]
+    fn cold_selection_resolves_to_first_file_not_folder_header() {
+        // An unresolved (never-navigated) selection used to fall back to the
+        // first non-section item — a folder header in grouped mode — so the
+        // next stage acted on the whole folder.
+        let items = vec![
+            header("Unstaged Changes"),
+            FilesPaneItem::FolderHeader("src/".to_string()),
+            fitem(unstaged("src/a.rs")),
+            fitem(unstaged("src/b.rs")),
+        ];
+        assert_eq!(FileSelection::default().resolve(&items), 2);
+    }
+
+    #[test]
+    fn explicit_folder_header_selection_still_resolves_to_the_header() {
+        let items = vec![
+            header("Unstaged Changes"),
+            FilesPaneItem::FolderHeader("src/".to_string()),
+            fitem(unstaged("src/a.rs")),
+        ];
+        let sel = FileSelection {
+            section: Some("src/".to_string()),
+            path: None,
+        };
+        assert_eq!(sel.resolve(&items), 1);
+    }
+
+    #[test]
+    fn cold_selection_acts_on_exactly_one_file_in_grouped_mode() {
+        let mut state = FilesPaneState::new();
+        state.files_group_by_folder = true;
+        let diff = make_uncommitted_diff(
+            vec![],
+            vec![
+                unstaged("src/a.rs"),
+                unstaged("src/b.rs"),
+                unstaged("src/main.rs"),
+            ],
+        );
+        state.sync_file_list_cache(Some(&diff), true, "/repo");
+        let selected = state.selected_files();
+        assert_eq!(
+            selected.len(),
+            1,
+            "a cold selection must act on one file, got {:?}",
+            selected.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
     }
 
     // ─── folder_group ────────────────────────────────────────────────

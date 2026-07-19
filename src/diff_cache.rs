@@ -244,14 +244,43 @@ impl DiffCache {
             return;
         };
 
-        // Build a lookup: path → stage_status from the quick diff
-        let stage_map: std::collections::HashMap<&std::path::Path, Option<crate::git::StageStatus>> =
-            quick.files.iter().map(|f| (f.path.as_path(), f.stage_status)).collect();
+        // Build a lookup: path → stage statuses from the quick diff. A
+        // partially-staged file legitimately appears twice (one staged row,
+        // one unstaged), so this must be a multi-map — collapsing to a single
+        // status per path flipped both of its rows to the last one seen.
+        let mut quick_statuses: std::collections::HashMap<
+            &std::path::Path,
+            Vec<Option<crate::git::StageStatus>>,
+        > = std::collections::HashMap::new();
+        for f in &quick.files {
+            quick_statuses
+                .entry(f.path.as_path())
+                .or_default()
+                .push(f.stage_status);
+        }
 
-        // Update stage_status on each file in the full diff
+        // This fast path can only relabel existing rows, not split or merge
+        // them. If a path's row count changed (a file became — or stopped
+        // being — partially staged), bail without sealing the cache key so
+        // poll() falls back to a real reload.
+        let mut full_counts: std::collections::HashMap<&std::path::Path, usize> =
+            std::collections::HashMap::new();
+        for f in &full.files {
+            *full_counts.entry(f.path.as_path()).or_default() += 1;
+        }
+        if full_counts
+            .iter()
+            .any(|(p, &n)| quick_statuses.get(p).is_some_and(|s| s.len() != n))
+        {
+            return;
+        }
+
+        // Update stage_status on each file in the full diff. A path with two
+        // rows is a partially-staged pair whose labels are already one of
+        // each — leave them as they are.
         for file in &mut full.files {
-            if let Some(&status) = stage_map.get(file.path.as_path()) {
-                file.stage_status = status;
+            if let Some([status]) = quick_statuses.get(file.path.as_path()).map(Vec::as_slice) {
+                file.stage_status = *status;
             }
         }
 
@@ -626,6 +655,91 @@ mod tests {
         assert!(!cache.uncommitted_diff_loading);
         assert!(!cache.uncommitted_diff_failed);
         assert!(cache.uncommitted_cache_key.as_ref().is_none());
+    }
+
+    // ─── reclassify_uncommitted_staging ─────────────────────────────
+
+    fn uncommitted_diff(
+        staged: Vec<crate::git::FileDiffInfo>,
+        unstaged: Vec<crate::git::FileDiffInfo>,
+    ) -> CommitDiffInfo {
+        let mut files = staged.clone();
+        files.extend(unstaged.clone());
+        CommitDiffInfo {
+            files,
+            total_insertions: 0,
+            total_deletions: 0,
+            total_files: 0,
+            truncated: false,
+            staged_files: staged,
+            unstaged_files: unstaged,
+        }
+    }
+
+    #[test]
+    fn reclassify_keeps_a_partially_staged_pair_intact() {
+        // a.txt is partially staged (one staged + one unstaged row); b.txt
+        // just got staged. Reclassifying used to collapse a.txt into one
+        // path→status entry, flipping both of its rows to the last one seen.
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(uncommitted_diff(
+            vec![diff_file("a.txt", Some(StageStatus::Staged))],
+            vec![
+                diff_file("a.txt", Some(StageStatus::Unstaged)),
+                diff_file("b.txt", Some(StageStatus::Unstaged)),
+            ],
+        ));
+        let quick = uncommitted_diff(
+            vec![
+                diff_file("a.txt", Some(StageStatus::Staged)),
+                diff_file("b.txt", Some(StageStatus::Staged)),
+            ],
+            vec![diff_file("a.txt", Some(StageStatus::Unstaged))],
+        );
+        set_quick(&mut cache, DiffTarget::Uncommitted, quick);
+
+        cache.reclassify_uncommitted_staging(Some(&precise_status()));
+
+        let full = cache.uncommitted_diff_cache.as_ref().unwrap();
+        let staged: Vec<_> = full
+            .staged_files
+            .iter()
+            .map(|f| f.path.to_str().unwrap())
+            .collect();
+        let unstaged: Vec<_> = full
+            .unstaged_files
+            .iter()
+            .map(|f| f.path.to_str().unwrap())
+            .collect();
+        assert_eq!(staged, vec!["a.txt", "b.txt"]);
+        assert_eq!(unstaged, vec!["a.txt"]);
+        assert!(cache.uncommitted_cache_key.is_some(), "fast path seals the key");
+    }
+
+    #[test]
+    fn reclassify_bails_to_reload_when_a_file_becomes_partially_staged() {
+        // full has one a.txt row but the quick diff now has two: the fast
+        // path can't split a row, so it must leave the rows untouched and the
+        // key unsealed so poll() falls back to a real reload.
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(uncommitted_diff(
+            vec![diff_file("a.txt", Some(StageStatus::Staged))],
+            vec![],
+        ));
+        let quick = uncommitted_diff(
+            vec![diff_file("a.txt", Some(StageStatus::Staged))],
+            vec![diff_file("a.txt", Some(StageStatus::Unstaged))],
+        );
+        set_quick(&mut cache, DiffTarget::Uncommitted, quick);
+
+        cache.reclassify_uncommitted_staging(Some(&precise_status()));
+
+        assert!(
+            cache.uncommitted_cache_key.is_none(),
+            "key must stay unsealed so poll() reloads"
+        );
+        let full = cache.uncommitted_diff_cache.as_ref().unwrap();
+        assert_eq!(full.staged_files.len(), 1);
     }
 
     #[test]
