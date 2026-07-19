@@ -61,7 +61,12 @@ fn main() {
     // commit row's underlay, replicating the real pixel pipeline
     // (build_pixel_row_specs / fold_rows). Produces (node_idx, underlay) rows.
     let fold = std::env::var("FOLD").is_ok();
-    let folded: Vec<(usize, Vec<keifu::git::graph::CellType>)> = if fold {
+    type FoldedRow = (
+        usize,
+        Vec<keifu::git::graph::CellType>,
+        Vec<keifu::git::graph::CellOids>,
+    );
+    let folded: Vec<FoldedRow> = if fold {
         let mut out = Vec::new();
         let mut pending: Vec<usize> = Vec::new();
         for (i, node) in layout.nodes.iter().enumerate() {
@@ -74,24 +79,35 @@ fn main() {
                     .max()
                     .unwrap_or(0);
                 let mut underlay = vec![keifu::git::graph::CellType::Empty; width];
+                // Fold edge identity alongside, mirroring merge_connector_cells,
+                // so the underlay dims/recolors exactly like the app.
+                let mut underlay_oids: Vec<keifu::git::graph::CellOids> =
+                    vec![(None, None); width];
                 for &p in &pending {
                     for (col, cell) in layout.nodes[p].cells.iter().enumerate() {
                         if *cell != keifu::git::graph::CellType::Empty {
                             underlay[col] = *cell;
+                            underlay_oids[col] = layout.nodes[p]
+                                .cell_oids
+                                .get(col)
+                                .copied()
+                                .unwrap_or((None, None));
                         }
                     }
                 }
                 pending.clear();
-                out.push((i, underlay));
+                out.push((i, underlay, underlay_oids));
             }
         }
         out
     } else {
-        (0..layout.nodes.len()).map(|i| (i, Vec::new())).collect()
+        (0..layout.nodes.len())
+            .map(|i| (i, Vec::new(), Vec::new()))
+            .collect()
     };
     let target_row = folded
         .iter()
-        .position(|(i, _)| *i == target_idx)
+        .position(|(i, _, _)| *i == target_idx)
         .unwrap_or(0);
     let start = target_row.saturating_sub(n_rows / 2);
     let end = (start + n_rows).min(folded.len());
@@ -101,7 +117,7 @@ fn main() {
     let mut row_imgs: Vec<RgbaImage> = Vec::new();
     let mut max_w = 0u32;
     for i in start..end {
-        let (node_idx, underlay) = &folded[i];
+        let (node_idx, underlay, underlay_oids) = &folded[i];
         let node = &layout.nodes[*node_idx];
         let above = if i > 0 {
             Some(layout.nodes[folded[i - 1].0].cells.clone())
@@ -110,7 +126,7 @@ fn main() {
         };
         let below = folded
             .get(i + 1)
-            .map(|(ni, _)| layout.nodes[*ni].cells.clone());
+            .map(|(ni, _, _)| layout.nodes[*ni].cells.clone());
         let mut spec =
             build_row_spec(above.as_deref(), node, below.as_deref(), underlay, &theme);
         if std::env::var("NODIM").is_ok() {
@@ -141,9 +157,15 @@ fn main() {
                 .and_then(|oid| lane_rgb.get(oid))
                 .copied()
         };
-        for (ci, pc) in spec.cells.iter_mut().enumerate() {
+        // Dim/recolor both layers, as build_pixel_row_specs does.
+        let layers: [(&mut Vec<_>, &[keifu::git::graph::CellOids]); 2] = [
+            (&mut spec.cells, &node.cell_oids),
+            (&mut spec.underlay, underlay_oids),
+        ];
+        for (cells, oids) in layers {
+        for (ci, pc) in cells.iter_mut().enumerate() {
             let (primary, secondary) =
-                node.cell_oids.get(ci).copied().unwrap_or((None, None));
+                oids.get(ci).copied().unwrap_or((None, None));
             if pc.shape == CellShape::HorizontalPipe {
                 pc.dim_secondary = !is_lit(primary);
                 pc.dim = !is_lit(secondary);
@@ -164,17 +186,17 @@ fn main() {
                 }
             }
         }
+        }
         let img = rasterize_row(&spec, cw, ch);
         if std::env::var("DUMP_CELLS").is_ok() {
-            for (ci, pc) in spec.cells.iter().enumerate() {
-                if pc.shape == CellShape::HorizontalPipe {
-                    let cy = ch / 2;
-                    let xs: Vec<u32> = ((ci as u32 + 1) * cw..(ci as u32 + 2) * cw)
-                        .filter(|&x| img.get_pixel(x, cy)[3] > 0)
-                        .collect();
+            for (layer, cells) in [("cells", &spec.cells), ("underlay", &spec.underlay)] {
+                for (ci, pc) in cells.iter().enumerate() {
+                    if pc.shape == CellShape::Empty {
+                        continue;
+                    }
                     eprintln!(
-                        "row {i} col {ci}: {:?} dim={} dim_sec={} colored-x-at-cy={:?}",
-                        pc.shape, pc.dim, pc.dim_secondary, xs
+                        "row {i} {layer} col {ci}: {:?} color={:?} sec={:?} dim={} dim_sec={}",
+                        pc.shape, pc.color, pc.secondary, pc.dim, pc.dim_secondary
                     );
                 }
             }
@@ -218,7 +240,7 @@ fn main() {
     eprintln!("wrote {out} ({max_w}x{total_h})");
 
     if std::env::var("DUMP_CELLS").is_ok() {
-        for (ni, underlay) in &folded[start..end] {
+        for (ni, underlay, _) in &folded[start..end] {
             let n = &layout.nodes[*ni];
             let label = n
                 .commit
