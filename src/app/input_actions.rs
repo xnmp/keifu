@@ -68,6 +68,14 @@ impl App {
                     InputAction::StashPush { scope } => {
                         self.do_stash_push(scope, input.trim())?;
                     }
+                    InputAction::EditIssueAssignees { number } => {
+                        self.submit_issue_assignees(number, &input);
+                        // The runner is async; return to the detail popup rather
+                        // than falling through to Normal below.
+                        self.search_state = SearchState::default();
+                        self.mode = AppMode::IssueDetail;
+                        return Ok(());
+                    }
                     InputAction::Search => {
                         self.jump_to_search_result();
                     }
@@ -82,7 +90,13 @@ impl App {
                     self.restore_search_position();
                 }
                 self.search_state = SearchState::default();
-                self.mode = AppMode::Normal;
+                // Cancelling the assignee edit returns to the issue detail it was
+                // launched from, not all the way out to Normal.
+                self.mode = if matches!(input_action, InputAction::EditIssueAssignees { .. }) {
+                    AppMode::IssueDetail
+                } else {
+                    AppMode::Normal
+                };
             }
             Action::InputChar(c) => {
                 input.push(c);
@@ -106,7 +120,11 @@ impl App {
                         self.restore_search_position();
                     }
                     self.search_state = SearchState::default();
-                    self.mode = AppMode::Normal;
+                    self.mode = if matches!(input_action, InputAction::EditIssueAssignees { .. }) {
+                        AppMode::IssueDetail
+                    } else {
+                        AppMode::Normal
+                    };
                     return Ok(());
                 }
 

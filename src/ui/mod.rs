@@ -12,6 +12,9 @@ pub mod files_pane;
 pub mod graph_pixels;
 pub mod graph_view;
 pub mod help_popup;
+pub mod issue_compose;
+pub mod issue_detail;
+pub mod issue_list;
 pub mod metadata_menu;
 pub mod pr_compose;
 pub mod pr_thread;
@@ -62,6 +65,10 @@ pub const MIN_WIDGET_HEIGHT: u16 = 3;
 /// PR-thread popup size (% of screen). Shared by the scroll pre-pass and the
 /// render so their geometry matches.
 const PR_THREAD_POPUP_PCT: (u16, u16) = (80, 80);
+
+/// Issue list/detail popup size (% of screen). Shared by the scroll pre-pass
+/// and the render so their geometry matches.
+const ISSUE_POPUP_PCT: (u16, u16) = (80, 80);
 
 /// Render a placeholder block when widget area is too small
 pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -424,6 +431,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    // Issue-detail pre-pass: clamp the scroll to its wrapped height (same as the
+    // PR-thread pre-pass), before the immutable borrow in the popup match below.
+    if matches!(app.mode, AppMode::IssueDetail) {
+        let popup = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
+        let inner_w = popup.width.saturating_sub(4);
+        let body_h = popup.height.saturating_sub(3) as usize;
+        let total = app.issue_detail.as_ref().map(|v| {
+            let lines = issue_detail::build_lines(&v.state, &theme);
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .line_count(inner_w)
+        });
+        if let (Some(total), Some(v)) = (total, app.issue_detail.as_mut()) {
+            v.max_scroll = total.saturating_sub(body_h);
+            v.scroll = v.scroll.min(v.max_scroll);
+        }
+    }
+
     // Popups. Each interactive popup records its rect for mouse hit-testing
     // (click-inside routes, click-outside closes).
     let mut rendered_popup: Option<Rect> = None;
@@ -561,6 +586,52 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
             rendered_popup = Some(popup_area);
+        }
+        AppMode::IssueList => {
+            if let Some(view) = &app.issue_list {
+                use self::issue_list::IssueListWidget;
+                let popup_area = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
+                frame.render_widget(IssueListWidget::new(view, &theme), popup_area);
+                rendered_popup = Some(popup_area);
+            }
+        }
+        AppMode::IssueDetail => {
+            if let Some(view) = &app.issue_detail {
+                use self::issue_detail::IssueDetailWidget;
+                let popup_area = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
+                frame.render_widget(IssueDetailWidget::new(view, &theme), popup_area);
+                rendered_popup = Some(popup_area);
+            }
+        }
+        AppMode::IssueCompose { purpose } => {
+            use self::issue_compose::IssueComposeWidget;
+            use self::pr_compose::text_area;
+            let popup_area = centered_rect(64, 60, area);
+            rendered_popup = Some(popup_area);
+            frame.render_widget(
+                IssueComposeWidget::new(&app.issue_editor, *purpose, &theme),
+                popup_area,
+            );
+            // Place the terminal cursor at the editor position.
+            let (row, col) = app.issue_editor.cursor_position();
+            let body = text_area(popup_area);
+            let cx = body.x + col as u16;
+            let cy = body.y + row as u16;
+            if cx < body.x + body.width && cy < body.y + body.height {
+                frame.set_cursor_position((cx, cy));
+            }
+        }
+        AppMode::IssueLabelPicker { selected, .. } => {
+            if let Some(picker) = &app.issue_label_picker {
+                use self::issue_detail::IssueLabelPickerWidget;
+                let rows = (picker.labels.len() + 3).clamp(6, 24) as u16;
+                let popup_area = centered_rect_fixed(48, rows, area);
+                frame.render_widget(
+                    IssueLabelPickerWidget::new(picker, *selected, &theme),
+                    popup_area,
+                );
+                rendered_popup = Some(popup_area);
+            }
         }
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);

@@ -434,6 +434,32 @@ impl StatusBar {
             }
             AppMode::PrCompose { .. } => {
                 hb.hint(" Ctrl+S ", key_style, "submit ", desc_style, Action::SubmitCompose);
+                hb.hint(" Ctrl+E ", key_style, "editor ", desc_style, Action::ExternalEdit);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
+            }
+            AppMode::IssueList => {
+                hb.hint_static(" ↑↓ ", key_style, "nav ", desc_style);
+                hb.hint(" Enter ", key_style, "open ", desc_style, Action::OpenIssueDetail);
+                hb.hint(" Tab ", key_style, "filter ", desc_style, Action::CycleIssueFilter);
+                hb.hint(" n ", key_style, "new ", desc_style, Action::NewIssue);
+                hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
+            }
+            AppMode::IssueDetail => {
+                hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
+                hb.hint(" c ", key_style, "comment ", desc_style, Action::CommentOnIssue);
+                hb.hint(" x ", key_style, "close/reopen ", desc_style, Action::ToggleIssueState);
+                hb.hint(" l ", key_style, "labels ", desc_style, Action::EditIssueLabels);
+                hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
+            }
+            AppMode::IssueCompose { .. } => {
+                hb.hint(" Ctrl+S ", key_style, "submit ", desc_style, Action::SubmitCompose);
+                hb.hint(" Ctrl+E ", key_style, "editor ", desc_style, Action::ExternalEdit);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
+            }
+            AppMode::IssueLabelPicker { .. } => {
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::ToggleIssueLabel);
+                hb.hint(" Enter ", key_style, "apply ", desc_style, Action::MenuSelect);
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::PrMergePicker { .. } | AppMode::PrReviewPicker { .. } => {
@@ -475,6 +501,10 @@ impl StatusBar {
             AppMode::PrCompose { .. } => Some(" COMPOSE "),
             AppMode::PrMergePicker { .. } => Some(" MERGE PR "),
             AppMode::PrReviewPicker { .. } => Some(" REVIEW "),
+            AppMode::IssueList => Some(" ISSUES "),
+            AppMode::IssueDetail => Some(" ISSUE "),
+            AppMode::IssueCompose { .. } => Some(" COMPOSE "),
+            AppMode::IssueLabelPicker { .. } => Some(" LABELS "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::TagPicker { .. } => Some(" TAG "),

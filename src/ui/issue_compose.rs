@@ -1,4 +1,8 @@
-//! PR-compose editor popup (create PR title/body, or a review body).
+//! Issue-compose editor popup (new issue title/body, or a comment body).
+//!
+//! A small sibling to `pr_compose`: the PR widget is bound to `ComposePurpose`,
+//! so issues get their own thin widget rather than an awkward generalization.
+//! Cursor placement reuses `pr_compose::text_area` since the layout is identical.
 
 use ratatui::{
     buffer::Buffer,
@@ -7,18 +11,19 @@ use ratatui::{
     widgets::{Clear, Widget},
 };
 
+use super::pr_compose::text_area;
 use super::theme::Theme;
-use crate::app::ComposePurpose;
+use crate::app::IssueComposePurpose;
 use crate::text_editor::TextEditor;
 
-pub struct PrComposeWidget<'a> {
+pub struct IssueComposeWidget<'a> {
     editor: &'a TextEditor,
-    purpose: ComposePurpose,
+    purpose: IssueComposePurpose,
     theme: &'a Theme,
 }
 
-impl<'a> PrComposeWidget<'a> {
-    pub fn new(editor: &'a TextEditor, purpose: ComposePurpose, theme: &'a Theme) -> Self {
+impl<'a> IssueComposeWidget<'a> {
+    pub fn new(editor: &'a TextEditor, purpose: IssueComposePurpose, theme: &'a Theme) -> Self {
         Self {
             editor,
             purpose,
@@ -28,38 +33,20 @@ impl<'a> PrComposeWidget<'a> {
 
     fn title(&self) -> &'static str {
         match self.purpose {
-            ComposePurpose::CreatePr => " New Pull Request ",
-            ComposePurpose::ReviewRequestChanges { .. } => " Request Changes ",
-            ComposePurpose::ReviewComment { .. } => " Review Comment ",
+            IssueComposePurpose::NewIssue => " New Issue ",
+            IssueComposePurpose::Comment { .. } => " New Comment ",
         }
     }
 
     fn header(&self) -> &'static str {
         match self.purpose {
-            ComposePurpose::CreatePr => "First line = title, the rest is the body:",
-            _ => "Review body:",
+            IssueComposePurpose::NewIssue => "First line = title, the rest is the body:",
+            IssueComposePurpose::Comment { .. } => "Comment body:",
         }
     }
 }
 
-/// The inner text area (where editor lines start), for cursor placement. Mirrors
-/// the widget's layout: block border + 1 col horizontal padding + 1 header row.
-pub fn text_area(popup: Rect) -> Rect {
-    // Border (1) + the popup block's horizontal padding (1) on each side.
-    let inner_x = popup.x + 2;
-    let inner_y = popup.y + 1;
-    let inner_w = popup.width.saturating_sub(4);
-    let inner_h = popup.height.saturating_sub(2);
-    // Header row on top, hint row at bottom.
-    Rect::new(
-        inner_x,
-        inner_y + 1,
-        inner_w,
-        inner_h.saturating_sub(2),
-    )
-}
-
-impl<'a> Widget for PrComposeWidget<'a> {
+impl<'a> Widget for IssueComposeWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let block = self.theme.popup_block(self.title());
@@ -79,13 +66,13 @@ impl<'a> Widget for PrComposeWidget<'a> {
 
         // Editor lines.
         let body = text_area(area);
-        let is_create = matches!(self.purpose, ComposePurpose::CreatePr);
+        let is_new = matches!(self.purpose, IssueComposePurpose::NewIssue);
         for (row, line) in self.editor.lines().iter().enumerate() {
             if row as u16 >= body.height {
                 break;
             }
-            // Highlight the title line (row 0) for Create.
-            let style = if is_create && row == 0 {
+            // Highlight the title line (row 0) for a new issue.
+            let style = if is_new && row == 0 {
                 Style::default()
                     .fg(self.theme.text_primary)
                     .add_modifier(Modifier::BOLD)

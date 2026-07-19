@@ -81,6 +81,12 @@ pub fn map_key_to_action(
         AppMode::PrMergePicker { .. } | AppMode::PrReviewPicker { .. } => {
             map_pull_divergence_mode(key)
         }
+        AppMode::IssueList => map_issue_list_mode(key),
+        AppMode::IssueDetail => map_issue_detail_mode(key),
+        // The issue-compose editor shares the PR-compose keymap (Ctrl+S submit,
+        // Esc cancel, Enter newline, everything else the editor).
+        AppMode::IssueCompose { .. } => map_pr_compose_mode(key),
+        AppMode::IssueLabelPicker { .. } => map_issue_label_picker_mode(key),
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
@@ -138,6 +144,12 @@ fn map_normal_mode(
             && key.code == KeyCode::Char(':');
         if ctrl_p || colon {
             return Some(Action::OpenCommandPalette);
+        }
+
+        // Shift+I opens the GitHub issue list from any panel. 'I' is unbound in
+        // every Normal-mode panel scope (lowercase 'i' is Files-only gitignore).
+        if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Char('I') {
+            return Some(Action::OpenIssueList);
         }
     }
 
@@ -583,6 +595,96 @@ fn map_pr_thread_mode(key: KeyEvent) -> Option<Action> {
     }
 }
 
+/// Issue list: j/k move, Enter opens the detail, Tab/f cycle the filter, r
+/// refresh, n new issue, o open in browser, Esc/q close.
+fn map_issue_list_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {
+            Some(Action::GoToTop)
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
+            Some(Action::GoToBottom)
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenIssueDetail),
+        (KeyModifiers::NONE, KeyCode::Tab) | (KeyModifiers::NONE, KeyCode::Char('f')) => {
+            Some(Action::CycleIssueFilter)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshIssues),
+        (KeyModifiers::NONE, KeyCode::Char('n')) => Some(Action::NewIssue),
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenIssueInBrowser),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
+/// Issue detail: j/k scroll, c comment, x close/reopen, l labels, a assignees,
+/// o browser, r refresh, Esc back to the list.
+fn map_issue_detail_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            Some(Action::PageUp)
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            Some(Action::PageDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {
+            Some(Action::GoToTop)
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
+            Some(Action::GoToBottom)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::CommentOnIssue),
+        (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::ToggleIssueState),
+        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::EditIssueLabels),
+        (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::EditIssueAssignees),
+        (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenIssueInBrowser),
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshIssues),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
+/// Issue label picker: j/k move, Space toggles the label, Enter applies, Esc
+/// cancels.
+fn map_issue_label_picker_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::ToggleIssueLabel),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
 /// PR-compose editor: Enter inserts a newline, Ctrl+S / Ctrl+Enter submit, Esc
 /// cancels; everything else reuses the commit-message editor's key handling.
 fn map_pr_compose_mode(key: KeyEvent) -> Option<Action> {
@@ -590,6 +692,7 @@ fn map_pr_compose_mode(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Esc => return Some(Action::Cancel),
         KeyCode::Char('s') if ctrl => return Some(Action::SubmitCompose),
+        KeyCode::Char('e') if ctrl => return Some(Action::ExternalEdit),
         KeyCode::Enter if ctrl => return Some(Action::SubmitCompose),
         KeyCode::Enter if key.modifiers.is_empty() => return Some(Action::EditorNewline),
         _ => {}
@@ -793,5 +896,25 @@ fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::Cancel)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compose_maps_ctrl_e_to_external_edit() {
+        let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert_eq!(map_pr_compose_mode(key), Some(Action::ExternalEdit));
+    }
+
+    #[test]
+    fn compose_ctrl_s_still_submits_and_plain_e_types_a_char() {
+        let submit = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(map_pr_compose_mode(submit), Some(Action::SubmitCompose));
+        // Plain 'e' (no ctrl) types a character, not an external-edit request.
+        let plain = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
+        assert_eq!(map_pr_compose_mode(plain), Some(Action::EditorChar('e')));
     }
 }

@@ -68,7 +68,10 @@ impl App {
             if let Some(rect) = self.popup_rect {
                 if point_in(rect, col, row) {
                     self.handle_popup_click(rect, col, row);
-                } else if !matches!(self.mode, AppMode::PrCompose { .. }) {
+                } else if !matches!(
+                    self.mode,
+                    AppMode::PrCompose { .. } | AppMode::IssueCompose { .. }
+                ) {
                     // A click outside the popup dismisses it — and is swallowed
                     // so it does not also act on the panel underneath. The
                     // compose editor is excluded so a stray click can't discard

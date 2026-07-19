@@ -10,9 +10,12 @@ use keifu::{
     app::App,
     debug_server,
     event::{get_key_event, get_mouse_event, poll_event_with_timeout},
+    external_edit::{self, ExternalEditTarget},
     git::configure_git_extensions,
     keybindings::{map_key_to_action, map_mouse_to_action},
-    logging, tui, ui,
+    logging,
+    toast::ToastKind,
+    tui, ui,
 };
 
 #[derive(Parser)]
@@ -30,6 +33,31 @@ struct Cli {
     /// Listen for debug commands (NDJSON over TCP, e.g. 127.0.0.1:7167)
     #[arg(long, value_name = "ADDR")]
     debug_listen: Option<String>,
+}
+
+/// Pop the current compose buffer out into the user's `$EDITOR`. main.rs is the
+/// sole owner of the terminal, so it fully suspends the TUI, runs the editor
+/// (which inherits stdio), then restores the terminal exactly as at startup and
+/// forces a full repaint. On spawn failure or a non-zero editor exit the
+/// original text is kept and the error is surfaced as a toast.
+fn run_external_edit(
+    terminal: &mut tui::Tui,
+    app: &mut App,
+    target: ExternalEditTarget,
+) -> Result<()> {
+    let source = app.external_edit_source_text(target);
+    // Suspend the TUI before handing the screen to the child editor.
+    tui::restore()?;
+    let outcome = external_edit::edit_text(&source);
+    // Restore the terminal to the startup state and force a full redraw over
+    // whatever the editor left on screen.
+    tui::resume()?;
+    terminal.clear()?;
+    match outcome {
+        Ok(edited) => app.apply_external_edit(target, edited),
+        Err(e) => app.toast(ToastKind::Error, format!("Editor: {e}")),
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -119,6 +147,12 @@ fn main() -> Result<()> {
                     if let Err(e) = app.handle_action(action) {
                         app.show_error(format!("{}", e));
                     }
+                    // External-editor pop-out: the compose handler set a pending
+                    // request; main.rs owns the terminal, so it runs here (real
+                    // input path only — never for debug-injected keys).
+                    if let Some(target) = app.pending_external_edit.take() {
+                        run_external_edit(&mut terminal, &mut app, target)?;
+                    }
                 }
             } else if let Some(mouse) = get_mouse_event(&event) {
                 if let Some(action) = map_mouse_to_action(mouse) {
@@ -142,6 +176,7 @@ fn main() -> Result<()> {
         needs_render |= app.update_check_status();
         needs_render |= app.update_thread_status();
         needs_render |= app.update_pr_action_status();
+        needs_render |= app.update_issue_status();
         needs_render |= app.update_avatars();
         needs_render |= app.maybe_autoload_commits();
 
@@ -163,6 +198,10 @@ fn main() -> Result<()> {
                     command.request,
                 );
                 let _ = command.reply.send(response);
+                // An external editor can't run headlessly (no interactive tty
+                // for the child), so a debug-injected Ctrl+E must not suspend the
+                // terminal. Drop any request the injected key produced.
+                app.pending_external_edit = None;
                 needs_render |= mutates;
                 if app.should_quit {
                     break;
