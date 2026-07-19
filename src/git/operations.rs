@@ -800,16 +800,23 @@ pub fn stash_staged(repo_path: &str, message: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn stash_apply(repo_path: &str, index: usize) -> Result<()> {
+/// Apply a stash without removing it. A conflicting apply is a first-class
+/// `Conflicts` outcome, not an error: git leaves the working tree with unmerged
+/// paths but — unlike merge/rebase — sets no MERGE_HEAD, so no operation is left
+/// "in progress". Apply always keeps the stash entry regardless of the outcome.
+pub fn stash_apply(repo_path: &str, index: usize) -> Result<OpOutcome> {
     let ref_name = format!("stash@{{{index}}}");
-    run_git(repo_path, &["stash", "apply", &ref_name])?;
-    Ok(())
+    run_git_allow_conflict(repo_path, &["stash", "apply", &ref_name])
 }
 
-pub fn stash_pop(repo_path: &str, index: usize) -> Result<()> {
+/// Pop a stash (apply, then drop it on success). A conflicting pop returns
+/// `Conflicts` and — as git itself notes ("The stash entry is kept in case you
+/// need it again") — leaves the stash entry in place; the user resolves the
+/// conflicts and drops it manually. No MERGE_HEAD is set, so there is no
+/// "continue" step.
+pub fn stash_pop(repo_path: &str, index: usize) -> Result<OpOutcome> {
     let ref_name = format!("stash@{{{index}}}");
-    run_git(repo_path, &["stash", "pop", &ref_name])?;
-    Ok(())
+    run_git_allow_conflict(repo_path, &["stash", "pop", &ref_name])
 }
 
 pub fn stash_drop(repo_path: &str, index: usize) -> Result<()> {

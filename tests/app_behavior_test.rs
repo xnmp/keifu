@@ -1389,6 +1389,50 @@ fn commit_menu_stash_node_shows_stash_items() {
 }
 
 #[test]
+fn stash_pop_conflict_shows_stash_specific_guidance_not_merge_flow() {
+    // A stash whose contents conflict with a divergent HEAD commit.
+    let (td, repo) = init_repo();
+    commit_file(repo.repo(), "f.txt", "base\n", "root");
+    fs::write(td.path().join("f.txt"), "stashed\n").unwrap();
+    {
+        let mut r = Repository::open(td.path()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        r.stash_save(&sig, "wip", None).unwrap();
+    }
+    commit_file(repo.repo(), "f.txt", "committed\n", "diverge");
+    let mut app = make_app(repo);
+
+    // Select the stash node and open its menu, then pop it (item index 1).
+    let stash_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.is_stash)
+        .expect("a stash node is present");
+    app.graph_nav.graph_list_state.select(Some(stash_idx));
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    app.handle_action(Action::MoveDown).unwrap(); // StashApply -> StashPop
+    app.handle_action(Action::MenuSelect).unwrap();
+
+    let msg = app.get_message().expect("a status message was set");
+    assert!(
+        msg.contains("stash kept") && msg.to_lowercase().contains("resolve"),
+        "guidance should be stash-specific: {msg:?}"
+    );
+    // The merge-style Continue/Abort guidance must NOT appear — a stash conflict
+    // leaves no operation in progress.
+    assert!(
+        !msg.contains("Continue (c)"),
+        "stash guidance must not offer the merge Continue step: {msg:?}"
+    );
+    assert_eq!(
+        app.op_state,
+        keifu::git::OperationState::Clean,
+        "a stash conflict must not put the app into an in-progress operation"
+    );
+}
+
+#[test]
 fn commit_menu_tagged_commit_includes_tag_ops() {
     let (_td, repo) = init_repo();
     let c1 = commit_file(repo.repo(), "a.txt", "a", "first");

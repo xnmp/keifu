@@ -25,6 +25,44 @@ impl App {
         )
     }
 
+    /// Guidance for a conflicting stash pop/apply. Unlike merge/rebase there is
+    /// no MERGE_HEAD and so no Continue/Abort step: the user resolves in place
+    /// and drops the (kept) stash from the stash menu when done.
+    pub(crate) fn stash_conflict_guidance(verb: &str, count: usize) -> String {
+        format!(
+            "Stash {} hit conflicts in {} file{} — stash kept; resolve (o/t accept a side), then Drop it from the stash menu (Enter) when done",
+            verb,
+            count,
+            if count == 1 { "" } else { "s" }
+        )
+    }
+
+    /// React to a stash pop/apply outcome. A stash conflict leaves no operation
+    /// in progress (no MERGE_HEAD), so `op_state` stays Clean and the merge-style
+    /// Continue/Abort guidance does not apply; on conflicts we only surface the
+    /// conflicted files and point the user at stash-specific resolution. `verb`
+    /// is the past-tense action for the success message ("applied"/"popped");
+    /// `gerund` names the operation in the conflict guidance ("apply"/"pop").
+    pub(crate) fn handle_stash_outcome(
+        &mut self,
+        outcome: OpOutcome,
+        verb: &str,
+        gerund: &str,
+    ) -> Result<()> {
+        match outcome {
+            OpOutcome::Completed => {
+                self.refresh(true)?;
+                self.set_message(format!("Stash {verb}"));
+            }
+            OpOutcome::Conflicts { count } => {
+                self.refresh(true)?;
+                self.focus_conflict_files();
+                self.set_message(Self::stash_conflict_guidance(gerund, count));
+            }
+        }
+        Ok(())
+    }
+
     /// React to a merge/rebase/cherry-pick/revert outcome. On conflicts, move
     /// to the uncommitted node's files pane and guide the user; on completion,
     /// confirm success. `op` is the operation that ran (state may already be

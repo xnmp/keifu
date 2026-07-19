@@ -839,6 +839,65 @@ fn stash_drop_without_stash_errors() {
     assert!(stash_drop(repo_path(&git_repo), 0).is_err());
 }
 
+/// Leave the repo with exactly one stash whose contents conflict with HEAD, so
+/// applying/popping it stops on a merge conflict. Stashes an edit to `f.txt`,
+/// then commits a divergent edit to the same file on top.
+fn conflicting_stash(repo: &git2::Repository, path: &str) {
+    commit_file(repo, "f.txt", "base\n", "base");
+    fs::write(repo.workdir().unwrap().join("f.txt"), "stashed\n").unwrap();
+    git_cli(path, &["stash", "push"]);
+    commit_file(repo, "f.txt", "committed\n", "committed");
+}
+
+#[test]
+fn stash_pop_conflict_reports_conflicts_and_keeps_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    conflicting_stash(repo, path);
+
+    let outcome = stash_pop(path, 0).unwrap();
+    assert!(
+        matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
+        "a conflicting pop must report Conflicts, got {outcome:?}"
+    );
+    // git keeps the stash entry when a pop conflicts.
+    assert_eq!(stash_count(path), 1, "stash must survive a conflicting pop");
+    // A stash conflict sets no MERGE_HEAD, so no operation is left in progress.
+    assert_eq!(git_repo.operation_state(), OperationState::Clean);
+}
+
+#[test]
+fn stash_pop_clean_reports_completed_and_drops_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    commit_file(repo, "a.txt", "committed\n", "initial");
+
+    fs::write(repo.workdir().unwrap().join("a.txt"), "wip\n").unwrap();
+    git_cli(path, &["stash", "push"]);
+
+    let outcome = stash_pop(path, 0).unwrap();
+    assert_eq!(outcome, OpOutcome::Completed);
+    assert_eq!(stash_count(path), 0, "a clean pop drops the stash");
+}
+
+#[test]
+fn stash_apply_conflict_reports_conflicts_and_keeps_stash() {
+    let (_td, git_repo) = init_repo(Seed::Empty);
+    let repo = git_repo.repo();
+    let path = repo_path(&git_repo);
+    conflicting_stash(repo, path);
+
+    let outcome = stash_apply(path, 0).unwrap();
+    assert!(
+        matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
+        "a conflicting apply must report Conflicts, got {outcome:?}"
+    );
+    // apply never removes the stash — conflict or not.
+    assert_eq!(stash_count(path), 1, "apply must retain the stash");
+}
+
 // ── Remote checkout / fetch / push ──────────────────────────────────
 
 #[test]
