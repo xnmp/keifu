@@ -70,7 +70,7 @@ pub struct PixelCell {
 }
 
 /// Alpha applied to non-traced graph cells while branch tracing is active.
-pub const TRACE_DIM_ALPHA: f32 = 0.35;
+pub const TRACE_DIM_ALPHA: f32 = 0.28;
 
 /// A fully-resolved, hashable description of one row's pixel content. Two rows
 /// with an identical `RowSpec` rasterize to an identical image, so protocols
@@ -533,17 +533,28 @@ fn draw_cells(
     ch: f32,
     stars: &mut Vec<(f32, f32, f32, [u8; 3], bool)>,
 ) {
+    // The commit dot's radius is capped by the cell height, so on wide cells
+    // it can end short of the cell edge while connector strokes start exactly
+    // at it — a font-metric-dependent hairline gap. Horizontal stroke ends
+    // overshoot their cell by the dot's shortfall (min 1px) so they always
+    // meet the dot; between connector cells the overlap is invisible.
+    let dot_base = cw.min(ch * 2.0 / 5.0).max(3.0);
+    let dot_r = (dot_base * 0.6).min(cw * 0.65);
+    let reach = (cw / 2.0 - dot_r + 1.0).max(1.0);
+
     for (i, cell) in cells.iter().enumerate() {
         let ox = (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw;
         let cx = ox + cw / 2.0;
         let cy = ch / 2.0;
+        let left = ox - reach;
+        let right = ox + cw + reach;
         let color = cell.color;
         // A crossing routes its two strokes independently, so tracing can
         // light one direction while the other fades; the traced stroke ends
         // up on the bright layer, composited over the faded one.
         if cell.shape == CellShape::HorizontalPipe {
             let h = if cell.dim_secondary { &mut *dim } else { &mut *bright };
-            draw_segment(h, ox, cy, ox + cw, cy, half, cell.secondary);
+            draw_segment(h, left, cy, right, cy, half, cell.secondary);
             let v = if cell.dim { &mut *dim } else { &mut *bright };
             draw_segment(v, cx, 0.0, cx, ch, half, color);
             continue;
@@ -554,30 +565,30 @@ fn draw_cells(
         match cell.shape {
             CellShape::Empty | CellShape::HorizontalPipe => {}
             CellShape::Pipe => draw_segment(canvas, cx, 0.0, cx, ch, half, color),
-            CellShape::Horizontal => draw_segment(canvas, ox, cy, ox + cw, cy, half, color),
+            CellShape::Horizontal => draw_segment(canvas, left, cy, right, cy, half, color),
             CellShape::BranchRight => {
-                draw_bezier(canvas, (ox + cw, cy), (cx, cy), (cx, ch), half, color)
+                draw_bezier(canvas, (right, cy), (cx, cy), (cx, ch), half, color)
             }
             CellShape::BranchLeft => {
-                draw_bezier(canvas, (ox, cy), (cx, cy), (cx, ch), half, color)
+                draw_bezier(canvas, (left, cy), (cx, cy), (cx, ch), half, color)
             }
             CellShape::MergeRight => {
-                draw_bezier(canvas, (cx, 0.0), (cx, cy), (ox + cw, cy), half, color)
+                draw_bezier(canvas, (cx, 0.0), (cx, cy), (right, cy), half, color)
             }
             CellShape::MergeLeft => {
-                draw_bezier(canvas, (cx, 0.0), (cx, cy), (ox, cy), half, color)
+                draw_bezier(canvas, (cx, 0.0), (cx, cy), (left, cy), half, color)
             }
             CellShape::TeeRight => {
                 draw_segment(canvas, cx, 0.0, cx, ch, half, color);
-                draw_segment(canvas, cx, cy, ox + cw, cy, half, color);
+                draw_segment(canvas, cx, cy, right, cy, half, color);
             }
             CellShape::TeeLeft => {
                 draw_segment(canvas, cx, 0.0, cx, ch, half, color);
-                draw_segment(canvas, ox, cy, cx, cy, half, color);
+                draw_segment(canvas, left, cy, cx, cy, half, color);
             }
             CellShape::TeeUp => {
                 draw_segment(canvas, cx, 0.0, cx, cy, half, color);
-                draw_segment(canvas, ox, cy, ox + cw, cy, half, color);
+                draw_segment(canvas, left, cy, right, cy, half, color);
             }
             CellShape::Commit {
                 connect_up,
@@ -594,8 +605,7 @@ fn draw_cells(
                 }
                 // Dots may spill slightly into the adjacent connector column;
                 // lanes are two columns wide, so the overlap is harmless.
-                let base = cw.min(ch * 2.0 / 5.0).max(3.0);
-                let r = (base * 0.6).min(cw * 0.65);
+                let r = dot_r;
                 match style {
                     CommitStyle::Normal => fill_disc(canvas, cx, cy, r, color),
                     CommitStyle::Head => {
@@ -924,6 +934,33 @@ mod tests {
         assert!(
             alpha(&img, cx, probe_y) > 0,
             "star should extend above the normal dot radius"
+        );
+    }
+
+    #[test]
+    fn wide_cells_leave_no_gap_between_dot_and_horizontal() {
+        // With wide cells the dot radius (capped by cell height) ends short
+        // of the cell edge; the neighbouring horizontal overshoots its cell
+        // to meet the dot instead of leaving a hairline gap.
+        const WCW: u32 = 14;
+        let img = rasterize_row(
+            &spec(vec![
+                commit(false, false, CommitStyle::Normal, [0, 255, 0]),
+                solid(CellShape::Horizontal, [0, 255, 0]),
+            ]),
+            WCW,
+            CH,
+        );
+        let mid = CH / 2;
+        let pad = PIXEL_LEFT_PAD_CELLS as u32 * WCW;
+        let dot_cx = pad + WCW / 2;
+        let horiz_cx = pad + WCW + WCW / 2;
+        let gaps: Vec<u32> = (dot_cx..=horiz_cx)
+            .filter(|&x| alpha(&img, x, mid) == 0)
+            .collect();
+        assert!(
+            gaps.is_empty(),
+            "transparent pixels between dot and horizontal at x={gaps:?}"
         );
     }
 
