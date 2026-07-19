@@ -136,16 +136,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // FileDiff mode: full-screen diff view
-    if let AppMode::FileDiff {
-        content,
-        rendered_lines,
-        scroll_offset,
-        horizontal_offset,
-        file_index,
-        file_list,
-        ..
-    } = &app.mode
-    {
+    if matches!(app.mode, AppMode::FileDiff { .. }) {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -154,6 +145,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // Update viewport dimensions for scroll calculations (minus borders)
         app.diff_viewport_height = vertical[0].height.saturating_sub(2);
         app.diff_viewport_width = vertical[0].width.saturating_sub(2);
+
+        // Re-lay-out (soft-wrap) the diff if the wrap toggle or pane width has
+        // changed since the last frame, before taking the immutable borrow below.
+        app.ensure_diff_layout();
+
+        let AppMode::FileDiff {
+            content,
+            rendered_lines,
+            scroll_offset,
+            horizontal_offset,
+            file_index,
+            file_list,
+            ..
+        } = &app.mode
+        else {
+            unreachable!("guarded by matches! above");
+        };
 
         // Capture scroll geometry before the app.mode borrow ends so the
         // scrollbar can render after the status bar takes a &mut borrow.

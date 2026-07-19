@@ -145,6 +145,7 @@ impl StatusBar {
         let graph_cappable = (app.graph_layout.max_lane + 1) * 2 > 4;
         let trace_traceable = crate::git::graph::graph_has_enough_lanes(&app.graph_layout);
         let trace_enabled = app.trace_enabled;
+        let diff_word_wrap = app.diff_word_wrap;
 
         // Search status message (only while the search input is open).
         let search_info = match mode {
@@ -391,7 +392,13 @@ impl StatusBar {
                 hb.hint_static(" n/N ", key_style, "file ", desc_style);
                 hb.hint_static(" ]/[ ", key_style, "hunk ", desc_style);
                 hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
-                hb.hint_static(" ←→ ", key_style, "pan ", desc_style);
+                // Panning is only meaningful without wrap; when wrapped, lines
+                // already fit the pane.
+                if !diff_word_wrap {
+                    hb.hint_static(" ←→ ", key_style, "pan ", desc_style);
+                }
+                let wrap_label = if diff_word_wrap { "wrap on " } else { "wrap off " };
+                hb.hint(" ^⌥w ", key_style, wrap_label, desc_style, Action::ToggleDiffWrap);
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::CommitMenu { .. }

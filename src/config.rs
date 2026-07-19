@@ -213,6 +213,9 @@ pub struct UiState {
     /// Hide remote-only branches (remote refs with no matching local branch)
     /// from the graph. Off by default (remotes shown).
     pub hide_remote_branches: bool,
+    /// Soft line-wrapping in the file-diff viewer. Off by default (long lines
+    /// truncate and scroll horizontally, the historical behavior).
+    pub diff_word_wrap: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -224,6 +227,7 @@ impl Default for UiState {
             graph_split_ratio: DEFAULT_GRAPH_SPLIT_RATIO,
             trace_enabled: true,
             hide_remote_branches: false,
+            diff_word_wrap: false,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -437,6 +441,7 @@ mod tests {
             graph_split_ratio: 40,
             trace_enabled: false,
             hide_remote_branches: true,
+            diff_word_wrap: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -488,6 +493,21 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
         assert!(restored.hide_remote_branches);
+    }
+
+    #[test]
+    fn diff_word_wrap_defaults_off_and_round_trips() {
+        // Wrap is off by default, including for an older state.toml without the key.
+        assert!(!UiState::default().diff_word_wrap);
+        let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(!older.diff_word_wrap, "missing key defaults to off");
+
+        let wrapped = UiState {
+            diff_word_wrap: true,
+            ..UiState::default()
+        };
+        let restored: UiState = toml::from_str(&toml::to_string(&wrapped).unwrap()).unwrap();
+        assert!(restored.diff_word_wrap);
     }
 
     #[test]

@@ -743,6 +743,14 @@ fn map_error_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
+    // Ctrl+Alt+W toggles soft line-wrapping. Matched via a guard (combined
+    // modifiers) before the exact-modifier arms below.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::ALT)
+        && matches!(key.code, KeyCode::Char('w') | KeyCode::Char('W'))
+    {
+        return Some(Action::ToggleDiffWrap);
+    }
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::ScrollDown),
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::ScrollUp),

@@ -287,6 +287,18 @@ fn parse_key_token(token: &str) -> std::result::Result<KeyEvent, String> {
         .ok_or_else(|| format!("invalid key token: {token}"))?
         .to_ascii_lowercase();
 
+    // Ctrl+Alt combo, e.g. <c-a-w>.
+    if let Some(c) = inner.strip_prefix("c-a-") {
+        let mut it = c.chars();
+        if let (Some(ch), None) = (it.next(), it.next()) {
+            return Ok(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ));
+        }
+        return Err(format!("invalid ctrl-alt key token: {token}"));
+    }
+
     if let Some(c) = inner.strip_prefix("c-") {
         let mut it = c.chars();
         if let (Some(ch), None) = (it.next(), it.next()) {
@@ -346,6 +358,13 @@ mod tests {
         assert_eq!(events[0].modifiers, KeyModifiers::SHIFT);
         assert_eq!(events[1].code, KeyCode::Char('p'));
         assert_eq!(events[1].modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn parses_ctrl_alt_combo() {
+        let events = parse_key_sequence("<c-a-w>").unwrap();
+        assert_eq!(events[0].code, KeyCode::Char('w'));
+        assert_eq!(events[0].modifiers, KeyModifiers::CONTROL | KeyModifiers::ALT);
     }
 
     #[test]

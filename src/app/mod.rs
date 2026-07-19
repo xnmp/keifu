@@ -703,6 +703,12 @@ pub struct App {
     pub pending_refresh: bool,
     pub diff_viewport_height: u16,
     pub diff_viewport_width: u16,
+    /// Soft line-wrapping in the full-screen file-diff viewer (Ctrl+Alt+W).
+    /// Off by default: long lines truncate and scroll horizontally. Persisted.
+    pub diff_word_wrap: bool,
+    /// Source rows for the active FileDiff viewer, kept beside the mode so the
+    /// wrap re-layout inputs don't bloat the AppMode enum. `None` when closed.
+    pub diff_source: Option<crate::ui::file_diff_view::DiffSource>,
 
     // Status message with auto-clear
     pub message: Option<String>,
@@ -1094,6 +1100,66 @@ impl App {
         Ok(())
     }
 
+    /// Toggle soft line-wrapping in the file-diff viewer (persisted). The next
+    /// render re-lays-out the diff via `ensure_diff_layout`, so the toggle only
+    /// flips the flag and reports the new state.
+    pub(crate) fn toggle_diff_word_wrap(&mut self) {
+        self.diff_word_wrap = !self.diff_word_wrap;
+        self.save_ui_state();
+        let state = if self.diff_word_wrap { "on" } else { "off" };
+        self.set_message(format!("Line wrap {state}"));
+    }
+
+    /// Re-lay-out the file-diff viewer's rendered lines when the wrap toggle or
+    /// the pane width has changed since the last layout. Cheap no-op otherwise.
+    /// Called from the renderer before it borrows the diff state, so scrolling,
+    /// the scrollbar, and hunk navigation all see wrapped-row coordinates.
+    pub(crate) fn ensure_diff_layout(&mut self) {
+        let wrap = self.diff_word_wrap;
+        let width = self.diff_viewport_width as usize;
+        let viewport = self.diff_viewport_height as usize;
+
+        let Some(source) = self.diff_source.as_mut() else {
+            return;
+        };
+        // Width only affects the wrapped layout; when wrap is off a width change
+        // is irrelevant, so skip re-laying-out on every resize.
+        let width_matters = wrap && source.layout_width != width;
+        if source.layout_wrap == wrap && !width_matters {
+            return;
+        }
+        let (lines, hunks) = crate::ui::file_diff_view::layout_diff_rows(
+            &source.rows,
+            &source.hunk_positions,
+            wrap,
+            width,
+        );
+        source.layout_wrap = wrap;
+        source.layout_width = width;
+
+        if let AppMode::FileDiff {
+            rendered_lines,
+            hunk_positions,
+            scroll_offset,
+            horizontal_offset,
+            max_line_width,
+            total_lines,
+            ..
+        } = &mut self.mode
+        {
+            *max_line_width = lines.iter().map(|l| l.width()).max().unwrap_or(0);
+            *total_lines = lines.len();
+            *rendered_lines = lines;
+            *hunk_positions = hunks;
+            // Wrapping changes the row count, so keep the viewport in range and
+            // reset horizontal pan (wrapped lines never overflow the width).
+            *scroll_offset = (*scroll_offset).min(total_lines.saturating_sub(viewport));
+            if wrap {
+                *horizontal_offset = 0;
+            }
+        }
+    }
+
     /// Persist the writable UI state (panel layout + metadata columns).
     pub(crate) fn save_ui_state(&self) {
         UiState {
@@ -1102,6 +1168,7 @@ impl App {
             graph_split_ratio: self.graph_split_ratio,
             trace_enabled: self.trace_enabled,
             hide_remote_branches: self.hide_remote_branches,
+            diff_word_wrap: self.diff_word_wrap,
             metadata_columns: self.metadata_columns,
         }
         .save();

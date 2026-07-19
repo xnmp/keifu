@@ -194,4 +194,6 @@ pub enum Action {
     StageHunk,
     UnstageHunk,
     DiscardHunk,
+    /// Toggle soft line-wrapping in the file-diff viewer (Ctrl+Alt+W).
+    ToggleDiffWrap,
 }
