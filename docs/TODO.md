@@ -336,3 +336,23 @@ and diff lookups still key on the full path). A pure helper
 `is_under_folder_header` (`files_pane_state.rs`, unit-tested: nested files,
 root files, grouping off, `SectionHeader` reset between staged/unstaged
 sections) drives the choice in `ui/files_pane.rs`.
+
+### [DONE] 2026-07-19 Star gap under commit filter
+The "sometimes a small gap beneath the star" report: with a Ctrl+F commit
+filter active that excluded HEAD's message, HEAD's row was hidden while the
+always-visible uncommitted row kept its connector (wired against the unfiltered
+node list at build time), leaving a dangling stub under the top marker.
+`node_passes_commit_filter` now always keeps the HEAD row whenever an
+uncommitted node exists. The pure-geometry hypothesis was disproved and
+codified as a raster regression test (star row tiles seamlessly across 10+
+font metrics).
+
+### [DONE] 2026-07-19 S-curve pixel graph edges
+Lane transitions in the pixel graph are now full VSCode-style cubic S-curves
+instead of straight horizontal runs with a small rounded corner. A pure
+row-local scan (`transition_curves`) reconstructs each horizontal run into
+hub→spoke cubics (dots/Tee arms = horizontal tangent; Merge/Branch/TeeUp
+risers = vertical tangent at row edges); verticals and dots draw on top so
+HorizontalPipe crossings and trace dim/bright layering are unchanged. Curve
+endpoints stay at exact lane centers on row edges (unit-tested) so rows tile
+seamlessly. Unicode mode untouched. See docs/architecture.md.

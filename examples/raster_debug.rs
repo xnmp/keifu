@@ -4,7 +4,7 @@
 //! Usage: cargo run --example raster_debug -- <repo> <commit_prefix> <cw> <ch> <out.png> [rows]
 
 use image::RgbaImage;
-use keifu::git::graph::{build_graph, edge_is_traced, lineage_oids};
+use keifu::git::graph::{build_graph, lineage_oids};
 use keifu::git::GitRepository;
 use keifu::ui::graph_pixels::{
     build_row_spec, rasterize_row, CellShape, PIXEL_LEFT_PAD_CELLS,
