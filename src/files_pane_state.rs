@@ -469,6 +469,38 @@ impl FilesPaneState {
         items
     }
 
+    /// Display-item indices of conflicted files (the "Merge Changes" entries),
+    /// in display order.
+    pub fn conflicted_positions(&self) -> Vec<usize> {
+        self.display_items_cache
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                matches!(
+                    item,
+                    FilesPaneItem::File(f)
+                        if f.stage_status == Some(StageStatus::Conflicted)
+                )
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Move selection to the next (`forward`) or previous conflicted file,
+    /// wrapping around. Returns `false` when there are no conflicted files (the
+    /// caller can then surface a status message); the selection is untouched.
+    pub fn select_conflict(&mut self, forward: bool) -> bool {
+        let positions = self.conflicted_positions();
+        let current = self.file_selected_index();
+        match crate::conflict::next_position(&positions, current, forward) {
+            Some(idx) => {
+                self.select_file_at(idx);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Check if the current selection is in the "Archived Files" section.
     pub fn is_in_archived_section(&self) -> bool {
         section_of(&self.display_items_cache, self.file_selected_index())
@@ -507,6 +539,10 @@ mod tests {
 
     fn plain(path: &str) -> FileDiffInfo {
         file(path, FileChangeKind::Modified, None)
+    }
+
+    fn conflicted(path: &str) -> FileDiffInfo {
+        file(path, FileChangeKind::Modified, Some(StageStatus::Conflicted))
     }
 
     fn header(text: &str) -> FilesPaneItem {
@@ -1030,6 +1066,84 @@ mod tests {
         state.move_file_selection(-1);
         // No items to select — resolve() always falls back to index 0.
         assert_eq!(state.file_selected_index(), 0);
+    }
+
+    // ─── Conflicted-file jump (select_conflict) ─────────────────────
+
+    #[test]
+    fn conflicted_positions_finds_merge_changes_files() {
+        let state = make_state_with_items(vec![
+            header("Merge Changes"),
+            fitem(conflicted("a.rs")),
+            fitem(conflicted("b.rs")),
+            header("Unstaged Changes"),
+            fitem(unstaged("c.rs")),
+        ]);
+        assert_eq!(state.conflicted_positions(), vec![1, 2]);
+    }
+
+    #[test]
+    fn select_conflict_cycles_forward_with_wrap() {
+        let mut state = make_state_with_items(vec![
+            header("Merge Changes"),
+            fitem(conflicted("a.rs")),
+            fitem(conflicted("b.rs")),
+            header("Unstaged Changes"),
+            fitem(unstaged("c.rs")),
+        ]);
+        state.select_file_at(1); // on a.rs
+        assert!(state.select_conflict(true));
+        assert_eq!(state.file_selected_index(), 2); // -> b.rs
+        assert!(state.select_conflict(true));
+        assert_eq!(state.file_selected_index(), 1); // wraps back to a.rs
+    }
+
+    #[test]
+    fn select_conflict_cycles_backward_with_wrap() {
+        let mut state = make_state_with_items(vec![
+            header("Merge Changes"),
+            fitem(conflicted("a.rs")),
+            fitem(conflicted("b.rs")),
+        ]);
+        state.select_file_at(1); // on a.rs
+        assert!(state.select_conflict(false));
+        assert_eq!(state.file_selected_index(), 2); // wraps to b.rs
+    }
+
+    #[test]
+    fn select_conflict_from_non_conflict_jumps_to_a_conflict() {
+        let mut state = make_state_with_items(vec![
+            header("Merge Changes"),
+            fitem(conflicted("a.rs")),
+            header("Unstaged Changes"),
+            fitem(unstaged("c.rs")),
+        ]);
+        state.select_file_at(3); // on the unstaged file
+        assert!(state.select_conflict(false)); // previous conflict wraps to a.rs
+        assert_eq!(state.file_selected_index(), 1);
+    }
+
+    #[test]
+    fn select_conflict_single_conflict_stays_put() {
+        let mut state = make_state_with_items(vec![
+            header("Merge Changes"),
+            fitem(conflicted("a.rs")),
+        ]);
+        state.select_file_at(1);
+        assert!(state.select_conflict(true));
+        assert_eq!(state.file_selected_index(), 1);
+    }
+
+    #[test]
+    fn select_conflict_returns_false_when_none() {
+        let mut state = make_state_with_items(vec![
+            header("Unstaged Changes"),
+            fitem(unstaged("a.rs")),
+        ]);
+        assert!(!state.select_conflict(true));
+        assert!(!state.select_conflict(false));
+        // Selection is left untouched (still the only file).
+        assert_eq!(state.file_selected_index(), 1);
     }
 
     // ─── Filtering ──────────────────────────────────────────────────

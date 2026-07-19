@@ -538,6 +538,14 @@ pub fn layout_diff_rows(
     (lines, hunk_positions)
 }
 
+/// A diff row for a git conflict-marker line: the marker text as a single
+/// error-bar span, keeping the normal gutter (line numbers + change prefix) so
+/// it aligns with surrounding rows.
+fn make_conflict_marker_line(dl: &DiffLineContent, theme: &Theme) -> DiffRow {
+    let spans = vec![Span::styled(dl.content.clone(), theme.conflict_marker_style())];
+    make_diff_line(dl, spans, theme)
+}
+
 fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme: &Theme) -> DiffRow {
     let lineno_style = Style::default().fg(theme.text_muted);
 
@@ -606,6 +614,11 @@ fn determine_syntax(path: &std::path::Path) -> &'static SyntaxReference {
 /// `hunk_positions` indexes the rows at which each hunk header sits. The caller
 /// lays these out into display lines via [`layout_diff_rows`] (optionally
 /// wrapping), keeping hunk navigation in sync with the rendered output.
+///
+/// Any diff line that is a git conflict marker (line-initial, exactly seven
+/// marker chars) is rendered with [`Theme::conflict_marker_style`] so a diff
+/// that surfaces marker text — e.g. a commit that left `<<<<<<<`/`=======`/
+/// `>>>>>>>` lines in a file — reads as a conflict at a glance.
 pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (Vec<DiffRow>, Vec<usize>) {
     if content.is_binary {
         return (
@@ -660,11 +673,17 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
         for group in &groups {
             match group {
                 LineGroup::Context(dl) => {
+                    // Advance both highlight states even for marker lines so
+                    // multi-line constructs stay consistent across the marker.
                     let syn = highlight_line_owned(&mut old_hl, &dl.content);
                     let _ = highlight_line_owned(&mut new_hl, &dl.content);
                     let dark_fg = ui_theme.syntax_use_dark_colors;
-                    let spans = syntax_to_ratatui(&syn, None, dark_fg);
-                    rows.push(make_diff_line(dl, spans, ui_theme));
+                    let row = if crate::conflict::is_conflict_marker(&dl.content) {
+                        make_conflict_marker_line(dl, ui_theme)
+                    } else {
+                        make_diff_line(dl, syntax_to_ratatui(&syn, None, dark_fg), ui_theme)
+                    };
+                    rows.push(row);
                 }
                 LineGroup::Change {
                     deletions,
@@ -675,22 +694,26 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
 
                     for (i, dl) in deletions.iter().enumerate() {
                         let syn = highlight_line_owned(&mut old_hl, &dl.content);
-                        let spans = if let Some(emp_spans) = emp.old_spans.get(i) {
-                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_del_bg, ui_theme.diff_del_emph_bg, dark_fg)
+                        let row = if crate::conflict::is_conflict_marker(&dl.content) {
+                            make_conflict_marker_line(dl, ui_theme)
+                        } else if let Some(emp_spans) = emp.old_spans.get(i) {
+                            make_diff_line(dl, merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_del_bg, ui_theme.diff_del_emph_bg, dark_fg), ui_theme)
                         } else {
-                            syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg), dark_fg)
+                            make_diff_line(dl, syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg), dark_fg), ui_theme)
                         };
-                        rows.push(make_diff_line(dl, spans, ui_theme));
+                        rows.push(row);
                     }
 
                     for (i, dl) in additions.iter().enumerate() {
                         let syn = highlight_line_owned(&mut new_hl, &dl.content);
-                        let spans = if let Some(emp_spans) = emp.new_spans.get(i) {
-                            merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_add_bg, ui_theme.diff_add_emph_bg, dark_fg)
+                        let row = if crate::conflict::is_conflict_marker(&dl.content) {
+                            make_conflict_marker_line(dl, ui_theme)
+                        } else if let Some(emp_spans) = emp.new_spans.get(i) {
+                            make_diff_line(dl, merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_add_bg, ui_theme.diff_add_emph_bg, dark_fg), ui_theme)
                         } else {
-                            syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg), dark_fg)
+                            make_diff_line(dl, syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg), dark_fg), ui_theme)
                         };
-                        rows.push(make_diff_line(dl, spans, ui_theme));
+                        rows.push(row);
                     }
                 }
                 LineGroup::NoNewline => {

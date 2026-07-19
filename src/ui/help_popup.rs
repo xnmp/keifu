@@ -194,6 +194,10 @@ impl<'a> Widget for HelpPopup<'a> {
                 ]),
                 Line::from(Span::styled("  Merge conflicts", header_style)),
                 Line::from(vec![
+                    Span::styled("  ] / [      ", key_style),
+                    Span::styled("Jump to next / previous conflicted file", desc_style),
+                ]),
+                Line::from(vec![
                     Span::styled("  o          ", key_style),
                     Span::styled("Accept ours (on conflicted file)", desc_style),
                 ]),
