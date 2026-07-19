@@ -22,15 +22,16 @@ use crate::{
             checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
             create_lightweight_tag, delete_branch, delete_remote_branch, delete_tag,
-            get_last_commit_message, is_annotated_tag, reset_hard_checked,
+            extract_auth_url, get_last_commit_message, is_annotated_tag, is_https_auth_failure,
+            reset_hard_checked, url_host,
             humanize_git_error, is_divergent_pull_error, merge_branch, prune_remote, push_tag,
             rebase_branch, rename_branch, reset_to_commit, restore_files, revert_commit, stage_all,
             stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
             unstage_all, unstage_file, OpOutcome, PullMode, ResetMode,
         },
         extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch,
-        BranchInfo, CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffContent, FileDiffInfo,
-        GitRepository, OperationState, StageStatus, WorkingTreeStatus,
+        BranchInfo, CommitDiffInfo, CommitInfo, Credentials, FileChangeKind, FileDiffContent,
+        FileDiffInfo, GitRepository, OperationState, StageStatus, WorkingTreeStatus,
     },
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
@@ -55,6 +56,7 @@ mod commit_menu_actions;
 mod branch_picker_actions;
 mod file_diff_actions;
 mod input_actions;
+mod credentials;
 mod confirm_actions;
 mod compare_actions;
 mod file_history_actions;
@@ -356,6 +358,11 @@ pub enum AppMode {
         number: u64,
         selected: usize,
     },
+    /// Filter the issue list by label. The label set + chosen state live on
+    /// `App.issue_label_filter`; this variant carries only the cursor row.
+    IssueLabelFilter {
+        selected: usize,
+    },
     BranchFilter {
         filter: String,
         selected: usize,
@@ -480,14 +487,32 @@ pub enum ThreadViewState {
 /// `AppMode::Error`), mirroring `CiChecksView`/`PrThreadView`.
 pub struct IssueListView {
     pub state: IssueListState,
-    /// Selected row (index into the `Ready` list).
+    /// Selected row — an index into the *visible* (filtered) rows, not the raw
+    /// `Ready` list, so navigation operates on what the user sees.
     pub selected: usize,
     pub filter: crate::issue::IssueFilter,
+    /// Client-side narrowing (labels / unblocked-only) applied over the fetched
+    /// rows without a refetch.
+    pub view_filter: crate::issue::IssueViewFilter,
     /// First visible row, kept in range each frame by the widget.
     pub scroll: usize,
     /// Issue number to reselect once a refetch completes, captured when the view
     /// transitions to `Loading` so a refresh/mutation doesn't jump to row 0.
     pub pending_reselect: Option<u64>,
+}
+
+impl IssueListView {
+    /// Indices into the `Ready` list that pass the current view filter. `blocked`
+    /// is the set of blocked issue numbers (empty when unknown). Non-`Ready`
+    /// states have no visible rows.
+    pub fn visible(&self, blocked: &std::collections::HashSet<u64>) -> Vec<usize> {
+        match &self.state {
+            IssueListState::Ready(issues) => {
+                crate::issue::visible_issues(issues, &self.view_filter, blocked)
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 pub enum IssueListState {
@@ -530,6 +555,14 @@ pub struct IssueLabelPicker {
     pub number: u64,
     pub labels: Vec<crate::issue::IssueLabel>,
     pub original: Vec<bool>,
+    pub chosen: Vec<bool>,
+}
+
+/// Live label-*filter* picker data (on `App`), used by the list's `t` filter.
+/// `labels` is the repo's full label set; `chosen` is the in-progress checkbox
+/// state. On apply the checked label names become the list's `view_filter`.
+pub struct IssueLabelFilter {
+    pub labels: Vec<crate::issue::IssueLabel>,
     pub chosen: Vec<bool>,
 }
 
@@ -590,6 +623,50 @@ pub enum InputAction {
     /// desired final set; the handler diffs it against the issue's current
     /// assignees to compute add/remove.
     EditIssueAssignees { number: u64 },
+    /// First step of the HTTPS credential prompt: enter the username. The
+    /// pending op + host live on `App.pending_auth`.
+    AuthUsername,
+    /// Second step of the HTTPS credential prompt: enter the password/token.
+    /// Rendered masked.
+    AuthPassword,
+}
+
+/// A network op that can be re-issued with credentials after an auth-failure
+/// prompt. Captures everything needed to rerun the exact same command.
+#[derive(Debug, Clone)]
+pub enum RetryableOp {
+    Fetch { remote: String, show_message: bool, silent: bool },
+    FetchAll,
+    Push(PushSpec),
+    Pull { remote: Option<String>, branch: Option<String>, mode: PullMode },
+}
+
+/// A network op currently in flight, kept so its completion handler can drive
+/// the credential-prompt retry on an auth failure.
+#[derive(Debug, Clone)]
+pub struct InFlightOp {
+    pub op: RetryableOp,
+    /// The op's target host (for credential-cache lookup), if resolvable.
+    pub host: Option<String>,
+    /// Whether credentials were attached to this attempt (so a fresh auth
+    /// failure means the cached creds are stale).
+    pub had_creds: bool,
+    /// True for a silent background auto-fetch — never prompt on those.
+    pub silent: bool,
+    /// How many credential prompts this auth episode has already shown.
+    pub attempts: u32,
+}
+
+/// State of an in-progress HTTPS credential prompt: the op to retry once the
+/// user finishes entering their username + password/token.
+#[derive(Debug, Clone)]
+pub struct PendingAuth {
+    pub op: RetryableOp,
+    pub host: String,
+    /// Filled after the username step; `None` while collecting it.
+    pub username: Option<String>,
+    /// Prompt count for this episode (capped to avoid infinite re-prompt loops).
+    pub attempts: u32,
 }
 
 /// Confirmation action kinds
@@ -802,6 +879,17 @@ pub struct App {
     // Network operations (fetch/push/auto-refresh)
     pub network: NetworkManager,
 
+    // ── HTTPS credential prompt (issue #33) ──────────────────────────────
+    // Session credential cache, keyed by host — entered once, then supplied
+    // transparently to later network ops on the same host.
+    pub credentials: std::collections::HashMap<String, Credentials>,
+    // The network op currently in flight, so its completion can drive the
+    // credential-prompt retry on an auth failure.
+    pub in_flight_op: Option<InFlightOp>,
+    // An in-progress credential prompt (username → password → retry). `None`
+    // when no prompt is open.
+    pub pending_auth: Option<PendingAuth>,
+
     // Open GitHub PRs by head branch name, refreshed in the background via the
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
@@ -840,6 +928,7 @@ pub struct App {
     pub issue_detail: Option<IssueDetailView>,
     pub issue_editor: crate::text_editor::TextEditor,
     pub issue_label_picker: Option<IssueLabelPicker>,
+    pub issue_label_filter: Option<IssueLabelFilter>,
 
     // A pending request (set by a compose handler on Ctrl+E) to pop the compose
     // buffer out into the user's $EDITOR. `main.rs` — the sole owner of the
@@ -1128,6 +1217,7 @@ impl App {
             AppMode::IssueDetail => self.handle_issue_detail_action(action),
             AppMode::IssueCompose { .. } => self.handle_issue_compose_action(action),
             AppMode::IssueLabelPicker { .. } => self.handle_issue_label_picker_action(action),
+            AppMode::IssueLabelFilter { .. } => self.handle_issue_label_filter_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
             AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,

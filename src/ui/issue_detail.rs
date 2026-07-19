@@ -39,22 +39,13 @@ impl<'a> Widget for IssueDetailWidget<'a> {
         if inner.height == 0 {
             return;
         }
-        // Reserve the last row for the footer hint.
-        let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
+        // Full-screen: the shared status bar carries the key hints, so the whole
+        // inner area is available for the (scrollable) body.
         let lines = build_lines(&self.view.state, self.theme);
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((self.view.scroll as u16, 0))
-            .render(body, buf);
-
-        let hint = " ↑↓ scroll   c comment   x close/reopen   l labels   a assignees   o browser   Esc back";
-        let fy = inner.y + inner.height - 1;
-        buf.set_string(
-            inner.x,
-            fy,
-            super::truncate_str(hint, inner.width as usize),
-            Style::default().fg(self.theme.text_muted),
-        );
+            .render(inner, buf);
     }
 }
 
@@ -105,24 +96,28 @@ fn build_detail(d: &IssueDetail, theme: &Theme) -> Vec<Line<'static>> {
         ),
     ]));
 
-    // Labels + assignees meta.
+    // Labels: colored chips (reusing the list's hex→color), with a muted caption.
     if !d.labels.is_empty() {
-        let names: Vec<String> = d.labels.iter().map(|l| format!("[{}]", l.name)).collect();
-        out.push(Line::from(Span::styled(
-            format!("labels: {}", names.join(" ")),
-            Style::default().fg(theme.text_secondary),
-        )));
+        let mut spans = vec![Span::styled("labels: ", theme.metadata_label_style())];
+        for label in &d.labels {
+            let color = super::issue_list::hex_to_color(&label.color).unwrap_or(theme.pr_badge);
+            spans.push(Span::styled(
+                format!("[{}] ", label.name),
+                Style::default().fg(color),
+            ));
+        }
+        out.push(Line::from(spans));
     }
     if !d.assignees.is_empty() {
         let who: Vec<String> = d.assignees.iter().map(|a| format!("@{a}")).collect();
-        out.push(Line::from(Span::styled(
-            format!("assignees: {}", who.join(" ")),
-            Style::default().fg(theme.text_secondary),
-        )));
+        out.push(Line::from(vec![
+            Span::styled("assignees: ", theme.metadata_label_style()),
+            Span::styled(who.join(" "), Style::default().fg(theme.text_secondary)),
+        ]));
     }
 
     out.push(Line::default());
-    push_body(&mut out, &d.body, theme);
+    push_body(&mut out, &d.body, theme, "");
 
     for c in &d.comments {
         out.push(Line::default());
@@ -133,6 +128,7 @@ fn build_detail(d: &IssueDetail, theme: &Theme) -> Vec<Line<'static>> {
 }
 
 fn push_comment(out: &mut Vec<Line<'static>>, c: &IssueComment, theme: &Theme) {
+    // Author + relative time header, then the body indented under it.
     out.push(Line::from(vec![
         Span::styled(
             format!("@{} ", c.author),
@@ -141,23 +137,24 @@ fn push_comment(out: &mut Vec<Line<'static>>, c: &IssueComment, theme: &Theme) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("commented · {}", date_only(&c.created_at)),
+            format!("commented · {}", crate::issue::relative_time(&c.created_at)),
             Style::default().fg(theme.text_muted),
         ),
     ]));
-    push_body(out, &c.body, theme);
+    push_body(out, &c.body, theme, "  ");
 }
 
-/// Push a body verbatim (one styled line per source line). An empty body reads
-/// as a muted placeholder so a blank issue/comment isn't a void.
-fn push_body(out: &mut Vec<Line<'static>>, body: &str, theme: &Theme) {
+/// Push a body (one styled line per source line), each prefixed with `indent`.
+/// An empty body reads as a muted placeholder so a blank issue/comment isn't a
+/// void.
+fn push_body(out: &mut Vec<Line<'static>>, body: &str, theme: &Theme, indent: &str) {
     if body.trim().is_empty() {
-        out.push(muted_line("  (no description)", theme));
+        out.push(muted_line(&format!("{indent}(no description)"), theme));
         return;
     }
     for line in body.lines() {
         out.push(Line::from(Span::styled(
-            line.to_string(),
+            format!("{indent}{line}"),
             Style::default().fg(theme.text_primary),
         )));
     }

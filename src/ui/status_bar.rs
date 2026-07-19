@@ -440,7 +440,10 @@ impl StatusBar {
             AppMode::IssueList => {
                 hb.hint_static(" ↑↓ ", key_style, "nav ", desc_style);
                 hb.hint(" Enter ", key_style, "open ", desc_style, Action::OpenIssueDetail);
-                hb.hint(" Tab ", key_style, "filter ", desc_style, Action::CycleIssueFilter);
+                hb.hint(" Tab ", key_style, "state ", desc_style, Action::CycleIssueFilter);
+                hb.hint(" t ", key_style, "labels ", desc_style, Action::OpenIssueLabelFilter);
+                hb.hint(" u ", key_style, "unblocked ", desc_style, Action::ToggleUnblockedOnly);
+                hb.hint(" l ", key_style, "tag ", desc_style, Action::EditIssueLabels);
                 hb.hint(" n ", key_style, "new ", desc_style, Action::NewIssue);
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
@@ -449,7 +452,16 @@ impl StatusBar {
                 hb.hint(" c ", key_style, "comment ", desc_style, Action::CommentOnIssue);
                 hb.hint(" x ", key_style, "close/reopen ", desc_style, Action::ToggleIssueState);
                 hb.hint(" l ", key_style, "labels ", desc_style, Action::EditIssueLabels);
+                hb.hint(" a ", key_style, "assignees ", desc_style, Action::EditIssueAssignees);
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
+            }
+            AppMode::IssueLabelFilter { .. } => {
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::ToggleIssueLabel);
+                hb.hint(" ^a ", key_style, "all ", desc_style, Action::SelectAll);
+                hb.hint(" ^o ", key_style, "none ", desc_style, Action::SelectNone);
+                hb.hint(" Enter ", key_style, "apply ", desc_style, Action::MenuSelect);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::IssueCompose { .. } => {
                 hb.hint(" Ctrl+S ", key_style, "submit ", desc_style, Action::SubmitCompose);
@@ -505,6 +517,7 @@ impl StatusBar {
             AppMode::IssueDetail => Some(" ISSUE "),
             AppMode::IssueCompose { .. } => Some(" COMPOSE "),
             AppMode::IssueLabelPicker { .. } => Some(" LABELS "),
+            AppMode::IssueLabelFilter { .. } => Some(" LABEL FILTER "),
             AppMode::BranchPicker { .. } => Some(" CHECKOUT "),
             AppMode::BranchDeletePicker { .. } => Some(" DELETE BRANCH "),
             AppMode::TagPicker { .. } => Some(" TAG "),

@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::{App, FilesPaneItem, FocusedPanel};
+use crate::files_pane_state::is_under_folder_header;
 use crate::git::StageStatus;
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
@@ -101,7 +102,8 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                 break;
             }
             let y = inner.y + i as u16;
-            let is_selected = self.is_focused && state.selected == Some(state.offset + i);
+            let idx = state.offset + i;
+            let is_selected = self.is_focused && state.selected == Some(idx);
 
             match item {
                 FilesPaneItem::SectionHeader(text) => {
@@ -138,7 +140,17 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                         self.theme.file_change_style(&file.kind)
                     };
 
-                    let path_str = file.path.to_string_lossy().to_string();
+                    // Under a folder header the folder is already shown above,
+                    // so just the file name is displayed; otherwise (root-level
+                    // files, or grouping disabled) show the full repo-relative path.
+                    let path_str = if is_under_folder_header(&self.items, idx) {
+                        file.path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| file.path.to_string_lossy().to_string())
+                    } else {
+                        file.path.to_string_lossy().to_string()
+                    };
                     let icon = super::file_icons::file_icon(&file.path);
                     let mut spans = vec![
                         Span::styled(format!(" {} ", indicator), Style::default().fg(color)),

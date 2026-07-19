@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use keifu::{
     app::App,
     debug_server,
-    event::{get_key_event, get_mouse_event, poll_event_with_timeout},
+    event::{get_key_event, get_mouse_event, get_paste_event, poll_event_with_timeout},
     external_edit::{self, ExternalEditTarget},
     git::configure_git_extensions,
     keybindings::{map_key_to_action, map_mouse_to_action},
@@ -160,6 +160,12 @@ fn main() -> Result<()> {
                         app.show_error(format!("{}", e));
                     }
                 }
+            } else if let Some(text) = get_paste_event(&event) {
+                // Bracketed paste: routed by mode (credential prompt, other
+                // inputs, or a compose editor) inside the App.
+                if let Err(e) = app.handle_paste(text) {
+                    app.show_error(format!("{}", e));
+                }
             }
             needs_render = true;
         }
@@ -190,6 +196,7 @@ fn main() -> Result<()> {
                     command.request,
                     debug_server::DebugRequest::Keys { .. }
                         | debug_server::DebugRequest::Mouse { .. }
+                        | debug_server::DebugRequest::Paste { .. }
                 );
                 let response = debug_server::handle_request(
                     &mut app,

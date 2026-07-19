@@ -5,8 +5,10 @@
 //! the view state; errors render inside the popup (never `AppMode::Error`);
 //! mutating actions run through the shared async runner.
 
+use std::collections::HashSet;
+
 use super::*;
-use crate::issue::{IssueDetail, IssueFilter, IssueInfo, IssueLabel};
+use crate::issue::{IssueDetail, IssueFilter, IssueInfo, IssueLabel, IssueViewFilter};
 use crate::issue_action::{success_message, IssueAction};
 use crate::toast::ToastKind;
 
@@ -21,11 +23,13 @@ impl App {
             state: IssueListState::Loading,
             selected: 0,
             filter,
+            view_filter: IssueViewFilter::default(),
             scroll: 0,
             pending_reselect: None,
         });
         self.issue_fetch.start_list(&self.repo_path, filter);
         self.issue_fetch.start_labels(&self.repo_path);
+        self.issue_fetch.start_blocked(&self.repo_path);
         self.mode = AppMode::IssueList;
     }
 
@@ -39,6 +43,9 @@ impl App {
             Action::GoToBottom => self.issue_list_move(i32::MAX, false),
             Action::OpenIssueDetail => self.open_issue_detail(),
             Action::CycleIssueFilter => self.cycle_issue_filter(),
+            Action::OpenIssueLabelFilter => self.open_issue_label_filter(),
+            Action::ToggleUnblockedOnly => self.toggle_unblocked_only(),
+            Action::EditIssueLabels => self.open_issue_label_picker(),
             Action::RefreshIssues => self.refresh_issue_list(),
             Action::NewIssue => self.open_issue_compose(IssueComposePurpose::NewIssue),
             Action::OpenIssueInBrowser => self.open_selected_issue_url(),
@@ -50,21 +57,26 @@ impl App {
         }
     }
 
-    /// Move the list selection by `delta`. `wrap` wraps at both ends (j/k);
-    /// otherwise it clamps (page/top/bottom, with `i32::MIN`/`MAX` as jumps).
+    /// The blocked-issue set from the session cache (empty when not yet known).
+    fn blocked_set(&self) -> HashSet<u64> {
+        self.issue_fetch.cached_blocked().cloned().unwrap_or_default()
+    }
+
+    /// Move the list selection by `delta` over the *visible* (filtered) rows.
+    /// `wrap` wraps at both ends (j/k); otherwise it clamps (page/top/bottom).
     fn issue_list_move(&mut self, delta: i32, wrap: bool) {
+        let blocked = self.blocked_set();
         if let Some(v) = &mut self.issue_list {
-            if let IssueListState::Ready(issues) = &v.state {
-                let len = issues.len();
-                if len == 0 {
-                    return;
-                }
-                v.selected = if wrap {
-                    wrapped_index(v.selected, len, delta)
-                } else {
-                    clamped_index(v.selected, len, delta)
-                };
+            let visible_len = v.visible(&blocked).len();
+            if visible_len == 0 {
+                v.selected = 0;
+                return;
             }
+            v.selected = if wrap {
+                wrapped_index(v.selected, visible_len, delta)
+            } else {
+                clamped_index(v.selected, visible_len, delta)
+            };
         }
     }
 
@@ -72,8 +84,8 @@ impl App {
         if let Some(v) = &mut self.issue_list {
             let filter = v.filter.next();
             v.filter = filter;
-            // A filter change swaps the whole set, so start at the top rather
-            // than trying to preserve the previous selection.
+            // A status-filter change swaps the whole set, so start at the top
+            // rather than trying to preserve the previous selection.
             v.pending_reselect = None;
             v.state = IssueListState::Loading;
             v.selected = 0;
@@ -82,29 +94,61 @@ impl App {
         }
     }
 
+    /// Toggle the unblocked-only view filter, keeping the selection valid as the
+    /// visible set shrinks/grows.
+    fn toggle_unblocked_only(&mut self) {
+        if let Some(v) = &mut self.issue_list {
+            v.view_filter.unblocked_only = !v.view_filter.unblocked_only;
+            let on = v.view_filter.unblocked_only;
+            if on && self.issue_fetch.cached_blocked().is_none() {
+                self.issue_fetch.start_blocked(&self.repo_path);
+                self.toast(ToastKind::Info, "Loading blocked-by data…");
+            }
+        }
+        self.clamp_issue_selection();
+    }
+
     fn refresh_issue_list(&mut self) {
         let Some(filter) = self.issue_list.as_ref().map(|v| v.filter) else {
             return;
         };
         self.set_issue_list_loading();
+        self.issue_fetch.invalidate_blocked();
         self.issue_fetch.start_list(&self.repo_path, filter);
+        self.issue_fetch.start_blocked(&self.repo_path);
     }
 
     /// Transition the list to `Loading`, remembering the currently-selected
     /// issue's number so the selection can be restored by number once the
     /// refetch completes (instead of snapping back to row 0).
     fn set_issue_list_loading(&mut self) {
+        let number = self.selected_issue().map(|i| i.number);
         if let Some(v) = &mut self.issue_list {
-            v.pending_reselect = selected_issue_number(&v.state, v.selected);
+            v.pending_reselect = number;
             v.state = IssueListState::Loading;
         }
     }
 
-    /// The issue currently selected in the list, if the list is `Ready`.
+    /// Recompute the visible set and clamp the selection into range. Called after
+    /// any filter change or async update that can shrink what's visible.
+    fn clamp_issue_selection(&mut self) {
+        let blocked = self.blocked_set();
+        if let Some(v) = &mut self.issue_list {
+            let visible_len = v.visible(&blocked).len();
+            v.selected = clamp_visible_selection(v.selected, visible_len);
+        }
+    }
+
+    /// The issue currently selected in the list (mapping the visible-row index
+    /// through the filter), if the list is `Ready`.
     fn selected_issue(&self) -> Option<&IssueInfo> {
         let v = self.issue_list.as_ref()?;
+        let blocked = self.issue_fetch.cached_blocked();
+        let empty = HashSet::new();
+        let visible = v.visible(blocked.unwrap_or(&empty));
+        let raw = *visible.get(v.selected)?;
         match &v.state {
-            IssueListState::Ready(issues) => issues.get(v.selected),
+            IssueListState::Ready(issues) => issues.get(raw),
             _ => None,
         }
     }
@@ -299,13 +343,34 @@ impl App {
 
     // ── label picker ───────────────────────────────────────────────────
 
+    /// The mode to return to from an issue overlay (label picker): the detail
+    /// popup when it's the layer beneath, otherwise the list.
+    fn issue_return_mode(&self) -> AppMode {
+        if self.issue_detail.is_some() {
+            AppMode::IssueDetail
+        } else {
+            AppMode::IssueList
+        }
+    }
+
+    /// Open the label picker for the current issue. Works from the detail popup
+    /// (uses the loaded detail's labels) *and* from the list (uses the selected
+    /// row's labels), so tags can be toggled without opening the issue.
     fn open_issue_label_picker(&mut self) {
-        let Some(detail) = self.loaded_detail() else {
-            return;
-        };
-        let number = detail.number;
-        let current: std::collections::HashSet<String> =
-            detail.labels.iter().map(|l| l.name.clone()).collect();
+        let (number, current): (u64, std::collections::HashSet<String>) =
+            if let Some(detail) = self.loaded_detail() {
+                (
+                    detail.number,
+                    detail.labels.iter().map(|l| l.name.clone()).collect(),
+                )
+            } else if let Some(issue) = self.selected_issue() {
+                (
+                    issue.number,
+                    issue.labels.iter().map(|l| l.name.clone()).collect(),
+                )
+            } else {
+                return;
+            };
         let Some(labels) = self.issue_fetch.cached_labels().cloned() else {
             // Not fetched yet — kick it off and let the user retry.
             self.issue_fetch.start_labels(&self.repo_path);
@@ -361,20 +426,21 @@ impl App {
             Action::MenuSelect => self.apply_issue_labels(),
             Action::Cancel => {
                 self.issue_label_picker = None;
-                self.mode = AppMode::IssueDetail;
+                self.mode = self.issue_return_mode();
             }
             _ => {}
         }
     }
 
     fn apply_issue_labels(&mut self) {
+        let return_mode = self.issue_return_mode();
         let Some(picker) = self.issue_label_picker.take() else {
-            self.mode = AppMode::IssueDetail;
+            self.mode = return_mode;
             return;
         };
         let (add, remove) = label_diff(&picker.labels, &picker.original, &picker.chosen);
         if add.is_empty() && remove.is_empty() {
-            self.mode = AppMode::IssueDetail;
+            self.mode = return_mode;
             self.toast(ToastKind::Info, "No label changes");
             return;
         }
@@ -387,12 +453,100 @@ impl App {
             },
             "Updating labels…",
         ) {
-            self.mode = AppMode::IssueDetail;
+            self.mode = return_mode;
         } else {
             // Runner busy — keep the picker open so the user's checkbox choices
             // aren't lost (the selection cursor lives on the mode, untouched).
             self.issue_label_picker = Some(picker);
         }
+    }
+
+    // ── label filter (list) ────────────────────────────────────────────
+
+    /// Open the label-*filter* picker for the list, seeding the checkboxes from
+    /// the currently-active `view_filter.labels`.
+    fn open_issue_label_filter(&mut self) {
+        let Some(labels) = self.issue_fetch.cached_labels().cloned() else {
+            self.issue_fetch.start_labels(&self.repo_path);
+            self.toast(ToastKind::Info, "Loading labels… press t again");
+            return;
+        };
+        if labels.is_empty() {
+            self.toast(ToastKind::Info, "No labels defined in this repo");
+            return;
+        }
+        let active: std::collections::HashSet<String> = self
+            .issue_list
+            .as_ref()
+            .map(|v| v.view_filter.labels.iter().cloned().collect())
+            .unwrap_or_default();
+        let chosen: Vec<bool> = labels.iter().map(|l| active.contains(&l.name)).collect();
+        self.issue_label_filter = Some(IssueLabelFilter { labels, chosen });
+        self.mode = AppMode::IssueLabelFilter { selected: 0 };
+    }
+
+    pub(crate) fn handle_issue_label_filter_action(&mut self, action: Action) {
+        let len = self
+            .issue_label_filter
+            .as_ref()
+            .map(|p| p.labels.len())
+            .unwrap_or(0);
+        match action {
+            Action::MoveUp => {
+                if let AppMode::IssueLabelFilter { selected } = &mut self.mode {
+                    *selected = wrapped_index(*selected, len, -1);
+                }
+            }
+            Action::MoveDown => {
+                if let AppMode::IssueLabelFilter { selected } = &mut self.mode {
+                    *selected = wrapped_index(*selected, len, 1);
+                }
+            }
+            Action::ToggleIssueLabel => {
+                let cursor = match self.mode {
+                    AppMode::IssueLabelFilter { selected } => selected,
+                    _ => return,
+                };
+                if let Some(p) = &mut self.issue_label_filter {
+                    if let Some(slot) = p.chosen.get_mut(cursor) {
+                        *slot = !*slot;
+                    }
+                }
+            }
+            Action::SelectAll => {
+                if let Some(p) = &mut self.issue_label_filter {
+                    p.chosen.iter_mut().for_each(|c| *c = true);
+                }
+            }
+            Action::SelectNone => {
+                if let Some(p) = &mut self.issue_label_filter {
+                    p.chosen.iter_mut().for_each(|c| *c = false);
+                }
+            }
+            Action::MenuSelect => self.apply_issue_label_filter(),
+            Action::Cancel => {
+                self.issue_label_filter = None;
+                self.mode = AppMode::IssueList;
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_issue_label_filter(&mut self) {
+        if let Some(picker) = self.issue_label_filter.take() {
+            let chosen: Vec<String> = picker
+                .labels
+                .iter()
+                .zip(&picker.chosen)
+                .filter(|(_, on)| **on)
+                .map(|(l, _)| l.name.clone())
+                .collect();
+            if let Some(v) = &mut self.issue_list {
+                v.view_filter.labels = chosen;
+            }
+        }
+        self.mode = AppMode::IssueList;
+        self.clamp_issue_selection();
     }
 
     // ── assignees ──────────────────────────────────────────────────────
@@ -482,21 +636,42 @@ impl App {
     /// popups. Returns true when something changed (triggering a re-render).
     pub fn update_issue_status(&mut self) -> bool {
         let mut changed = false;
+        let blocked = self.blocked_set();
 
         if let Some(result) = self.issue_fetch.poll_list() {
             if let Some(v) = &mut self.issue_list {
                 if matches!(v.state, IssueListState::Loading) {
                     let want = v.pending_reselect.take();
                     v.state = list_state_from(result);
-                    v.selected = match &v.state {
-                        IssueListState::Ready(issues) => {
-                            relocate_selection(issues, want, v.selected)
-                        }
-                        _ => 0,
-                    };
+                    if let IssueListState::Ready(issues) = &v.state {
+                        let visible =
+                            crate::issue::visible_issues(issues, &v.view_filter, &blocked);
+                        v.selected =
+                            relocate_visible_selection(issues, &visible, want, v.selected);
+                    } else {
+                        v.selected = 0;
+                    }
                     v.scroll = 0;
                 }
             }
+            changed = true;
+        }
+
+        // Blocked-by data can shrink the visible set (when unblocked-only is on),
+        // so re-clamp the selection when it arrives. Errors degrade silently to
+        // "all unblocked" (the cache stays empty); only surface one when the
+        // unblocked filter is actually active and thus affected.
+        if let Some(result) = self.issue_fetch.poll_blocked() {
+            if let Err(e) = result {
+                let filtering = self
+                    .issue_list
+                    .as_ref()
+                    .is_some_and(|v| v.view_filter.unblocked_only);
+                if filtering {
+                    self.toast(ToastKind::Error, first_line(&e));
+                }
+            }
+            self.clamp_issue_selection();
             changed = true;
         }
 
@@ -551,6 +726,9 @@ impl App {
         if let Some(filter) = self.issue_list.as_ref().map(|v| v.filter) {
             self.set_issue_list_loading();
             self.issue_fetch.start_list(&self.repo_path, filter);
+            // A close/reopen can change what's blocked, so refresh the set too.
+            self.issue_fetch.invalidate_blocked();
+            self.issue_fetch.start_blocked(&self.repo_path);
         }
     }
 }
@@ -646,28 +824,35 @@ fn issue_action_number(action: &IssueAction) -> Option<u64> {
     }
 }
 
-/// The issue number of the row at `selected` in a `Ready` list, else `None`.
-fn selected_issue_number(state: &IssueListState, selected: usize) -> Option<u64> {
-    match state {
-        IssueListState::Ready(issues) => issues.get(selected).map(|i| i.number),
-        _ => None,
+/// Clamp a *visible-list* selection index into range; empty ⇒ 0. Keeps the
+/// cursor valid when a filter shrinks the visible set beneath it.
+fn clamp_visible_selection(selected: usize, visible_len: usize) -> usize {
+    if visible_len == 0 {
+        0
+    } else {
+        selected.min(visible_len - 1)
     }
 }
 
-/// Re-locate the list selection after a refetch: prefer the row whose issue
-/// number matches `want` (the previously-selected issue); if it's gone (or none
-/// was remembered) clamp the previous index into range. Empty list ⇒ 0.
-fn relocate_selection(issues: &[IssueInfo], want: Option<u64>, prev: usize) -> usize {
+/// Re-locate the list selection (a *visible*-row index) after a refetch: prefer
+/// the visible row whose issue number matches `want` (the previously-selected
+/// issue); otherwise clamp the previous visible index into range. `visible` is
+/// the filtered set of indices into `issues`. Empty ⇒ 0.
+fn relocate_visible_selection(
+    issues: &[IssueInfo],
+    visible: &[usize],
+    want: Option<u64>,
+    prev: usize,
+) -> usize {
     if let Some(number) = want {
-        if let Some(idx) = issues.iter().position(|i| i.number == number) {
-            return idx;
+        if let Some(pos) = visible
+            .iter()
+            .position(|&i| issues.get(i).map(|x| x.number) == Some(number))
+        {
+            return pos;
         }
     }
-    if issues.is_empty() {
-        0
-    } else {
-        prev.min(issues.len() - 1)
-    }
+    clamp_visible_selection(prev, visible.len())
 }
 
 /// Map a completed list fetch to the list view state.
@@ -896,46 +1081,49 @@ mod tests {
         }
     }
 
-    // ── selection preservation across refetch ──────────────────────────
+    // ── selection preservation across refetch (visible-index) ──────────
 
     #[test]
-    fn relocate_selection_prefers_matching_issue_number() {
+    fn relocate_visible_prefers_matching_issue_number() {
         let issues = vec![sample_issue(10), sample_issue(20), sample_issue(30)];
-        // #20 was selected; it moved to a new index after refetch.
-        let reordered = vec![sample_issue(30), sample_issue(20), sample_issue(10)];
-        assert_eq!(relocate_selection(&reordered, Some(20), 1), 1);
-        // #30 was selected (index 2); now first.
-        assert_eq!(relocate_selection(&reordered, Some(30), 2), 0);
-        // Sanity: unchanged order keeps the same row.
-        assert_eq!(relocate_selection(&issues, Some(30), 2), 2);
+        // All rows visible (identity map).
+        let visible = vec![0usize, 1, 2];
+        // #20 remembered → its visible position.
+        assert_eq!(relocate_visible_selection(&issues, &visible, Some(20), 0), 1);
+        // #30 remembered → last visible position.
+        assert_eq!(relocate_visible_selection(&issues, &visible, Some(30), 0), 2);
     }
 
     #[test]
-    fn relocate_selection_clamps_when_issue_gone_or_unremembered() {
+    fn relocate_visible_maps_through_filtered_indices() {
+        let issues = vec![sample_issue(10), sample_issue(20), sample_issue(30)];
+        // Only #10 and #30 pass the filter (indices 0 and 2 into `issues`).
+        let visible = vec![0usize, 2];
+        // #30 is the 2nd *visible* row → position 1.
+        assert_eq!(relocate_visible_selection(&issues, &visible, Some(30), 0), 1);
+        // A remembered issue filtered out → clamp the previous visible index.
+        assert_eq!(relocate_visible_selection(&issues, &visible, Some(20), 5), 1);
+    }
+
+    #[test]
+    fn relocate_visible_clamps_when_gone_or_unremembered() {
         let issues = vec![sample_issue(10), sample_issue(20)];
-        // Remembered issue no longer present (e.g. closed & filtered out) →
-        // clamp the previous index into range.
-        assert_eq!(relocate_selection(&issues, Some(99), 5), 1);
-        // Nothing remembered → clamp previous index.
-        assert_eq!(relocate_selection(&issues, None, 0), 0);
-        assert_eq!(relocate_selection(&issues, None, 7), 1);
-        // Empty list → 0, never panics.
-        assert_eq!(relocate_selection(&[], Some(10), 3), 0);
-        assert_eq!(relocate_selection(&[], None, 3), 0);
+        let visible = vec![0usize, 1];
+        assert_eq!(relocate_visible_selection(&issues, &visible, Some(99), 5), 1);
+        assert_eq!(relocate_visible_selection(&issues, &visible, None, 0), 0);
+        assert_eq!(relocate_visible_selection(&issues, &visible, None, 7), 1);
+        // Empty visible set → 0, never panics.
+        assert_eq!(relocate_visible_selection(&issues, &[], Some(10), 3), 0);
+        assert_eq!(relocate_visible_selection(&issues, &[], None, 3), 0);
     }
 
     #[test]
-    fn selected_issue_number_reads_ready_row_only() {
-        let ready = IssueListState::Ready(vec![sample_issue(10), sample_issue(20)]);
-        assert_eq!(selected_issue_number(&ready, 1), Some(20));
-        // Out-of-range index ⇒ None.
-        assert_eq!(selected_issue_number(&ready, 9), None);
-        // Non-Ready states have no selection to remember.
-        assert_eq!(selected_issue_number(&IssueListState::Loading, 0), None);
-        assert_eq!(
-            selected_issue_number(&IssueListState::Error("boom".into()), 0),
-            None
-        );
+    fn clamp_visible_selection_keeps_cursor_in_range() {
+        // Filter shrinks the visible set from under the cursor.
+        assert_eq!(clamp_visible_selection(5, 3), 2);
+        assert_eq!(clamp_visible_selection(1, 3), 1);
+        // Empty → 0, never panics.
+        assert_eq!(clamp_visible_selection(4, 0), 0);
     }
 
     #[test]

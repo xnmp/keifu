@@ -113,6 +113,30 @@ pub fn section_of(items: &[FilesPaneItem], idx: usize) -> Option<&str> {
         })
 }
 
+/// Whether the item at `idx` is a file nested under a folder-grouping
+/// `FolderHeader` (as opposed to sitting directly under a `SectionHeader`,
+/// or grouping being off entirely). A `SectionHeader` resets the context:
+/// each staged/unstaged section re-emits its own folder headers, so a
+/// `FolderHeader` from a previous section must not "leak" into the next.
+///
+/// Used by the renderer to decide whether a file row should display just
+/// its basename (under a folder header) or the full repo-relative path
+/// (root-level files, or grouping disabled).
+pub fn is_under_folder_header(items: &[FilesPaneItem], idx: usize) -> bool {
+    if items.is_empty() {
+        return false;
+    }
+    items[..=idx.min(items.len() - 1)]
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            FilesPaneItem::FolderHeader(_) => Some(true),
+            FilesPaneItem::SectionHeader(_) => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 /// State for the files pane subsystem.
 #[derive(Default)]
 pub struct FilesPaneState {
@@ -549,6 +573,10 @@ mod tests {
         FilesPaneItem::SectionHeader(text.to_string())
     }
 
+    fn folder_header(text: &str) -> FilesPaneItem {
+        FilesPaneItem::FolderHeader(text.to_string())
+    }
+
     fn fitem(f: FileDiffInfo) -> FilesPaneItem {
         FilesPaneItem::File(f)
     }
@@ -701,6 +729,58 @@ mod tests {
     #[test]
     fn section_of_empty_items() {
         assert_eq!(section_of(&[], 0), None);
+    }
+
+    // ─── is_under_folder_header ──────────────────────────────────────
+
+    #[test]
+    fn is_under_folder_header_true_for_nested_file() {
+        let items = vec![
+            folder_header("src/"),
+            fitem(plain("src/main.rs")),
+            fitem(plain("src/lib.rs")),
+        ];
+        assert!(is_under_folder_header(&items, 1));
+        assert!(is_under_folder_header(&items, 2));
+    }
+
+    #[test]
+    fn is_under_folder_header_false_for_root_level_file() {
+        // Root-level files get no FolderHeader at all (folder_group skips it).
+        let items = vec![fitem(plain("a.rs")), fitem(plain("b.rs"))];
+        assert!(!is_under_folder_header(&items, 0));
+        assert!(!is_under_folder_header(&items, 1));
+    }
+
+    #[test]
+    fn is_under_folder_header_false_when_grouping_off() {
+        // No FolderHeader items at all -> always full path.
+        let items = vec![
+            header("Unstaged Changes"),
+            fitem(plain("src/main.rs")),
+            fitem(plain("a.rs")),
+        ];
+        assert!(!is_under_folder_header(&items, 1));
+        assert!(!is_under_folder_header(&items, 2));
+    }
+
+    #[test]
+    fn is_under_folder_header_resets_on_section_header() {
+        // A SectionHeader must "cut off" a FolderHeader from a previous
+        // section: staged/unstaged sections each re-emit their own headers.
+        let items = vec![
+            folder_header("src/"),
+            fitem(plain("src/staged.rs")),
+            header("Unstaged Changes"),
+            fitem(plain("src/unstaged.rs")), // no folder header re-emitted here
+        ];
+        assert!(is_under_folder_header(&items, 1));
+        assert!(!is_under_folder_header(&items, 3));
+    }
+
+    #[test]
+    fn is_under_folder_header_empty_items() {
+        assert!(!is_under_folder_header(&[], 0));
     }
 
     // ─── cold selection (regression: one `s` staged a whole folder) ──

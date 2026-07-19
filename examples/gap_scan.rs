@@ -45,7 +45,7 @@ fn main() {
                 while g < w && is_bg(img.get_pixel(g, y)) {
                     g += 1;
                 }
-                if g < w && g - x - 1 >= 1 && g - x - 1 <= max_gap {
+                if g < w && g - x > 1 && g - x - 1 <= max_gap {
                     println!("H y={y} x={}..{} gap={}", x + 1, g - 1, g - x - 1);
                 }
                 x = g;
@@ -63,7 +63,7 @@ fn main() {
                 while g < h && is_bg(img.get_pixel(x, g)) {
                     g += 1;
                 }
-                if g < h && g - y - 1 >= 1 && g - y - 1 <= max_gap {
+                if g < h && g - y > 1 && g - y - 1 <= max_gap {
                     println!("V x={x} y={}..{} gap={}", y + 1, g - 1, g - y - 1);
                 }
                 y = g;

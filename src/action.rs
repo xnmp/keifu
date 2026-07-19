@@ -75,6 +75,10 @@ pub enum Action {
     RefreshIssues,
     /// Cycle the list filter Open → Closed → All.
     CycleIssueFilter,
+    /// Open the label-filter picker for the issue list (`t`).
+    OpenIssueLabelFilter,
+    /// Toggle showing only unblocked issues in the list (`u`).
+    ToggleUnblockedOnly,
     /// Open the selected issue's detail popup.
     OpenIssueDetail,
     /// Start composing a new issue.
@@ -185,6 +189,9 @@ pub enum Action {
     Confirm,
     Cancel,
     InputChar(char),
+    /// A bracketed-paste chunk pasted into a single-line input (already
+    /// sanitized: control chars, including newlines/tabs, stripped).
+    InputPaste(String),
     InputBackspace,
     InputBackspaceWord,
     InputClearLine,

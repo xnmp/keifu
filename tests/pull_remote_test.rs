@@ -53,7 +53,7 @@ fn pull_fast_forward_advances_head_and_worktree() {
     advance_origin(origin.path(), &branch, "remote.txt", "from remote\n", "remote change");
 
     // A fast-forward succeeds even under the strict --ff-only default.
-    let outcome = pull(&path, None, None, PullMode::FfOnly).unwrap();
+    let outcome = pull(&path, None, None, PullMode::FfOnly, None).unwrap();
     assert_eq!(outcome, OpOutcome::Completed);
 
     // The worktree gained the remote file and HEAD is the remote commit.
@@ -76,7 +76,7 @@ fn pull_divergent_remote_creates_merge_commit() {
     let before = head_oid(git_repo.repo());
 
     // The merge strategy is explicit (--no-rebase), independent of git config.
-    let outcome = pull(&path, None, None, PullMode::Merge).unwrap();
+    let outcome = pull(&path, None, None, PullMode::Merge, None).unwrap();
     assert_eq!(outcome, OpOutcome::Completed);
 
     // HEAD is a fresh merge commit (two parents) with both sides' files.
@@ -104,7 +104,7 @@ fn pull_conflict_leaves_repo_in_merge_state() {
     git_cli(&path, &["commit", "-am", "local edit"]);
 
     // A conflicting merge-pull is a typed outcome, not an error.
-    let outcome = pull(&path, None, None, PullMode::Merge).unwrap();
+    let outcome = pull(&path, None, None, PullMode::Merge, None).unwrap();
     assert!(
         matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
         "expected Conflicts, got {outcome:?}"
@@ -124,7 +124,7 @@ fn pull_ff_only_fails_on_divergence_with_a_recognized_error() {
 
     // The default --ff-only pull fails loudly, and the failure is classified as
     // divergence (which drives the merge/rebase prompt) rather than a hard error.
-    let err = pull(&path, None, None, PullMode::FfOnly).unwrap_err().to_string();
+    let err = pull(&path, None, None, PullMode::FfOnly, None).unwrap_err().to_string();
     assert!(
         is_divergent_pull_error(&err),
         "expected a divergence error, got: {err}"
@@ -150,7 +150,7 @@ fn push_sets_upstream_when_absent() {
         .upstream()
         .is_err());
 
-    push_set_upstream(&path, "origin", &branch).unwrap();
+    push_set_upstream(&path, "origin", &branch, None).unwrap();
 
     // @{u} now resolves to origin/<branch>.
     let up = git_cli(&path, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")]);
@@ -163,7 +163,7 @@ fn push_current_pushes_to_configured_upstream() {
     let path = git_repo.path.clone();
 
     commit_file(git_repo.repo(), "more.txt", "more\n", "more work");
-    push_current(&path).unwrap();
+    push_current(&path, None).unwrap();
 
     // The remote-tracking ref advanced to the new HEAD.
     let head = git_cli(&path, &["rev-parse", "HEAD"]);
@@ -179,7 +179,7 @@ fn push_publishes_to_explicit_second_remote() {
     let _origin = add_bare_origin(&path);
     let _backup = add_bare_remote(&path, "backup");
 
-    push_set_upstream(&path, "backup", &branch).unwrap();
+    push_set_upstream(&path, "backup", &branch, None).unwrap();
 
     // Upstream points at backup, and backup received the branch tip.
     let up = git_cli(&path, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")]);
@@ -238,7 +238,7 @@ fn prune_removes_stale_remote_tracking_ref() {
     // Publish feature and fetch so a local origin/feature tracking ref exists.
     create_branch(git_repo.repo(), "feature", c0).unwrap();
     git_cli(&path, &["push", "origin", "feature"]);
-    fetch_remote(&path, "origin").unwrap();
+    fetch_remote(&path, "origin", None).unwrap();
     assert!(git_cli(&path, &["branch", "-r"]).contains("origin/feature"));
 
     // Delete feature directly in the bare origin — a plain fetch won't drop the

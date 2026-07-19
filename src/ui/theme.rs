@@ -84,6 +84,8 @@ pub struct Theme {
     pub pr_ci_pass: Color,
     pub pr_ci_pending: Color,
     pub pr_ci_fail: Color,
+    // Closed-issue accent (GitHub's purple ✓), distinct from the green open ●.
+    pub issue_closed: Color,
     // HEAD marker gold (pixel star fill + Unicode ◉ fallback), matching the ⭐.
     pub head_star: Color,
 
@@ -189,6 +191,7 @@ impl Theme {
             pr_ci_pass: Color::Rgb(63, 185, 80),
             pr_ci_pending: Color::Rgb(210, 153, 34),
             pr_ci_fail: Color::Rgb(248, 81, 73),
+            issue_closed: Color::Rgb(163, 113, 247),
             head_star: Color::Rgb(255, 200, 50),
 
             // Editor selection
@@ -300,6 +303,7 @@ impl Theme {
             pr_ci_pass: Color::Rgb(26, 127, 55),
             pr_ci_pending: Color::Rgb(154, 103, 0),
             pr_ci_fail: Color::Rgb(207, 34, 46),
+            issue_closed: Color::Rgb(130, 80, 223),
             head_star: Color::Rgb(184, 134, 11),
 
             // Editor selection

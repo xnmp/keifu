@@ -249,6 +249,16 @@ impl GitRepository {
             .unwrap_or_default()
     }
 
+    /// The fetch URL of a configured remote by name (e.g. for extracting its
+    /// host to look up cached credentials). `None` if the remote or URL is
+    /// missing.
+    pub fn remote_url(&self, remote: &str) -> Option<String> {
+        self.repo
+            .find_remote(remote)
+            .ok()
+            .and_then(|r| r.url().map(|s| s.to_string()))
+    }
+
     /// The remote configured for the current branch's upstream, if any
     /// (`branch.<name>.remote`). `None` for a detached HEAD or an
     /// upstream-less branch.

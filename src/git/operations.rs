@@ -7,7 +7,21 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository, Status};
 
+use super::askpass::{self, Credentials};
 use super::repository::OperationState;
+
+/// Attach the askpass shim + credential env vars to `cmd` when `creds` is set,
+/// so a retried HTTPS git op authenticates without a terminal prompt. A no-op
+/// when `creds` is `None` (the normal, uncredentialed path).
+fn apply_credentials(cmd: &mut Command, creds: Option<&Credentials>) -> Result<()> {
+    if let Some(c) = creds {
+        let shim = askpass::ensure_askpass_shim()?;
+        cmd.env("GIT_ASKPASS", shim)
+            .env(askpass::ENV_USER, &c.username)
+            .env(askpass::ENV_PASS, &c.password);
+    }
+    Ok(())
+}
 
 /// Outcome of a history-integrating operation (merge/rebase/cherry-pick/revert).
 ///
@@ -24,14 +38,27 @@ pub enum OpOutcome {
 
 /// Run a git CLI command and return its output, or bail with stderr on failure.
 fn run_git(repo_path: &str, args: &[&str]) -> Result<std::process::Output> {
-    let output = Command::new("git")
-        .args(args)
+    run_git_creds(repo_path, args, None)
+}
+
+/// As [`run_git`], but supplies HTTPS credentials to the child via `GIT_ASKPASS`
+/// when `creds` is set. Used by the network ops that the credential-prompt flow
+/// retries.
+fn run_git_creds(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+) -> Result<std::process::Output> {
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(repo_path)
         // Never let auth block on /dev/tty: a missing credential becomes an
         // instant "could not read Username" error instead of a silent hang that
         // wedges the background op forever.
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    apply_credentials(&mut cmd, creds)?;
+    let output = cmd
         .output()
         .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
     if !output.status.success() {
@@ -58,16 +85,28 @@ fn count_conflicts(repo_path: &str) -> usize {
 /// revert, …). On non-zero exit, a still-present conflict is reported as
 /// `Conflicts` rather than an error; a genuine failure bails with stderr.
 fn run_git_allow_conflict(repo_path: &str, args: &[&str]) -> Result<OpOutcome> {
+    run_git_allow_conflict_creds(repo_path, args, None)
+}
+
+/// As [`run_git_allow_conflict`], but supplies HTTPS credentials via
+/// `GIT_ASKPASS` when set (used by the credential-prompt pull retry).
+fn run_git_allow_conflict_creds(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+) -> Result<OpOutcome> {
     let subcommand = args.first().copied().unwrap_or("");
-    let output = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(repo_path)
         // Never block the TUI on an editor prompt.
         .env("GIT_EDITOR", "true")
         .env("GIT_SEQUENCE_EDITOR", "true")
         // Never block on a credential prompt (see run_git).
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    apply_credentials(&mut cmd, creds)?;
+    let output = cmd
         .output()
         .context(format!("Failed to execute git {subcommand}"))?;
     if output.status.success() {
@@ -337,20 +376,21 @@ pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<OpOutcome> 
     Ok(OpOutcome::Completed)
 }
 
-/// Fetch from a named remote using the git CLI.
-pub fn fetch_remote(repo_path: &str, remote: &str) -> Result<()> {
-    run_git(repo_path, &["fetch", remote])?;
+/// Fetch from a named remote using the git CLI. `creds` supplies HTTPS
+/// credentials on a retry after an auth-failure prompt (`None` normally).
+pub fn fetch_remote(repo_path: &str, remote: &str, creds: Option<&Credentials>) -> Result<()> {
+    run_git_creds(repo_path, &["fetch", remote], creds)?;
     Ok(())
 }
 
 /// Fetch from the `origin` remote (thin wrapper over [`fetch_remote`]).
 pub fn fetch_origin(repo_path: &str) -> Result<()> {
-    fetch_remote(repo_path, "origin")
+    fetch_remote(repo_path, "origin", None)
 }
 
 /// Fetch from every configured remote (`git fetch --all`).
-pub fn fetch_all(repo_path: &str) -> Result<()> {
-    run_git(repo_path, &["fetch", "--all"])?;
+pub fn fetch_all(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
+    run_git_creds(repo_path, &["fetch", "--all"], creds)?;
     Ok(())
 }
 
@@ -394,6 +434,7 @@ pub fn pull(
     remote: Option<&str>,
     branch: Option<&str>,
     mode: PullMode,
+    creds: Option<&Credentials>,
 ) -> Result<OpOutcome> {
     let mut args = vec!["pull", mode.arg()];
     if let Some(r) = remote {
@@ -402,7 +443,7 @@ pub fn pull(
             args.push(b);
         }
     }
-    run_git_allow_conflict(repo_path, &args)
+    run_git_allow_conflict_creds(repo_path, &args, creds)
 }
 
 /// Whether a `git pull --ff-only` failure is due to divergent branches (offer
@@ -455,6 +496,59 @@ pub fn humanize_git_error(stderr: &str) -> Option<String> {
         );
     }
     None
+}
+
+/// Whether a git failure is an **HTTPS** auth failure a username/token prompt
+/// could fix. SSH publickey failures are deliberately excluded — no password
+/// prompt can satisfy them — so the caller keeps showing them as plain errors.
+pub fn is_https_auth_failure(stderr: &str) -> bool {
+    if stderr.contains("Permission denied (publickey") {
+        return false;
+    }
+    stderr.contains("could not read Username") || stderr.contains("Authentication failed")
+}
+
+/// Host + optional embedded username parsed from a git remote URL or an
+/// auth-failure message. The host is the per-session credential-cache key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthUrl {
+    pub host: String,
+    pub user: Option<String>,
+}
+
+/// Host of an `https://[user@]host[:port]/…` URL (scheme optional), lowercased.
+/// `None` if no host is present.
+pub fn url_host(url: &str) -> Option<String> {
+    let authority_and_path = url.split("://").last().unwrap_or(url);
+    let authority = authority_and_path.split('/').next().unwrap_or(authority_and_path);
+    // Drop any `user@` prefix and `:port` suffix.
+    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host);
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
+    }
+}
+
+/// Pull the host (and any `user@` component) out of an HTTPS git auth-failure
+/// message, e.g. `could not read Username for 'https://github.com': …` or
+/// `Authentication failed for 'https://alice@github.example/…'`. Returns `None`
+/// when no `https://` URL is present.
+pub fn extract_auth_url(stderr: &str) -> Option<AuthUrl> {
+    let start = stderr.find("https://")? + "https://".len();
+    let rest = &stderr[start..];
+    // The URL ends at the closing quote, whitespace, or end of string.
+    let end = rest
+        .find(|c: char| c == '\'' || c == '"' || c.is_whitespace())
+        .unwrap_or(rest.len());
+    let authority = rest[..end].split('/').next().unwrap_or("");
+    let user = authority
+        .rsplit_once('@')
+        .map(|(u, _)| u.to_string())
+        .filter(|u| !u.is_empty());
+    let host = url_host(&rest[..end])?;
+    Some(AuthUrl { host, user })
 }
 
 /// Prune stale remote-tracking refs for a remote (`git remote prune <remote>`).
@@ -558,15 +652,32 @@ pub fn revert_commit(repo_path: &str, commit_oid: Oid) -> Result<OpOutcome> {
 ///
 /// Fails if the branch has no upstream — callers should route to
 /// [`push_set_upstream`] (publish) in that case.
-pub fn push_current(repo_path: &str) -> Result<()> {
-    run_git(repo_path, &["push"])?;
+pub fn push_current(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
+    run_git_creds(repo_path, &["push"], creds)?;
     Ok(())
 }
 
 /// Publish `branch` to `remote`, setting it as the branch's upstream
 /// (`git push -u <remote> <branch>`).
-pub fn push_set_upstream(repo_path: &str, remote: &str, branch: &str) -> Result<()> {
-    run_git(repo_path, &["push", "-u", remote, branch])?;
+pub fn push_set_upstream(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    run_git_creds(repo_path, &["push", "-u", remote, branch], creds)?;
+    Ok(())
+}
+
+/// Push HEAD to an explicit `remote` **without** changing the branch's upstream
+/// tracking (`git push <remote> HEAD`). Used when the user picks a remote other
+/// than the configured upstream from the push remote-picker.
+pub fn push_head_to_remote(
+    repo_path: &str,
+    remote: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    run_git_creds(repo_path, &["push", remote, "HEAD"], creds)?;
     Ok(())
 }
 
@@ -924,8 +1035,51 @@ pub fn signature_status_label(code: char) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        humanize_git_error, is_divergent_pull_error, signature_status_label, PullMode,
+        extract_auth_url, humanize_git_error, is_divergent_pull_error, is_https_auth_failure,
+        signature_status_label, url_host, AuthUrl, PullMode,
     };
+
+    #[test]
+    fn https_auth_failure_detected_but_not_ssh() {
+        // HTTPS credential prompts a token can fix.
+        assert!(is_https_auth_failure(
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+        ));
+        assert!(is_https_auth_failure(
+            "remote: Support for password authentication was removed.\nfatal: Authentication failed for 'https://github.com/o/r.git/'"
+        ));
+        // SSH publickey failure — a token can't fix it, so it's NOT an HTTPS
+        // auth failure even though libgit2 words it as a denial.
+        assert!(!is_https_auth_failure(
+            "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
+        ));
+        // Unrelated errors.
+        assert!(!is_https_auth_failure("fatal: Not possible to fast-forward"));
+        assert!(!is_https_auth_failure("Already up to date."));
+    }
+
+    #[test]
+    fn extract_auth_url_pulls_host_and_optional_user() {
+        assert_eq!(
+            extract_auth_url("fatal: could not read Username for 'https://github.com': x"),
+            Some(AuthUrl { host: "github.com".into(), user: None })
+        );
+        // Embedded user@ prefills the username prompt; path is ignored.
+        assert_eq!(
+            extract_auth_url("fatal: Authentication failed for 'https://alice@git.example.com/o/r.git/'"),
+            Some(AuthUrl { host: "git.example.com".into(), user: Some("alice".into()) })
+        );
+        // No URL present.
+        assert_eq!(extract_auth_url("git@github.com: Permission denied (publickey)."), None);
+    }
+
+    #[test]
+    fn url_host_strips_scheme_user_and_port() {
+        assert_eq!(url_host("https://github.com/o/r.git").as_deref(), Some("github.com"));
+        assert_eq!(url_host("https://alice@github.com:443/o/r").as_deref(), Some("github.com"));
+        assert_eq!(url_host("github.com/o/r").as_deref(), Some("github.com"));
+        assert_eq!(url_host("https://").as_deref(), None);
+    }
 
     #[test]
     fn pull_mode_maps_to_reconcile_flags() {

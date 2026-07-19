@@ -98,16 +98,22 @@ impl App {
             self.set_message("Not on a branch");
             return;
         };
-        if head.upstream.is_some() {
-            self.start_push_current();
-            return;
-        }
-        // No upstream yet — publish, choosing a remote.
+        let has_upstream = head.upstream.is_some();
         let branch = head.name.clone();
-        match self.resolve_remote() {
-            RemoteChoice::None => self.set_message("No remote configured"),
-            RemoteChoice::Use(r) => self.start_publish(r, branch),
-            RemoteChoice::Prompt(remotes) => self.open_remote_picker(remotes, RemoteOp::Push),
+        let mut remotes = self.repo.remotes();
+        match remotes.len() {
+            0 => self.set_message("No remote configured"),
+            1 => {
+                if has_upstream {
+                    self.start_push_current();
+                } else {
+                    self.start_publish(remotes.remove(0), branch);
+                }
+            }
+            // With several remotes, always let the user pick which to push to —
+            // even when an upstream is configured — defaulting the selection to
+            // that upstream remote.
+            _ => self.open_remote_picker(remotes, RemoteOp::Push),
         }
     }
 
@@ -137,9 +143,11 @@ impl App {
     // ── Remote picker ───────────────────────────────────────────────────
 
     fn open_remote_picker(&mut self, remotes: Vec<String>, op: RemoteOp) {
+        let selected =
+            remote_picker_default(&remotes, self.repo.head_upstream_remote().as_deref());
         self.mode = AppMode::RemotePicker {
             remotes,
-            selected: 0,
+            selected,
             op,
         };
     }
@@ -184,11 +192,28 @@ impl App {
         match op {
             RemoteOp::Fetch => self.start_fetch_remote(remote, true, false),
             RemoteOp::Pull => self.start_pull_remote(Some(remote), PullMode::FfOnly),
-            RemoteOp::Push => match self.head_branch_info().map(|b| b.name.clone()) {
-                Some(branch) => self.start_publish(remote, branch),
-                None => self.set_message("Not on a branch"),
-            },
+            RemoteOp::Push => self.run_push_to_remote(remote),
             RemoteOp::Prune => self.prune_remote_now(&remote),
+        }
+    }
+
+    /// Push HEAD to the chosen `remote`. If the branch has no upstream, publish
+    /// (set upstream). If `remote` is the configured upstream, a plain
+    /// `git push`. Otherwise push to that remote without retargeting upstream.
+    fn run_push_to_remote(&mut self, remote: String) {
+        let Some(head) = self.head_branch_info() else {
+            self.set_message("Not on a branch");
+            return;
+        };
+        let branch = head.name.clone();
+        let has_upstream = head.upstream.is_some();
+        let upstream_remote = self.repo.head_upstream_remote();
+        if !has_upstream {
+            self.start_publish(remote, branch);
+        } else if upstream_remote.as_deref() == Some(remote.as_str()) {
+            self.start_push_current();
+        } else {
+            self.start_push_head_to(remote);
         }
     }
 
@@ -203,5 +228,37 @@ impl App {
                 .strip_prefix(&format!("{remote}/"))
                 .map(|branch| (remote.clone(), branch.to_string()))
         })
+    }
+}
+
+/// Default-selected row in the remote picker: the branch's upstream remote when
+/// it's among the choices, else the first remote. Pure so it's unit-testable
+/// independent of a live repo.
+pub(crate) fn remote_picker_default(remotes: &[String], upstream_remote: Option<&str>) -> usize {
+    upstream_remote
+        .and_then(|r| remotes.iter().position(|x| x == r))
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_picker_default;
+
+    fn remotes() -> Vec<String> {
+        vec!["origin".to_string(), "upstream".to_string(), "fork".to_string()]
+    }
+
+    #[test]
+    fn defaults_to_upstream_remote_when_present() {
+        assert_eq!(remote_picker_default(&remotes(), Some("upstream")), 1);
+        assert_eq!(remote_picker_default(&remotes(), Some("fork")), 2);
+        assert_eq!(remote_picker_default(&remotes(), Some("origin")), 0);
+    }
+
+    #[test]
+    fn falls_back_to_first_when_upstream_absent_or_unknown() {
+        assert_eq!(remote_picker_default(&remotes(), None), 0);
+        // Upstream remote not in the list (renamed/removed) — pick the first.
+        assert_eq!(remote_picker_default(&remotes(), Some("gone")), 0);
     }
 }

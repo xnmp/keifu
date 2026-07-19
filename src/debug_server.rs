@@ -45,6 +45,10 @@ pub enum DebugRequest {
         x: u16,
         y: u16,
     },
+    /// Inject a bracketed-paste chunk (same path as a real terminal paste).
+    Paste {
+        text: String,
+    },
     /// Screen dump; width/height override the real terminal size
     Dump {
         width: Option<u16>,
@@ -152,6 +156,12 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
             }
             json!({"ok": true})
         }
+        DebugRequest::Paste { text } => {
+            if let Err(e) = app.handle_paste(text) {
+                app.show_error(format!("{}", e));
+            }
+            json!({"ok": true})
+        }
         DebugRequest::Dump {
             width: req_width,
             height: req_height,
@@ -217,6 +227,7 @@ fn mode_name(mode: &AppMode) -> &'static str {
         AppMode::IssueDetail => "issue_detail",
         AppMode::IssueCompose { .. } => "issue_compose",
         AppMode::IssueLabelPicker { .. } => "issue_label_picker",
+        AppMode::IssueLabelFilter { .. } => "issue_label_filter",
         AppMode::BranchFilter { .. } => "branch_filter",
         AppMode::BranchPicker { .. } => "branch_picker",
         AppMode::BranchDeletePicker { .. } => "branch_delete_picker",
