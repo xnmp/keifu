@@ -363,12 +363,15 @@ fn draw_segment(c: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, half: f32, c
     }
 }
 
-/// Stroke a quadratic bezier via dense segment sampling. Endpoints are exact.
-fn draw_bezier(
+/// Stroke a cubic bezier via dense segment sampling. Endpoints are exact. Used
+/// for the smooth, VSCode-style lane-transition S-curves (long gentle bends
+/// eased along their end tangents), in place of a straight run + tight corner.
+fn draw_cubic(
     c: &mut Canvas,
     p0: (f32, f32),
-    ctrl: (f32, f32),
+    p1: (f32, f32),
     p2: (f32, f32),
+    p3: (f32, f32),
     half: f32,
     color: [u8; 3],
 ) {
@@ -377,8 +380,9 @@ fn draw_bezier(
     for i in 1..=STEPS {
         let t = i as f32 / STEPS as f32;
         let mt = 1.0 - t;
-        let x = mt * mt * p0.0 + 2.0 * mt * t * ctrl.0 + t * t * p2.0;
-        let y = mt * mt * p0.1 + 2.0 * mt * t * ctrl.1 + t * t * p2.1;
+        let (a, b, cc, d) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
+        let x = a * p0.0 + b * p1.0 + cc * p2.0 + d * p3.0;
+        let y = a * p0.1 + b * p1.1 + cc * p2.1 + d * p3.1;
         draw_segment(c, prev.0, prev.1, x, y, half, color);
         prev = (x, y);
     }
@@ -520,10 +524,223 @@ pub fn rasterize_row(spec: &RowSpec, cell_w: u32, cell_h: u32) -> RgbaImage {
     out
 }
 
-/// Stroke one row of `cells` onto the bright or dim layer (per cell). HEAD
-/// commit stars are deferred into
-/// `stars` (drawn last, on top). Shared by the folded underlay and the row's own
-/// cells so they rasterize identically.
+/// Ease factor for transition cubics: each end's control handle extends this
+/// fraction of the endpoint delta along the end's tangent. ~0.5 gives the long,
+/// gentle VSCode Git Graph bend (leaves each endpoint along its tangent for
+/// about half the span before turning) rather than a tight rounded corner.
+const CURVE_EASE: f32 = 0.5;
+
+/// End tangent of a transition endpoint.
+#[derive(Clone, Copy, PartialEq)]
+enum Tangent {
+    /// Runs horizontally here (a dot anchor, or a Tee's arm leaving the trunk).
+    Horizontal,
+    /// Runs vertically here (a corner turning to/from a lane pipe at a row edge,
+    /// or a riser coming from the row above).
+    Vertical,
+}
+
+/// One endpoint of a lane transition, at an exact lane center / row-edge point.
+#[derive(Clone, Copy)]
+struct Endpoint {
+    x: f32,
+    y: f32,
+    tan: Tangent,
+    color: [u8; 3],
+    dim: bool,
+}
+
+/// A resolved transition curve: a cubic bezier plus its color / dim layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Curve {
+    p0: (f32, f32),
+    p1: (f32, f32),
+    p2: (f32, f32),
+    p3: (f32, f32),
+    color: [u8; 3],
+    dim: bool,
+}
+
+/// Whether a shape contributes a horizontal component to a transition run.
+fn has_horizontal(shape: CellShape) -> bool {
+    matches!(
+        shape,
+        CellShape::Horizontal
+            | CellShape::HorizontalPipe
+            | CellShape::BranchLeft
+            | CellShape::BranchRight
+            | CellShape::MergeLeft
+            | CellShape::MergeRight
+            | CellShape::TeeLeft
+            | CellShape::TeeRight
+            | CellShape::TeeUp
+    )
+}
+
+/// The horizontal edge's color and dim for a run cell (a `HorizontalPipe`
+/// carries its horizontal in `secondary`/`dim_secondary`; every other
+/// horizontal-family shape in its primary `color`/`dim`).
+fn run_style(cell: &PixelCell) -> ([u8; 3], bool) {
+    if cell.shape == CellShape::HorizontalPipe {
+        (cell.secondary, cell.dim_secondary)
+    } else {
+        (cell.color, cell.dim)
+    }
+}
+
+/// The cubic connecting two endpoints, eased along each end's tangent so the
+/// transition reads as one long, gentle S rather than a straight run into a
+/// tight corner. Endpoints are exact (lane centers on row edges / dot centers),
+/// so rows still tile seamlessly and the curve meets the dot it belongs to.
+fn cubic_between(a: Endpoint, b: Endpoint) -> [(f32, f32); 4] {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let p1 = match a.tan {
+        Tangent::Vertical => (a.x, a.y + CURVE_EASE * dy),
+        Tangent::Horizontal => (a.x + CURVE_EASE * dx, a.y),
+    };
+    let p2 = match b.tan {
+        Tangent::Vertical => (b.x, b.y - CURVE_EASE * dy),
+        Tangent::Horizontal => (b.x - CURVE_EASE * dx, b.y),
+    };
+    [(a.x, a.y), p1, p2, (b.x, b.y)]
+}
+
+/// Reconstruct a row's lane transitions from its cells into smooth cubic curves.
+///
+/// A *run* is a maximal span of horizontal-family cells. Its endpoints are the
+/// corners/Tees inside it plus any commit dot immediately flanking it:
+/// - *hubs* (horizontal tangent, at row mid-height): a flanking commit dot, or a
+///   `TeeRight`/`TeeLeft` arm leaving the trunk.
+/// - *spokes* (vertical tangent, at a row edge): `Merge*` (turn up), `Branch*`
+///   (turn down), `TeeUp` (riser from above).
+///
+/// A curve is drawn from the run's primary hub to each spoke (a branch/merge is
+/// the 2-endpoint case → one curve; a fork connector fans several); with no hub,
+/// spokes are chained; a lone hub with no spoke falls back to a straight bridge
+/// (e.g. a trailing dot→horizontal stub). Each spoke curve takes the spoke's own
+/// color/dim, so a multi-color fork connector colors each arm correctly. Pure
+/// over `cells`, so the drawing stays a deterministic function of the `RowSpec`.
+fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
+    let cx = |i: usize| (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw + cw / 2.0;
+    let cy = ch / 2.0;
+    let mut curves = Vec::new();
+    let n = cells.len();
+    let mut i = 0;
+    while i < n {
+        if !has_horizontal(cells[i].shape) {
+            i += 1;
+            continue;
+        }
+        let l = i;
+        let mut r = i;
+        while r + 1 < n && has_horizontal(cells[r + 1].shape) {
+            r += 1;
+        }
+
+        let mut hubs: Vec<Endpoint> = Vec::new();
+        let mut spokes: Vec<Endpoint> = Vec::new();
+        // The run's own horizontal color/dim (from its leftmost cell), used for
+        // flanking-dot hubs and the no-endpoint / lone-hub fallbacks.
+        let (run_color, run_dim) = run_style(&cells[l]);
+
+        // Commit dots immediately flanking the run anchor it horizontally.
+        if l > 0 && matches!(cells[l - 1].shape, CellShape::Commit { .. }) {
+            hubs.push(Endpoint { x: cx(l - 1), y: cy, tan: Tangent::Horizontal, color: run_color, dim: run_dim });
+        }
+        if r + 1 < n && matches!(cells[r + 1].shape, CellShape::Commit { .. }) {
+            hubs.push(Endpoint { x: cx(r + 1), y: cy, tan: Tangent::Horizontal, color: run_color, dim: run_dim });
+        }
+
+        for (c, cell) in cells.iter().enumerate().take(r + 1).skip(l) {
+            let (color, dim) = (cell.color, cell.dim);
+            match cell.shape {
+                CellShape::MergeLeft | CellShape::MergeRight => {
+                    spokes.push(Endpoint { x: cx(c), y: 0.0, tan: Tangent::Vertical, color, dim });
+                }
+                CellShape::BranchLeft | CellShape::BranchRight => {
+                    spokes.push(Endpoint { x: cx(c), y: ch, tan: Tangent::Vertical, color, dim });
+                }
+                CellShape::TeeUp => {
+                    spokes.push(Endpoint { x: cx(c), y: 0.0, tan: Tangent::Vertical, color, dim });
+                }
+                CellShape::TeeRight | CellShape::TeeLeft => {
+                    hubs.push(Endpoint { x: cx(c), y: cy, tan: Tangent::Horizontal, color, dim });
+                }
+                _ => {} // Horizontal / HorizontalPipe: run body.
+            }
+        }
+
+        let push = |curves: &mut Vec<Curve>, a: Endpoint, b: Endpoint, color: [u8; 3], dim: bool| {
+            let [p0, p1, p2, p3] = cubic_between(a, b);
+            curves.push(Curve { p0, p1, p2, p3, color, dim });
+        };
+
+        if let Some(&primary) = hubs.first() {
+            for &s in &spokes {
+                push(&mut curves, primary, s, s.color, s.dim);
+            }
+            // Extra hubs (e.g. dot ↔ dot, or a TeeLeft opposite the main): join
+            // them to the primary hub with the run's own color.
+            for &h in hubs.iter().skip(1) {
+                push(&mut curves, primary, h, run_color, run_dim);
+            }
+            if spokes.is_empty() && hubs.len() == 1 {
+                // Lone dot with a trailing horizontal and no far anchor: bridge
+                // straight to the run's far edge so the stub still meets the dot.
+                let far_x = if primary.x < cx(l) {
+                    (r + 1 + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw
+                } else {
+                    (l + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw
+                };
+                let end = Endpoint { x: far_x, y: cy, tan: Tangent::Horizontal, color: run_color, dim: run_dim };
+                push(&mut curves, primary, end, run_color, run_dim);
+            }
+        } else if spokes.len() >= 2 {
+            // No hub: chain the spokes (e.g. a lane shifting via two corners).
+            let spokes_owned = spokes.clone();
+            for w in spokes_owned.windows(2) {
+                push(&mut curves, w[0], w[1], w[1].color, w[1].dim);
+            }
+        } else if let Some(&s) = spokes.first() {
+            // Lone spoke with no anchor: bridge to the run's far edge at cy.
+            let far_x = if s.x <= cx(l) {
+                (r + 1 + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw
+            } else {
+                (l + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw
+            };
+            let end = Endpoint { x: far_x, y: cy, tan: Tangent::Horizontal, color: s.color, dim: s.dim };
+            push(&mut curves, end, s, s.color, s.dim);
+        } else {
+            // No endpoints at all (a bare horizontal run): draw it straight.
+            let a = Endpoint {
+                x: (l + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw,
+                y: cy,
+                tan: Tangent::Horizontal,
+                color: run_color,
+                dim: run_dim,
+            };
+            let b = Endpoint {
+                x: (r + 1 + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw,
+                y: cy,
+                tan: Tangent::Horizontal,
+                color: run_color,
+                dim: run_dim,
+            };
+            push(&mut curves, a, b, run_color, run_dim);
+        }
+
+        i = r + 1;
+    }
+    curves
+}
+
+/// Stroke one row of `cells` onto the bright or dim layer. Lane transitions are
+/// reconstructed row-locally into smooth cubic curves (VSCode-style S-curves)
+/// drawn first; the straight verticals (lane pipes, crossed pipes, Tee trunks,
+/// commit connectors) and the dots draw on top. HEAD commit stars are deferred
+/// into `stars` (drawn last, on top). Shared by the folded underlay and the
+/// row's own cells so they rasterize identically.
 fn draw_cells(
     bright: &mut Canvas,
     dim: &mut Canvas,
@@ -533,68 +750,44 @@ fn draw_cells(
     ch: f32,
     stars: &mut Vec<(f32, f32, f32, [u8; 3], bool)>,
 ) {
-    // The commit dot's radius is capped by the cell height, so on wide cells
-    // it can end short of the cell edge while connector strokes start exactly
-    // at it — a font-metric-dependent hairline gap. Horizontal stroke ends
-    // overshoot their cell by the dot's shortfall (min 1px) so they always
-    // meet the dot; between connector cells the overlap is invisible.
     let dot_base = cw.min(ch * 2.0 / 5.0).max(3.0);
     let dot_r = (dot_base * 0.6).min(cw * 0.65);
-    let reach = (cw / 2.0 - dot_r + 1.0).max(1.0);
 
+    // Phase A: smooth lane-transition curves (branch/merge/fork arms, crossings'
+    // horizontal). Drawn beneath the verticals so a crossed pipe stays on top.
+    for c in transition_curves(cells, cw, ch) {
+        let canvas: &mut Canvas = if c.dim { dim } else { bright };
+        draw_cubic(canvas, c.p0, c.p1, c.p2, c.p3, half, c.color);
+    }
+
+    // Phase B: verticals and dots, on top of the curves.
+    let cy = ch / 2.0;
     for (i, cell) in cells.iter().enumerate() {
         let ox = (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw;
         let cx = ox + cw / 2.0;
-        let cy = ch / 2.0;
-        let left = ox - reach;
-        let right = ox + cw + reach;
         let color = cell.color;
-        // A crossing routes its two strokes independently, so tracing can
-        // light one direction while the other fades; the traced stroke ends
-        // up on the bright layer, composited over the faded one.
-        if cell.shape == CellShape::HorizontalPipe {
-            let h = if cell.dim_secondary { &mut *dim } else { &mut *bright };
-            draw_segment(h, left, cy, right, cy, half, cell.secondary);
-            let v = if cell.dim { &mut *dim } else { &mut *bright };
-            draw_segment(v, cx, 0.0, cx, ch, half, color);
-            continue;
-        }
-        // Non-traced cells rasterize onto the dim layer, which rasterize_row
-        // fades as a whole once drawing is done.
-        let canvas: &mut Canvas = if cell.dim { dim } else { bright };
         match cell.shape {
-            CellShape::Empty | CellShape::HorizontalPipe => {}
-            CellShape::Pipe => draw_segment(canvas, cx, 0.0, cx, ch, half, color),
-            CellShape::Horizontal => draw_segment(canvas, left, cy, right, cy, half, color),
-            CellShape::BranchRight => {
-                draw_bezier(canvas, (right, cy), (cx, cy), (cx, ch), half, color)
+            // The crossing's vertical pipe draws on top of the transition curve
+            // that sweeps under it, and dims independently of the horizontal.
+            CellShape::HorizontalPipe => {
+                let v = if cell.dim { &mut *dim } else { &mut *bright };
+                draw_segment(v, cx, 0.0, cx, ch, half, color);
             }
-            CellShape::BranchLeft => {
-                draw_bezier(canvas, (left, cy), (cx, cy), (cx, ch), half, color)
-            }
-            CellShape::MergeRight => {
-                draw_bezier(canvas, (cx, 0.0), (cx, cy), (right, cy), half, color)
-            }
-            CellShape::MergeLeft => {
-                draw_bezier(canvas, (cx, 0.0), (cx, cy), (left, cy), half, color)
-            }
-            CellShape::TeeRight => {
+            CellShape::Pipe => {
+                let canvas = if cell.dim { &mut *dim } else { &mut *bright };
                 draw_segment(canvas, cx, 0.0, cx, ch, half, color);
-                draw_segment(canvas, cx, cy, right, cy, half, color);
             }
-            CellShape::TeeLeft => {
+            // A Tee's trunk is the straight through-line; its arm is a curve.
+            CellShape::TeeRight | CellShape::TeeLeft => {
+                let canvas = if cell.dim { &mut *dim } else { &mut *bright };
                 draw_segment(canvas, cx, 0.0, cx, ch, half, color);
-                draw_segment(canvas, left, cy, cx, cy, half, color);
-            }
-            CellShape::TeeUp => {
-                draw_segment(canvas, cx, 0.0, cx, cy, half, color);
-                draw_segment(canvas, left, cy, right, cy, half, color);
             }
             CellShape::Commit {
                 connect_up,
                 connect_down,
                 style,
             } => {
+                let canvas: &mut Canvas = if cell.dim { dim } else { bright };
                 // Connectors use the lane color (`secondary`); only the dot or
                 // star itself takes the cell color (gold for HEAD).
                 if connect_up {
@@ -622,6 +815,14 @@ fn draw_cells(
                     }
                 }
             }
+            // Horizontal-family shapes are drawn as curves in Phase A.
+            CellShape::Empty
+            | CellShape::Horizontal
+            | CellShape::BranchRight
+            | CellShape::BranchLeft
+            | CellShape::MergeRight
+            | CellShape::MergeLeft
+            | CellShape::TeeUp => {}
         }
     }
 }
@@ -962,6 +1163,49 @@ mod tests {
             gaps.is_empty(),
             "transparent pixels between dot and horizontal at x={gaps:?}"
         );
+    }
+
+    #[test]
+    fn head_star_row_tiles_seamlessly_at_many_font_sizes() {
+        // Regression (Task 1): a HEAD-star row that connects both up and down
+        // must paint its lane column continuously from the top edge to the
+        // bottom edge, so it tiles against the rows above/below with no
+        // hairline gap beneath the star. The star is deferred/opaque on top of
+        // the connectors, so this checks the connectors reach both edges under
+        // it across a range of terminal cell metrics.
+        let gold = [255, 200, 50];
+        for (cw, ch) in [
+            (6u32, 12u32),
+            (7, 14),
+            (8, 16),
+            (9, 18),
+            (10, 20),
+            (12, 24),
+            (14, 28),
+            (8, 20),
+            (10, 24),
+            (7, 21),
+        ] {
+            let mut cell = commit(true, true, CommitStyle::Head, gold);
+            cell.secondary = [0, 0, 255];
+            let img = rasterize_row(&spec(vec![cell]), cw, ch);
+            let cx = PIXEL_LEFT_PAD_CELLS as u32 * cw + cw / 2;
+            // Both edges are opaque…
+            assert!(
+                alpha(&img, cx, 0) > 0,
+                "star row must reach the top edge at {cw}x{ch}"
+            );
+            assert!(
+                alpha(&img, cx, ch - 1) > 0,
+                "star row must reach the bottom edge at {cw}x{ch}"
+            );
+            // …and the whole lane column in between is covered (no interior gap).
+            let gaps: Vec<u32> = (0..ch).filter(|&y| alpha(&img, cx, y) == 0).collect();
+            assert!(
+                gaps.is_empty(),
+                "star row lane column has gaps at y={gaps:?} ({cw}x{ch})"
+            );
+        }
     }
 
     #[test]
@@ -1358,5 +1602,176 @@ mod tests {
         assert_eq!(map.len(), 2);
         assert!(map.contains_key(&all[1]) && map.contains_key(&all[2]));
         assert!(!map.contains_key(&all[0]) && !map.contains_key(&all[3]));
+    }
+
+    // ── S-curve transition reconstruction (Task 2) ──────────────────────
+
+    /// A solid cell of the given shape.
+    fn sh(shape: CellShape) -> PixelCell {
+        solid(shape, [10, 20, 30])
+    }
+
+    /// The lane-center x of cell index `i` at width `CW`.
+    fn cell_cx(i: usize) -> f32 {
+        (i + PIXEL_LEFT_PAD_CELLS as usize) as f32 * CW as f32 + CW as f32 / 2.0
+    }
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    /// Every transition curve must begin/end exactly on a lane center at a row
+    /// edge (a spoke turning up/down) or at row mid-height (a hub) — the tiling
+    /// contract: row edges must land on lane centers so rows still stack seamlessly.
+    #[test]
+    fn transition_curve_endpoints_sit_on_lane_centers_at_row_edges() {
+        // A commit on lane 2 merges left to lane 0: [╰ H H H commit].
+        let cells = vec![
+            sh(CellShape::MergeRight),
+            sh(CellShape::Horizontal),
+            sh(CellShape::Horizontal),
+            sh(CellShape::Horizontal),
+            commit(false, false, CommitStyle::Normal, [9, 9, 9]),
+        ];
+        let curves = transition_curves(&cells, CW as f32, CH as f32);
+        assert_eq!(curves.len(), 1, "one dot→corner merge curve");
+        let c = curves[0];
+        // Endpoints are the corner (lane 0, top edge) and the dot (lane 2, mid).
+        let ends = [c.p0, c.p3];
+        let corner = ends
+            .iter()
+            .find(|p| approx(p.1, 0.0))
+            .expect("one endpoint on the top edge (the ╰ turning up)");
+        assert!(
+            approx(corner.0, cell_cx(0)),
+            "corner endpoint sits on lane-0 center, got x={}",
+            corner.0
+        );
+        let dot = ends
+            .iter()
+            .find(|p| approx(p.1, CH as f32 / 2.0))
+            .expect("one endpoint at the dot (mid-height)");
+        assert!(
+            approx(dot.0, cell_cx(4)),
+            "dot endpoint sits on the commit's lane center, got x={}",
+            dot.0
+        );
+    }
+
+    /// A branch spawning downward ends on the row's BOTTOM edge; a merge ends on
+    /// the TOP edge — so the curve continues into the lane pipe on the adjacent row.
+    #[test]
+    fn branch_turns_to_bottom_edge_merge_turns_to_top_edge() {
+        // Branch: [commit H ╮] — lane 1 spawns downward.
+        let branch = vec![
+            commit(false, false, CommitStyle::Normal, [9, 9, 9]),
+            sh(CellShape::Horizontal),
+            sh(CellShape::BranchLeft),
+        ];
+        let bc = transition_curves(&branch, CW as f32, CH as f32);
+        assert_eq!(bc.len(), 1);
+        let spoke = [bc[0].p0, bc[0].p3]
+            .into_iter()
+            .find(|p| approx(p.0, cell_cx(2)))
+            .expect("a spoke on lane 1");
+        assert!(approx(spoke.1, CH as f32), "branch spoke turns to the BOTTOM edge");
+
+        // Merge: [╯ ... ] on the right of a commit — [commit H ╯] lane1 merges up.
+        let merge = vec![
+            commit(false, false, CommitStyle::Normal, [9, 9, 9]),
+            sh(CellShape::Horizontal),
+            sh(CellShape::MergeLeft),
+        ];
+        let mc = transition_curves(&merge, CW as f32, CH as f32);
+        assert_eq!(mc.len(), 1);
+        let spoke = [mc[0].p0, mc[0].p3]
+            .into_iter()
+            .find(|p| approx(p.0, cell_cx(2)))
+            .expect("a spoke on lane 1");
+        assert!(approx(spoke.1, 0.0), "merge spoke turns to the TOP edge");
+    }
+
+    /// A fork connector `├─┴─╯` fans one curve from the main lane to each merging
+    /// lane, and each curve takes that merging lane's own color.
+    #[test]
+    fn fork_connector_fans_one_curve_per_merging_lane() {
+        let mut tee = sh(CellShape::TeeRight);
+        tee.color = [1, 1, 1];
+        let mut up = sh(CellShape::TeeUp);
+        up.color = [2, 2, 2];
+        let mut ml = sh(CellShape::MergeLeft);
+        ml.color = [3, 3, 3];
+        let cells = vec![
+            tee,
+            sh(CellShape::Horizontal),
+            up,
+            sh(CellShape::Horizontal),
+            ml,
+        ];
+        let curves = transition_curves(&cells, CW as f32, CH as f32);
+        assert_eq!(curves.len(), 2, "one curve per merging lane (┴ and ╯)");
+        // Both curves start at the main lane (TeeRight) mid-height point.
+        let main = (cell_cx(0), CH as f32 / 2.0);
+        for c in &curves {
+            let starts_at_main = approx(c.p0.0, main.0) && approx(c.p0.1, main.1);
+            let ends_at_main = approx(c.p3.0, main.0) && approx(c.p3.1, main.1);
+            assert!(starts_at_main || ends_at_main, "a fork arm touches the main lane");
+        }
+        // Colors: the arms carry the merging lanes' colors, not the trunk's.
+        let colors: std::collections::HashSet<[u8; 3]> = curves.iter().map(|c| c.color).collect();
+        assert!(colors.contains(&[2, 2, 2]), "┴ arm keeps its lane color");
+        assert!(colors.contains(&[3, 3, 3]), "╯ arm keeps its lane color");
+    }
+
+    /// A crossing (`HorizontalPipe`) is treated as run body: the transition curve
+    /// sweeps through it, and the crossed vertical pipe is still painted on top.
+    #[test]
+    fn crossing_keeps_the_curve_and_the_crossed_pipe() {
+        // [╰ H ┼ commit] — merge from lane… crossing a pipe at cell 2.
+        let mut cross = solid(CellShape::HorizontalPipe, [0, 0, 0]);
+        cross.color = [200, 30, 30]; // crossed pipe (vertical)
+        cross.secondary = [30, 200, 30]; // the horizontal (curve) color
+        let cells = vec![
+            sh(CellShape::MergeRight),
+            sh(CellShape::Horizontal),
+            cross,
+            commit(false, false, CommitStyle::Normal, [9, 9, 9]),
+        ];
+        // The run spans the HorizontalPipe (a single curve, not split by it).
+        let curves = transition_curves(&cells, CW as f32, CH as f32);
+        assert_eq!(curves.len(), 1, "crossing does not split the transition run");
+
+        // Rasterized: the crossed pipe's column is a continuous vertical line
+        // (top edge to bottom edge), drawn on top of the sweeping curve.
+        let img = rasterize_row(&spec(cells), CW, CH);
+        let px = PIXEL_LEFT_PAD_CELLS as u32 * CW + 2 * CW + CW / 2; // cell 2 center
+        assert!(alpha(&img, px, 0) > 0, "crossed pipe reaches the top edge");
+        assert!(alpha(&img, px, CH - 1) > 0, "crossed pipe reaches the bottom edge");
+        let top = img.get_pixel(px, 0);
+        assert!(
+            top[0] > 150 && top[1] < 90,
+            "crossed pipe stays its own (red) color on top, got {top:?}"
+        );
+    }
+
+    /// The reconstructed run reaches the flanking commit dot's exact center, so
+    /// the transition meets the dot with no hairline gap (subsumes the old
+    /// horizontal-overshoot fix for the curve path).
+    #[test]
+    fn transition_curve_meets_the_flanking_dot_center() {
+        let cells = vec![
+            commit(false, false, CommitStyle::Normal, [9, 9, 9]),
+            sh(CellShape::Horizontal),
+            sh(CellShape::BranchLeft),
+        ];
+        let curves = transition_curves(&cells, CW as f32, CH as f32);
+        let hub = [curves[0].p0, curves[0].p3]
+            .into_iter()
+            .find(|p| approx(p.1, CH as f32 / 2.0))
+            .expect("hub at mid-height");
+        assert!(
+            approx(hub.0, cell_cx(0)),
+            "curve meets the dot at its lane center"
+        );
     }
 }

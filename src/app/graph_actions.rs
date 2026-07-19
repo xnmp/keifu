@@ -435,11 +435,27 @@ impl App {
         Ok(())
     }
 
+    /// Whether the graph currently carries a synthetic uncommitted-changes node.
+    /// `insert_uncommitted_node` always inserts it at index 0, so this is O(1).
+    pub fn has_uncommitted_node(&self) -> bool {
+        self.graph_layout
+            .nodes
+            .first()
+            .is_some_and(|n| n.is_uncommitted)
+    }
+
     pub fn node_passes_commit_filter(&self, node: &crate::git::graph::GraphNode) -> bool {
         if self.commit_filter.is_empty() {
             return true;
         }
         if node.is_uncommitted {
+            return true;
+        }
+        // The uncommitted-changes row always shows and its connector is wired to
+        // HEAD at build time. Keep HEAD visible even when its own message misses
+        // the filter, so that connector always terminates at the star instead of
+        // dangling into a filtered-out row (a broken line beneath the star).
+        if node.is_head && self.has_uncommitted_node() {
             return true;
         }
         let Some(commit) = &node.commit else {
@@ -515,5 +531,123 @@ impl App {
             ForkTarget::Linear => self.set_message("No divergence — linear history"),
             ForkTarget::NoBase => self.set_message("No merge base found"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::App;
+    use crate::git::GitRepository;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .expect("run git");
+    }
+
+    /// A repo whose HEAD commit message won't match a "feature"-style filter,
+    /// with an uncommitted change in the working tree so the graph carries the
+    /// synthetic uncommitted node anchored to HEAD.
+    fn repo_with_uncommitted_head() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", "feature work one"]);
+        std::fs::write(dir.join("f.txt"), "two\n").unwrap();
+        git(dir, &["commit", "-q", "-am", "feature work two"]);
+        // HEAD commit's message is deliberately off-theme from the filter below.
+        std::fs::write(dir.join("f.txt"), "three\n").unwrap();
+        git(dir, &["commit", "-q", "-am", "chore: bump version"]);
+        // Dirty the tree so an uncommitted node is inserted.
+        std::fs::write(dir.join("f.txt"), "dirty working copy\n").unwrap();
+        tmp
+    }
+
+    #[test]
+    fn filter_keeps_head_row_so_the_uncommitted_connector_never_dangles() {
+        let tmp = repo_with_uncommitted_head();
+        let repo = GitRepository::open(tmp.path()).expect("open repo");
+        let mut app = App::from_repo(repo).expect("build app");
+
+        // Precondition: the graph carries the uncommitted node anchored to HEAD.
+        assert!(
+            app.has_uncommitted_node(),
+            "dirty tree should yield an uncommitted node"
+        );
+        let head_idx = app
+            .graph_layout
+            .nodes
+            .iter()
+            .position(|n| n.is_head)
+            .expect("a HEAD commit exists");
+        // Sanity: HEAD's own message does NOT contain the filter term, so the
+        // plain text predicate would drop it.
+        let head_node = &app.graph_layout.nodes[head_idx];
+        assert!(
+            !head_node
+                .commit
+                .as_ref()
+                .unwrap()
+                .message
+                .to_lowercase()
+                .contains("feature"),
+            "test fixture: HEAD must not match the filter on its own"
+        );
+
+        // Apply a filter that matches the older commits but not HEAD.
+        app.commit_filter = "feature".to_string();
+        app.recompute_visible_commits();
+
+        // The HEAD row is kept visible so its uncommitted connector terminates
+        // at the star instead of dangling into a hidden row.
+        assert!(
+            app.visible_commit_indices.contains(&head_idx),
+            "HEAD row must stay visible while an uncommitted connector anchors to it"
+        );
+    }
+
+    #[test]
+    fn head_is_still_filtered_out_when_there_are_no_uncommitted_changes() {
+        // Without an uncommitted node there is no connector to orphan, so the
+        // HEAD-keep exception must not fire — the filter behaves normally.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", "feature work one"]);
+        std::fs::write(dir.join("f.txt"), "two\n").unwrap();
+        git(dir, &["commit", "-q", "-am", "chore: unrelated head"]);
+        // Clean tree: no uncommitted node.
+
+        let repo = GitRepository::open(dir).expect("open repo");
+        let mut app = App::from_repo(repo).expect("build app");
+        assert!(!app.has_uncommitted_node(), "clean tree: no uncommitted node");
+
+        let head_idx = app
+            .graph_layout
+            .nodes
+            .iter()
+            .position(|n| n.is_head)
+            .expect("a HEAD commit exists");
+
+        app.commit_filter = "feature".to_string();
+        app.recompute_visible_commits();
+
+        assert!(
+            !app.visible_commit_indices.contains(&head_idx),
+            "with no uncommitted node, a non-matching HEAD is filtered out normally"
+        );
     }
 }

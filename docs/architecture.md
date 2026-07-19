@@ -153,3 +153,35 @@ Graph.
 **Color mapping:** theme lane colors may be named ANSI variants, not RGB.
 `color_to_rgb` maps named/Indexed colors to real RGB (standard xterm values,
 xterm-256 palette formula) so rasterization has concrete colors.
+
+**S-curve lane transitions (2026-07-19).** Lane-to-lane shifts render as long,
+gentle VSCode-style S-curves rather than a straight horizontal run + a tight
+rounded corner. `draw_cells` runs in two phases:
+1. `transition_curves` — a pure, row-local scan of `spec.cells` — reconstructs
+   each maximal horizontal-family run into cubic beziers. A run's endpoints are
+   its corners/Tees plus any flanking commit dot, classified as *hubs*
+   (horizontal tangent, at row mid-height: a dot, or a `Tee{Right,Left}` arm) or
+   *spokes* (vertical tangent, at a row edge: `Merge*` up, `Branch*` down,
+   `TeeUp` risers). One cubic is drawn from the primary hub to each spoke
+   (branch/merge = the 2-endpoint case → one curve; a fork connector `├─┴─╯`
+   fans several), each eased along its end tangents by `CURVE_EASE`. Each spoke
+   curve carries the spoke's own color/dim, so a multi-color fork connector
+   colors each arm correctly.
+2. The straight verticals (lane pipes, `HorizontalPipe`'s crossed pipe, `Tee`
+   trunks, commit connectors) and the dots/stars draw *on top* of the curves, so
+   a crossed pipe stays visible over the sweep and dims independently.
+
+Curve endpoints are exact lane centers on row edges (spokes) or dot centers
+(hubs), so rows still tile seamlessly (no new gap class) and each curve meets
+the dot it belongs to (subsumes the earlier horizontal-overshoot fix). Because
+`transition_curves` is pure over the cells, drawing stays a deterministic
+function of the `RowSpec`, so the protocol cache stays correct. Unicode mode is
+unchanged (box glyphs can't curve).
+
+**Uncommitted connector survives the commit filter (2026-07-19).** The synthetic
+uncommitted-changes node always passes the commit filter, and its connector is
+wired to HEAD at graph-build time. If HEAD's own message missed the filter it
+was hidden, orphaning the connector into a dangling grey stub beneath the top
+marker. `node_passes_commit_filter` now also keeps the HEAD row whenever an
+uncommitted node exists (`has_uncommitted_node`, O(1) — the uncommitted node is
+always at index 0), so the connector always terminates at the star.
