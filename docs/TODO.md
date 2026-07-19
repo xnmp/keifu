@@ -368,3 +368,18 @@ sweep keeps its own arm color. Regression tests cover both regimes (dim sibling
 keeps its color at the trunk; elevated arm keeps its own color over a sibling's
 column, traced and untraced). raster_debug gained FOLD/NODIM/underlay options
 for pixel-mode repros.
+
+### [DONE] 2026-07-19 Trace bleed: cross-layer curve overlap (real root cause)
+The traced-branch color appearing to "lead into" other branches survived two
+prior fixes because the colliding curves were never in the same reconstruction
+run: the bright traced arm lives in the row's own `cells` while the dim
+sibling's lead-in lives in the folded `underlay` — two `transition_curves`
+passes over the same columns, both dead-flat at mid-height near the shared dot,
+so bright-over-dim compositing erased the dim stroke. Fix per user direction:
+per-column corridor shading removed (flat per-arm colors restored); instead
+every hub→spoke cubic's hub handle leans toward its spoke (`HUB_TILT` +
+`FAN_EXTRA` for same-run fans), so curves sharing a dot diverge immediately,
+whether same-run or split across cells/underlay. Endpoints unchanged (tiling +
+protocol cache unaffected). raster_debug now folds `cell_oids` and dims the
+underlay app-faithfully. Regression tests: cross-layer bury case, fan bury
+case, hub-handle geometry.

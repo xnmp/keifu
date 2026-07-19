@@ -165,8 +165,16 @@ rounded corner. `draw_cells` runs in two phases:
    `TeeUp` risers). One cubic is drawn from the primary hub to each spoke
    (branch/merge = the 2-endpoint case → one curve; a fork connector `├─┴─╯`
    fans several), each eased along its end tangents by `CURVE_EASE`. Each spoke
-   curve carries the spoke's own color/dim, so a multi-color fork connector
-   colors each arm correctly.
+   curve carries the spoke's own flat color/dim for its entire sweep, so a
+   multi-color fork connector colors each arm correctly. Hub handles lean
+   toward their spokes (`HUB_TILT`, plus `FAN_EXTRA` scaled by how much shorter
+   an arm is than its side's longest), so curves sharing a hub — same-run fan
+   arms, or a bright traced curve in `cells` over a dim lead-in in the folded
+   `underlay` (two separate runs) — leave the dot at different angles instead
+   of coinciding along the trunk. Without that separation, the bright layer
+   composites over the faded dim layer wherever strokes overlap, and a traced
+   arm buried a dim sibling's lead-in entirely (the "pink lead-in to a green
+   branch" bug).
 2. The straight verticals (lane pipes, `HorizontalPipe`'s crossed pipe, `Tee`
    trunks, commit connectors) and the dots/stars draw *on top* of the curves, so
    a crossed pipe stays visible over the sweep and dims independently.
