@@ -62,6 +62,9 @@ impl App {
     // ── Pull ────────────────────────────────────────────────────────────
 
     pub(crate) fn initiate_pull(&mut self) {
+        if self.block_if_op_in_progress("pull") {
+            return;
+        }
         if self.network.is_busy() {
             return;
         }

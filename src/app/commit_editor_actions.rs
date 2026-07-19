@@ -65,6 +65,9 @@ impl App {
         }
 
         if matches!(action, Action::AmendCommit) {
+            if self.block_commit_if_unmerged() {
+                return Ok(());
+            }
             if self.is_uncommitted_selected() {
                 // Ctrl+Enter with no message: amend --no-edit
                 commit_amend_no_edit(&self.repo_path)?;
@@ -125,6 +128,9 @@ impl App {
                 self.amending_commit = false;
             }
             Action::CommitChanges => {
+                if self.block_commit_if_unmerged() {
+                    return Ok(());
+                }
                 let msg = self.commit_editor.text.trim().to_string();
                 if self.amending_commit {
                     // Amending: use the edited message
@@ -147,6 +153,9 @@ impl App {
                 }
             }
             Action::AmendCommit => {
+                if self.block_commit_if_unmerged() {
+                    return Ok(());
+                }
                 if self.amending_commit {
                     // Already editing HEAD commit — Ctrl+Enter acts same as Enter (save amend)
                     let msg = self.commit_editor.text.trim().to_string();

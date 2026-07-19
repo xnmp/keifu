@@ -435,6 +435,9 @@ impl App {
                 self.open_delete_branch_picker();
             }
             CommitMenuItem::MergeIntoCurrent => {
+                if self.block_if_op_in_progress("merge") {
+                    return Ok(());
+                }
                 if let Some(branch) = self.selected_branch() {
                     if !branch.is_head {
                         self.mode = AppMode::Confirm {
@@ -445,6 +448,9 @@ impl App {
                 }
             }
             CommitMenuItem::CherryPick => {
+                if self.block_if_op_in_progress("cherry-pick") {
+                    return Ok(());
+                }
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
                         message: format!("Cherry-pick commit {}?", &oid.to_string()[..7]),
@@ -453,6 +459,9 @@ impl App {
                 }
             }
             CommitMenuItem::Rebase => {
+                if self.block_if_op_in_progress("rebase") {
+                    return Ok(());
+                }
                 if let Some(branch) = self.selected_branch() {
                     if !branch.is_head {
                         self.mode = AppMode::Confirm {
@@ -532,6 +541,9 @@ impl App {
                 self.open_push_tag_picker();
             }
             CommitMenuItem::Revert => {
+                if self.block_if_op_in_progress("revert") {
+                    return Ok(());
+                }
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
                         message: format!("Revert commit {}?", &oid.to_string()[..7]),
@@ -583,6 +595,9 @@ impl App {
                 self.open_merge_pr();
             }
             CommitMenuItem::StashApply => {
+                if self.block_if_op_in_progress("apply a stash") {
+                    return Ok(());
+                }
                 if let Some(index) = self.selected_stash_index() {
                     stash_apply(&self.repo_path, index)?;
                     self.refresh(false)?;
@@ -590,6 +605,9 @@ impl App {
                 }
             }
             CommitMenuItem::StashPop => {
+                if self.block_if_op_in_progress("pop a stash") {
+                    return Ok(());
+                }
                 if let Some(index) = self.selected_stash_index() {
                     stash_pop(&self.repo_path, index)?;
                     self.refresh(true)?;
