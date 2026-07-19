@@ -363,30 +363,6 @@ fn draw_segment(c: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, half: f32, c
     }
 }
 
-/// Stroke a cubic bezier via dense segment sampling. Endpoints are exact. Used
-/// for the smooth, VSCode-style lane-transition S-curves (long gentle bends
-/// eased along their end tangents), in place of a straight run + tight corner.
-fn draw_cubic(
-    c: &mut Canvas,
-    p0: (f32, f32),
-    p1: (f32, f32),
-    p2: (f32, f32),
-    p3: (f32, f32),
-    half: f32,
-    color: [u8; 3],
-) {
-    const STEPS: usize = 48;
-    let mut prev = p0;
-    for i in 1..=STEPS {
-        let t = i as f32 / STEPS as f32;
-        let mt = 1.0 - t;
-        let (a, b, cc, d) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
-        let x = a * p0.0 + b * p1.0 + cc * p2.0 + d * p3.0;
-        let y = a * p0.1 + b * p1.1 + cc * p2.1 + d * p3.1;
-        draw_segment(c, prev.0, prev.1, x, y, half, color);
-        prev = (x, y);
-    }
-}
 
 fn fill_disc(c: &mut Canvas, cx: f32, cy: f32, r: f32, color: [u8; 3]) {
     let minx = (cx - r - 1.0).floor() as i64;
@@ -735,6 +711,70 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
     curves
 }
 
+/// Stroke a transition cubic, shading it per underlying column only where fan
+/// arms actually overlap — the shared trunk corridor near mid-height — and by
+/// the curve's own arm colour elsewhere.
+///
+/// A fork fan emits one curve per arm, and every arm converges onto the trunk
+/// near the hub before peeling off to its own lane. Along that shared corridor
+/// a single flat colour per curve lets the last-drawn arm overpaint the others;
+/// worse, while branch-tracing a lit (bright) arm and its dim siblings land on
+/// different compositing layers, so the bright arm floods a dim sibling's trunk
+/// with the traced colour (the "pink lead-in to a green branch" bug). Colouring
+/// each corridor segment by its column — the identity `apply_trace_dim` has
+/// already set per edge — keeps every column in its own lane's colour and layer.
+///
+/// Above/below the corridor the arm has separated from the trunk and stands
+/// alone, so it must keep its OWN colour/dim; shading it by whatever column it
+/// happens to fly over would stripe an elevated sweep with sibling colours (a
+/// milder version of the same complaint). The corridor half-height is a stroke
+/// width, where the arm has visually merged onto the trunk, so the regime switch
+/// is seamless. Off the run entirely it falls back to the curve's own colour.
+fn draw_curve_shaded(
+    bright: &mut Canvas,
+    dim: &mut Canvas,
+    curve: &Curve,
+    cells: &[PixelCell],
+    half: f32,
+    cw: f32,
+    ch: f32,
+) {
+    const STEPS: usize = 48;
+    let cy = ch / 2.0;
+    // Trunk corridor half-height: within a stroke width of mid-height the arms
+    // overlap the horizontal trunk, so column identity governs; outside it each
+    // arm owns its stroke.
+    let corridor = (2.0 * half).max(1.5);
+    let resolve = |x: f32, y: f32| -> ([u8; 3], bool) {
+        if (y - cy).abs() <= corridor {
+            let col = (x / cw).floor() as isize - PIXEL_LEFT_PAD_CELLS as isize;
+            if col >= 0 {
+                if let Some(cell) = cells.get(col as usize) {
+                    if has_horizontal(cell.shape) {
+                        return run_style(cell);
+                    }
+                }
+            }
+        }
+        (curve.color, curve.dim)
+    };
+    let (p0, p1, p2, p3) = (curve.p0, curve.p1, curve.p2, curve.p3);
+    let mut prev = p0;
+    for i in 1..=STEPS {
+        let t = i as f32 / STEPS as f32;
+        let mt = 1.0 - t;
+        let (a, b, cc, d) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
+        let x = a * p0.0 + b * p1.0 + cc * p2.0 + d * p3.0;
+        let y = a * p0.1 + b * p1.1 + cc * p2.1 + d * p3.1;
+        // Resolve by the segment's midpoint so a segment straddling a column or
+        // corridor boundary still lands wholly in one regime.
+        let (color, is_dim) = resolve((prev.0 + x) / 2.0, (prev.1 + y) / 2.0);
+        let canvas: &mut Canvas = if is_dim { dim } else { bright };
+        draw_segment(canvas, prev.0, prev.1, x, y, half, color);
+        prev = (x, y);
+    }
+}
+
 /// Stroke one row of `cells` onto the bright or dim layer. Lane transitions are
 /// reconstructed row-locally into smooth cubic curves (VSCode-style S-curves)
 /// drawn first; the straight verticals (lane pipes, crossed pipes, Tee trunks,
@@ -755,9 +795,11 @@ fn draw_cells(
 
     // Phase A: smooth lane-transition curves (branch/merge/fork arms, crossings'
     // horizontal). Drawn beneath the verticals so a crossed pipe stays on top.
+    // Each curve is shaded per underlying column, not a flat colour, so a fork
+    // fan's arms keep their own lane colour/dim layer instead of overpainting
+    // each other (see `draw_curve_shaded`).
     for c in transition_curves(cells, cw, ch) {
-        let canvas: &mut Canvas = if c.dim { dim } else { bright };
-        draw_cubic(canvas, c.p0, c.p1, c.p2, c.p3, half, c.color);
+        draw_curve_shaded(bright, dim, &c, cells, half, cw, ch);
     }
 
     // Phase B: verticals and dots, on top of the curves.
@@ -1752,6 +1794,123 @@ mod tests {
             top[0] > 150 && top[1] < 90,
             "crossed pipe stays its own (red) color on top, got {top:?}"
         );
+    }
+
+    /// Branch-tracing regression: a lit (bright) fork arm must not overpaint a
+    /// dim sibling arm that shares the run. A fork fans one curve per arm from
+    /// the shared hub, and each arm sweeps across the trunk near the hub. When
+    /// tracing lights one arm (bright) and dims its siblings, the bright arm's
+    /// sweep used to flood a dim sibling's own column with the traced color —
+    /// the "pink lead-in to a green branch" bug. Per-column shading keeps each
+    /// column in its own lane's color and dim layer.
+    #[test]
+    fn traced_fork_arm_does_not_overpaint_a_dim_sibling_arm() {
+        let green = [0, 255, 0];
+        let magenta = [255, 0, 255];
+        // Fork underlay: blue trunk (TeeRight) → NEAR arm (green TeeUp, cell 2) →
+        // FAR arm (magenta MergeLeft, cell 4), joined by shared horizontals.
+        // Tracing the magenta (far) branch: its cells are lit → bright; the
+        // green near arm is off-lineage → dim.
+        let mut hub = solid(CellShape::TeeRight, [0, 0, 255]);
+        hub.dim = true;
+        let mut near = solid(CellShape::TeeUp, green);
+        near.dim = true; // off-lineage: dim
+        let far = solid(CellShape::MergeLeft, magenta); // traced: bright (dim = false)
+        let cells = vec![
+            hub,
+            solid(CellShape::Horizontal, magenta),
+            near,
+            solid(CellShape::Horizontal, magenta),
+            far,
+        ];
+        let img = rasterize_row(&spec(cells), CW, CH);
+        let cap = (TRACE_DIM_ALPHA * 255.0).round() as u8;
+        let cx_near = PAD_X + 2 * CW + CW / 2; // near arm's own column
+        // The far arm's sweep must not paint bright magenta in the near arm's
+        // column: any bright pixel there must belong to the near (green) lane.
+        for y in 0..CH {
+            let p = img.get_pixel(cx_near, y).0;
+            let bright_magenta = p[3] > cap && p[0] > 150 && p[2] > 150 && p[1] < 120;
+            assert!(
+                !bright_magenta,
+                "near arm column flooded by the lit far arm at y={y}: {p:?}"
+            );
+        }
+        // The near arm still renders its own (dim) green.
+        let has_dim_green = (0..CH).any(|y| {
+            let p = img.get_pixel(cx_near, y).0;
+            p[3] > 0 && p[3] <= cap && p[1] > 150 && p[0] < 100 && p[2] < 100
+        });
+        assert!(has_dim_green, "near arm should keep its dim green riser");
+        // The traced far arm still renders bright magenta in its own column.
+        let cx_far = PAD_X + 4 * CW + CW / 2;
+        let far_bright_magenta = (0..CH).any(|y| {
+            let p = img.get_pixel(cx_far, y).0;
+            p[3] > cap && p[0] > 150 && p[2] > 150 && p[1] < 120
+        });
+        assert!(far_bright_magenta, "traced far arm should stay bright magenta");
+    }
+
+    /// Per-column shading must be confined to the trunk corridor near mid-height.
+    /// An elevated fork arm that flies over a differently-coloured sibling's
+    /// column (well above the trunk, where it no longer overlaps anything) must
+    /// keep its OWN colour, not pick up the column's — otherwise the sweep stripes
+    /// with sibling colours mid-air (a milder form of the lead-in bug). Verified
+    /// both traced (arm bright, sibling dim) and untraced (all bright).
+    #[test]
+    fn elevated_fork_arm_keeps_its_own_color_over_a_sibling_column() {
+        let green = [0, 255, 0];
+        let magenta = [255, 0, 255];
+        // hub (TeeRight) → a green branch turning DOWN at cell 4 (its riser lives
+        // in the BOTTOM half) → a magenta merge turning UP at cell 6. Cell 4 sits
+        // in the merge arm's far half, so the arm flies over it elevated, in the
+        // TOP half — isolated from the down-going green riser.
+        let build = |dim_siblings: bool| {
+            let mut hub = solid(CellShape::TeeRight, [0, 0, 255]);
+            let mut branch = solid(CellShape::BranchLeft, green);
+            if dim_siblings {
+                hub.dim = true;
+                branch.dim = true;
+            }
+            vec![
+                hub,
+                solid(CellShape::Horizontal, magenta),
+                solid(CellShape::Horizontal, magenta),
+                solid(CellShape::Horizontal, magenta),
+                branch,
+                solid(CellShape::Horizontal, magenta),
+                solid(CellShape::MergeLeft, magenta),
+            ]
+        };
+        let cap = (TRACE_DIM_ALPHA * 255.0).round() as u8;
+        let cx4 = PAD_X + 4 * CW + CW / 2;
+        for traced in [false, true] {
+            let img = rasterize_row(&spec(build(traced)), CW, CH);
+            // Top band over cell 4, above the trunk corridor: only the elevated
+            // magenta merge arm passes here (the green branch dives the other way).
+            let mut saw_arm = false;
+            for y in 0..(CH / 2 - 3) {
+                for x in cx4 - 1..=cx4 + 1 {
+                    let p = img.get_pixel(x, y).0;
+                    if p[3] == 0 {
+                        continue;
+                    }
+                    saw_arm = true;
+                    let is_green = p[1] > 150 && p[0] < 100 && p[2] < 100;
+                    assert!(
+                        !is_green,
+                        "elevated merge arm striped green (sibling colour) at ({x},{y}) traced={traced}: {p:?}"
+                    );
+                    // What is there is the magenta arm.
+                    assert!(
+                        p[0] > 120 && p[2] > 120,
+                        "elevated segment should be the arm's own magenta at ({x},{y}) traced={traced}: {p:?}"
+                    );
+                }
+            }
+            assert!(saw_arm, "expected the elevated merge arm over cell 4 (traced={traced})");
+            let _ = cap;
+        }
     }
 
     /// The reconstructed run reaches the flanking commit dot's exact center, so

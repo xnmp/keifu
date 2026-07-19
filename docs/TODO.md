@@ -356,3 +356,15 @@ risers = vertical tangent at row edges); verticals and dots draw on top so
 HorizontalPipe crossings and trace dim/bright layering are unchanged. Curve
 endpoints stay at exact lane centers on row edges (unit-tested) so rows tile
 seamlessly. Unicode mode untouched. See docs/architecture.md.
+
+### [DONE] 2026-07-19 Traced fork fan no longer floods sibling arms
+User report: tracing a commit on one branch painted that branch's color over
+sibling arms' lead-ins in shared fork fans (bright layer composited over dim).
+Untraced rendering was verified correct (75+ fuzzed topologies). Fix:
+`draw_curve_shaded` in `ui/graph_pixels.rs` shades curve sub-segments by the
+underlying cell column — but only inside the trunk corridor near mid-height
+(|y-cy| <= stroke width) where arms genuinely overlap; the elevated part of a
+sweep keeps its own arm color. Regression tests cover both regimes (dim sibling
+keeps its color at the trunk; elevated arm keeps its own color over a sibling's
+column, traced and untraced). raster_debug gained FOLD/NODIM/underlay options
+for pixel-mode repros.
