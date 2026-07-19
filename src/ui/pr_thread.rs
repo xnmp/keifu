@@ -11,7 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{Clear, Paragraph, Widget, Wrap},
 };
 
 use super::theme::Theme;
@@ -32,11 +32,9 @@ impl<'a> PrThreadWidget<'a> {
 impl<'a> Widget for PrThreadWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let block = Block::default()
-            .title(format!(" PR #{} Conversation ", self.view.pr_number))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self
+            .theme
+            .popup_block(format!(" PR #{} Conversation ", self.view.pr_number));
         let inner = block.inner(area);
         block.render(area, buf);
         if inner.height == 0 {

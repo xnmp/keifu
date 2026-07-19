@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Clear, Paragraph, Widget},
 };
 
 use crate::app::FileHistoryEntry;
@@ -29,11 +29,9 @@ impl<'a> Widget for InputDialog<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(format!(" {} ", self.title))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.input_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self
+            .theme
+            .popup_block_in(format!(" {} ", self.title), self.theme.input_border);
 
         let input_style = Style::default()
             .fg(self.theme.text_primary)
@@ -72,11 +70,9 @@ impl<'a> Widget for ConfirmDialog<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(" Confirm ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.confirm_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self
+            .theme
+            .popup_block_in(" Confirm ", self.theme.confirm_border);
 
         let lines = vec![
             Line::from(""),
@@ -125,11 +121,9 @@ impl<'a> Widget for PullDivergenceDialog<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(" Branches Diverged ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.confirm_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self
+            .theme
+            .popup_block_in(" Branches Diverged ", self.theme.confirm_border);
 
         let mut lines = vec![
             Line::from(""),
@@ -146,7 +140,7 @@ impl<'a> Widget for PullDivergenceDialog<'a> {
             } else {
                 Style::default().fg(self.theme.text_primary)
             };
-            let prefix = if selected { " > " } else { "   " };
+            let prefix = if selected { "> " } else { "  " };
             lines.push(Line::from(Span::styled(format!("{prefix}{opt}"), style)));
         }
         lines.push(Line::from(""));
@@ -190,11 +184,9 @@ impl<'a> OptionsDialog<'a> {
 impl<'a> Widget for OptionsDialog<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let block = Block::default()
-            .title(format!(" {} ", self.title))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.confirm_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self
+            .theme
+            .popup_block_in(format!(" {} ", self.title), self.theme.confirm_border);
 
         let mut lines = vec![
             Line::from(""),
@@ -211,7 +203,7 @@ impl<'a> Widget for OptionsDialog<'a> {
             } else {
                 Style::default().fg(self.theme.text_primary)
             };
-            let prefix = if selected { " > " } else { "   " };
+            let prefix = if selected { "> " } else { "  " };
             lines.push(Line::from(Span::styled(format!("{prefix}{opt}"), style)));
         }
         lines.push(Line::from(""));
@@ -261,11 +253,7 @@ impl<'a> Widget for BranchPickerWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(self.title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(self.title);
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -283,10 +271,10 @@ impl<'a> Widget for BranchPickerWidget<'a> {
                 Style::default().fg(self.theme.text_primary)
             };
 
-            let prefix = if is_selected { " > " } else { "   " };
+            let prefix = if is_selected { "> " } else { "  " };
             let max_width = inner.width as usize;
-            let display = if branch.len() + 3 > max_width {
-                format!("{}{}...", prefix, &branch[..max_width.saturating_sub(6)])
+            let display = if branch.len() + 2 > max_width {
+                format!("{}{}...", prefix, &branch[..max_width.saturating_sub(5)])
             } else {
                 format!("{}{}", prefix, branch)
             };
@@ -324,11 +312,7 @@ impl<'a> Widget for FileHistoryWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(self.title.clone())
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(self.title.clone());
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -350,7 +334,7 @@ impl<'a> Widget for FileHistoryWidget<'a> {
                 Style::default().fg(self.theme.text_primary)
             };
 
-            let prefix = if is_selected { " > " } else { "   " };
+            let prefix = if is_selected { "> " } else { "  " };
             let line = format!(
                 "{}{}  {}  {}",
                 prefix, entry.short_id, entry.date, entry.subject

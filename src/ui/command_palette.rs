@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Clear, Widget},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -43,11 +43,7 @@ impl<'a> Widget for CommandPaletteWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(" Command Palette ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(" Command Palette ");
         let inner = block.inner(area);
         block.render(area, buf);
         if inner.width == 0 || inner.height == 0 {

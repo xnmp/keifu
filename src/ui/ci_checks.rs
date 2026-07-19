@@ -9,7 +9,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Block, Clear, Widget},
 };
 
 use super::theme::Theme;
@@ -48,11 +48,7 @@ impl<'a> Widget for CiChecksWidget<'a> {
 
 impl<'a> CiChecksWidget<'a> {
     fn block(&self, title: String) -> Block<'static> {
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg))
+        self.theme.popup_block(title)
     }
 
     fn footer(&self, inner: Rect, buf: &mut Buffer, text: &str) {
@@ -117,7 +113,7 @@ impl<'a> CiChecksWidget<'a> {
                     let icon = check.state.icon();
                     let dur = check.duration.as_deref().unwrap_or("");
                     let name = truncate(&check.name, inner.width.saturating_sub(10) as usize);
-                    let prefix = if selected { " > " } else { "   " };
+                    let prefix = if selected { "> " } else { "  " };
                     let line = Line::from(vec![
                         Span::styled(prefix, base),
                         Span::styled(

@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Clear, Widget},
 };
 
 use super::theme::Theme;
@@ -46,11 +46,7 @@ impl<'a> Widget for CommitMenuWidget<'a> {
             format!(" Actions: {}_ ", self.filter)
         };
 
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(title);
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -106,7 +102,7 @@ impl<'a> Widget for CommitMenuWidget<'a> {
                 Style::default().fg(self.theme.text_primary)
             };
 
-            let prefix = if is_selected { " > " } else { "   " };
+            let prefix = if is_selected { "> " } else { "  " };
             let label = item.label();
 
             // Build spans with highlight for matched characters
