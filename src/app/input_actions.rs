@@ -69,11 +69,14 @@ impl App {
                         self.do_stash_push(scope, input.trim())?;
                     }
                     InputAction::EditIssueAssignees { number } => {
-                        self.submit_issue_assignees(number, &input);
                         // The runner is async; return to the detail popup rather
-                        // than falling through to Normal below.
-                        self.search_state = SearchState::default();
-                        self.mode = AppMode::IssueDetail;
+                        // than falling through to Normal below. If the runner was
+                        // busy the edit was rejected — keep the Input open (mode
+                        // untouched) so the typed logins aren't lost.
+                        if self.submit_issue_assignees(number, &input) {
+                            self.search_state = SearchState::default();
+                            self.mode = AppMode::IssueDetail;
+                        }
                         return Ok(());
                     }
                     InputAction::Search => {

@@ -485,6 +485,9 @@ pub struct IssueListView {
     pub filter: crate::issue::IssueFilter,
     /// First visible row, kept in range each frame by the widget.
     pub scroll: usize,
+    /// Issue number to reselect once a refetch completes, captured when the view
+    /// transitions to `Loading` so a refresh/mutation doesn't jump to row 0.
+    pub pending_reselect: Option<u64>,
 }
 
 pub enum IssueListState {

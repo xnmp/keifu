@@ -52,7 +52,7 @@ impl<'a> Widget for IssueDetailWidget<'a> {
         buf.set_string(
             inner.x,
             fy,
-            trunc(hint, inner.width as usize),
+            super::truncate_str(hint, inner.width as usize),
             Style::default().fg(self.theme.text_muted),
         );
     }
@@ -174,14 +174,6 @@ fn date_only(ts: &str) -> String {
     ts.split('T').next().unwrap_or(ts).to_string()
 }
 
-fn trunc(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
-    }
-}
-
 // ── label picker ───────────────────────────────────────────────────────
 
 pub struct IssueLabelPickerWidget<'a> {
@@ -247,7 +239,10 @@ impl<'a> Widget for IssueLabelPickerWidget<'a> {
         buf.set_string(
             inner.x,
             y,
-            trunc(" ↑↓ move   Space toggle   Enter apply   Esc cancel", inner.width as usize),
+            super::truncate_str(
+                " ↑↓ move   Space toggle   Enter apply   Esc cancel",
+                inner.width as usize,
+            ),
             Style::default().fg(self.theme.text_muted),
         );
     }

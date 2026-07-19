@@ -312,6 +312,9 @@ impl App {
                 | AppMode::TagPicker { .. }
                 | AppMode::RemotePicker { .. }
                 | AppMode::FileHistory { .. }
+                | AppMode::IssueList
+                | AppMode::IssueDetail
+                | AppMode::IssueLabelPicker { .. }
         )
     }
 }

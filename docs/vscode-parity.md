@@ -75,8 +75,9 @@ message/author/hash), fuzzy branch search (/).
 
 ## Deliberately skipped (terminal-impractical or low value)
 
-Avatars, code-review tracking, issue links/PR creation, emoji/markdown in
-messages, column resize cosmetics.
+Emoji/markdown in messages, column resize cosmetics. (Avatars, PR
+create/merge/review, CI checks, and GitHub issue viewing/management were
+originally skipped but have since shipped.)
 
 ## Capabilities keifu has that Git Graph does NOT
 

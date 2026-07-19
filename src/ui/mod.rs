@@ -832,12 +832,33 @@ fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
 }
 
 /// Truncate to `max` display columns with an ellipsis.
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+/// Truncate `s` to at most `max` display columns, appending `…` when it
+/// overflows. Uses Unicode display width (not char count) so wide CJK/emoji
+/// glyphs are measured correctly and the result — including the ellipsis — never
+/// exceeds `max` columns. Shared by widgets that write with `Buffer::set_string`,
+/// which does not clip.
+pub(crate) fn truncate_str(s: &str, max: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if UnicodeWidthStr::width(s) <= max {
+        return s.to_string();
     }
+    if max == 0 {
+        return String::new();
+    }
+    // Reserve one column for the ellipsis.
+    let budget = max - 1;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 /// Overlay pixel-rendered graph images on top of the (blank) graph column.
@@ -1028,6 +1049,36 @@ mod tests {
         let buf = term.backend().buffer();
         let painted = (0..8).any(|y| (0..10).any(|x| buf[(x, y)].symbol() != " "));
         assert!(!painted, "a pane whose content fits draws no scrollbar");
+    }
+
+    #[test]
+    fn truncate_str_measures_display_width() {
+        use unicode_width::UnicodeWidthStr;
+
+        // ASCII: fits untouched, exact-fit untouched, overflow gets an ellipsis.
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello", 5), "hello");
+        assert_eq!(truncate_str("hello world", 5), "hell…");
+        assert_eq!(UnicodeWidthStr::width(truncate_str("hello world", 5).as_str()), 5);
+
+        // CJK glyphs are 2 columns each: 3 chars = 6 columns.
+        assert_eq!(truncate_str("日本語", 6), "日本語");
+        // max 5 can't fit the third wide glyph (2 cols) + ellipsis, so one glyph
+        // + ellipsis = 3 columns, never exceeding 5.
+        let cjk = truncate_str("日本語テスト", 5);
+        assert!(UnicodeWidthStr::width(cjk.as_str()) <= 5, "got {cjk:?}");
+        assert!(cjk.ends_with('…'));
+
+        // Emoji (width 2) never overflow the budget.
+        let emoji = truncate_str("🐛🐛🐛🐛", 5);
+        assert!(UnicodeWidthStr::width(emoji.as_str()) <= 5, "got {emoji:?}");
+        assert!(emoji.ends_with('…'));
+
+        // Zero max yields empty (can't even fit the ellipsis).
+        assert_eq!(truncate_str("anything", 0), "");
+        // Empty input stays empty regardless of max.
+        assert_eq!(truncate_str("", 0), "");
+        assert_eq!(truncate_str("", 5), "");
     }
 
     #[test]

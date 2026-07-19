@@ -308,6 +308,14 @@ const DETAIL_FIELDS: &str =
 /// A completed detail fetch: which issue, and its detail or an error.
 type DetailResult = (u64, Result<IssueDetail, String>);
 
+/// Whether `start_detail` should spawn a fetch for `number`: only when it is
+/// neither already cached nor the number a fetch is already in flight for. A
+/// fetch for a *different* number is always started (replacing the in-flight
+/// one), so opening issue #7 while #42's fetch runs never gets dropped.
+fn should_start_detail(is_cached: bool, pending: Option<u64>, number: u64) -> bool {
+    !is_cached && pending != Some(number)
+}
+
 /// Turn a `gh` invocation into a parsed value: parse stdout on success, else an
 /// error from stderr (or a generic fallback).
 fn parse_output<T>(
@@ -387,9 +395,13 @@ impl IssueFetch {
         self.detail_cache.get(&number)
     }
 
-    /// Spawn a detail fetch for `number` unless cached or already in flight.
+    /// Spawn a detail fetch for `number` unless cached or already the pending
+    /// fetch. A fetch for a *different* number replaces any in-flight one (the
+    /// orphaned worker's `send` fails harmlessly; `poll_detail` matches by
+    /// number), so switching issues while a fetch is in flight never stalls.
     pub fn start_detail(&mut self, repo_path: &str, number: u64) {
-        if self.detail_cache.contains_key(&number) || self.detail_rx.is_some() {
+        if !should_start_detail(self.detail_cache.contains_key(&number), self.pending_detail, number)
+        {
             return;
         }
         let (tx, rx) = mpsc::channel();
@@ -697,6 +709,26 @@ mod tests {
     }
 
     // ── filter cycling ───────────────────────────────────────────────
+
+    // ── detail-fetch guard ───────────────────────────────────────────
+
+    #[test]
+    fn start_detail_guard_starts_second_number_while_first_in_flight() {
+        // Regression (#issues MAJOR): opening #7 while #42's fetch is in flight
+        // must start #7's fetch, not silently drop it (leaving the popup stuck
+        // Loading forever).
+        assert!(
+            should_start_detail(false, Some(42), 7),
+            "a fetch for a different number replaces the in-flight one"
+        );
+        // Same number already in flight → don't restart.
+        assert!(!should_start_detail(false, Some(7), 7));
+        // Already cached → never fetch, regardless of what's pending.
+        assert!(!should_start_detail(true, None, 7));
+        assert!(!should_start_detail(true, Some(42), 7));
+        // Nothing cached, nothing pending → fetch.
+        assert!(should_start_detail(false, None, 7));
+    }
 
     #[test]
     fn filter_cycles_and_maps_to_args() {

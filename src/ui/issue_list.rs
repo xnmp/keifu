@@ -75,7 +75,7 @@ impl<'a> IssueListWidget<'a> {
         buf.set_string(
             inner.x,
             inner.y,
-            truncate(text, inner.width as usize),
+            super::truncate_str(text, inner.width as usize),
             Style::default().fg(color),
         );
     }
@@ -85,7 +85,7 @@ impl<'a> IssueListWidget<'a> {
         buf.set_string(
             inner.x,
             y,
-            truncate(text, inner.width as usize),
+            super::truncate_str(text, inner.width as usize),
             Style::default().fg(self.theme.text_muted),
         );
     }
@@ -157,15 +157,6 @@ fn hex_to_color(hex: &str) -> Option<Color> {
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
     Some(Color::Rgb(r, g, b))
-}
-
-/// Truncate a string to `max` display columns (char-count approximation).
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
-    }
 }
 
 #[cfg(test)]

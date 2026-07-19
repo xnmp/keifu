@@ -22,6 +22,7 @@ impl App {
             selected: 0,
             filter,
             scroll: 0,
+            pending_reselect: None,
         });
         self.issue_fetch.start_list(&self.repo_path, filter);
         self.issue_fetch.start_labels(&self.repo_path);
@@ -71,6 +72,9 @@ impl App {
         if let Some(v) = &mut self.issue_list {
             let filter = v.filter.next();
             v.filter = filter;
+            // A filter change swaps the whole set, so start at the top rather
+            // than trying to preserve the previous selection.
+            v.pending_reselect = None;
             v.state = IssueListState::Loading;
             v.selected = 0;
             v.scroll = 0;
@@ -79,10 +83,20 @@ impl App {
     }
 
     fn refresh_issue_list(&mut self) {
+        let Some(filter) = self.issue_list.as_ref().map(|v| v.filter) else {
+            return;
+        };
+        self.set_issue_list_loading();
+        self.issue_fetch.start_list(&self.repo_path, filter);
+    }
+
+    /// Transition the list to `Loading`, remembering the currently-selected
+    /// issue's number so the selection can be restored by number once the
+    /// refetch completes (instead of snapping back to row 0).
+    fn set_issue_list_loading(&mut self) {
         if let Some(v) = &mut self.issue_list {
-            let filter = v.filter;
+            v.pending_reselect = selected_issue_number(&v.state, v.selected);
             v.state = IssueListState::Loading;
-            self.issue_fetch.start_list(&self.repo_path, filter);
         }
     }
 
@@ -262,9 +276,12 @@ impl App {
                     self.toast(ToastKind::Error, "Issue title can't be empty");
                     return;
                 }
-                self.issue_editor = crate::text_editor::TextEditor::new();
-                self.start_issue_action(IssueAction::Create { title, body }, "Creating issue…");
-                self.mode = AppMode::IssueList;
+                // Only discard the buffer + leave compose once the action is
+                // actually accepted; a busy runner keeps the typed text intact.
+                if self.start_issue_action(IssueAction::Create { title, body }, "Creating issue…") {
+                    self.issue_editor = crate::text_editor::TextEditor::new();
+                    self.mode = AppMode::IssueList;
+                }
             }
             IssueComposePurpose::Comment { number } => {
                 let body = text.trim().to_string();
@@ -272,12 +289,10 @@ impl App {
                     self.toast(ToastKind::Error, "Comment can't be empty");
                     return;
                 }
-                self.issue_editor = crate::text_editor::TextEditor::new();
-                self.start_issue_action(
-                    IssueAction::Comment { number, body },
-                    "Adding comment…",
-                );
-                self.mode = AppMode::IssueDetail;
+                if self.start_issue_action(IssueAction::Comment { number, body }, "Adding comment…") {
+                    self.issue_editor = crate::text_editor::TextEditor::new();
+                    self.mode = AppMode::IssueDetail;
+                }
             }
         }
     }
@@ -358,19 +373,26 @@ impl App {
             return;
         };
         let (add, remove) = label_diff(&picker.labels, &picker.original, &picker.chosen);
-        self.mode = AppMode::IssueDetail;
         if add.is_empty() && remove.is_empty() {
+            self.mode = AppMode::IssueDetail;
             self.toast(ToastKind::Info, "No label changes");
             return;
         }
-        self.start_issue_action(
+        let number = picker.number;
+        if self.start_issue_action(
             IssueAction::EditLabels {
-                number: picker.number,
+                number,
                 add,
                 remove,
             },
             "Updating labels…",
-        );
+        ) {
+            self.mode = AppMode::IssueDetail;
+        } else {
+            // Runner busy — keep the picker open so the user's checkbox choices
+            // aren't lost (the selection cursor lives on the mode, untouched).
+            self.issue_label_picker = Some(picker);
+        }
     }
 
     // ── assignees ──────────────────────────────────────────────────────
@@ -390,13 +412,16 @@ impl App {
 
     /// Diff the typed logins against the issue's current assignees and, if
     /// anything changed, run the edit. Called from the Input confirm path.
-    pub(crate) fn submit_issue_assignees(&mut self, number: u64, input: &str) {
+    /// Returns whether the input can be dismissed: `true` when there was nothing
+    /// to do or the edit started, `false` when the runner was busy (so the
+    /// caller keeps the Input open and the typed logins aren't lost).
+    pub(crate) fn submit_issue_assignees(&mut self, number: u64, input: &str) -> bool {
         let current = self.current_issue_assignees(number);
         let desired = parse_logins(input);
         let (add, remove) = assignee_diff(&current, &desired);
         if add.is_empty() && remove.is_empty() {
             self.toast(ToastKind::Info, "No assignee changes");
-            return;
+            return true;
         }
         self.start_issue_action(
             IssueAction::EditAssignees {
@@ -405,7 +430,7 @@ impl App {
                 remove,
             },
             "Updating assignees…",
-        );
+        )
     }
 
     /// The current assignees of issue `number`, read from the open detail view.
@@ -430,13 +455,16 @@ impl App {
     }
 
     /// Start an issue action in the background, guarding against a busy runner.
-    fn start_issue_action(&mut self, action: IssueAction, busy_msg: &str) {
+    /// Returns whether the action was accepted (started); `false` means the
+    /// runner was busy and the caller must preserve any in-progress input.
+    fn start_issue_action(&mut self, action: IssueAction, busy_msg: &str) -> bool {
         if self.issue_action_runner.is_busy() {
             self.toast(ToastKind::Info, "busy: another issue operation in progress");
-            return;
+            return false;
         }
         self.issue_action_runner.start(&self.repo_path, action);
         self.toast(ToastKind::Info, busy_msg.to_string());
+        true
     }
 
     /// Open a URL in the browser, with status-line feedback.
@@ -458,8 +486,14 @@ impl App {
         if let Some(result) = self.issue_fetch.poll_list() {
             if let Some(v) = &mut self.issue_list {
                 if matches!(v.state, IssueListState::Loading) {
+                    let want = v.pending_reselect.take();
                     v.state = list_state_from(result);
-                    v.selected = 0;
+                    v.selected = match &v.state {
+                        IssueListState::Ready(issues) => {
+                            relocate_selection(issues, want, v.selected)
+                        }
+                        _ => 0,
+                    };
                     v.scroll = 0;
                 }
             }
@@ -477,8 +511,13 @@ impl App {
         }
 
         // Draining a completed label fetch caches it (inside `poll_labels`); the
-        // picker reads the cache lazily when it opens.
-        if self.issue_fetch.poll_labels().is_some() {
+        // picker reads the cache lazily when it opens. A failed fetch has no view
+        // to render into, so surface it as a toast — otherwise the picker toasts
+        // "Loading labels… press l again" forever with no explanation.
+        if let Some(result) = self.issue_fetch.poll_labels() {
+            if let Err(e) = result {
+                self.toast(ToastKind::Error, first_line(&e));
+            }
             changed = true;
         }
 
@@ -509,9 +548,8 @@ impl App {
                 }
             }
         }
-        if let Some(v) = &mut self.issue_list {
-            let filter = v.filter;
-            v.state = IssueListState::Loading;
+        if let Some(filter) = self.issue_list.as_ref().map(|v| v.filter) {
+            self.set_issue_list_loading();
             self.issue_fetch.start_list(&self.repo_path, filter);
         }
     }
@@ -605,6 +643,30 @@ fn issue_action_number(action: &IssueAction) -> Option<u64> {
         | IssueAction::Reopen { number }
         | IssueAction::EditLabels { number, .. }
         | IssueAction::EditAssignees { number, .. } => Some(*number),
+    }
+}
+
+/// The issue number of the row at `selected` in a `Ready` list, else `None`.
+fn selected_issue_number(state: &IssueListState, selected: usize) -> Option<u64> {
+    match state {
+        IssueListState::Ready(issues) => issues.get(selected).map(|i| i.number),
+        _ => None,
+    }
+}
+
+/// Re-locate the list selection after a refetch: prefer the row whose issue
+/// number matches `want` (the previously-selected issue); if it's gone (or none
+/// was remembered) clamp the previous index into range. Empty list ⇒ 0.
+fn relocate_selection(issues: &[IssueInfo], want: Option<u64>, prev: usize) -> usize {
+    if let Some(number) = want {
+        if let Some(idx) = issues.iter().position(|i| i.number == number) {
+            return idx;
+        }
+    }
+    if issues.is_empty() {
+        0
+    } else {
+        prev.min(issues.len() - 1)
     }
 }
 
@@ -832,6 +894,48 @@ mod tests {
             IssueDetailState::Error(e) => assert_eq!(e, "nope"),
             _ => panic!("expected Error"),
         }
+    }
+
+    // ── selection preservation across refetch ──────────────────────────
+
+    #[test]
+    fn relocate_selection_prefers_matching_issue_number() {
+        let issues = vec![sample_issue(10), sample_issue(20), sample_issue(30)];
+        // #20 was selected; it moved to a new index after refetch.
+        let reordered = vec![sample_issue(30), sample_issue(20), sample_issue(10)];
+        assert_eq!(relocate_selection(&reordered, Some(20), 1), 1);
+        // #30 was selected (index 2); now first.
+        assert_eq!(relocate_selection(&reordered, Some(30), 2), 0);
+        // Sanity: unchanged order keeps the same row.
+        assert_eq!(relocate_selection(&issues, Some(30), 2), 2);
+    }
+
+    #[test]
+    fn relocate_selection_clamps_when_issue_gone_or_unremembered() {
+        let issues = vec![sample_issue(10), sample_issue(20)];
+        // Remembered issue no longer present (e.g. closed & filtered out) →
+        // clamp the previous index into range.
+        assert_eq!(relocate_selection(&issues, Some(99), 5), 1);
+        // Nothing remembered → clamp previous index.
+        assert_eq!(relocate_selection(&issues, None, 0), 0);
+        assert_eq!(relocate_selection(&issues, None, 7), 1);
+        // Empty list → 0, never panics.
+        assert_eq!(relocate_selection(&[], Some(10), 3), 0);
+        assert_eq!(relocate_selection(&[], None, 3), 0);
+    }
+
+    #[test]
+    fn selected_issue_number_reads_ready_row_only() {
+        let ready = IssueListState::Ready(vec![sample_issue(10), sample_issue(20)]);
+        assert_eq!(selected_issue_number(&ready, 1), Some(20));
+        // Out-of-range index ⇒ None.
+        assert_eq!(selected_issue_number(&ready, 9), None);
+        // Non-Ready states have no selection to remember.
+        assert_eq!(selected_issue_number(&IssueListState::Loading, 0), None);
+        assert_eq!(
+            selected_issue_number(&IssueListState::Error("boom".into()), 0),
+            None
+        );
     }
 
     #[test]

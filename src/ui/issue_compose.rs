@@ -60,7 +60,7 @@ impl<'a> Widget for IssueComposeWidget<'a> {
         buf.set_string(
             inner.x,
             inner.y,
-            trunc(self.header(), inner.width as usize),
+            super::truncate_str(self.header(), inner.width as usize),
             Style::default().fg(self.theme.text_muted),
         );
 
@@ -79,7 +79,12 @@ impl<'a> Widget for IssueComposeWidget<'a> {
             } else {
                 Style::default().fg(self.theme.text_primary)
             };
-            buf.set_string(body.x, body.y + row as u16, trunc(line, body.width as usize), style);
+            buf.set_string(
+                body.x,
+                body.y + row as u16,
+                super::truncate_str(line, body.width as usize),
+                style,
+            );
         }
 
         // Hint (bottom row).
@@ -88,16 +93,8 @@ impl<'a> Widget for IssueComposeWidget<'a> {
         buf.set_string(
             inner.x,
             fy,
-            trunc(hint, inner.width as usize),
+            super::truncate_str(hint, inner.width as usize),
             Style::default().fg(self.theme.text_muted),
         );
-    }
-}
-
-fn trunc(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
     }
 }
