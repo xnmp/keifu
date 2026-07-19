@@ -69,13 +69,18 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
         }
 
         if self.items.is_empty() {
-            if self.is_loading {
-                let loading = Paragraph::new(Line::from(Span::styled(
-                    "Loading...",
-                    Style::default().fg(self.theme.text_muted),
-                )));
-                loading.render(inner, buf);
-            }
+            // Dim placeholder instead of a blank pane. Loading is transient
+            // (plain muted); a settled empty state uses the italic placeholder.
+            let (text, style) = if self.is_loading {
+                ("Loading...", Style::default().fg(self.theme.text_muted))
+            } else if self.is_uncommitted {
+                ("no changes", self.theme.placeholder_style())
+            } else {
+                ("empty commit", self.theme.placeholder_style())
+            };
+            // Lead with a space to match the pane's content inset.
+            Paragraph::new(Line::from(Span::styled(format!(" {text}"), style)))
+                .render(inner, buf);
             return;
         }
 

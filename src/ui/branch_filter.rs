@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Clear, Widget},
 };
 
 use super::theme::Theme;
@@ -81,11 +81,7 @@ impl<'a> Widget for BranchFilterWidget<'a> {
             format!(" Branch Filter [{}] ", self.filter)
         };
 
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(title);
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -95,6 +91,16 @@ impl<'a> Widget for BranchFilterWidget<'a> {
         }
 
         let filtered = self.filtered_branches();
+
+        // Empty state: a dim placeholder instead of a blank body.
+        if filtered.is_empty() {
+            buf.set_line(
+                inner.x,
+                inner.y,
+                &Line::from(Span::styled("no matching branches", self.theme.placeholder_style())),
+                inner.width,
+            );
+        }
 
         // Reserve last row for footer
         let list_height = inner.height.saturating_sub(1) as usize;

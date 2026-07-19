@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
 };
 
 use crate::app::{App, FocusedPanel};
@@ -53,7 +53,9 @@ pub fn compute_commit_detail_layout<'a>(
         app.commit_editor_line_offset = offset;
     }
 
-    let commit_inner_width = commit_area.width.saturating_sub(2) as usize;
+    // Inner width excludes both borders (2) and the block's horizontal
+    // padding (1 each side), so wrapped-line counting matches what renders.
+    let commit_inner_width = commit_area.width.saturating_sub(4) as usize;
     let commit_visible = commit_area.height.saturating_sub(2) as usize;
     app.commit_detail_visible_rows = commit_visible as u16;
 
@@ -242,7 +244,7 @@ impl<'a> CommitDetailWidget<'a> {
         let mut lines = vec![
             // Author
             Line::from(vec![
-                Span::styled("Author: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("Author: ", theme.metadata_label_style()),
                 Span::styled(
                     format!("{} <{}>", commit.author_name, commit.author_email),
                     Style::default().fg(theme.author_color),
@@ -250,7 +252,7 @@ impl<'a> CommitDetailWidget<'a> {
             ]),
             // Date
             Line::from(vec![
-                Span::styled("Date:   ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("Date:   ", theme.metadata_label_style()),
                 Span::styled(
                     commit.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
                     Style::default().fg(theme.date_color),
@@ -269,7 +271,7 @@ impl<'a> CommitDetailWidget<'a> {
                     _ => (theme.file_deleted, Modifier::BOLD),
                 };
                 lines.push(Line::from(vec![
-                    Span::styled("Sig:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled("Sig:    ", theme.metadata_label_style()),
                     Span::styled(
                         signature_status_label(code).to_string(),
                         Style::default().fg(color).add_modifier(modifier),
@@ -351,7 +353,10 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             .title_style(self.theme.title_style(self.is_focused))
             .borders(Borders::ALL)
             .border_style(self.theme.border_style(self.is_focused))
-            .border_type(self.theme.border_type());
+            .border_type(self.theme.border_type())
+            // One column of horizontal inset so field text (Author:/Date:/…)
+            // never touches the border, matching the other panes' padding.
+            .padding(Padding::horizontal(1));
 
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)

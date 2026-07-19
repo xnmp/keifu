@@ -5,10 +5,142 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Clear, Paragraph, Widget},
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::theme::Theme;
+
+/// One row of the help sheet.
+enum HelpEntry {
+    /// A section heading (e.g. "Navigation").
+    Header(&'static str),
+    /// A `(key, description)` binding row.
+    Row(&'static str, &'static str),
+    /// Vertical spacer between sections.
+    Blank,
+}
+
+/// Minimum gap (in columns) between the key column and its description, so the
+/// two never collide even for the longest key label.
+const KEY_GAP: usize = 2;
+
+/// The rendered width of the key column: the widest key label plus [`KEY_GAP`].
+/// Pure so the layout can be unit-tested independently of rendering.
+fn key_column_width(entries: &[HelpEntry]) -> usize {
+    let widest = entries
+        .iter()
+        .filter_map(|e| match e {
+            HelpEntry::Row(key, _) => Some(UnicodeWidthStr::width(*key)),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    widest + KEY_GAP
+}
+
+/// The help entries for the current context (uncommitted adds the staging and
+/// merge-conflict rows). Order matches the on-screen sections.
+fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
+    use HelpEntry::{Blank, Header, Row};
+    let mut e = vec![
+        Header("Navigation"),
+        Row("↑ / ↓", "Move up/down"),
+        Row("← / →", "Switch panels"),
+        Row("Tab / S-Tab", "Switch panels (forward/back)"),
+        Row("Ctrl+d/u", "Page down/up"),
+        Row("g / Home", "Go to top"),
+        Row("G / End", "Go to bottom"),
+        Row("@", "Jump to HEAD"),
+        Row("Esc", "Return to graph / stop editing / quit (from graph)"),
+        Blank,
+        Header("Graph Panel"),
+        Row("Enter", "Open actions menu"),
+        Row("Space", "Open file select"),
+        Row("] / [", "Next / previous branch label"),
+        Row("b", "Create new branch"),
+        Row("d", "Delete branch"),
+        Row("f", "Fetch from remote"),
+        Row("p", "Pull (fetch + integrate)"),
+        Row("P", "Push current branch (publishes if no upstream)"),
+        Row("B", "Branch filter (type to filter by name, @ by author)"),
+        Row("O", "Show/hide remote-only branches"),
+        Row("Ctrl+f", "Filter commits (message/author/hash)"),
+        Row("m", "Mark / compare two commits (Esc clears)"),
+        Row("o", "Open PR in browser (badge color = CI: green/yellow/red)"),
+        Row("c", "CI check details (see failure logs without a browser)"),
+        Row("v", "View PR conversation (comments, reviews, threads)"),
+        Row("M", "Toggle author/hash/date, muted merges & avatars"),
+        Row("< / >", "Shrink / widen the graph column (… = truncated)"),
+        Row("t", "Toggle branch tracing (dim off-lineage lanes)"),
+        Row("^", "Jump to fork point (merge base with main / HEAD)"),
+        Row("Ctrl+Z", "Undo last op — branch/tag delete, merge, pull, rename"),
+        Blank,
+        Header("Files Panel"),
+    ];
+
+    if is_uncommitted {
+        e.extend([
+            Row("s", "Stage/unstage file"),
+            Row("S / U", "Stage all / unstage all"),
+            Row("i", "Add to .gitignore (folder in folder mode)"),
+            Row("v", "Archive to .archive/ (folder in folder mode)"),
+            Row("r", "Restore file (discard changes)"),
+            Row("Delete", "Delete untracked file (recycle bin)"),
+            Row("Ctrl+z", "Undo last file operation"),
+            Header("Merge conflicts"),
+            Row("] / [", "Jump to next / previous conflicted file"),
+            Row("o", "Accept ours (on conflicted file)"),
+            Row("t", "Accept theirs (on conflicted file)"),
+            Row("c", "Continue merge/rebase/cherry-pick/revert"),
+            Row("A", "Abort the in-progress operation"),
+        ]);
+    }
+
+    e.extend([
+        Row("f", "Toggle folder grouping"),
+        Row("Ctrl+f", "Filter files"),
+        Row("Space", "Open file with default app"),
+        Row("y", "Copy file path"),
+        Row("Enter", "Open file diff"),
+        Row("h", "File history (commits touching this file)"),
+        Blank,
+        Header("File Diff Viewer"),
+        Row("[ / ]", "Previous / next hunk"),
+        Row("n / N", "Next / previous file"),
+        Row("s", "Stage hunk under cursor"),
+        Row("u", "Unstage hunk under cursor"),
+        Row("x", "Discard hunk (working tree)"),
+        Row("Ctrl+Alt+W", "Toggle soft line wrap"),
+        Blank,
+        Header("Commit Panel"),
+        Row("↑ / ↓", "Scroll"),
+        Row("Enter", "Start editing commit message"),
+        Row("Enter", "Commit changes (or save amend)"),
+        Row("Ctrl+Enter", "Amend last commit"),
+        Row("Ctrl+S", "Stash changes (staged / all / +untracked)"),
+        Blank,
+        Header("Search"),
+        Row("/", "Search branches"),
+        Blank,
+        Header("Mouse"),
+        Row("Click", "Select commit/file, focus panel"),
+        Row("Double-click", "Open commit menu / file diff"),
+        Row("Right-click", "Commit context menu at cursor"),
+        Row("Click chip", "PR badge opens PR; branch chip checks out"),
+        Row("Wheel", "Scroll panel / popup under cursor"),
+        Row("Drag divider", "Resize the graph/detail split"),
+        Blank,
+        Header("Other"),
+        Row("Ctrl+P / :", "Command palette (commands, branches, commits)"),
+        Row("R", "Refresh"),
+        Row("F5", "Full update (fetch all remotes + PRs + refresh)"),
+        Row("?", "Toggle this help"),
+        Row("Ctrl+Q", "Quit (from anywhere)"),
+    ]);
+
+    e
+}
 
 pub struct HelpPopup<'a> {
     pub is_uncommitted: bool,
@@ -36,323 +168,72 @@ impl<'a> Widget for HelpPopup<'a> {
             .fg(self.theme.help_header)
             .add_modifier(Modifier::BOLD);
 
-        let mut lines = vec![
-            Line::from(Span::styled("Navigation", header_style)),
-            Line::from(vec![
-                Span::styled("  ↑ / ↓      ", key_style),
-                Span::styled("Move up/down", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  ← / →      ", key_style),
-                Span::styled("Switch panels", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Tab / S-Tab", key_style),
-                Span::styled("Switch panels (forward/back)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+d/u   ", key_style),
-                Span::styled("Page down/up", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  g / Home   ", key_style),
-                Span::styled("Go to top", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  G / End    ", key_style),
-                Span::styled("Go to bottom", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  @          ", key_style),
-                Span::styled("Jump to HEAD", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Esc        ", key_style),
-                Span::styled("Return to graph / stop editing / quit (from graph)", desc_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Graph Panel", header_style)),
-            Line::from(vec![
-                Span::styled("  Enter      ", key_style),
-                Span::styled("Open actions menu", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Space      ", key_style),
-                Span::styled("Open file select", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  ] / [      ", key_style),
-                Span::styled("Next / previous branch label", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  b          ", key_style),
-                Span::styled("Create new branch", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  d          ", key_style),
-                Span::styled("Delete branch", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  f          ", key_style),
-                Span::styled("Fetch from remote", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  p          ", key_style),
-                Span::styled("Pull (fetch + integrate)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  P          ", key_style),
-                Span::styled("Push current branch (publishes if no upstream)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  B          ", key_style),
-                Span::styled("Branch filter (type to filter by name, @ by author)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  O          ", key_style),
-                Span::styled("Show/hide remote-only branches", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+f     ", key_style),
-                Span::styled("Filter commits (message/author/hash)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  m          ", key_style),
-                Span::styled("Mark / compare two commits (Esc clears)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  o          ", key_style),
-                Span::styled(
-                    "Open PR in browser (badge color = CI: green/yellow/red)",
-                    desc_style,
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  c          ", key_style),
-                Span::styled("CI check details (see failure logs without a browser)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  v          ", key_style),
-                Span::styled("View PR conversation (comments, reviews, threads)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  M          ", key_style),
-                Span::styled("Toggle author/hash/date, muted merges & avatars", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  < / >      ", key_style),
-                Span::styled("Shrink / widen the graph column (… = truncated)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  t          ", key_style),
-                Span::styled("Toggle branch tracing (dim off-lineage lanes)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  ^          ", key_style),
-                Span::styled("Jump to fork point (merge base with main / HEAD)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+Z     ", key_style),
-                Span::styled(
-                    "Undo last op — branch/tag delete, merge, pull, rename",
-                    desc_style,
-                ),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Files Panel", header_style)),
-        ];
+        let entries = entries(self.is_uncommitted);
+        // Fixed key column sized to the longest key, guaranteeing a ≥ KEY_GAP
+        // gap so keys and descriptions never collide (e.g. "Tab / S-Tab").
+        let kw = key_column_width(&entries);
 
-        if self.is_uncommitted {
-            lines.extend([
-                Line::from(vec![
-                    Span::styled("  s          ", key_style),
-                    Span::styled("Stage/unstage file", desc_style),
+        let lines: Vec<Line> = entries
+            .iter()
+            .map(|entry| match entry {
+                HelpEntry::Header(text) => Line::from(Span::styled(*text, header_style)),
+                HelpEntry::Row(key, desc) => Line::from(vec![
+                    // Leading space indents rows under their section header;
+                    // `{:<kw$}` pads the key so descriptions start at a fixed
+                    // column with a guaranteed gap.
+                    Span::styled(format!(" {key:<kw$}"), key_style),
+                    Span::styled(*desc, desc_style),
                 ]),
-                Line::from(vec![
-                    Span::styled("  S / U      ", key_style),
-                    Span::styled("Stage all / unstage all", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  i          ", key_style),
-                    Span::styled("Add to .gitignore (folder in folder mode)", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  v          ", key_style),
-                    Span::styled("Archive to .archive/ (folder in folder mode)", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  r          ", key_style),
-                    Span::styled("Restore file (discard changes)", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Delete     ", key_style),
-                    Span::styled("Delete untracked file (recycle bin)", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Ctrl+z     ", key_style),
-                    Span::styled("Undo last file operation", desc_style),
-                ]),
-                Line::from(Span::styled("  Merge conflicts", header_style)),
-                Line::from(vec![
-                    Span::styled("  ] / [      ", key_style),
-                    Span::styled("Jump to next / previous conflicted file", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  o          ", key_style),
-                    Span::styled("Accept ours (on conflicted file)", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  t          ", key_style),
-                    Span::styled("Accept theirs (on conflicted file)", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  c          ", key_style),
-                    Span::styled("Continue merge/rebase/cherry-pick/revert", desc_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("  A          ", key_style),
-                    Span::styled("Abort the in-progress operation", desc_style),
-                ]),
-            ]);
-        }
+                HelpEntry::Blank => Line::from(""),
+            })
+            .collect();
 
-        lines.extend([
-            Line::from(vec![
-                Span::styled("  f          ", key_style),
-                Span::styled("Toggle folder grouping", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+f     ", key_style),
-                Span::styled("Filter files", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Space      ", key_style),
-                Span::styled("Open file with default app", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  y          ", key_style),
-                Span::styled("Copy file path", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Enter      ", key_style),
-                Span::styled("Open file diff", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  h          ", key_style),
-                Span::styled("File history (commits touching this file)", desc_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("File Diff Viewer", header_style)),
-            Line::from(vec![
-                Span::styled("  [ / ]      ", key_style),
-                Span::styled("Previous / next hunk", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  n / N      ", key_style),
-                Span::styled("Next / previous file", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  s          ", key_style),
-                Span::styled("Stage hunk under cursor", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  u          ", key_style),
-                Span::styled("Unstage hunk under cursor", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  x          ", key_style),
-                Span::styled("Discard hunk (working tree)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+Alt+W ", key_style),
-                Span::styled("Toggle soft line wrap", desc_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Commit Panel", header_style)),
-            Line::from(vec![
-                Span::styled("  ↑ / ↓      ", key_style),
-                Span::styled("Scroll", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Enter      ", key_style),
-                Span::styled("Start editing commit message", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Enter        ", key_style),
-                Span::styled("Commit changes (or save amend)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+Enter   ", key_style),
-                Span::styled("Amend last commit", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+S       ", key_style),
-                Span::styled("Stash changes (staged / all / +untracked)", desc_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Search", header_style)),
-            Line::from(vec![
-                Span::styled("  /          ", key_style),
-                Span::styled("Search branches", desc_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Mouse", header_style)),
-            Line::from(vec![
-                Span::styled("  Click        ", key_style),
-                Span::styled("Select commit/file, focus panel", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Double-click ", key_style),
-                Span::styled("Open commit menu / file diff", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Right-click  ", key_style),
-                Span::styled("Commit context menu at cursor", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Click chip   ", key_style),
-                Span::styled("PR badge opens PR; branch chip checks out", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Wheel        ", key_style),
-                Span::styled("Scroll panel / popup under cursor", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Drag divider ", key_style),
-                Span::styled("Resize the graph/detail split", desc_style),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Other", header_style)),
-            Line::from(vec![
-                Span::styled("  Ctrl+P / :  ", key_style),
-                Span::styled("Command palette (commands, branches, commits)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  R          ", key_style),
-                Span::styled("Refresh", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  F5         ", key_style),
-                Span::styled("Full update (fetch all remotes + PRs + refresh)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  ?          ", key_style),
-                Span::styled("Toggle this help", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+Q     ", key_style),
-                Span::styled("Quit (from anywhere)", desc_style),
-            ]),
-        ]);
-
-        let block = Block::default()
-            .title(" Help ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
-
+        let block = self.theme.popup_block(" Help ");
         let paragraph = Paragraph::new(lines).block(block);
 
         Widget::render(paragraph, area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_column_leaves_a_gap_after_the_longest_key() {
+        let e = entries(true);
+        let kw = key_column_width(&e);
+        // Widest key label present in the sheet ("Double-click" / "Drag divider").
+        let widest = e
+            .iter()
+            .filter_map(|entry| match entry {
+                HelpEntry::Row(k, _) => Some(UnicodeWidthStr::width(*k)),
+                _ => None,
+            })
+            .max()
+            .unwrap();
+        assert_eq!(kw, widest + KEY_GAP);
+        // Every key padded to `kw` keeps at least KEY_GAP trailing spaces before
+        // the description — the fix for the "Tab / S-TabSwitch panels" collision.
+        for entry in &e {
+            if let HelpEntry::Row(k, _) = entry {
+                let padded = format!("{k:<kw$}");
+                let trailing = kw - UnicodeWidthStr::width(*k);
+                assert!(
+                    trailing >= KEY_GAP,
+                    "key {k:?} padded to {padded:?} leaves only {trailing} cols"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn width_is_stable_across_contexts() {
+        // The widest key lives in an always-present section (Mouse), so the
+        // column width does not jump between committed and uncommitted help.
+        assert_eq!(
+            key_column_width(&entries(false)),
+            key_column_width(&entries(true))
+        );
     }
 }

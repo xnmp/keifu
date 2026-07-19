@@ -4,7 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Clear, Widget},
 };
 
 use super::theme::Theme;
@@ -43,11 +43,12 @@ impl<'a> PrComposeWidget<'a> {
 }
 
 /// The inner text area (where editor lines start), for cursor placement. Mirrors
-/// the widget's layout: block border + 1 header row.
+/// the widget's layout: block border + 1 col horizontal padding + 1 header row.
 pub fn text_area(popup: Rect) -> Rect {
-    let inner_x = popup.x + 1;
+    // Border (1) + the popup block's horizontal padding (1) on each side.
+    let inner_x = popup.x + 2;
     let inner_y = popup.y + 1;
-    let inner_w = popup.width.saturating_sub(2);
+    let inner_w = popup.width.saturating_sub(4);
     let inner_h = popup.height.saturating_sub(2);
     // Header row on top, hint row at bottom.
     Rect::new(
@@ -61,11 +62,7 @@ pub fn text_area(popup: Rect) -> Rect {
 impl<'a> Widget for PrComposeWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let block = Block::default()
-            .title(self.title())
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(self.title());
         let inner = block.inner(area);
         block.render(area, buf);
         if inner.height < 2 {

@@ -1,7 +1,8 @@
 //! Centralized theme definitions for UI rendering
 
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::BorderType;
+use ratatui::text::Line;
+use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 /// All color and style definitions used by the TUI.
 ///
@@ -420,6 +421,51 @@ impl Theme {
     /// the frame stays visually stable as focus moves.
     pub fn border_type(&self) -> BorderType {
         BorderType::Rounded
+    }
+
+    /// Popup title emphasis: bold in the popup's border color, so an overlay's
+    /// title and frame read as one active chrome (mirroring how a focused
+    /// pane's border and title share the accent via `title_style`).
+    pub fn popup_title_style(&self, border: Color) -> Style {
+        Style::default().fg(border).add_modifier(Modifier::BOLD)
+    }
+
+    /// The shared chrome for every overlay/popup: rounded borders (matching the
+    /// panes via `border_type`), a bold title styled in the border color, the
+    /// popup background, and one column of horizontal padding so content never
+    /// sits flush against the frame. Callers add their own content; a few
+    /// dialogs override the border color for semantics (see `popup_block_in`).
+    pub fn popup_block<'a>(&self, title: impl Into<Line<'a>>) -> Block<'a> {
+        self.popup_block_in(title, self.popup_border)
+    }
+
+    /// Like `popup_block`, but with an explicit border/title color — used by the
+    /// input (`input_border`) and confirm (`confirm_border`) dialogs, which keep
+    /// their semantic hue while sharing the unified rounded/padded chrome.
+    pub fn popup_block_in<'a>(&self, title: impl Into<Line<'a>>, border: Color) -> Block<'a> {
+        Block::default()
+            .title(title)
+            .title_style(self.popup_title_style(border))
+            .borders(Borders::ALL)
+            .border_type(self.border_type())
+            .border_style(Style::default().fg(border))
+            .style(Style::default().bg(self.popup_bg))
+            .padding(Padding::horizontal(1))
+    }
+
+    /// Muted style for commit-detail field labels (Author:/Date:/Sig:) and other
+    /// metadata captions, so the label recedes and its value reads first.
+    pub fn metadata_label_style(&self) -> Style {
+        Style::default().fg(self.text_muted)
+    }
+
+    /// Dim placeholder text for an empty pane/popup body ("no changes",
+    /// "empty commit", …): the muted family, italicized so it never reads as a
+    /// real row.
+    pub fn placeholder_style(&self) -> Style {
+        Style::default()
+            .fg(self.text_muted)
+            .add_modifier(Modifier::ITALIC)
     }
 
     /// Scrollbar track: the muted, always-present rail. Drawn from the

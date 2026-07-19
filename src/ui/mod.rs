@@ -388,7 +388,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Show cursor when editing commit message
     if app.editing_commit_message && app.focused_panel == crate::app::FocusedPanel::CommitDetail {
         let (cursor_row, cursor_col) = app.commit_editor.cursor_position();
-        let commit_inner_x = commit_area.x + 1;
+        // Border (1) + the commit-detail block's horizontal padding (1).
+        let commit_inner_x = commit_area.x + 2;
         let commit_inner_y = commit_area.y + 1;
         let editor_start_line = app.commit_editor_line_offset;
         let absolute_row = editor_start_line + cursor_row as u16;
@@ -397,7 +398,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             commit_inner_y + absolute_row.saturating_sub(app.commit_detail_scroll);
         if cursor_y < commit_area.y + commit_area.height - 1
             && cursor_y >= commit_inner_y
-            && cursor_x < commit_area.x + commit_area.width - 1
+            && cursor_x < commit_area.x + commit_area.width - 2
         {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
@@ -407,7 +408,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // (needs &mut app before the immutable borrow in the popup match below).
     if matches!(app.mode, AppMode::PrThread) {
         let popup = centered_rect(PR_THREAD_POPUP_PCT.0, PR_THREAD_POPUP_PCT.1, area);
-        let inner_w = popup.width.saturating_sub(2);
+        // 2 border cols + 1 col horizontal padding each side (popup_block).
+        let inner_w = popup.width.saturating_sub(4);
         // 2 border rows + 1 footer row.
         let body_h = popup.height.saturating_sub(3) as usize;
         let total = app.pr_thread.as_ref().map(|v| {
@@ -635,8 +637,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     branch_filter::matches_branch_filter(b, author_of(b), filter)
                 })
                 .count();
-            // +3 for borders and footer
-            let popup_height = (filtered_count + 3).min(24) as u16;
+            // +3 for borders and footer; keep at least one body row so the
+            // empty-state ("no matching branches") placeholder has room.
+            let popup_height = (filtered_count.max(1) + 3).min(24) as u16;
             // Room for "[x] " + name + a gap + author.
             let max_row_len = all_branches
                 .iter()

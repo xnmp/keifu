@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Clear, Widget},
 };
 
 const MAX_VISIBLE_RESULTS: usize = 7;
@@ -110,11 +110,7 @@ impl<'a> Widget for SearchDropdown<'a> {
         let visible_count = self.results.len().min(MAX_VISIBLE_RESULTS);
 
         // Build block
-        let block = Block::default()
-            .title(" Search branches ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(" Search branches ");
 
         let inner = block.inner(area);
         block.render(area, buf);

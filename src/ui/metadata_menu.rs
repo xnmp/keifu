@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Widget},
+    widgets::{Clear, Widget},
 };
 
 use super::theme::Theme;
@@ -34,11 +34,7 @@ impl<'a> Widget for MetadataMenuWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let block = Block::default()
-            .title(" Columns ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.popup_border))
-            .style(Style::default().bg(self.theme.popup_bg));
+        let block = self.theme.popup_block(" Columns ");
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -55,7 +51,7 @@ impl<'a> Widget for MetadataMenuWidget<'a> {
                 Style::default().fg(self.theme.text_primary)
             };
 
-            let prefix = if is_selected { " > " } else { "   " };
+            let prefix = if is_selected { "> " } else { "  " };
             let check = if self.columns.is_visible(*col) {
                 "[x] "
             } else {
