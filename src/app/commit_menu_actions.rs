@@ -599,9 +599,8 @@ impl App {
                     return Ok(());
                 }
                 if let Some(index) = self.selected_stash_index() {
-                    stash_apply(&self.repo_path, index)?;
-                    self.refresh(false)?;
-                    self.set_message("Stash applied");
+                    let outcome = stash_apply(&self.repo_path, index)?;
+                    self.handle_stash_outcome(outcome, "applied", "apply")?;
                 }
             }
             CommitMenuItem::StashPop => {
@@ -609,9 +608,8 @@ impl App {
                     return Ok(());
                 }
                 if let Some(index) = self.selected_stash_index() {
-                    stash_pop(&self.repo_path, index)?;
-                    self.refresh(true)?;
-                    self.set_message("Stash popped");
+                    let outcome = stash_pop(&self.repo_path, index)?;
+                    self.handle_stash_outcome(outcome, "popped", "pop")?;
                 }
             }
             CommitMenuItem::StashDrop => {
