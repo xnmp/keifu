@@ -1,5 +1,6 @@
 //! Git layer
 
+pub mod askpass;
 pub mod branch;
 pub mod commit;
 pub mod diff;
@@ -9,6 +10,7 @@ pub mod operations;
 pub mod patch;
 pub mod repository;
 
+pub use askpass::Credentials;
 pub use branch::{branch_authors, remote_only_branch_names, BranchInfo};
 pub use commit::CommitInfo;
 pub use diff::{

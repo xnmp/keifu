@@ -87,6 +87,7 @@ pub fn map_key_to_action(
         // Esc cancel, Enter newline, everything else the editor).
         AppMode::IssueCompose { .. } => map_pr_compose_mode(key),
         AppMode::IssueLabelPicker { .. } => map_issue_label_picker_mode(key),
+        AppMode::IssueLabelFilter { .. } => map_issue_label_filter_mode(key),
         AppMode::BranchPicker { .. }
         | AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
@@ -623,7 +624,31 @@ fn map_issue_list_mode(key: KeyEvent) -> Option<Action> {
         }
         (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshIssues),
         (KeyModifiers::NONE, KeyCode::Char('n')) => Some(Action::NewIssue),
+        (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::OpenIssueLabelFilter),
+        (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::ToggleUnblockedOnly),
+        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::EditIssueLabels),
         (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Action::OpenIssueInBrowser),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
+        _ => None,
+    }
+}
+
+/// Issue label-filter picker: j/k move, Space toggles, Ctrl+A all, Ctrl+O none,
+/// Enter applies, Esc cancels. Mirrors the branch-filter checkbox idiom.
+fn map_issue_label_filter_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::ToggleIssueLabel),
+        (KeyModifiers::CONTROL, KeyCode::Char('a')) => Some(Action::SelectAll),
+        (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::SelectNone),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::MenuSelect),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }

@@ -151,6 +151,45 @@ main.rs owns terminal suspend/resume, debug/headless path never suspends.
 
 ---
 
+## Remotes & Push
+
+### [DONE] 2026-07-19 Remote choice on push
+Push (`P`) now opens the remote picker whenever the repo has 2+ remotes — even
+when HEAD already has an upstream — with the selection defaulting to the upstream
+remote (falls back to the first remote). Single-remote and zero-remote behavior
+is unchanged. Choosing remote R pushes HEAD to R: the configured upstream → a
+plain `git push`; any other remote → `git push R HEAD` (no `-u`, upstream
+tracking untouched); a branch with no upstream still publishes (`push -u`). New
+`PushSpec::ToRemote` + `push_head_to_remote()`; `remote_ops::run_push_to_remote`
+picks the mode; pure, unit-tested `remote_picker_default()` for the default
+selection. Fetch/pull/prune pickers unchanged (they only surface when there's no
+upstream to disambiguate, so their default is naturally the first remote).
+
+### [DONE] 2026-07-19 In-TUI credential prompt with paste (issue #33)
+An HTTPS auth failure on a push/fetch/pull no longer dead-ends in the error
+popup: keifu prompts for a username (prefilled from the URL's `user@` or a
+previous entry) then a **masked** password/token, caches them per host for the
+session, and retries the same op automatically. Credentials reach the child git
+via a `GIT_ASKPASS` shim (`src/git/askpass.rs`, mode 0700 in the temp dir, echoes
+`KEIFU_ASKPASS_USER`/`_PASS`) — never in argv, the URL, or on disk; the shim is
+credential-free so it persists harmlessly. `GIT_TERMINAL_PROMPT=0` stays set.
+Cached creds are attached transparently to later ops on the same host (asked once
+per session); a retry that still fails auth drops the stale creds and re-prompts
+(prefilled), capped so it can't loop. Detection is a pure, unit-tested predicate
+`is_https_auth_failure()` (HTTPS `could not read Username` / `Authentication
+failed` only — SSH `publickey` failures stay plain errors) plus `extract_auth_url`
+for host/user. SSH keys are untouched. Real bracketed paste
+(`EnableBracketedPaste` in `tui.rs`, `Event::Paste` forwarded through
+`event.rs`): `Action::InputPaste` appends a sanitized single-line chunk to any
+input (control chars incl. newlines/tabs stripped), and paste routes into the
+commit/PR/issue `TextEditor` too (newlines kept). Session cache + retry state on
+`App` (`credentials`, `in_flight_op`, `pending_auth`); orchestration in
+`src/app/credentials.rs`. Verified live: multi-remote picker default + non-
+upstream push, the username→masked-password flow, masked paste (no plaintext
+leak), and re-prompt-on-retry.
+
+---
+
 ## Maintenance Sweeps
 
 ### [DONE] 2026-07-13 comprehensive perf/bug/architecture sweep
@@ -255,3 +294,45 @@ sheet is data-driven (`HelpEntry`) with a computed fixed key column (fixes the
 muted field labels; empty states show muted placeholders ("no changes",
 "empty commit", "no matching branches" — the branch-filter popup also no
 longer collapses to zero body rows when nothing matches).
+
+### [DONE] 2026-07-19 Issues enhancement batch (full-screen + filtering)
+Reworked the GitHub Issues feature (issue #37 follow-up). (1) Full-screen views:
+`AppMode::IssueList`/`IssueDetail` now render full-screen (content + 1-row status
+bar, early return in `ui::draw` via `draw_issue_screen`, mirroring `FileDiff`)
+instead of an 80% popup; compose / label-picker / label-filter draw the relevant
+issue view as a backdrop with a centered overlay on top (backdrop = detail when a
+detail popup is live, else the list). The old `ISSUE_POPUP_PCT` popup arms and the
+detail scroll pre-pass were removed; scroll clamping happens in the new
+full-screen path. (2) Filtering via a pure, unit-tested predicate
+(`issue::visible_issues` / `issue_matches`) shared by the widget and the
+selection/navigation handlers — `selected` now indexes the *visible* rows and is
+re-clamped whenever a filter shrinks the set. Status filter (open/closed/all)
+stays on `f`/Tab; `t` opens a label-filter checkbox picker
+(`AppMode::IssueLabelFilter`, Space toggle, ^a/^o all/none, Enter apply); `u`
+toggles unblocked-only. (3) Blocking data is sourced from GitHub's native issue
+dependencies via `gh api graphql` (`blockedBy` field, resolved through the repo's
+`nameWithOwner`), *combined* with body-parsed references (`blocked by #N`,
+`depends on #N`, `- [ ] #N`) to other open issues — both live in pure functions
+(`parse_blocked`, `blockers_in_body`, `compute_blocked_set`) with unit tests
+(self-refs, closed blockers, cross-repo refs ignored, malformed bodies). The
+fetch runs in the existing background style (`IssueFetch::start_blocked` /
+`poll_blocked`), degrading to "all unblocked" if unavailable. (4) `l` in the list
+opens the label picker for the selected issue (was detail-only), returning to
+whichever view it was opened from. (5) Aesthetics: list header (repo + active
+filters + shown/total), aligned rows (colored state glyph ● open / ✓ closed
+purple, right-aligned number, ⛔ blocked marker, truncated title, colored label
+chips, relative updated time, muted author, theme selection highlight); detail
+gets colored label chips (shared `hex_to_color`), muted field captions, comments
+with an author + relative-time header and indented body; "no issues match
+filters" empty state. Added a `Theme::issue_closed` (purple) color and a
+relative-time helper (`issue::relative_time`). Status-bar hints and the
+data-driven Help sheet updated with the new keys.
+
+### [DONE] 2026-07-19 Folder view shows basenames
+In the files pane's folder-grouping view (`f`), file rows under a folder header
+now display just the basename (`main.rs` under `src/`) instead of repeating the
+full repo-relative path. Display-only: `FileDiffInfo.path` is untouched (staging
+and diff lookups still key on the full path). A pure helper
+`is_under_folder_header` (`files_pane_state.rs`, unit-tested: nested files,
+root files, grouping off, `SectionHeader` reset between staged/unstaged
+sections) drives the choice in `ui/files_pane.rs`.

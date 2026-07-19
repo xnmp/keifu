@@ -84,6 +84,14 @@ impl TextEditor {
         self.insert_char('\n');
     }
 
+    /// Insert a whole string at the cursor (replacing any selection). Used for
+    /// bracketed paste; `s` may contain newlines.
+    pub fn insert_str(&mut self, s: &str) {
+        self.delete_selection();
+        self.text.insert_str(self.cursor, s);
+        self.cursor += s.len();
+    }
+
     pub fn backspace(&mut self) {
         if self.delete_selection() {
             return;

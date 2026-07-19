@@ -82,12 +82,32 @@ impl App {
                     InputAction::Search => {
                         self.jump_to_search_result();
                     }
+                    // Credential prompt: username step advances to the masked
+                    // password step; password step caches + retries. Both manage
+                    // their own mode transition and return early.
+                    InputAction::AuthUsername => {
+                        self.auth_advance_to_password(input.clone());
+                        return Ok(());
+                    }
+                    InputAction::AuthPassword => {
+                        self.auth_submit_password(input.clone());
+                        return Ok(());
+                    }
                 }
                 // Clear search state after confirming
                 self.search_state = SearchState::default();
                 self.mode = AppMode::Normal;
             }
             Action::Cancel => {
+                // A credential prompt cancels cleanly back to Normal, discarding
+                // the pending op.
+                if matches!(
+                    input_action,
+                    InputAction::AuthUsername | InputAction::AuthPassword
+                ) {
+                    self.auth_cancel();
+                    return Ok(());
+                }
                 // Restore position when canceling search
                 if matches!(input_action, InputAction::Search) {
                     self.restore_search_position();
@@ -105,6 +125,21 @@ impl App {
                 input.push(c);
 
                 // Incremental fuzzy search with live preview
+                if matches!(input_action, InputAction::Search) {
+                    self.update_fuzzy_search(&input);
+                    self.jump_to_search_result();
+                }
+
+                self.mode = AppMode::Input {
+                    title,
+                    input,
+                    action: input_action,
+                };
+            }
+            Action::InputPaste(pasted) => {
+                // Append a (pre-sanitized) paste chunk atomically.
+                input.push_str(&pasted);
+
                 if matches!(input_action, InputAction::Search) {
                     self.update_fuzzy_search(&input);
                     self.jump_to_search_result();

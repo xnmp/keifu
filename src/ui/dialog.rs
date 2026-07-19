@@ -17,11 +17,18 @@ pub struct InputDialog<'a> {
     title: &'a str,
     input: &'a str,
     theme: &'a Theme,
+    /// When true, the input is rendered as bullets (password/token entry).
+    mask: bool,
 }
 
 impl<'a> InputDialog<'a> {
     pub fn new(title: &'a str, input: &'a str, theme: &'a Theme) -> Self {
-        Self { title, input, theme }
+        Self { title, input, theme, mask: false }
+    }
+
+    /// Render the input masked (bullets) — for password/token entry.
+    pub fn masked(title: &'a str, input: &'a str, theme: &'a Theme) -> Self {
+        Self { title, input, theme, mask: true }
     }
 }
 
@@ -37,12 +44,19 @@ impl<'a> Widget for InputDialog<'a> {
             .fg(self.theme.text_primary)
             .add_modifier(Modifier::UNDERLINED);
 
+        // Mask the secret: one bullet per character, never the text itself.
+        let shown = if self.mask {
+            "\u{2022}".repeat(self.input.chars().count())
+        } else {
+            self.input.to_string()
+        };
+
         let hint_style = Style::default().fg(self.theme.text_muted);
         let lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled(self.input, input_style),
+                Span::styled(shown, input_style),
                 Span::styled("_", Style::default().fg(self.theme.search_cursor)),
             ]),
             Line::from(""),

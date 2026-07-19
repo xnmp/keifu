@@ -8,6 +8,7 @@ impl App {
         let Some((result, silent)) = self.network.poll_fetch() else {
             return false;
         };
+        let flight = self.in_flight_op.take();
         match result {
             Ok(()) => {
                 self.network.reset_timers();
@@ -35,9 +36,12 @@ impl App {
                 }
             }
             // A silent auto-fetch error was previously swallowed; surface it as a
-            // toast. A user-initiated fetch keeps the full error dialog.
+            // toast. A user-initiated fetch keeps the full error dialog. An HTTPS
+            // auth failure on a user-initiated fetch opens the credential prompt.
             Err(e) => {
-                if silent {
+                if self.try_prompt_credentials(&e, flight) {
+                    // Prompt opened.
+                } else if silent {
                     self.toast(ToastKind::Error, format!("Auto-fetch failed: {e}"));
                 } else {
                     self.show_git_error(e);
@@ -51,6 +55,7 @@ impl App {
         let Some(result) = self.network.poll_push() else {
             return false;
         };
+        let flight = self.in_flight_op.take();
         match result {
             Ok(()) => {
                 self.toast(ToastKind::Success, "Pushed");
@@ -58,7 +63,11 @@ impl App {
                     self.show_error(format!("Refresh failed: {e}"));
                 }
             }
-            Err(e) => self.show_git_error(e),
+            Err(e) => {
+                if !self.try_prompt_credentials(&e, flight) {
+                    self.show_git_error(e);
+                }
+            }
         }
         true
     }
@@ -70,6 +79,7 @@ impl App {
         let Some(result) = self.network.poll_pull() else {
             return false;
         };
+        let flight = self.in_flight_op.take();
         match result {
             Ok(outcome) => {
                 self.network.reset_timers();
@@ -115,7 +125,7 @@ impl App {
                 // surface — offer merge/rebase instead.
                 if is_divergent_pull_error(&e) && self.last_pull.is_some() {
                     self.mode = AppMode::PullDivergence { selected: 0 };
-                } else {
+                } else if !self.try_prompt_credentials(&e, flight) {
                     self.show_git_error(e);
                 }
             }
@@ -220,17 +230,14 @@ impl App {
     // ── Thin wrappers over NetworkManager ──────────────────────────────
 
     pub(crate) fn start_fetch_remote(&mut self, remote: String, show_message: bool, silent: bool) {
-        if let Some(msg) = self
-            .network
-            .start_fetch(&self.repo_path, &remote, show_message, silent)
-        {
-            self.set_message(msg);
-        }
+        self.dispatch_net_op(
+            RetryableOp::Fetch { remote, show_message, silent },
+            0,
+        );
     }
 
     pub(crate) fn start_fetch_all(&mut self) {
-        let msg = self.network.start_fetch_all(&self.repo_path);
-        self.set_message(msg);
+        self.dispatch_net_op(RetryableOp::FetchAll, 0);
     }
 
     /// F5 "full update": force an immediate PR refetch, refresh the graph/status
@@ -256,15 +263,17 @@ impl App {
     }
 
     pub(crate) fn start_push_current(&mut self) {
-        let msg = self.network.start_push(&self.repo_path, PushSpec::Current);
-        self.set_message(msg);
+        self.dispatch_net_op(RetryableOp::Push(PushSpec::Current), 0);
     }
 
     pub(crate) fn start_publish(&mut self, remote: String, branch: String) {
-        let msg = self
-            .network
-            .start_push(&self.repo_path, PushSpec::Publish { remote, branch });
-        self.set_message(msg);
+        self.dispatch_net_op(RetryableOp::Push(PushSpec::Publish { remote, branch }), 0);
+    }
+
+    /// Push HEAD to an explicit remote without changing upstream tracking
+    /// (`git push <remote> HEAD`).
+    pub(crate) fn start_push_head_to(&mut self, remote: String) {
+        self.dispatch_net_op(RetryableOp::Push(PushSpec::ToRemote { remote }), 0);
     }
 
     /// Start a pull with strategy `mode`. `remote = None` uses the branch's
@@ -284,8 +293,7 @@ impl App {
         self.last_pull = Some((remote.clone(), branch.clone()));
         // Snapshot HEAD so a completed pull that moved it can record an undo.
         self.pre_pull_head = self.repo.head_oid();
-        let msg = self.network.start_pull(&self.repo_path, remote, branch, mode);
-        self.set_message(msg);
+        self.dispatch_net_op(RetryableOp::Pull { remote, branch, mode }, 0);
     }
 
     /// Rerun the last pull with an explicit strategy after the divergence

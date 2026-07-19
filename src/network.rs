@@ -6,8 +6,10 @@ use std::time::Instant;
 
 use crate::config::RefreshConfig;
 use crate::git::operations::{
-    fetch_all, fetch_remote, pull, push_current, push_set_upstream, OpOutcome, PullMode,
+    fetch_all, fetch_remote, pull, push_current, push_head_to_remote, push_set_upstream, OpOutcome,
+    PullMode,
 };
+use crate::git::Credentials;
 
 /// What a background push should do.
 #[derive(Debug, Clone)]
@@ -16,6 +18,10 @@ pub enum PushSpec {
     Current,
     /// Publish `branch` to `remote`, setting upstream (`git push -u`).
     Publish { remote: String, branch: String },
+    /// Push HEAD to an explicit `remote` without changing upstream tracking
+    /// (`git push <remote> HEAD`) — chosen when the picked remote isn't the
+    /// configured upstream.
+    ToRemote { remote: String },
 }
 
 /// Manages async fetch/pull/push operations and auto-refresh timers.
@@ -87,12 +93,13 @@ impl NetworkManager {
         remote: &str,
         show_message: bool,
         silent: bool,
+        creds: Option<Credentials>,
     ) -> Option<String> {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
         let remote_owned = remote.to_string();
         thread::spawn(move || {
-            let result = fetch_remote(&path, &remote_owned).map_err(|e| e.to_string());
+            let result = fetch_remote(&path, &remote_owned, creds.as_ref()).map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.fetch_receiver = Some(rx);
@@ -107,11 +114,11 @@ impl NetworkManager {
     /// Start a background fetch from every configured remote (`git fetch
     /// --all`). Shares the fetch receiver, so completion flows through the same
     /// `poll_fetch` / refresh path as a single-remote fetch.
-    pub fn start_fetch_all(&mut self, repo_path: &str) -> String {
+    pub fn start_fetch_all(&mut self, repo_path: &str, creds: Option<Credentials>) -> String {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
         thread::spawn(move || {
-            let result = fetch_all(&path).map_err(|e| e.to_string());
+            let result = fetch_all(&path, creds.as_ref()).map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.fetch_receiver = Some(rx);
@@ -120,7 +127,7 @@ impl NetworkManager {
     }
 
     /// Start a background push per `spec`.
-    pub fn start_push(&mut self, repo_path: &str, spec: PushSpec) -> String {
+    pub fn start_push(&mut self, repo_path: &str, spec: PushSpec, creds: Option<Credentials>) -> String {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
         let message = match &spec {
@@ -128,12 +135,16 @@ impl NetworkManager {
             PushSpec::Publish { remote, branch } => {
                 format!("Publishing {branch} to {remote}...")
             }
+            PushSpec::ToRemote { remote } => format!("Pushing to {remote}..."),
         };
         thread::spawn(move || {
             let result = match spec {
-                PushSpec::Current => push_current(&path),
+                PushSpec::Current => push_current(&path, creds.as_ref()),
                 PushSpec::Publish { remote, branch } => {
-                    push_set_upstream(&path, &remote, &branch)
+                    push_set_upstream(&path, &remote, &branch, creds.as_ref())
+                }
+                PushSpec::ToRemote { remote } => {
+                    push_head_to_remote(&path, &remote, creds.as_ref())
                 }
             }
             .map_err(|e| e.to_string());
@@ -152,6 +163,7 @@ impl NetworkManager {
         remote: Option<String>,
         branch: Option<String>,
         mode: PullMode,
+        creds: Option<Credentials>,
     ) -> String {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
@@ -160,7 +172,7 @@ impl NetworkManager {
             None => "Pulling...".to_string(),
         };
         thread::spawn(move || {
-            let result = pull(&path, remote.as_deref(), branch.as_deref(), mode)
+            let result = pull(&path, remote.as_deref(), branch.as_deref(), mode, creds.as_ref())
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });

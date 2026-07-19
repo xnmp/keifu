@@ -66,9 +66,33 @@ pub const MIN_WIDGET_HEIGHT: u16 = 3;
 /// render so their geometry matches.
 const PR_THREAD_POPUP_PCT: (u16, u16) = (80, 80);
 
-/// Issue list/detail popup size (% of screen). Shared by the scroll pre-pass
-/// and the render so their geometry matches.
-const ISSUE_POPUP_PCT: (u16, u16) = (80, 80);
+/// Whether the current mode is one of the full-screen issue views (list/detail)
+/// or an overlay drawn on top of them (compose/label picker/label filter).
+fn is_issue_mode(mode: &AppMode) -> bool {
+    matches!(
+        mode,
+        AppMode::IssueList
+            | AppMode::IssueDetail
+            | AppMode::IssueCompose { .. }
+            | AppMode::IssueLabelPicker { .. }
+            | AppMode::IssueLabelFilter { .. }
+    )
+}
+
+/// Whether the issue detail (vs the list) is the full-screen backdrop for the
+/// current issue mode. The label picker's backdrop follows where it was opened
+/// from — detail when a detail popup is live, otherwise the list.
+fn issue_bg_is_detail(app: &App) -> bool {
+    use crate::app::IssueComposePurpose;
+    match &app.mode {
+        AppMode::IssueDetail => true,
+        AppMode::IssueCompose {
+            purpose: IssueComposePurpose::Comment { .. },
+        } => true,
+        AppMode::IssueLabelPicker { .. } => app.issue_detail.is_some(),
+        _ => false,
+    }
+}
 
 /// Render a placeholder block when widget area is too small
 pub fn render_placeholder_block(area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -195,6 +219,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(status_bar, vertical[1]);
         // Toasts sit on top of the full-screen diff view too.
         render_toasts(frame, app, &theme);
+        return;
+    }
+
+    // Issue modes: full-screen list/detail (mirroring FileDiff), with the
+    // compose / label-picker / label-filter drawn as centered overlays on top of
+    // the relevant backdrop.
+    if is_issue_mode(&app.mode) {
+        draw_issue_screen(frame, app, &theme, area);
         return;
     }
 
@@ -431,24 +463,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    // Issue-detail pre-pass: clamp the scroll to its wrapped height (same as the
-    // PR-thread pre-pass), before the immutable borrow in the popup match below.
-    if matches!(app.mode, AppMode::IssueDetail) {
-        let popup = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
-        let inner_w = popup.width.saturating_sub(4);
-        let body_h = popup.height.saturating_sub(3) as usize;
-        let total = app.issue_detail.as_ref().map(|v| {
-            let lines = issue_detail::build_lines(&v.state, &theme);
-            Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .line_count(inner_w)
-        });
-        if let (Some(total), Some(v)) = (total, app.issue_detail.as_mut()) {
-            v.max_scroll = total.saturating_sub(body_h);
-            v.scroll = v.scroll.min(v.max_scroll);
-        }
-    }
-
     // Popups. Each interactive popup records its rect for mouse hit-testing
     // (click-inside routes, click-outside closes).
     let mut rendered_popup: Option<Rect> = None;
@@ -480,9 +494,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
         }
-        AppMode::Input { title, input, .. } => {
+        AppMode::Input { title, input, action } => {
             let popup_area = centered_rect(50, 20, area);
-            frame.render_widget(InputDialog::new(title, input, &theme), popup_area);
+            let widget = if matches!(action, InputAction::AuthPassword) {
+                InputDialog::masked(title, input, &theme)
+            } else {
+                InputDialog::new(title, input, &theme)
+            };
+            frame.render_widget(widget, popup_area);
         }
         AppMode::Confirm { message, .. } => {
             let popup_area = centered_rect(50, 20, area);
@@ -587,52 +606,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             );
             rendered_popup = Some(popup_area);
         }
-        AppMode::IssueList => {
-            if let Some(view) = &app.issue_list {
-                use self::issue_list::IssueListWidget;
-                let popup_area = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
-                frame.render_widget(IssueListWidget::new(view, &theme), popup_area);
-                rendered_popup = Some(popup_area);
-            }
-        }
-        AppMode::IssueDetail => {
-            if let Some(view) = &app.issue_detail {
-                use self::issue_detail::IssueDetailWidget;
-                let popup_area = centered_rect(ISSUE_POPUP_PCT.0, ISSUE_POPUP_PCT.1, area);
-                frame.render_widget(IssueDetailWidget::new(view, &theme), popup_area);
-                rendered_popup = Some(popup_area);
-            }
-        }
-        AppMode::IssueCompose { purpose } => {
-            use self::issue_compose::IssueComposeWidget;
-            use self::pr_compose::text_area;
-            let popup_area = centered_rect(64, 60, area);
-            rendered_popup = Some(popup_area);
-            frame.render_widget(
-                IssueComposeWidget::new(&app.issue_editor, *purpose, &theme),
-                popup_area,
-            );
-            // Place the terminal cursor at the editor position.
-            let (row, col) = app.issue_editor.cursor_position();
-            let body = text_area(popup_area);
-            let cx = body.x + col as u16;
-            let cy = body.y + row as u16;
-            if cx < body.x + body.width && cy < body.y + body.height {
-                frame.set_cursor_position((cx, cy));
-            }
-        }
-        AppMode::IssueLabelPicker { selected, .. } => {
-            if let Some(picker) = &app.issue_label_picker {
-                use self::issue_detail::IssueLabelPickerWidget;
-                let rows = (picker.labels.len() + 3).clamp(6, 24) as u16;
-                let popup_area = centered_rect_fixed(48, rows, area);
-                frame.render_widget(
-                    IssueLabelPickerWidget::new(picker, *selected, &theme),
-                    popup_area,
-                );
-                rendered_popup = Some(popup_area);
-            }
-        }
+        // Issue modes render full-screen via `draw_issue_screen` (early return
+        // above), so they never reach this popup match.
         AppMode::BranchPicker { branches, selected } => {
             let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
             let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
@@ -781,6 +756,100 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// Render stacked toast notifications in the top-right corner, newest on top,
 /// over whatever else is on screen.
+/// Draw a full-screen issue view (list or detail) plus any centered overlay
+/// (compose / label picker / label filter) and the shared status bar. Mirrors
+/// the `FileDiff` full-screen path.
+fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+    let content = vertical[0];
+    let status_area = vertical[1];
+
+    let bg_is_detail = issue_bg_is_detail(app);
+
+    // Detail scroll pre-pass (clamp to wrapped height) before immutable borrows,
+    // matching the PR-thread pre-pass. Geometry: full content rect minus the
+    // border rows; horizontal padding removes 2 more columns on each side.
+    if bg_is_detail {
+        let inner_w = content.width.saturating_sub(4);
+        let body_h = content.height.saturating_sub(2) as usize;
+        let total = app.issue_detail.as_ref().map(|v| {
+            let lines = issue_detail::build_lines(&v.state, theme);
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .line_count(inner_w)
+        });
+        if let (Some(total), Some(v)) = (total, app.issue_detail.as_mut()) {
+            v.max_scroll = total.saturating_sub(body_h);
+            v.scroll = v.scroll.min(v.max_scroll);
+        }
+    }
+
+    // Full-screen backdrop.
+    if bg_is_detail {
+        if let Some(view) = &app.issue_detail {
+            frame.render_widget(issue_detail::IssueDetailWidget::new(view, theme), content);
+        }
+    } else if let Some(view) = &app.issue_list {
+        let empty = std::collections::HashSet::new();
+        let blocked = app.issue_fetch.cached_blocked().unwrap_or(&empty);
+        let repo_name = std::path::Path::new(&app.repo_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(app.repo_path.as_str());
+        frame.render_widget(
+            issue_list::IssueListWidget::new(view, blocked, repo_name, theme),
+            content,
+        );
+    }
+
+    // Centered overlay on top of the backdrop.
+    match &app.mode {
+        AppMode::IssueCompose { purpose } => {
+            let popup_area = centered_rect(64, 60, area);
+            frame.render_widget(
+                issue_compose::IssueComposeWidget::new(&app.issue_editor, *purpose, theme),
+                popup_area,
+            );
+            let (row, col) = app.issue_editor.cursor_position();
+            let body = pr_compose::text_area(popup_area);
+            let cx = body.x + col as u16;
+            let cy = body.y + row as u16;
+            if cx < body.x + body.width && cy < body.y + body.height {
+                frame.set_cursor_position((cx, cy));
+            }
+        }
+        AppMode::IssueLabelPicker { selected, .. } => {
+            if let Some(picker) = &app.issue_label_picker {
+                let rows = (picker.labels.len() + 3).clamp(6, 24) as u16;
+                let popup_area = centered_rect_fixed(48, rows, area);
+                frame.render_widget(
+                    issue_detail::IssueLabelPickerWidget::new(picker, *selected, theme),
+                    popup_area,
+                );
+            }
+        }
+        AppMode::IssueLabelFilter { selected } => {
+            if let Some(picker) = &app.issue_label_filter {
+                let rows = (picker.labels.len() + 3).clamp(6, 24) as u16;
+                let popup_area = centered_rect_fixed(52, rows, area);
+                frame.render_widget(
+                    issue_list::IssueLabelFilterWidget::new(picker, *selected, theme),
+                    popup_area,
+                );
+            }
+        }
+        _ => {}
+    }
+
+    let status_bar = StatusBar::new(app, theme);
+    app.status_hints = status_bar.hint_regions(status_area);
+    frame.render_widget(status_bar, status_area);
+    render_toasts(frame, app, theme);
+}
+
 fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
     use crate::toast::ToastKind;
     let toasts = app.toasts.visible();

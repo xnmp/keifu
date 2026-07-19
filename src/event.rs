@@ -44,3 +44,13 @@ pub fn get_mouse_event(event: &Event) -> Option<MouseEvent> {
         None
     }
 }
+
+/// Extract a bracketed-paste payload. `Some(text)` when the terminal delivered a
+/// paste as a single event (requires `EnableBracketedPaste`).
+pub fn get_paste_event(event: &Event) -> Option<String> {
+    if let Event::Paste(text) = event {
+        Some(text.clone())
+    } else {
+        None
+    }
+}
