@@ -53,7 +53,7 @@ impl App {
             return;
         }
         match self.resolve_remote() {
-            RemoteChoice::None => self.set_message("No remote configured"),
+            RemoteChoice::None => self.toast(crate::toast::ToastKind::Info, "No remote configured"),
             RemoteChoice::Use(r) => self.start_fetch_remote(r, true, false),
             RemoteChoice::Prompt(remotes) => self.open_remote_picker(remotes, RemoteOp::Fetch),
         }
@@ -69,7 +69,7 @@ impl App {
             return;
         }
         if self.repo.remotes().is_empty() {
-            self.set_message("No remote configured");
+            self.toast(crate::toast::ToastKind::Info, "No remote configured");
             return;
         }
         // A configured upstream lets a bare `git pull` resolve everything.
@@ -82,7 +82,7 @@ impl App {
             return;
         }
         match self.resolve_remote() {
-            RemoteChoice::None => self.set_message("No remote configured"),
+            RemoteChoice::None => self.toast(crate::toast::ToastKind::Info, "No remote configured"),
             RemoteChoice::Use(r) => self.start_pull_remote(Some(r), PullMode::FfOnly),
             RemoteChoice::Prompt(remotes) => self.open_remote_picker(remotes, RemoteOp::Pull),
         }
@@ -95,14 +95,14 @@ impl App {
             return;
         }
         let Some(head) = self.head_branch_info() else {
-            self.set_message("Not on a branch");
+            self.toast(crate::toast::ToastKind::Info, "Not on a branch");
             return;
         };
         let has_upstream = head.upstream.is_some();
         let branch = head.name.clone();
         let mut remotes = self.repo.remotes();
         match remotes.len() {
-            0 => self.set_message("No remote configured"),
+            0 => self.toast(crate::toast::ToastKind::Info, "No remote configured"),
             1 => {
                 if has_upstream {
                     self.start_push_current();
@@ -121,7 +121,7 @@ impl App {
 
     pub(crate) fn initiate_prune(&mut self) {
         match self.resolve_remote() {
-            RemoteChoice::None => self.set_message("No remote configured"),
+            RemoteChoice::None => self.toast(crate::toast::ToastKind::Info, "No remote configured"),
             RemoteChoice::Use(r) => self.prune_remote_now(&r),
             RemoteChoice::Prompt(remotes) => self.open_remote_picker(remotes, RemoteOp::Prune),
         }
@@ -134,7 +134,7 @@ impl App {
                     self.show_error(format!("Refresh failed: {e}"));
                     return;
                 }
-                self.set_message(format!("Pruned {remote}"));
+                self.toast(crate::toast::ToastKind::Success, format!("Pruned {remote}"));
             }
             Err(e) => self.show_error(format!("Prune failed: {e}")),
         }
@@ -202,7 +202,7 @@ impl App {
     /// `git push`. Otherwise push to that remote without retargeting upstream.
     fn run_push_to_remote(&mut self, remote: String) {
         let Some(head) = self.head_branch_info() else {
-            self.set_message("Not on a branch");
+            self.toast(crate::toast::ToastKind::Info, "Not on a branch");
             return;
         };
         let branch = head.name.clone();

@@ -94,7 +94,7 @@ impl App {
                     ConfirmAction::AbortOperation(op) => {
                         abort_operation(&self.repo_path, op)?;
                         self.refresh(true)?;
-                        self.set_message(format!("{} aborted", op.verb()));
+                        self.toast(crate::toast::ToastKind::Success, format!("{} aborted", op.verb()));
                         self.mode = AppMode::Normal;
                         return Ok(());
                     }
@@ -115,14 +115,14 @@ impl App {
                     ConfirmAction::DeleteRemoteBranch { remote, branch } => {
                         delete_remote_branch(&self.repo_path, &remote, &branch)?;
                         self.refresh(true)?;
-                        self.set_message(format!("Deleted {remote}/{branch}"));
+                        self.toast(crate::toast::ToastKind::Success, format!("Deleted {remote}/{branch}"));
                         self.mode = AppMode::Normal;
                         return Ok(());
                     }
                     ConfirmAction::RestoreFile(paths) => {
                         restore_files(&self.repo_path, &paths)?;
                         let label = file_count_label(&paths);
-                        self.set_message(format!("Restored {}", label));
+                        self.toast(crate::toast::ToastKind::Success, format!("Restored {}", label));
                         self.mode = AppMode::Normal;
                         self.refresh_after_file_op()?;
                         return Ok(());
@@ -137,9 +137,9 @@ impl App {
                         }
                         if errors.is_empty() {
                             let label = file_count_label(&paths);
-                            self.set_message(format!("Moved {} to recycle bin", label));
+                            self.toast(crate::toast::ToastKind::Success, format!("Moved {} to recycle bin", label));
                         } else {
-                            self.set_message(format!("Trash errors: {}", errors.join("; ")));
+                            self.toast(crate::toast::ToastKind::Error, format!("Trash errors: {}", errors.join("; ")));
                         }
                         self.mode = AppMode::Normal;
                         self.refresh_after_file_op()?;
@@ -147,7 +147,7 @@ impl App {
                     }
                     ConfirmAction::StashDrop(index) => {
                         stash_drop(&self.repo_path, index)?;
-                        self.set_message(format!("Dropped stash@{{{}}}", index));
+                        self.toast(crate::toast::ToastKind::Success, format!("Dropped stash@{{{}}}", index));
                     }
                     ConfirmAction::DeleteTag(name) => {
                         // Capture the target commit + whether it's annotated,
@@ -162,7 +162,7 @@ impl App {
                             (target, is_annotated_tag(repo, &name))
                         };
                         delete_tag(&self.repo_path, &name)?;
-                        self.set_message(format!("Deleted tag '{}'", name));
+                        self.toast(crate::toast::ToastKind::Success, format!("Deleted tag '{}'", name));
                         if let Some(oid) = target {
                             let suffix = if annotated { " as a lightweight tag" } else { "" };
                             self.record_undo(crate::undo::UndoEntry {
@@ -186,7 +186,7 @@ impl App {
                         scroll_offset,
                     } => {
                         apply_patch_worktree_reverse(&self.repo_path, &patch)?;
-                        self.set_message("Discarded hunk");
+                        self.toast(crate::toast::ToastKind::Success, "Discarded hunk");
                         // Reopen the diff viewer where we left off instead of
                         // falling through to Normal mode.
                         self.reload_file_diff_for_path(&file_path, scroll_offset)?;

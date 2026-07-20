@@ -144,7 +144,7 @@ impl App {
                     let new_index = (file_index + 1) % file_list_snapshot.len();
                     let path = file_list_snapshot[new_index].path.clone();
                     if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
-                        self.set_message(format!("Cannot open diff: {e}"));
+                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
                     }
                 }
             }
@@ -170,7 +170,7 @@ impl App {
                     };
                     let path = file_list_snapshot[new_index].path.clone();
                     if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
-                        self.set_message(format!("Cannot open diff: {e}"));
+                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
                     }
                 }
             }
@@ -234,15 +234,15 @@ impl App {
     fn resolve_hunk_op(&mut self) -> Option<HunkOpTarget> {
         let target = self.hunk_op_target()?;
         if self.current_diff_target() != Some(DiffTarget::Uncommitted) {
-            self.set_message("Hunk staging is only available for uncommitted changes");
+            self.toast(crate::toast::ToastKind::Info, "Hunk staging is only available for uncommitted changes");
             return None;
         }
         if target.is_binary {
-            self.set_message("Cannot stage a hunk of a binary file");
+            self.toast(crate::toast::ToastKind::Info, "Cannot stage a hunk of a binary file");
             return None;
         }
         if !target.has_hunks {
-            self.set_message("No hunk under the cursor");
+            self.toast(crate::toast::ToastKind::Info, "No hunk under the cursor");
             return None;
         }
         Some(target)
@@ -258,23 +258,23 @@ impl App {
         if target.is_untracked {
             let path_str = target.path.to_string_lossy().to_string();
             stage_file(&self.repo_path, &path_str)?;
-            self.set_message(format!("Staged {}", target.path.display()));
+            self.toast(crate::toast::ToastKind::Success, format!("Staged {}", target.path.display()));
             return self.reload_file_diff_for_path(&target.path, target.scroll_offset);
         }
         let Some(hunk) =
             extract_hunk_from_working_tree(self.repo.repo(), &target.path, target.hunk_index)?
         else {
-            self.set_message("Hunk is no longer present");
+            self.toast(crate::toast::ToastKind::Info, "Hunk is no longer present");
             return Ok(());
         };
         let path_str = target.path.to_string_lossy();
         let patch = render_hunk_patch(&path_str, &hunk);
         match apply_patch_cached(&self.repo_path, &patch) {
             Ok(()) => {
-                self.set_message("Staged hunk");
+                self.toast(crate::toast::ToastKind::Success, "Staged hunk");
                 self.reload_file_diff_for_path(&target.path, target.scroll_offset)?;
             }
-            Err(e) => self.set_message(format!("Stage hunk failed: {e}")),
+            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Stage hunk failed: {e}")),
         }
         Ok(())
     }
@@ -284,23 +284,23 @@ impl App {
             return Ok(());
         };
         if target.is_untracked {
-            self.set_message("Untracked file has nothing staged to unstage");
+            self.toast(crate::toast::ToastKind::Info, "Untracked file has nothing staged to unstage");
             return Ok(());
         }
         let Some(hunk) =
             extract_hunk_from_working_tree(self.repo.repo(), &target.path, target.hunk_index)?
         else {
-            self.set_message("Hunk is no longer present");
+            self.toast(crate::toast::ToastKind::Info, "Hunk is no longer present");
             return Ok(());
         };
         let path_str = target.path.to_string_lossy();
         let patch = render_hunk_patch(&path_str, &hunk);
         match apply_patch_cached_reverse(&self.repo_path, &patch) {
             Ok(()) => {
-                self.set_message("Unstaged hunk");
+                self.toast(crate::toast::ToastKind::Success, "Unstaged hunk");
                 self.reload_file_diff_for_path(&target.path, target.scroll_offset)?;
             }
-            Err(e) => self.set_message(format!("Unstage hunk failed: {e}")),
+            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Unstage hunk failed: {e}")),
         }
         Ok(())
     }
@@ -310,13 +310,13 @@ impl App {
             return Ok(());
         };
         if target.is_untracked {
-            self.set_message("Untracked file — use the files pane (Delete) to remove it");
+            self.toast(crate::toast::ToastKind::Info, "Untracked file — use the files pane (Delete) to remove it");
             return Ok(());
         }
         let Some(hunk) =
             extract_hunk_from_working_tree(self.repo.repo(), &target.path, target.hunk_index)?
         else {
-            self.set_message("Hunk is no longer present");
+            self.toast(crate::toast::ToastKind::Info, "Hunk is no longer present");
             return Ok(());
         };
         let path_str = target.path.to_string_lossy();
@@ -365,7 +365,7 @@ impl App {
             self.diff_source = None;
             self.mode = AppMode::Normal;
             self.focused_panel = FocusedPanel::Files;
-            self.set_message("No changes remaining");
+            self.toast(crate::toast::ToastKind::Info, "No changes remaining");
             return Ok(());
         }
         let new_index = new_file_list
@@ -527,8 +527,8 @@ impl App {
                 .spawn()
         };
         match result {
-            Ok(_) => self.set_message(format!("Opening {}", display_path.display())),
-            Err(e) => self.set_message(format!("Cannot open file: {e}")),
+            Ok(_) => self.toast(crate::toast::ToastKind::Success, format!("Opening {}", display_path.display())),
+            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Cannot open file: {e}")),
         }
     }
 
@@ -552,7 +552,7 @@ impl App {
             if matches!(self.mode, AppMode::FileDiff { .. }) {
                 self.diff_source = None;
                 self.mode = AppMode::Normal;
-                self.set_message("No changed files in this diff");
+                self.toast(crate::toast::ToastKind::Info, "No changed files in this diff");
             }
             return;
         }
@@ -582,7 +582,7 @@ impl App {
         if self.pending_refresh {
             self.pending_refresh = false;
             if let Err(e) = self.refresh(true) {
-                self.set_message(format!("Refresh failed: {e}"));
+                self.toast(crate::toast::ToastKind::Error, format!("Refresh failed: {e}"));
             }
         }
     }

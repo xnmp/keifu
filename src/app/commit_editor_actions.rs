@@ -72,7 +72,7 @@ impl App {
                 // Ctrl+Enter with no message: amend --no-edit
                 commit_amend_no_edit(&self.repo_path)?;
                 self.refresh(true)?;
-                self.set_message("Commit amended (--no-edit)");
+                self.toast(crate::toast::ToastKind::Success, "Commit amended (--no-edit)");
                 self.focused_panel = FocusedPanel::Graph;
             }
             return Ok(());
@@ -140,7 +140,7 @@ impl App {
                         self.editing_commit_message = false;
                         self.amending_commit = false;
                         self.refresh(true)?;
-                        self.set_message("Commit amended");
+                        self.toast(crate::toast::ToastKind::Success, "Commit amended");
                         self.focused_panel = FocusedPanel::Graph;
                     }
                 } else if !msg.is_empty() {
@@ -148,7 +148,7 @@ impl App {
                     self.commit_editor = crate::text_editor::TextEditor::new();
                     self.editing_commit_message = false;
                     self.refresh(true)?;
-                    self.set_message("Changes committed");
+                    self.toast(crate::toast::ToastKind::Success, "Changes committed");
                     self.focused_panel = FocusedPanel::Graph;
                 }
             }
@@ -165,7 +165,7 @@ impl App {
                         self.editing_commit_message = false;
                         self.amending_commit = false;
                         self.refresh(true)?;
-                        self.set_message("Commit amended");
+                        self.toast(crate::toast::ToastKind::Success, "Commit amended");
                         self.focused_panel = FocusedPanel::Graph;
                     }
                 } else {
@@ -179,7 +179,7 @@ impl App {
                     self.commit_editor = crate::text_editor::TextEditor::new();
                     self.editing_commit_message = false;
                     self.refresh(true)?;
-                    self.set_message("Commit amended");
+                    self.toast(crate::toast::ToastKind::Success, "Commit amended");
                     self.focused_panel = FocusedPanel::Graph;
                 }
             }

@@ -209,12 +209,12 @@ impl App {
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
-                        self.set_message(format!("Cannot open diff: {e}"));
+                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
                     }
                 } else if self.is_diff_loading() {
-                    self.set_message("Loading diff...");
+                    self.toast(crate::toast::ToastKind::Info, "Loading diff...");
                 } else {
-                    self.set_message("Diff not available");
+                    self.toast(crate::toast::ToastKind::Info, "Diff not available");
                 }
             }
             Action::StartCommitFilter => {
@@ -529,10 +529,10 @@ impl App {
         match target {
             ForkTarget::Jump(oid) => match row_of_commit(&self.graph_layout, oid) {
                 Some(idx) => self.select_commit_by_full_idx(idx),
-                None => self.set_message("Merge base beyond loaded history"),
+                None => self.toast(crate::toast::ToastKind::Info, "Merge base beyond loaded history"),
             },
-            ForkTarget::Linear => self.set_message("No divergence — linear history"),
-            ForkTarget::NoBase => self.set_message("No merge base found"),
+            ForkTarget::Linear => self.toast(crate::toast::ToastKind::Info, "No divergence — linear history"),
+            ForkTarget::NoBase => self.toast(crate::toast::ToastKind::Info, "No merge base found"),
         }
     }
 }

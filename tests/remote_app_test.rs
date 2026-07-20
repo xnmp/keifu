@@ -70,10 +70,10 @@ fn pull_without_remote_reports_message() {
     app.handle_action(Action::Pull).unwrap();
 
     assert!(matches!(app.mode, AppMode::Normal));
+    let toast_texts: Vec<&str> = app.toasts.visible().iter().map(|t| t.text.as_str()).collect();
     assert!(
-        app.get_message().unwrap_or_default().contains("No remote"),
-        "expected a no-remote message, got {:?}",
-        app.get_message()
+        toast_texts.iter().any(|t| t.contains("No remote")),
+        "expected a no-remote toast, got {toast_texts:?}"
     );
 }
 

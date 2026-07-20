@@ -876,6 +876,14 @@ pub struct App {
     /// by a later, unrelated network op.
     pub message_sticky: bool,
 
+    // Once-per-episode latches for periodically-retried refresh errors. Each is
+    // set when the failure is first reported and re-armed (cleared) on the next
+    // success, so a persistent failure doesn't re-flash the status bar every
+    // refresh / poll tick.
+    pub wt_status_error_latched: bool,
+    pub auto_refresh_error_latched: bool,
+    pub watch_refresh_error_latched: bool,
+
     // Transient toast notifications for background-op outcomes.
     pub toasts: crate::toast::ToastQueue,
     // Armed after the first open-PR fetch fills the map, so the initial load
@@ -1174,7 +1182,7 @@ impl App {
         }
         if matches!(action, Action::ToggleDebugKeys) {
             self.debug_keys = !self.debug_keys;
-            self.set_message(if self.debug_keys {
+            self.toast(crate::toast::ToastKind::Info, if self.debug_keys {
                 "Debug keys ON"
             } else {
                 "Debug keys OFF"

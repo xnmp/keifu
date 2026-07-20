@@ -157,7 +157,7 @@ impl App {
         let url = self.selected_issue().map(|i| i.url.clone());
         match url {
             Some(url) if !url.is_empty() => self.open_issue_url(&url),
-            _ => self.set_message("No URL for this issue"),
+            _ => self.toast(crate::toast::ToastKind::Info, "No URL for this issue"),
         }
     }
 
@@ -247,7 +247,7 @@ impl App {
         let url = self.loaded_detail().map(|d| d.url.clone());
         match url {
             Some(url) if !url.is_empty() => self.open_issue_url(&url),
-            _ => self.set_message("No URL for this issue"),
+            _ => self.toast(crate::toast::ToastKind::Info, "No URL for this issue"),
         }
     }
 
@@ -626,7 +626,7 @@ impl App {
         if let Err(e) = open_url(url) {
             self.show_error(format!("Could not open: {e}"));
         } else {
-            self.set_message("Opening in browser");
+            self.toast(crate::toast::ToastKind::Success, "Opening in browser");
         }
     }
 
