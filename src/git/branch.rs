@@ -93,11 +93,25 @@ impl BranchInfo {
             }
         }
 
-        // Put the HEAD branch first
-        branches.sort_by(|a, b| b.is_head.cmp(&a.is_head).then(a.name.cmp(&b.name)));
+        sort_for_display(&mut branches);
 
         Ok(branches)
     }
+}
+
+/// Sort branches into a deterministic, stable badge/label order: the
+/// checked-out HEAD branch first, then local branches alphabetically, then
+/// remote branches alphabetically. This is the single source of truth for
+/// branch badge order — `graph::build_graph` pushes branch names into
+/// `oid_to_branches` in this order, so no other place (in particular, no UI
+/// rendering code reacting to navigation/selection state) may reorder badges.
+fn sort_for_display(branches: &mut [BranchInfo]) {
+    branches.sort_by(|a, b| {
+        b.is_head
+            .cmp(&a.is_head)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
 }
 
 /// Names of the remote branches in `branches` that have no matching local
@@ -271,6 +285,78 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains("origin/dependabot"));
         assert!(names.contains("origin/colleague"));
+    }
+
+    // --- sort_for_display: badge order must be deterministic regardless of
+    // insertion order (issue #50: badge order was flipping while navigating
+    // because a later rendering step reordered by selection state instead of
+    // the list carrying a stable order from the start). ---
+
+    fn head_local(name: &str, tip: Oid) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            is_head: true,
+            is_remote: false,
+            upstream: None,
+            tip_oid: tip,
+            ahead: 0,
+            behind: 0,
+        }
+    }
+
+    #[test]
+    fn sort_for_display_orders_head_then_local_then_remote_alphabetically() {
+        let mut branches = vec![
+            remote("origin/zeta", oid(1)),
+            local("zeta", oid(1), None),
+            remote("origin/alpha", oid(1)),
+            head_local("beta", oid(2)),
+            local("alpha", oid(1), None),
+        ];
+        sort_for_display(&mut branches);
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["beta", "alpha", "zeta", "origin/alpha", "origin/zeta"],
+            "HEAD first, then locals A-Z, then remotes A-Z"
+        );
+    }
+
+    #[test]
+    fn sort_for_display_is_deterministic_regardless_of_insertion_order() {
+        // Same conceptual branch set, fed in every rotation of a fixed
+        // ordering. The sorted result must be identical every time — no
+        // HashMap/HashSet iteration or insertion-order leakage.
+        let make = || {
+            vec![
+                remote("origin/mac", oid(1)),
+                local("mac", oid(1), None),
+                local("wip", oid(2), None),
+                remote("origin/wip", oid(2)),
+            ]
+        };
+        let baseline = {
+            let mut b = make();
+            sort_for_display(&mut b);
+            b.iter().map(|x| x.name.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(baseline, vec!["mac", "wip", "origin/mac", "origin/wip"]);
+
+        // Try every rotation of the insertion order and confirm the sorted
+        // output never changes.
+        let original = make();
+        for start in 0..original.len() {
+            let mut rotated: Vec<BranchInfo> = original
+                .iter()
+                .cloned()
+                .cycle()
+                .skip(start)
+                .take(original.len())
+                .collect();
+            sort_for_display(&mut rotated);
+            let names: Vec<String> = rotated.iter().map(|b| b.name.clone()).collect();
+            assert_eq!(names, baseline, "insertion order must not affect sorted badge order");
+        }
     }
 
     // --- branch_authors: exercised against real fixture repositories, since

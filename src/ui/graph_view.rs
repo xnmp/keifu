@@ -668,13 +668,11 @@ fn optimize_branch_display(
         .map(|s| s.as_str())
         .collect();
 
-    // Determine base color: main branch stays blue; other HEADs are green
-    let is_main_branch = color_index == crate::graph::colors::MAIN_BRANCH_COLOR;
-    let base_color = if is_head && !is_main_branch {
-        theme.branch_head
-    } else {
-        theme.lane_color(color_index)
-    };
+    // Badge color always resolves through the same palette lookup as the
+    // graph line/node for this commit's lane (`theme.lane_color`), so a
+    // branch's badge and its line never diverge. HEAD is distinguished by
+    // weight (bold, below), not by a separate color.
+    let base_color = theme.lane_color(color_index);
 
     // Helper to create style based on selection state. Restraint: color is the
     // single emphasis device for ordinary chips; only the checked-out HEAD's
@@ -792,21 +790,6 @@ fn optimize_branch_display(
         // Number of labels to display inline before collapsing the remainder
         const SHOWN_LABELS: usize = 2;
 
-        // Find selected index directly from branch_names, clamped to result bounds
-        let selected_idx = selected_branch_name
-            .and_then(|sel| {
-                branch_names
-                    .iter()
-                    .position(|n| n == sel || n.ends_with(&format!("/{}", sel)))
-            })
-            .unwrap_or(0)
-            .min(result.len().saturating_sub(1));
-
-        // Display order: selected first, then remaining in original order
-        let order: Vec<usize> = std::iter::once(selected_idx)
-            .chain((0..result.len()).filter(|&i| i != selected_idx))
-            .collect();
-
         let shown = SHOWN_LABELS.min(result.len());
         let extra_count = result.len() - shown;
 
@@ -827,15 +810,29 @@ fn optimize_branch_display(
         // Budget the available width across the shown labels
         let per_label = MAX_LABEL_WIDTH / shown;
 
+        // Display order: always the stable badge order from `result` (which
+        // in turn follows `branch_names`, itself deterministically sorted at
+        // the source — see `BranchInfo::list_all`). Never reordered by which
+        // branch is selected/navigated to: that would make badge order flap
+        // as the cursor moves, which is the bug this fixes.
         let mut combined = String::new();
-        for (pos, &idx) in order.iter().take(shown).enumerate() {
-            let clean_name = clean(&result[idx].0);
+        for (pos, (label, _)) in result.iter().take(shown).enumerate() {
+            let clean_name = clean(label);
             // Only the last shown label carries the "+N" suffix
             let extra = if pos == shown - 1 { extra_count } else { 0 };
             combined.push_str(&abbreviate_branch_label(&clean_name, per_label, extra));
         }
 
-        // Style follows the selected branch
+        // Style follows the selected branch when it's among these labels
+        // (highlight only — does not affect display order above).
+        let selected_idx = selected_branch_name
+            .and_then(|sel| {
+                branch_names
+                    .iter()
+                    .position(|n| n == sel || n.ends_with(&format!("/{}", sel)))
+            })
+            .unwrap_or(0)
+            .min(result.len().saturating_sub(1));
         let style = result[selected_idx].1;
         return vec![(combined, style)];
     }
@@ -2059,6 +2056,84 @@ mod tests {
         let label = &out[0].0;
         assert!(label.contains("lonely"), "stripped name present: {label:?}");
         assert!(!label.contains("origin/"), "{label:?}");
+    }
+
+    // ── badge order is stable regardless of selection (issue #50) ────
+
+    #[test]
+    fn badge_order_is_independent_of_which_branch_is_selected() {
+        // Three branches on one commit — more than SHOWN_LABELS (2), so this
+        // also exercises the collapse path. Regression: selecting each
+        // branch in turn (as branch-cycling navigation does) used to move
+        // that branch's chip to the front, flipping the visible order.
+        let theme = Theme::dark();
+        let names = [
+            "alpha".to_string(),
+            "beta".to_string(),
+            "origin/gamma".to_string(),
+        ];
+        let remotes = ["origin".to_string()];
+
+        let no_selection = optimize_branch_display(&names, false, 0, None, &theme, &remotes);
+        let selected_alpha =
+            optimize_branch_display(&names, false, 0, Some("alpha"), &theme, &remotes);
+        let selected_beta =
+            optimize_branch_display(&names, false, 0, Some("beta"), &theme, &remotes);
+        let selected_gamma =
+            optimize_branch_display(&names, false, 0, Some("origin/gamma"), &theme, &remotes);
+
+        // Only the label text (not the style/highlight) needs to stay fixed.
+        let text = |v: &[(String, Style)]| v.iter().map(|(s, _)| s.clone()).collect::<Vec<_>>();
+        assert_eq!(text(&no_selection), text(&selected_alpha));
+        assert_eq!(text(&no_selection), text(&selected_beta));
+        assert_eq!(text(&no_selection), text(&selected_gamma));
+    }
+
+    #[test]
+    fn badge_order_matches_source_order_two_labels() {
+        // Two non-synced branches render as one combined chip, e.g.
+        // "[mac][origin/mac]" (issue #50's exact example) — assert the
+        // bracket groups keep `branch_names`' order and never flip when a
+        // different branch becomes the "selected" one.
+        let theme = Theme::dark();
+        let names = ["mac".to_string(), "zzz-other".to_string()];
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &[]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "[mac][zzz-other]");
+
+        // Selecting the second branch must not move it first.
+        let out_selected =
+            optimize_branch_display(&names, false, 0, Some("zzz-other"), &theme, &[]);
+        assert_eq!(out_selected[0].0, "[mac][zzz-other]");
+    }
+
+    // ── badge color matches lane color (issue #53) ────────────────────
+
+    #[test]
+    fn head_badge_color_matches_lane_color_not_a_fixed_head_color() {
+        // Regression: the checked-out HEAD branch's badge used to be forced
+        // to a fixed color (green) regardless of the commit's actual lane
+        // color, diverging from the graph line/node drawn in that lane.
+        let theme = Theme::dark();
+        for color_index in 0..theme.lane_colors.len() {
+            if color_index == crate::graph::colors::MAIN_BRANCH_COLOR {
+                continue; // main branch is blue either way — not the regression case
+            }
+            let out = optimize_branch_display(
+                &["feature".to_string()],
+                true, // is_head
+                color_index,
+                None,
+                &theme,
+                &[],
+            );
+            assert_eq!(out.len(), 1);
+            assert_eq!(
+                out[0].1.fg,
+                Some(theme.lane_color(color_index)),
+                "HEAD badge fg must equal the lane's own color at index {color_index}"
+            );
+        }
     }
 
     // ── graph width cap arithmetic ───────────────────────────────────

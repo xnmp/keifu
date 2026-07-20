@@ -74,8 +74,6 @@ pub struct Theme {
     pub search_match: Color,
     pub search_cursor: Color,
 
-    // Branch labels in graph
-    pub branch_head: Color,
     // Tag labels in graph (distinct from branch labels)
     pub tag_label: Color,
     // Open-PR badge in graph (distinct from branch/tag labels). `pr_badge` is
@@ -181,9 +179,6 @@ impl Theme {
             search_match: Color::Yellow,
             search_cursor: Color::Cyan,
 
-            // Branch labels — bright ANSI green follows the terminal palette
-            // while staying legible for the checked-out HEAD label and node.
-            branch_head: Color::LightGreen,
             // Tag labels — gold, the git convention for tag refs.
             tag_label: Color::LightYellow,
             // Open-PR badge — GitHub link blue, distinct from green/gold labels.
@@ -294,8 +289,6 @@ impl Theme {
             search_match: Color::Blue,
             search_cursor: Color::Blue,
 
-            // Branch labels
-            branch_head: Color::Green,
             // Tag labels — dark gold, legible on light backgrounds.
             tag_label: Color::Rgb(150, 110, 0),
             // Open-PR badge — GitHub link blue, darkened for light backgrounds.
