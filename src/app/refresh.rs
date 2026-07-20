@@ -233,6 +233,7 @@ impl App {
         self.all_commits_loaded = self.commits.len() < self.commit_load_limit;
         let tags = self.repo.get_tags();
         let head_commit_oid = self.repo.head_oid();
+        let trunk_tip = self.repo.detect_trunk_tip(&visible_branches);
         self.graph_layout = build_graph(
             &self.commits,
             &visible_branches,
@@ -240,6 +241,7 @@ impl App {
             &stashes,
             uncommitted_count,
             head_commit_oid,
+            trunk_tip,
         );
         // Invalidate the pixel-graph spec cache: the layout changed.
         self.graph_generation = self.graph_generation.wrapping_add(1);

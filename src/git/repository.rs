@@ -269,6 +269,67 @@ impl GitRepository {
         buf.as_str().map(|s| s.to_string())
     }
 
+    /// Detect the repository's "trunk" branch and return its tip OID, so the
+    /// graph can pin the trunk to the leftmost lane.
+    ///
+    /// Priority cascade (industry-standard default-branch detection):
+    /// 1. The `<remote>/HEAD` symbolic ref (trying `origin` first, then any other
+    ///    remote) — the authoritative default branch on the remote, e.g.
+    ///    `refs/remotes/origin/HEAD -> refs/remotes/origin/main`.
+    /// 2. A name heuristic among the supplied branches: `main`, then `master`,
+    ///    then `develop`, then `trunk` (local preferred, else a remote whose
+    ///    short name matches).
+    /// 3. `None` — no trunk identified; the caller keeps its default layout.
+    ///
+    /// Matched only against `branches` (the visible set), so a hidden/unloaded
+    /// trunk yields `None` and the graph is left unpinned. A future layer could
+    /// rank by PR base-branch frequency, but PR data doesn't carry that today.
+    pub fn detect_trunk_tip(&self, branches: &[BranchInfo]) -> Option<Oid> {
+        // The bare (remote-prefix-stripped) name of a branch, for matching a
+        // remote-HEAD target or a name-heuristic candidate against either a local
+        // branch or a remote ref.
+        fn matches(branch: &BranchInfo, bare: &str) -> bool {
+            if branch.is_remote {
+                branch.name.split_once('/').map(|(_, r)| r) == Some(bare)
+            } else {
+                branch.name == bare
+            }
+        }
+
+        // Layer 1: <remote>/HEAD symbolic target. Prefer origin, then the rest.
+        let mut remotes = self.remotes();
+        remotes.sort_by_key(|r| r != "origin"); // origin first, order otherwise stable
+        for remote in &remotes {
+            let refname = format!("refs/remotes/{remote}/HEAD");
+            if let Ok(reference) = self.repo.find_reference(&refname) {
+                if let Some(target) = reference.symbolic_target() {
+                    // e.g. "refs/remotes/origin/main" -> "main"
+                    let bare = target
+                        .strip_prefix(&format!("refs/remotes/{remote}/"))
+                        .unwrap_or(target);
+                    if let Some(b) = branches.iter().find(|b| matches(b, bare)) {
+                        return Some(b.tip_oid);
+                    }
+                }
+            }
+        }
+
+        // Layer 2: name heuristic. First match wins, checking locals before
+        // remotes so a local trunk is preferred over its remote-tracking twin.
+        for candidate in ["main", "master", "develop", "trunk"] {
+            if let Some(b) = branches
+                .iter()
+                .filter(|b| !b.is_remote)
+                .find(|b| matches(b, candidate))
+                .or_else(|| branches.iter().find(|b| matches(b, candidate)))
+            {
+                return Some(b.tip_oid);
+            }
+        }
+
+        None
+    }
+
     /// Get the current HEAD name
     pub fn head_name(&self) -> Option<String> {
         self.repo

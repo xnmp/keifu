@@ -35,6 +35,7 @@ fn main() {
         &stashes,
         None,
         head.map(|c| c.oid),
+        None,
     );
 
     // Find the target commit's row and lineage.

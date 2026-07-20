@@ -104,7 +104,7 @@ mod tests {
         // c3 -> c2 -> c1; the newest commit anchors the main lane.
         let commits = vec![commit(3, &[2]), commit(2, &[1]), commit(1, &[])];
         let branches = vec![branch("main", 3, true)];
-        let layout = build_graph(&commits, &branches, &[], &[], None, None);
+        let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
         assert_eq!(main_branch_tip(&layout), Some(oid(3)));
     }
 
@@ -112,7 +112,7 @@ mod tests {
     fn row_of_commit_finds_and_misses() {
         let commits = vec![commit(3, &[2]), commit(2, &[1]), commit(1, &[])];
         let branches = vec![branch("main", 3, true)];
-        let layout = build_graph(&commits, &branches, &[], &[], None, None);
+        let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
         assert_eq!(row_of_commit(&layout, oid(2)), Some(1));
         // A merge base outside the loaded window is not found → caller messages.
         assert_eq!(row_of_commit(&layout, oid(99)), None);

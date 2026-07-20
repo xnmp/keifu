@@ -62,6 +62,7 @@ impl App {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
+        let trunk_tip = repo.detect_trunk_tip(&visible_branches);
         let graph_layout = build_graph(
             &commits,
             &visible_branches,
@@ -69,6 +70,7 @@ impl App {
             &stashes,
             uncommitted_count,
             head_commit_oid,
+            trunk_tip,
         );
 
         let mut graph_nav = GraphNav::new();

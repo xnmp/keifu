@@ -118,6 +118,7 @@ pub fn build_graph(
     stashes: &[super::repository::StashInfo],
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
+    trunk_tip: Option<Oid>,
 ) -> GraphLayout {
     // Map stash oid -> short label like "stash@{0}"
     let stash_oid_labels: HashMap<Oid, String> = stashes
@@ -222,6 +223,24 @@ pub fn build_graph(
     // Lane -> color index mapping (keep colors during forks)
     let mut lane_color_index: HashMap<usize, usize> = HashMap::new();
 
+    // Trunk pinning: when a trunk tip is known AND loaded, pre-seed lane 0 with
+    // it so the trunk always occupies the leftmost lane — even when HEAD is a
+    // different branch or the trunk tip isn't the newest commit. Newer commits
+    // (processed first, revwalk is newest-first) then take lanes >= 1, because
+    // the empty-lane search below skips the occupied lane 0. When the loop later
+    // reaches the trunk tip, the "lane tracking this OID" scan finds it at 0.
+    //
+    // The main color is reserved on lane 0 up front (idempotent with the
+    // per-commit assignment when the trunk row is processed) so any fork
+    // connector emitted *before* the trunk row still reads in the main blue.
+    let trunk_oid_in_graph: Option<Oid> = trunk_tip.filter(|oid| oid_to_row.contains_key(oid));
+    if let Some(trunk_oid) = trunk_oid_in_graph {
+        lanes.push(Some(trunk_oid));
+        lane_children.push(None);
+        color_assigner.assign_main_color(0);
+        lane_color_index.insert(0, crate::graph::colors::MAIN_BRANCH_COLOR);
+    }
+
     for (row_idx, commit) in commits.iter().enumerate() {
         // Start processing a new row
         color_assigner.advance_row();
@@ -322,10 +341,17 @@ pub fn build_graph(
 
         // Determine color index
         let commit_color_index = if commit_lane_opt.is_some() {
-            // Continue existing branch
+            // Continue existing branch. For the pre-seeded trunk lane this
+            // returns the reserved main color (continue_lane special-cases the
+            // main lane), so the trunk tip lands blue on lane 0.
             color_assigner.continue_lane(lane)
-        } else if nodes.is_empty() {
-            // First commit (main branch) - reserve color so others cannot use it
+        } else if trunk_oid_in_graph == Some(commit.oid) {
+            // Trunk tip reached on a fresh lane (not pre-tracked, e.g. nothing
+            // newer descended from it): assign the reserved main color here.
+            color_assigner.assign_main_color(lane)
+        } else if nodes.is_empty() && trunk_oid_in_graph.is_none() {
+            // No trunk pinning: original behavior — the first commit (HEAD's
+            // line) is the main branch and reserves the main color.
             color_assigner.assign_main_color(lane)
         } else {
             // New branch start - assign a new color (exclude reserved)
@@ -1285,7 +1311,7 @@ mod tests {
             ci(f2, vec![c]),
             ci(c, vec![z]),
         ];
-        let layout = build_graph(&commits, &[], &[], &[], None, None);
+        let layout = build_graph(&commits, &[], &[], &[], None, None, None);
         (layout, [a, b, c, f1, f2, z])
     }
 
@@ -1379,5 +1405,109 @@ mod tests {
             })
         });
         assert!(!references_z, "no rendered edge may reference off-graph Z");
+    }
+
+    // ── trunk pinning (issue #1) ─────────────────────────────────────────
+
+    fn toid(b: u8) -> Oid {
+        Oid::from_bytes(&[b; 20]).unwrap()
+    }
+
+    /// A commit with a concrete oid and parent oids (bytes).
+    fn tc(id: u8, parents: &[u8]) -> CommitInfo {
+        CommitInfo {
+            oid: toid(id),
+            short_id: format!("{id:07}"),
+            author_name: "a".into(),
+            author_email: "a@b".into(),
+            timestamp: chrono::Local::now(),
+            message: format!("c{id}"),
+            full_message: format!("c{id}"),
+            parent_oids: parents.iter().map(|p| toid(*p)).collect(),
+        }
+    }
+
+    fn tb(name: &str, tip: u8, head: bool) -> BranchInfo {
+        BranchInfo {
+            name: name.into(),
+            tip_oid: toid(tip),
+            is_head: head,
+            is_remote: false,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+        }
+    }
+
+    /// The lane + color of the row carrying `oid`.
+    fn row_lane_color(layout: &GraphLayout, oid: Oid) -> (usize, usize) {
+        let n = layout
+            .nodes
+            .iter()
+            .find(|n| n.commit.as_ref().is_some_and(|c| c.oid == oid))
+            .expect("commit present");
+        (n.lane, n.color_index)
+    }
+
+    #[test]
+    fn trunk_is_pinned_to_lane_zero_when_not_newest() {
+        // A feature branch (tip c4) has commits NEWER than the trunk tip (c2):
+        //   c4 -> c3 -> c2(trunk/main) -> c1
+        // Revwalk is newest-first, so c4/c3 are processed before the trunk. With
+        // trunk pinning, the trunk tip must still land on lane 0 in the main
+        // color, and the newer feature commits take a lane > 0.
+        let commits = vec![tc(4, &[3]), tc(3, &[2]), tc(2, &[1]), tc(1, &[])];
+        let branches = vec![tb("main", 2, false), tb("feature", 4, true)];
+        let layout = build_graph(&commits, &branches, &[], &[], None, None, Some(toid(2)));
+
+        let (trunk_lane, trunk_color) = row_lane_color(&layout, toid(2));
+        assert_eq!(trunk_lane, 0, "trunk pinned to leftmost lane");
+        assert_eq!(
+            trunk_color,
+            crate::graph::colors::MAIN_BRANCH_COLOR,
+            "trunk carries the reserved main color"
+        );
+        // The newer feature tip is NOT on lane 0.
+        let (feat_lane, _) = row_lane_color(&layout, toid(4));
+        assert_ne!(feat_lane, 0, "newer feature commit does not steal lane 0");
+    }
+
+    #[test]
+    fn trunk_pinning_is_noop_when_trunk_is_newest() {
+        // Linear history with trunk (main, c3) as the newest commit — the same
+        // situation as no pinning. Pinning must produce the identical layout
+        // (lane 0 + main color on the tip) as passing trunk_tip = None.
+        let commits = vec![tc(3, &[2]), tc(2, &[1]), tc(1, &[])];
+        let branches = vec![tb("main", 3, true)];
+        let pinned = build_graph(&commits, &branches, &[], &[], None, None, Some(toid(3)));
+        let unpinned = build_graph(&commits, &branches, &[], &[], None, None, None);
+
+        for oid in [toid(3), toid(2), toid(1)] {
+            assert_eq!(
+                row_lane_color(&pinned, oid),
+                row_lane_color(&unpinned, oid),
+                "pinned trunk==newest matches unpinned layout for {oid}"
+            );
+        }
+        assert_eq!(row_lane_color(&pinned, toid(3)).0, 0);
+        assert_eq!(
+            row_lane_color(&pinned, toid(3)).1,
+            crate::graph::colors::MAIN_BRANCH_COLOR
+        );
+    }
+
+    #[test]
+    fn trunk_beyond_loaded_window_is_not_pinned() {
+        // trunk_tip references a commit not in `commits` (beyond the load limit):
+        // pinning is skipped and the layout matches the unpinned one.
+        let commits = vec![tc(3, &[2]), tc(2, &[1])];
+        let branches = vec![tb("feature", 3, true)];
+        let pinned = build_graph(&commits, &branches, &[], &[], None, None, Some(toid(99)));
+        let unpinned = build_graph(&commits, &branches, &[], &[], None, None, None);
+        assert_eq!(
+            row_lane_color(&pinned, toid(3)),
+            row_lane_color(&unpinned, toid(3)),
+            "unloaded trunk tip leaves layout unchanged"
+        );
     }
 }

@@ -76,7 +76,7 @@ fn test_linear_history() {
     ];
     let branches = vec![make_branch("main", "c3", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("Linear history:");
     for node in &layout.nodes {
@@ -92,7 +92,7 @@ fn test_linear_history() {
 
 #[test]
 fn test_unborn_repo_shows_uncommitted_node() {
-    let layout = build_graph(&[], &[], &[], &[], Some(Some(1)), None);
+    let layout = build_graph(&[], &[], &[], &[], Some(Some(1)), None, None);
 
     assert_eq!(layout.max_lane, 0);
     assert_eq!(layout.nodes.len(), 1);
@@ -122,7 +122,7 @@ fn test_simple_branch_merge() {
         make_branch("feature", "c2", false),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nSimple branch merge:");
     for node in &layout.nodes {
@@ -171,7 +171,7 @@ fn test_multiple_merges() {
         make_branch("develop", "c2", false),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nMultiple merges:");
     for node in &layout.nodes {
@@ -265,7 +265,7 @@ fn test_cell_structure() {
     ];
     let branches = vec![make_branch("main", "m1", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nCell structure analysis:");
     for node in &layout.nodes {
@@ -306,7 +306,7 @@ fn test_octopus_merge() {
         make_branch("branch-c", "C", false),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nOctopus merge:");
     for node in &layout.nodes {
@@ -421,7 +421,7 @@ fn test_parallel_branches() {
     ];
     let branches = vec![make_branch("main", "M2", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nParallel branches:");
     for node in &layout.nodes {
@@ -553,7 +553,7 @@ fn test_many_active_lanes() {
         make_branch("d", "D", false),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nMany active lanes:");
     for node in &layout.nodes {
@@ -605,7 +605,7 @@ fn test_chained_merges_different_branches() {
         make_branch("develop", "develop-merge", true),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nChained merges (keifu-demo structure):");
     for node in &layout.nodes {
@@ -687,7 +687,7 @@ fn test_hotfix_merged_into_multiple_branches() {
         make_branch("hotfix", "hotfix", false),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nHotfix merged into multiple branches:");
     for node in &layout.nodes {
@@ -783,7 +783,7 @@ fn test_stash_node_renders_with_base_connection() {
         base_oid: make_oid("base"),
     }];
 
-    let layout = build_graph(&commits, &branches, &[], &stashes, None, None);
+    let layout = build_graph(&commits, &branches, &[], &stashes, None, None, None);
 
     println!("\nStash node:");
     for node in &layout.nodes {
@@ -881,7 +881,7 @@ fn test_uncommitted_node_connects_to_head_on_lane_zero() {
     let commits = vec![make_commit("c2", vec!["c1"]), make_commit("c1", vec![])];
     let branches = vec![make_branch("main", "c2", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], Some(Some(3)), Some(make_oid("c2")));
+    let layout = build_graph(&commits, &branches, &[], &[], Some(Some(3)), Some(make_oid("c2")), None);
 
     println!("\nUncommitted, HEAD on lane 0:");
     for node in &layout.nodes {
@@ -943,6 +943,7 @@ fn test_uncommitted_node_connects_to_head_on_nonzero_lane() {
         &[],
         Some(Some(2)),
         Some(make_oid("f1")),
+        None,
     );
 
     println!("\nUncommitted, HEAD on non-zero lane:");
@@ -1019,6 +1020,7 @@ fn test_uncommitted_node_dropped_when_head_oid_not_in_graph() {
         &[],
         Some(Some(1)),
         Some(make_oid("does-not-exist")),
+        None,
     );
 
     assert!(
@@ -1032,7 +1034,7 @@ fn test_uncommitted_node_dropped_when_head_oid_not_in_graph() {
 #[test]
 fn test_empty_graph_no_commits_no_uncommitted() {
     // No commits, no branches, no uncommitted changes => empty layout, no panic.
-    let layout = build_graph(&[], &[], &[], &[], None, None);
+    let layout = build_graph(&[], &[], &[], &[], None, None, None);
 
     assert_eq!(layout.nodes.len(), 0);
     assert_eq!(layout.max_lane, 0);
@@ -1058,7 +1060,7 @@ fn tags_attach_to_their_target_commit() {
         },
     ];
 
-    let layout = build_graph(&commits, &branches, &tags, &[], None, None);
+    let layout = build_graph(&commits, &branches, &tags, &[], None, None, None);
 
     let by_id = |id: &str| -> &keifu::git::graph::GraphNode {
         layout
@@ -1088,7 +1090,7 @@ fn multiple_tags_on_same_commit_all_appear() {
         },
     ];
 
-    let layout = build_graph(&commits, &branches, &tags, &[], None, None);
+    let layout = build_graph(&commits, &branches, &tags, &[], None, None, None);
     let node = layout.nodes.iter().find(|n| n.commit.is_some()).unwrap();
 
     assert_eq!(node.tag_names.len(), 2);
@@ -1115,7 +1117,7 @@ fn test_orphan_disconnected_roots() {
         make_branch("branch-b", "b2", false),
     ];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     println!("\nOrphan disconnected roots:");
     for node in &layout.nodes {
@@ -1179,7 +1181,7 @@ fn test_single_root_commit() {
     let commits = vec![make_commit("only", vec![])];
     let branches = vec![make_branch("main", "only", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     assert_eq!(layout.nodes.len(), 1);
     assert_eq!(layout.max_lane, 0);
@@ -1227,7 +1229,7 @@ fn trace_linear_covers_the_whole_line_and_gating_is_off() {
         make_commit("c1", vec![]),
     ];
     let branches = vec![make_branch("main", "c3", true)];
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     // Selecting the middle commit lights the entire linear history: ancestor
     // (c1, down) and descendant (c3, up).
@@ -1251,7 +1253,7 @@ fn trace_single_merge_excludes_the_other_branch() {
         make_commit("c1", vec![]),
     ];
     let branches = vec![make_branch("main", "c4", true)];
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     // Selecting the main line (c3): down to c1, up to the merge c4 — but NOT the
     // feature commit c2.
@@ -1332,7 +1334,7 @@ fn trace_does_not_leak_onto_a_reused_lane() {
         make_commit("b0", vec![]),           // base
     ];
     let branches = vec![make_branch("main", "m2", true)];
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     let feat_f = lineage_of(&layout, "f1");
     let feat_g = lineage_of(&layout, "g1");
@@ -1380,7 +1382,7 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
         make_branch("main", "A3", true),
         make_branch("b", "B2", false),
     ];
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     // Find the HorizontalPipe on A2's row (both edge OIDs populated).
     let a2 = &layout.nodes[row_of(&layout, "A2")];
@@ -1433,7 +1435,7 @@ fn trace_lit_edges_classifies_line_merge_and_lead_in_edges() {
         make_commit("B", vec![]),
     ];
     let branches = vec![make_branch("main", "A", true)];
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
     let (a, b, f) = (make_oid("A"), make_oid("B"), make_oid("F"));
 
     // Tracing the feature F: its own line lights colored by the child, its
@@ -1475,7 +1477,7 @@ fn trace_dim_mask_has_few_distinct_variants_per_row_shape() {
         make_commit("a", vec![]),         // root
     ];
     let branches = vec![make_branch("main", "h", true)];
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     // Base shapes: distinct cell-rows, independent of any selection. The
     // rendered glyph string plus the lane color indices fully determine the

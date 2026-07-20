@@ -48,7 +48,7 @@ fn feature_commit_forks_at_the_main_merge_base() {
     let (_dir, git, a, f, b) = fixture();
     let branches = git.get_branches().unwrap();
     let commits = git.get_commits(500, &branches, &[]).unwrap();
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, None);
 
     // The color assigner tags the newest (main) commit as main.
     assert_eq!(main_branch_tip(&layout), Some(b));
