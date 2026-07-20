@@ -5,12 +5,13 @@
 //! missing, errors, times out, or the repo has no GitHub remote, the feature is
 //! silently absent — the PR map is just empty and no badges render.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use git2::Oid;
 use serde::Deserialize;
 
 /// Interval between PR refreshes (also the back-off after a failure).
@@ -69,8 +70,21 @@ pub struct PrInfo {
     pub title: String,
     pub ci: CiStatus,
     pub review: ReviewState,
-    /// Any comment authored by someone other than the PR author.
+    /// Any comment or review authored by someone other than the PR author.
     pub outside_activity: bool,
+    /// The PR's head-branch tip commit SHA (`headRefOid`), when known. This
+    /// pins the badge to exactly one row — the PR's head commit — instead of
+    /// every commit whose branch label happens to match the head branch name.
+    /// `None` when `gh` didn't report it (older CLI / malformed record); the
+    /// renderer then falls back to head-branch-name matching.
+    pub head_oid: Option<String>,
+}
+
+impl PrInfo {
+    /// The head commit SHA parsed into a git `Oid`, when present and valid.
+    pub fn head_oid(&self) -> Option<Oid> {
+        self.head_oid.as_deref().and_then(|s| Oid::from_str(s).ok())
+    }
 }
 
 /// One `statusCheckRollup` entry. Both shapes appear: `CheckRun`
@@ -99,6 +113,14 @@ struct Comment {
     author: Option<Actor>,
 }
 
+/// One PR review (only the author matters for outside-activity detection; the
+/// aggregate approve/changes verdict is read from `reviewDecision` instead).
+#[derive(Debug, Deserialize)]
+struct Review {
+    #[serde(default)]
+    author: Option<Actor>,
+}
+
 /// Raw `gh pr list --json …` record. Heavier fields are `Option`/defaulted so a
 /// `null` or missing value degrades gracefully instead of failing the parse.
 #[derive(Debug, Deserialize)]
@@ -107,6 +129,8 @@ struct GhPr {
     url: String,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
+    #[serde(default, rename = "headRefOid")]
+    head_ref_oid: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -117,6 +141,8 @@ struct GhPr {
     review_decision: Option<String>,
     #[serde(default)]
     comments: Option<Vec<Comment>>,
+    #[serde(default)]
+    reviews: Option<Vec<Review>>,
     #[serde(default)]
     author: Option<Actor>,
 }
@@ -168,16 +194,26 @@ fn aggregate_ci(rollup: &[RollupEntry]) -> CiStatus {
     }
 }
 
-/// True if any comment was authored by someone other than the PR author.
-/// Comments with a missing/empty author login are skipped.
-fn has_outside_activity(pr_author: &str, comments: &[Comment]) -> bool {
-    comments.iter().any(|c| {
-        c.author
-            .as_ref()
-            .map(|a| a.login.as_str())
-            .filter(|l| !l.is_empty())
-            .is_some_and(|login| login != pr_author)
-    })
+/// The non-empty login of an actor, if present.
+fn actor_login(actor: &Option<Actor>) -> Option<&str> {
+    actor
+        .as_ref()
+        .map(|a| a.login.as_str())
+        .filter(|l| !l.is_empty())
+}
+
+/// True if any comment *or* review was authored by someone other than the PR
+/// author — i.e. the PR has been "actioned" by an outsider. Reviews are the
+/// stronger signal (a review comment / requested changes without an approval),
+/// so both streams are considered. Entries with a missing/empty author login
+/// are skipped.
+fn has_outside_activity(pr_author: &str, comments: &[Comment], reviews: &[Review]) -> bool {
+    let comment_logins = comments.iter().map(|c| actor_login(&c.author));
+    let review_logins = reviews.iter().map(|r| actor_login(&r.author));
+    comment_logins
+        .chain(review_logins)
+        .flatten()
+        .any(|login| login != pr_author)
 }
 
 /// Parse `gh pr list --json …` output into a map from head branch name to PR.
@@ -193,8 +229,11 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
             let ci = aggregate_ci(p.status_check_rollup.as_deref().unwrap_or_default());
             let review = ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
             let pr_author = p.author.as_ref().map(|a| a.login.as_str()).unwrap_or_default();
-            let outside_activity =
-                has_outside_activity(pr_author, p.comments.as_deref().unwrap_or_default());
+            let outside_activity = has_outside_activity(
+                pr_author,
+                p.comments.as_deref().unwrap_or_default(),
+                p.reviews.as_deref().unwrap_or_default(),
+            );
             (
                 p.head_ref_name,
                 PrInfo {
@@ -204,6 +243,7 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
                     ci,
                     review,
                     outside_activity,
+                    head_oid: p.head_ref_oid.filter(|s| !s.is_empty()),
                 },
             )
         })
@@ -262,6 +302,77 @@ pub fn pr_refresh_summary(
     })
 }
 
+/// A derived, render-ready view over the open-PR map: an index from each PR's
+/// head-commit `Oid` to its `PrInfo`, plus the set of those head OIDs. Built
+/// once per frame (cost is O(number of PRs), independent of commit count) so the
+/// per-row graph render can answer "does this commit head a PR?" and "is this a
+/// PR-merge commit?" in O(1) without any per-render scan of every commit.
+pub struct PrContext<'a> {
+    by_head_oid: HashMap<Oid, &'a PrInfo>,
+    head_oids: HashSet<Oid>,
+}
+
+impl<'a> PrContext<'a> {
+    /// Index the open PRs by head-commit OID. PRs whose `headRefOid` is absent
+    /// or unparseable are simply omitted from the index (the renderer falls back
+    /// to head-branch-name matching for those).
+    pub fn new(open_prs: &'a HashMap<String, PrInfo>) -> Self {
+        let mut by_head_oid = HashMap::new();
+        let mut head_oids = HashSet::new();
+        for pr in open_prs.values() {
+            if let Some(oid) = pr.head_oid() {
+                // On the rare collision of two PRs at the same head commit, the
+                // first wins deterministically enough for a single badge.
+                by_head_oid.entry(oid).or_insert(pr);
+                head_oids.insert(oid);
+            }
+        }
+        Self {
+            by_head_oid,
+            head_oids,
+        }
+    }
+
+    /// The PR whose head commit is exactly `oid`, if any. This is the primary,
+    /// data-driven mapping behind "one badge per PR, on its head commit" (#42).
+    pub fn pr_for_head_commit(&self, oid: Oid) -> Option<&'a PrInfo> {
+        self.by_head_oid.get(&oid).copied()
+    }
+
+    /// True when `oid` is the head commit of some open PR.
+    pub fn is_pr_head(&self, oid: Oid) -> bool {
+        self.head_oids.contains(&oid)
+    }
+
+    /// Whether a commit is a merge that landed a PR (#52), so its message can be
+    /// dimmed. Data-driven first: a merge whose *second* parent is a known PR
+    /// head is a PR merge. Falls back to the GitHub merge-commit message format
+    /// for PRs no longer open (merged PRs leave `gh pr list`, so only the
+    /// message survives). `is_merge` and `second_parent` come straight off the
+    /// row's commit, keeping the check inside the windowed per-row render path.
+    pub fn is_pr_merge(&self, is_merge: bool, second_parent: Option<Oid>, summary: &str) -> bool {
+        if !is_merge {
+            return false;
+        }
+        if second_parent.is_some_and(|p| self.is_pr_head(p)) {
+            return true;
+        }
+        message_is_github_merge(summary)
+    }
+}
+
+/// True when a commit summary line matches GitHub's default merge-commit format,
+/// `Merge pull request #<n> from <owner>/<branch>`. A plain `Merge branch …`
+/// (an ordinary local merge) is intentionally not matched.
+pub fn message_is_github_merge(summary: &str) -> bool {
+    let Some(rest) = summary.trim_start().strip_prefix("Merge pull request #") else {
+        return false;
+    };
+    // At least one digit for the PR number, then a space (the "from …" clause).
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    !digits.is_empty() && rest[digits.len()..].starts_with(' ')
+}
+
 /// Run `gh pr list` in `repo_path`, returning open PRs by head branch. `None`
 /// on any failure (gh missing, non-zero exit, timeout, non-UTF8 output).
 fn fetch_open_prs(repo_path: &str) -> Option<HashMap<String, PrInfo>> {
@@ -281,7 +392,7 @@ fn run_gh_pr_list(repo_path: &str) -> Option<std::process::Output> {
             "pr",
             "list",
             "--json",
-            "number,url,headRefName,title,state,statusCheckRollup,reviewDecision,comments,author",
+            "number,url,headRefName,headRefOid,title,state,statusCheckRollup,reviewDecision,comments,reviews,author",
             "--limit",
             "100",
         ])
@@ -399,6 +510,7 @@ mod tests {
                 ci: CiStatus::None,
                 review: ReviewState::None,
                 outside_activity: false,
+                head_oid: None,
             })
         );
         assert_eq!(map.get("fix/y").map(|p| p.number), Some(7));
@@ -562,6 +674,128 @@ mod tests {
         assert_eq!(pr.number, 1);
     }
 
+    #[test]
+    fn outside_activity_detects_non_author_reviews() {
+        // A review (not just an issue comment) by a non-author counts as activity.
+        let reviewed = one(
+            r#","author":{"login":"me"},"reviews":[{"author":{"login":"reviewer"}}]"#,
+        );
+        assert!(reviewed.outside_activity, "a non-author reviewed");
+
+        let self_review = one(
+            r#","author":{"login":"me"},"reviews":[{"author":{"login":"me"}}]"#,
+        );
+        assert!(!self_review.outside_activity, "only the author reviewed");
+
+        // Reviews and comments are both considered.
+        let mixed = one(
+            r#","author":{"login":"me"},"comments":[{"author":{"login":"me"}}],"reviews":[{"author":{"login":"bot"}}]"#,
+        );
+        assert!(mixed.outside_activity);
+    }
+
+    // ── head OID ─────────────────────────────────────────────────────
+
+    const OID_A: &str = "1111111111111111111111111111111111111111";
+    const OID_B: &str = "2222222222222222222222222222222222222222";
+
+    #[test]
+    fn head_oid_parsed_from_json() {
+        let pr = one(&format!(r#","headRefOid":"{OID_A}""#));
+        assert_eq!(pr.head_oid.as_deref(), Some(OID_A));
+        assert_eq!(pr.head_oid(), Some(Oid::from_str(OID_A).unwrap()));
+    }
+
+    #[test]
+    fn head_oid_absent_or_empty_is_none() {
+        assert_eq!(one("").head_oid, None);
+        assert_eq!(one(r#","headRefOid":"""#).head_oid, None);
+        assert_eq!(one(r#","headRefOid":null"#).head_oid, None);
+        // A non-hex string parses to None as an Oid but is still stored verbatim.
+        assert_eq!(one(r#","headRefOid":"not-a-sha""#).head_oid(), None);
+    }
+
+    // ── PrContext: PR→head-commit mapping (#42) ──────────────────────
+
+    fn pr_with_head(number: u64, head: Option<&str>) -> PrInfo {
+        PrInfo {
+            number,
+            url: String::new(),
+            title: String::new(),
+            ci: CiStatus::None,
+            review: ReviewState::None,
+            outside_activity: false,
+            head_oid: head.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn context_maps_head_commit_to_its_pr_only() {
+        let mut prs = HashMap::new();
+        prs.insert("feat".to_string(), pr_with_head(12, Some(OID_A)));
+        let ctx = PrContext::new(&prs);
+        let a = Oid::from_str(OID_A).unwrap();
+        let b = Oid::from_str(OID_B).unwrap();
+        // The head commit resolves to its PR; any other commit of the branch does not.
+        assert_eq!(ctx.pr_for_head_commit(a).map(|p| p.number), Some(12));
+        assert!(ctx.is_pr_head(a));
+        assert_eq!(ctx.pr_for_head_commit(b), None);
+        assert!(!ctx.is_pr_head(b));
+    }
+
+    #[test]
+    fn context_omits_prs_without_a_head_oid() {
+        let mut prs = HashMap::new();
+        prs.insert("feat".to_string(), pr_with_head(7, None));
+        let ctx = PrContext::new(&prs);
+        assert_eq!(ctx.pr_for_head_commit(Oid::from_str(OID_A).unwrap()), None);
+    }
+
+    // ── PR-merge-commit detection (#52) ──────────────────────────────
+
+    #[test]
+    fn github_merge_message_pattern() {
+        assert!(message_is_github_merge(
+            "Merge pull request #123 from octocat/feature"
+        ));
+        assert!(message_is_github_merge(
+            "  Merge pull request #1 from a/b" // leading whitespace tolerated
+        ));
+        // Not GitHub PR merges:
+        assert!(!message_is_github_merge("Merge branch 'main' into feature"));
+        assert!(!message_is_github_merge("Merge pull request from x")); // no number
+        assert!(!message_is_github_merge("Merge pull request #12")); // no " from"
+        assert!(!message_is_github_merge("fix: unrelated commit"));
+        assert!(!message_is_github_merge(""));
+    }
+
+    #[test]
+    fn is_pr_merge_data_driven_via_second_parent() {
+        let mut prs = HashMap::new();
+        prs.insert("feat".to_string(), pr_with_head(9, Some(OID_A)));
+        let ctx = PrContext::new(&prs);
+        let head = Oid::from_str(OID_A).unwrap();
+        let other = Oid::from_str(OID_B).unwrap();
+
+        // A merge whose 2nd parent is the PR head → PR merge, even with a plain message.
+        assert!(ctx.is_pr_merge(true, Some(head), "Merge branch feat"));
+        // 2nd parent is not a PR head, message not a GitHub merge → not a PR merge.
+        assert!(!ctx.is_pr_merge(true, Some(other), "Merge branch feat"));
+        // Not a merge at all → never a PR merge.
+        assert!(!ctx.is_pr_merge(false, Some(head), "Merge pull request #9 from x/y"));
+    }
+
+    #[test]
+    fn is_pr_merge_falls_back_to_message_for_closed_prs() {
+        // Merged PRs leave `gh pr list`, so the OID index is empty — the message
+        // pattern still identifies the merge commit.
+        let empty = HashMap::new();
+        let ctx = PrContext::new(&empty);
+        let p = Oid::from_str(OID_A).unwrap();
+        assert!(ctx.is_pr_merge(true, Some(p), "Merge pull request #42 from o/b"));
+        assert!(!ctx.is_pr_merge(true, Some(p), "Merge branch 'x'"));
+    }
+
     // ── pr_refresh_summary ───────────────────────────────────────────
 
     fn pr_info(number: u64, ci: CiStatus) -> PrInfo {
@@ -572,6 +806,7 @@ mod tests {
             ci,
             review: ReviewState::None,
             outside_activity: false,
+            head_oid: None,
         }
     }
 
