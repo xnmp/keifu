@@ -87,7 +87,7 @@ impl App {
         );
 
         let mut graph_nav = GraphNav::new();
-        graph_nav.rebuild_branch_positions(&graph_layout);
+        graph_nav.rebuild_branch_positions(&graph_layout, &repo.remotes());
         let has_uncommitted_node = graph_layout
             .nodes
             .first()

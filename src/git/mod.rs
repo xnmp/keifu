@@ -12,7 +12,7 @@ pub mod patch;
 pub mod repository;
 
 pub use askpass::Credentials;
-pub use branch::{branch_authors, remote_only_branch_names, BranchInfo};
+pub use branch::{branch_authors, remote_only_branch_names, split_remote_ref, BranchInfo};
 pub use commit::CommitInfo;
 pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,

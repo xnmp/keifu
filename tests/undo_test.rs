@@ -231,7 +231,7 @@ fn checkout_is_not_recorded_in_the_undo_ledger() {
     let (_dir, mut app, _a, _b) = fixture();
     app.mode = AppMode::Confirm {
         message: String::new(),
-        action: ConfirmAction::Checkout("feature".into()),
+        action: ConfirmAction::Checkout { name: "feature".into(), is_remote: false },
     };
     app.handle_action(Action::Confirm).unwrap();
     assert!(

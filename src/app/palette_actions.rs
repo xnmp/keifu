@@ -64,7 +64,10 @@ impl App {
                 label: format!("Checkout {display}"),
                 hint: None,
                 match_text: b.name.clone(),
-                action: PaletteAction::Checkout(b.name.clone()),
+                action: PaletteAction::Checkout {
+                    name: b.name.clone(),
+                    is_remote: b.is_remote,
+                },
                 order: 0, // ties broken alphabetically by label
             });
         }
@@ -163,11 +166,11 @@ impl App {
                 self.focused_panel = FocusedPanel::Graph;
                 self.handle_action(inner)?;
             }
-            PaletteAction::Checkout(name) => {
+            PaletteAction::Checkout { name, is_remote } => {
                 // Route through the existing checkout confirmation.
                 self.mode = AppMode::Confirm {
                     message: format!("Checkout branch '{name}'?"),
-                    action: ConfirmAction::Checkout(name),
+                    action: ConfirmAction::Checkout { name, is_remote },
                 };
             }
             PaletteAction::JumpToCommit(idx) => {

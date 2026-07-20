@@ -19,9 +19,9 @@ impl App {
                 // user through conflicts (or confirm success) after refresh.
                 let mut op_outcome: Option<(OpOutcome, OperationState)> = None;
                 match confirm_action {
-                    ConfirmAction::Checkout(name) => {
+                    ConfirmAction::Checkout { name, is_remote } => {
                         self.mode = AppMode::Normal;
-                        self.checkout_branch_by_name(&name)?;
+                        self.checkout_branch_by_name(&name, is_remote)?;
                         return Ok(());
                     }
                     ConfirmAction::LoadAllCommits => {
