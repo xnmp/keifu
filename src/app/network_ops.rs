@@ -198,8 +198,21 @@ impl App {
     /// no-op 5-minute refreshes. Never blocks the UI thread.
     pub fn update_open_prs(&mut self) -> bool {
         self.pr_fetch.maybe_start(&self.repo_path);
-        let Some(prs) = self.pr_fetch.poll() else {
-            return false;
+        let prs = match self.pr_fetch.poll() {
+            Some(Ok(prs)) => {
+                self.refresh_latches.pr_fetch = false;
+                prs
+            }
+            // gh-missing / no-remote / timeout: report once per episode and keep
+            // the last-good PR map rather than wiping the badges (issue #65).
+            Some(Err(e)) => {
+                if !self.refresh_latches.pr_fetch {
+                    self.refresh_latches.pr_fetch = true;
+                    self.set_message(format!("PR fetch failed: {e}"));
+                }
+                return false;
+            }
+            None => return false,
         };
         if self.pr_toasts_armed {
             if let Some(summary) = crate::pr::pr_refresh_summary(&self.open_prs, &prs) {
@@ -221,8 +234,22 @@ impl App {
     /// primary squash-merge signal (issue #60). Never blocks the UI.
     pub fn update_merged_prs(&mut self) -> bool {
         self.merged.pr_branch_fetch.maybe_start(&self.repo_path);
-        let Some(set) = self.merged.pr_branch_fetch.poll() else {
-            return false;
+        let set = match self.merged.pr_branch_fetch.poll() {
+            Some(Ok(set)) => {
+                self.refresh_latches.merged_fetch = false;
+                set
+            }
+            // gh-missing / no-remote / timeout: report once per episode and keep
+            // the last-good merged-branch signal (issue #65). The local patch-id
+            // classifier still runs, so squash-merge detection degrades, not dies.
+            Some(Err(e)) => {
+                if !self.refresh_latches.merged_fetch {
+                    self.refresh_latches.merged_fetch = true;
+                    self.set_message(format!("Merged-PR fetch failed: {e}"));
+                }
+                return false;
+            }
+            None => return false,
         };
         if set == self.merged.pr_branches {
             return false;

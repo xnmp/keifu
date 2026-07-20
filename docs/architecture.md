@@ -254,7 +254,11 @@ reporting for the next episode):
 
 All four follow `if !latched { latched = true; report(error) }` on failure and
 `latched = false` on success — the shape to copy for any new periodic
-background check.
+background check. Two more of the same shape were added in #65 for the
+background gh polls: `App.refresh_latches.pr_fetch` (open-PR poll) and
+`App.refresh_latches.merged_fetch` (merged-PR poll), both set/cleared in
+`src/app/network_ops.rs`. On failure the *last-good* data is kept (the PR map /
+merged-branch set is not wiped), so a transient gh error can't blank the badges.
 
 ## Settings Registry (2026-07-20)
 
@@ -317,9 +321,10 @@ settings exist and how they behave.
   replacement) still carries novel work, so the GitHub signal alone can't be
   trusted (guards against branch-name reuse).
 
-**Async infrastructure** (`src/merged_branches.rs`):
-- `MergedBranchFetch` polls `gh pr list --state merged` in the background
-  (10s timeout, 300s poll interval), never on the render thread.
+**Async infrastructure** (`src/merged_branch_fetch.rs`):
+- The merged-PR-branch poll (`gh pr list --state merged`, 10s timeout, 300s
+  interval) is an `IntervalFetch<HashSet<String>>` (see *Async Worker Shapes*
+  below), never on the render thread.
 - `MergedClassifier` reruns the pure classifier in a background worker, gated
   by an input signature (`ClassifyInput::signature()`, an order-independent
   XOR-hash over base name/tip, every branch's `(name, tip, is_remote,
@@ -480,3 +485,37 @@ enumeration even though only `self.merged.branches` changed. It now calls
 `rebuild_and_restore(false)` (phases 2–4), skipping `reload_refs`. The revwalk
 + `build_graph` still run (they must, to apply the filter), but the expensive
 disk reloads don't.
+
+## Async Worker Shapes (2026-07-20, #65)
+
+**Decision:** Background workers that shell out to `gh` share two axes —
+*trigger* (interval vs. one-shot vs. signature-gated) and *transport* (spawn a
+thread, send a `Result` down an `mpsc` channel, poll it) — routed through the
+single `gh::run` helper (`src/gh.rs`) for the actual subprocess + timeout.
+
+**Taxonomy:**
+- **Interval fetchers** — `src/interval_fetch.rs::IntervalFetch<T>`. A generic
+  fetcher parameterized by a poll interval + a producer `Fn(&str) -> Result<T,
+  String>`. The two open/merged-PR polls (`pr::open_pr_fetch` →
+  `IntervalFetch<HashMap<String, PrInfo>>`, `merged_branch_fetch::
+  merged_branch_fetch` → `IntervalFetch<HashSet<String>>`) were byte-identical
+  hand-rolled spawn+deadline loops before #65; they now differ only in their
+  producer closure. The producer is injectable, so interval gating / delivery /
+  error surfacing are unit-tested with no real `gh`.
+- **One-shot runners** — `CheckFetch`, `IssueFetch`, `PrThreadFetch`,
+  `PrActionRunner`. Fetched-on-demand (popup opens / action fires), each with
+  bespoke per-key caching + in-flight tracking (`pending_detail`, per-run log
+  cache, per-PR thread cache). They already call `gh::run` directly and already
+  surface `Result`; they are *not* forced under a shared abstraction because the
+  caching/keying differs per runner and a generic wrapper would need a callback
+  for each poll anyway — no net simplification.
+- **Signature-gated worker** — `MergedClassifier`. Not an `IntervalFetch`: its
+  trigger is an input-signature change (not a clock) and its producer is a
+  *local* git classification (not a `gh` call), so there is nothing to route
+  through `gh::run` and no interval to honor. Left as its own shape.
+- **Deliberately distinct** — `AvatarFetch`, `DiffCache`. Untouched.
+
+**Error convention:** `IntervalFetch::poll` returns `Option<Result<T, String>>`.
+A gh-missing / no-remote / timeout failure is surfaced (not mapped to an empty
+value) so the caller latches + reports it once per episode (see *Episode
+latching*) and keeps the last-good data instead of blanking the badges.

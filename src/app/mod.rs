@@ -813,7 +813,8 @@ pub struct MergedState {
     /// signal for catching squash-merged branches whose local ref survives (the
     /// remote copy having been deleted on merge). Empty when gh is unavailable.
     pub pr_branches: std::collections::HashSet<String>,
-    pub pr_branch_fetch: crate::merged_branch_fetch::MergedBranchFetch,
+    pub pr_branch_fetch:
+        crate::interval_fetch::IntervalFetch<std::collections::HashSet<String>>,
     /// OIDs of base-update ("back-merge") commits: merges on an open PR's branch
     /// that pulled the updated base branch in (issue #55). Derived from
     /// `open_prs` + the base branch via `classify_base_update_merges`; drives the
@@ -845,6 +846,14 @@ pub struct RefreshLatches {
     /// `.git` doesn't re-flash the status bar every refresh; a stale handle is
     /// kept as a best-effort fallback rather than aborting the refresh.
     pub reopen: bool,
+    /// Background open-PR poll (`gh pr list`) failures (issue #65). Set on the
+    /// first failure since the last success — so a gh-missing / no-remote repo
+    /// reports once rather than every 5-minute tick — and cleared on success.
+    /// The last-good PR map is kept on failure rather than wiped.
+    pub pr_fetch: bool,
+    /// Background merged-PR poll (`gh pr list --state merged`) failures (issue
+    /// #65). Same once-per-episode shape as `pr_fetch`.
+    pub merged_fetch: bool,
 }
 
 /// Application state
@@ -978,7 +987,9 @@ pub struct App {
     // Open GitHub PRs by head branch name, refreshed in the background via the
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
-    pub pr_fetch: crate::pr::PrFetch,
+    pub pr_fetch: crate::interval_fetch::IntervalFetch<
+        std::collections::HashMap<String, crate::pr::PrInfo>,
+    >,
 
     // Merged-branch classification subsystem (see `MergedState`): the async
     // GitHub/local merged signals, the hide-merged toggle, and the base-update

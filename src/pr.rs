@@ -1,18 +1,18 @@
 //! Open GitHub PR discovery via the `gh` CLI.
 //!
-//! Non-blocking by construction: the fetch runs on a background thread (the
-//! same pattern as `NetworkManager`) and the UI polls a channel. If `gh` is
-//! missing, errors, times out, or the repo has no GitHub remote, the feature is
-//! silently absent — the PR map is just empty and no badges render.
+//! Non-blocking by construction: the fetch runs on a background thread via the
+//! generic [`crate::interval_fetch::IntervalFetch`] and the UI polls a channel.
+//! If `gh` is missing, errors, times out, or the repo has no GitHub remote, the
+//! producer returns `Err` — surfaced by `poll` so the caller can latch/toast it
+//! once (issue #65), rather than silently substituting an empty PR map.
 
 use std::collections::{HashMap, HashSet};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use git2::Oid;
 use serde::Deserialize;
+
+use crate::interval_fetch::IntervalFetch;
 
 /// Interval between PR refreshes (also the back-off after a failure).
 const PR_FETCH_INTERVAL: Duration = Duration::from_secs(300);
@@ -373,120 +373,36 @@ pub fn message_is_github_merge(summary: &str) -> bool {
     !digits.is_empty() && rest[digits.len()..].starts_with(' ')
 }
 
-/// Run `gh pr list` in `repo_path`, returning open PRs by head branch. `None`
-/// on any failure (gh missing, non-zero exit, timeout, non-UTF8 output).
-fn fetch_open_prs(repo_path: &str) -> Option<HashMap<String, PrInfo>> {
-    let output = run_gh_pr_list(repo_path)?;
-    if !output.status.success() {
-        return None;
-    }
-    let json = String::from_utf8(output.stdout).ok()?;
-    Some(parse_pr_list(&json))
+/// Build the background open-PR fetcher: `gh pr list` every [`PR_FETCH_INTERVAL`]
+/// on a worker thread, routed through the generic [`IntervalFetch`].
+pub fn open_pr_fetch() -> IntervalFetch<HashMap<String, PrInfo>> {
+    IntervalFetch::new(PR_FETCH_INTERVAL, fetch_open_prs)
 }
 
-/// Spawn `gh pr list` with a timeout, killing it if it overruns `GH_TIMEOUT`.
-/// Runs on a background thread, so the polling sleep never touches the UI.
-fn run_gh_pr_list(repo_path: &str) -> Option<std::process::Output> {
-    let mut child = Command::new("gh")
-        .args([
+/// Run `gh pr list` in `repo_path`, returning open PRs by head branch. `Err`
+/// (surfaced by the caller) on gh-missing, timeout, or a non-zero exit — so a
+/// transient failure is observable rather than silently emptying the PR map.
+fn fetch_open_prs(repo_path: &str) -> Result<HashMap<String, PrInfo>, String> {
+    let out = crate::gh::run(
+        repo_path,
+        &[
             "pr",
             "list",
             "--json",
             "number,url,headRefName,headRefOid,title,state,statusCheckRollup,reviewDecision,comments,reviews,author",
             "--limit",
             "100",
-        ])
-        .current_dir(repo_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let deadline = Instant::now() + GH_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().ok(),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => return None,
-        }
-    }
-}
-
-/// Background fetcher for open PRs. Fetches once at startup and every
-/// `PR_FETCH_INTERVAL` thereafter; never blocks the UI thread.
-pub struct PrFetch {
-    receiver: Option<Receiver<HashMap<String, PrInfo>>>,
-    last_fetch: Option<Instant>,
-}
-
-impl Default for PrFetch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PrFetch {
-    pub fn new() -> Self {
-        Self {
-            receiver: None,
-            last_fetch: None,
-        }
-    }
-
-    /// Make the next `maybe_start` fetch immediately, ignoring the interval.
-    /// A fetch already in flight is untouched (no duplicate spawn).
-    pub fn force(&mut self) {
-        self.last_fetch = None;
-    }
-
-    /// Spawn a fetch when none is in flight and one is due (immediately on the
-    /// first call, then on the interval).
-    pub fn maybe_start(&mut self, repo_path: &str) {
-        if self.receiver.is_some() {
-            return;
-        }
-        let due = self
-            .last_fetch
-            .is_none_or(|t| t.elapsed() >= PR_FETCH_INTERVAL);
-        if !due {
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        let path = repo_path.to_string();
-        thread::spawn(move || {
-            let _ = tx.send(fetch_open_prs(&path).unwrap_or_default());
+        ],
+        GH_TIMEOUT,
+    )?;
+    if !out.success {
+        return Err(if out.stderr.is_empty() {
+            "gh pr list failed".to_string()
+        } else {
+            out.stderr
         });
-        self.receiver = Some(rx);
     }
-
-    /// Poll for a completed fetch. Returns the new PR map on completion (empty
-    /// on any failure), else `None`. Records the completion time so the next
-    /// fetch waits a full interval — no retry storm.
-    pub fn poll(&mut self) -> Option<HashMap<String, PrInfo>> {
-        let rx = self.receiver.as_ref()?;
-        match rx.try_recv() {
-            Ok(map) => {
-                self.receiver = None;
-                self.last_fetch = Some(Instant::now());
-                Some(map)
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                // Worker died without sending; back off until the next interval.
-                self.receiver = None;
-                self.last_fetch = Some(Instant::now());
-                None
-            }
-        }
-    }
+    Ok(parse_pr_list(&out.stdout))
 }
 
 #[cfg(test)]

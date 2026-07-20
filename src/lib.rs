@@ -20,6 +20,7 @@ pub mod perf;
 pub mod files_pane_state;
 pub mod git;
 pub mod graph_nav;
+pub mod interval_fetch;
 pub mod network;
 pub mod checks;
 pub mod gh;

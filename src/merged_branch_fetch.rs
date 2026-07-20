@@ -5,18 +5,20 @@
 //! the trunk, so local ancestry can't see the merge — but GitHub still knows the
 //! PR merged, and its `headRefName` is exactly that branch's name.
 //!
-//! Non-blocking by construction, mirroring [`crate::pr::PrFetch`]: the fetch runs
-//! on a background thread and the UI polls a channel. If `gh` is missing, errors,
-//! times out, or the repo has no GitHub remote, the feature is silently absent —
-//! the merged-head set is just empty and the local patch-id fallback takes over.
+//! Non-blocking by construction, mirroring the open-PR fetch: the fetch runs on
+//! a background thread via the generic [`crate::interval_fetch::IntervalFetch`]
+//! and the UI polls a channel. If `gh` is missing, errors, or times out, the
+//! producer returns `Err` — surfaced so the caller can latch/toast it once
+//! (issue #65); the local patch-id fallback still classifies branches meanwhile.
 
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
+
+use crate::interval_fetch::IntervalFetch;
 
 /// Interval between merged-PR refreshes (also the back-off after a failure).
 /// Merged state changes slowly, so this is deliberately coarse.
@@ -44,22 +46,21 @@ pub fn parse_merged_pr_list(json: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Run `gh pr list --state merged` in `repo_path`, returning the set of merged
-/// head-branch names. `None` on any failure (gh missing, non-zero exit, timeout,
-/// non-UTF8 output).
-fn fetch_merged_branches(repo_path: &str) -> Option<HashSet<String>> {
-    let output = run_gh(repo_path)?;
-    if !output.status.success() {
-        return None;
-    }
-    let json = String::from_utf8(output.stdout).ok()?;
-    Some(parse_merged_pr_list(&json))
+/// Build the background merged-PR-branch fetcher: `gh pr list --state merged`
+/// every [`MERGED_FETCH_INTERVAL`] on a worker thread, routed through the generic
+/// [`IntervalFetch`].
+pub fn merged_branch_fetch() -> IntervalFetch<HashSet<String>> {
+    IntervalFetch::new(MERGED_FETCH_INTERVAL, fetch_merged_branches)
 }
 
-/// Spawn `gh pr list --state merged` with a timeout, killing it if it overruns.
-fn run_gh(repo_path: &str) -> Option<std::process::Output> {
-    let mut child = Command::new("gh")
-        .args([
+/// Run `gh pr list --state merged` in `repo_path`, returning the set of merged
+/// head-branch names. `Err` (surfaced by the caller) on gh-missing, timeout, or
+/// a non-zero exit — so a transient failure is observable rather than silently
+/// emptying the merged-head set.
+fn fetch_merged_branches(repo_path: &str) -> Result<HashSet<String>, String> {
+    let out = crate::gh::run(
+        repo_path,
+        &[
             "pr",
             "list",
             "--state",
@@ -68,97 +69,17 @@ fn run_gh(repo_path: &str) -> Option<std::process::Output> {
             "headRefName",
             "--limit",
             "100",
-        ])
-        .current_dir(repo_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let deadline = Instant::now() + GH_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().ok(),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => return None,
-        }
-    }
-}
-
-/// Background fetcher for merged-PR head branches. Fetches once at startup and
-/// every [`MERGED_FETCH_INTERVAL`] thereafter; never blocks the UI thread.
-pub struct MergedBranchFetch {
-    receiver: Option<Receiver<HashSet<String>>>,
-    last_fetch: Option<Instant>,
-}
-
-impl Default for MergedBranchFetch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MergedBranchFetch {
-    pub fn new() -> Self {
-        Self {
-            receiver: None,
-            last_fetch: None,
-        }
-    }
-
-    /// Make the next `maybe_start` fetch immediately, ignoring the interval. A
-    /// fetch already in flight is untouched (no duplicate spawn).
-    pub fn force(&mut self) {
-        self.last_fetch = None;
-    }
-
-    /// Spawn a fetch when none is in flight and one is due (immediately on the
-    /// first call, then on the interval).
-    pub fn maybe_start(&mut self, repo_path: &str) {
-        if self.receiver.is_some() {
-            return;
-        }
-        let due = self
-            .last_fetch
-            .is_none_or(|t| t.elapsed() >= MERGED_FETCH_INTERVAL);
-        if !due {
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        let path = repo_path.to_string();
-        thread::spawn(move || {
-            let _ = tx.send(fetch_merged_branches(&path).unwrap_or_default());
+        ],
+        GH_TIMEOUT,
+    )?;
+    if !out.success {
+        return Err(if out.stderr.is_empty() {
+            "gh pr list (merged) failed".to_string()
+        } else {
+            out.stderr
         });
-        self.receiver = Some(rx);
     }
-
-    /// Poll for a completed fetch. Returns the merged-head set on completion
-    /// (empty on any failure), else `None`. Records the completion time so the
-    /// next fetch waits a full interval — no retry storm.
-    pub fn poll(&mut self) -> Option<HashSet<String>> {
-        let rx = self.receiver.as_ref()?;
-        match rx.try_recv() {
-            Ok(set) => {
-                self.receiver = None;
-                self.last_fetch = Some(Instant::now());
-                Some(set)
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.receiver = None;
-                self.last_fetch = Some(Instant::now());
-                None
-            }
-        }
-    }
+    Ok(parse_merged_pr_list(&out.stdout))
 }
 
 // ── Local merged-branch classification, run off the UI thread ────────────────
