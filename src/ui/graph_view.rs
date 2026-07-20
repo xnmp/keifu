@@ -497,6 +497,11 @@ impl<'a> GraphViewWidget<'a> {
         // space). In Unicode mode connectors remain their own rows.
         let rows = visible_rows(app, pixel_mode);
 
+        // Assign each open PR's badge to exactly one commit row (head-commit row
+        // if visible, else the topmost matching row), computed once over the
+        // full set of rendered rows so a PR is never dropped or duplicated.
+        let pr_badges = assign_pr_badges(&rows, remotes, open_prs);
+
         let mut selected_in_filtered = None;
         let mut items: Vec<ListItem> = Vec::new();
         let mut chip_hits: Vec<Vec<ChipHit>> = Vec::new();
@@ -515,6 +520,10 @@ impl<'a> GraphViewWidget<'a> {
                         .compare_range
                         .is_some_and(|(old, new)| old == c.oid || new == c.oid)
             });
+            let pr_badge = node
+                .commit
+                .as_ref()
+                .and_then(|c| pr_badges.get(&c.oid).copied());
             let (line, chips) = render_graph_line(
                 node,
                 graph_width,
@@ -526,7 +535,7 @@ impl<'a> GraphViewWidget<'a> {
                 now,
                 pixel_mode,
                 remotes,
-                open_prs,
+                pr_badge,
                 metadata_columns,
                 trace.as_ref(),
                 merged,
@@ -603,28 +612,53 @@ pub fn pr_for_branch_labels<'p>(
     })
 }
 
-/// The PR whose badge should render on a specific graph node — used at the badge
-/// site so a PR appears on exactly one row.
+/// Decide, once over the whole set of rendered rows, which commit row carries
+/// each open PR's badge — returning a map from that row's commit OID to the PR.
 ///
-/// Starts from the branch-label match (`pr_for_branch_labels`), then, when that
-/// PR carries a known head commit (`head_oid`), keeps the badge only on the row
-/// that *is* that commit. This suppresses the duplicate that appeared when a
-/// local branch and its remote-tracking ref (both stripping to the same head
-/// branch name) sat on different commits — each row matched by name, so both got
-/// a badge. When `head_oid` is unknown, or the node has no commit, it falls back
-/// to the name match so the badge still shows (pre-`headRefOid` behavior).
-pub fn pr_badge_for_node<'p>(
-    node: &crate::git::graph::GraphNode,
+/// A PR appears on exactly ONE row and is never dropped entirely:
+/// - Among the rows whose branch labels match the PR by name
+///   (`pr_for_branch_labels`), if one of them IS the PR's head commit
+///   (`head_oid`), the badge anchors there — this deduplicates the case where a
+///   local branch and its remote-tracking ref (both stripping to the same head
+///   branch name) sit on different commits.
+/// - Otherwise (head oid unknown, or the head commit isn't a loaded/label row),
+///   the badge falls back to the topmost matching row. This is the fix for the
+///   regression where requiring `head_oid == commit.oid` per-node suppressed the
+///   badge everywhere when the head commit wasn't the label-carrying row.
+///
+/// Keying by the winning row's commit OID keeps the per-row lookup at the badge
+/// site O(1). At most one badge per row (first matching label wins, mirroring
+/// `pr_for_branch_labels`).
+fn assign_pr_badges<'p>(
+    rows: &[RenderRow<'_>],
     remotes: &[String],
     open_prs: &'p HashMap<String, PrInfo>,
-) -> Option<&'p PrInfo> {
-    let pr = pr_for_branch_labels(&node.branch_names, remotes, open_prs)?;
-    match (pr.head_oid, node.commit.as_ref()) {
-        // Known head commit: badge only on the row that is that commit.
-        (Some(head), Some(commit)) => (head == commit.oid).then_some(pr),
-        // Unknown head oid (or no commit on the node): fall back to name match.
-        _ => Some(pr),
+) -> HashMap<git2::Oid, &'p PrInfo> {
+    // PR number -> candidate rows (commit OID + the PR), in top-to-bottom order.
+    let mut candidates: HashMap<u64, Vec<(git2::Oid, &'p PrInfo)>> = HashMap::new();
+    for row in rows {
+        let Some(commit) = row.node.commit.as_ref() else {
+            continue;
+        };
+        if let Some(pr) = pr_for_branch_labels(&row.node.branch_names, remotes, open_prs) {
+            candidates
+                .entry(pr.number)
+                .or_default()
+                .push((commit.oid, pr));
+        }
     }
+
+    let mut out: HashMap<git2::Oid, &'p PrInfo> = HashMap::new();
+    for cands in candidates.values() {
+        let pr = cands[0].1;
+        // Prefer the head-commit row; else the topmost matching row.
+        let target = pr
+            .head_oid
+            .and_then(|h| cands.iter().find(|(oid, _)| *oid == h).map(|(oid, _)| *oid))
+            .unwrap_or(cands[0].0);
+        out.insert(target, pr);
+    }
+    out
 }
 
 /// Compact badge text for an open PR, e.g. ` #12 ✓ ` (approved with outside
@@ -1086,7 +1120,7 @@ fn render_graph_line<'a>(
     now: DateTime<Local>,
     pixel_mode: bool,
     remotes: &[String],
-    open_prs: &HashMap<String, PrInfo>,
+    pr_badge: Option<&PrInfo>,
     metadata_columns: MetadataColumns,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
     merged: MergedFilter,
@@ -1147,9 +1181,10 @@ fn render_graph_line<'a>(
         theme,
         now,
         remotes,
-        open_prs,
+        pr_badge,
         metadata_columns,
         merged,
+        pixel_mode,
     )
 }
 
@@ -1289,9 +1324,10 @@ fn render_graph_line_tail<'a>(
     theme: &Theme,
     now: DateTime<Local>,
     remotes: &[String],
-    open_prs: &HashMap<String, PrInfo>,
+    pr_badge_pr: Option<&PrInfo>,
     metadata_columns: MetadataColumns,
     merged: MergedFilter,
+    pixel_mode: bool,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
     // Separator between graph and commit info
@@ -1344,7 +1380,7 @@ fn render_graph_line_tail<'a>(
     // === Left-aligned: branch names + message ===
 
     // Optimize branch names (compact when local matches origin/local)
-    let branch_display = optimize_branch_display(
+    let mut branch_display = optimize_branch_display(
         &node.branch_names,
         node.is_head,
         node.color_index,
@@ -1355,13 +1391,27 @@ fn render_graph_line_tail<'a>(
     );
 
     // Tag labels render after branch labels with a distinct color.
-    let tag_display = build_tag_labels(&node.tag_names, theme);
+    let mut tag_display = build_tag_labels(&node.tag_names, theme);
+
+    // In pixel mode the graph line is rasterized from `color_to_rgb(lane_color)`
+    // (an exact xterm RGB), while a chip emitted with an ANSI-named `fg` is
+    // remapped by the terminal's own palette — so the chip and its line can read
+    // as two different hues (e.g. yellow vs orange). Resolve chip/tag foregrounds
+    // through the same conversion so both agree. Idempotent for already-`Rgb`
+    // colors; skipped in Unicode mode, where the line is also ANSI-named.
+    if pixel_mode {
+        for (_, style) in branch_display.iter_mut().chain(tag_display.iter_mut()) {
+            if let Some(fg) = style.fg {
+                let [r, g, b] = crate::ui::graph_pixels::color_to_rgb(fg);
+                style.fg = Some(ratatui::style::Color::Rgb(r, g, b));
+            }
+        }
+    }
 
     // Open-PR badge: chip after the branch labels when one of this node's
     // branches has an open PR. Anchored to the PR's head commit so a PR shows on
     // exactly one row. Colored by CI status, with review/comment markers.
-    let pr_badge = pr_badge_for_node(node, remotes, open_prs)
-        .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
+    let pr_badge = pr_badge_pr.map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
     // Chip plus a trailing space.
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
 
@@ -1954,6 +2004,21 @@ mod tests {
         git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap()
     }
 
+    /// Wrap owned nodes into `RenderRow`s (Unicode-mode shape: no underlay) so
+    /// `assign_pr_badges` can be exercised without an `App`.
+    fn rows_of(nodes: &[GraphNode]) -> Vec<RenderRow<'_>> {
+        nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| RenderRow {
+                full_idx: i,
+                node,
+                underlay: Vec::new(),
+                underlay_oids: Vec::new(),
+            })
+            .collect()
+    }
+
     #[test]
     fn pr_badge_anchors_to_head_commit_when_oid_known() {
         // Local `feat` (ahead, on oid_a) and remote `origin/feat` (on oid_b, the
@@ -1964,42 +2029,58 @@ mod tests {
         let open: HashMap<String, PrInfo> = [("feat".to_string(), pr)].into_iter().collect();
         let remotes = vec!["origin".to_string()];
 
-        let local = node_on(oid_a(), &["feat"]);
-        let remote = node_on(oid_b(), &["origin/feat"]);
+        let nodes = [node_on(oid_a(), &["feat"]), node_on(oid_b(), &["origin/feat"])];
+        let badges = assign_pr_badges(&rows_of(&nodes), &remotes, &open);
 
         assert!(
-            pr_badge_for_node(&local, &remotes, &open).is_none(),
+            !badges.contains_key(&oid_a()),
             "local ref on a different commit must not get the badge"
         );
         assert_eq!(
-            pr_badge_for_node(&remote, &remotes, &open).map(|p| p.number),
+            badges.get(&oid_b()).map(|p| p.number),
             Some(340),
             "the PR's head commit row gets the badge"
         );
     }
 
     #[test]
-    fn pr_badge_falls_back_to_name_match_when_oid_unknown() {
-        // No head_oid → keep pre-headRefOid behavior: badge by branch label on
-        // whichever row carries the name (both, as before).
+    fn pr_badge_falls_back_to_topmost_row_when_oid_unknown() {
+        // No head_oid → badge the topmost matching row (exactly one), never zero.
+        // Regression guard: requiring head_oid == commit.oid used to drop it.
         let open = prs(&[("feat", 7)]); // pr() has head_oid: None
         let remotes = vec!["origin".to_string()];
-        let local = node_on(oid_a(), &["feat"]);
-        let remote = node_on(oid_b(), &["origin/feat"]);
-        assert_eq!(pr_badge_for_node(&local, &remotes, &open).map(|p| p.number), Some(7));
-        assert_eq!(pr_badge_for_node(&remote, &remotes, &open).map(|p| p.number), Some(7));
+        let nodes = [node_on(oid_a(), &["feat"]), node_on(oid_b(), &["origin/feat"])];
+        let badges = assign_pr_badges(&rows_of(&nodes), &remotes, &open);
+        assert_eq!(badges.len(), 1, "exactly one badge across the two rows");
+        assert_eq!(badges.get(&oid_a()).map(|p| p.number), Some(7), "topmost row wins");
+    }
+
+    #[test]
+    fn pr_badge_shows_when_head_oid_not_a_loaded_row() {
+        // The regression: gh reports a head_oid that isn't any rendered row (e.g.
+        // head commit not loaded, or on a row without the label). The badge must
+        // still appear — falling back to the topmost name-matched row.
+        let mut pr = pr(99);
+        pr.head_oid = Some(oid_b()); // oid_b is NOT among the rows below
+        let open: HashMap<String, PrInfo> = [("feat".to_string(), pr)].into_iter().collect();
+        let remotes = vec!["origin".to_string()];
+        let nodes = [node_on(oid_a(), &["feat"])];
+        let badges = assign_pr_badges(&rows_of(&nodes), &remotes, &open);
+        assert_eq!(
+            badges.get(&oid_a()).map(|p| p.number),
+            Some(99),
+            "badge falls back to the label row when head oid isn't loaded"
+        );
     }
 
     #[test]
     fn actioned_pr_renders_badge_and_markers_end_to_end() {
         // End-to-end: an approved PR with an outside comment, anchored to the
         // node's commit, renders the PR badge plus the approved ✓ and comment
-        // glyphs in the actual line text (data → pr_badge_for_node →
-        // pr_badge_text → span). Substitutes for a hard-to-create live actioned
-        // PR; the earlier live #35 dump confirmed the plain badge on screen.
-        let mut pr = pr_with(35, CiStatus::Pass, ReviewState::Approved, true);
-        pr.head_oid = Some(oid_a());
-        let open: HashMap<String, PrInfo> = [("feat".to_string(), pr)].into_iter().collect();
+        // glyphs in the actual line text (data → pr_badge_text → span).
+        // Substitutes for a hard-to-create live actioned PR; the earlier live #35
+        // dump confirmed the plain badge on screen.
+        let pr = pr_with(35, CiStatus::Pass, ReviewState::Approved, true);
         let node = node_on(oid_a(), &["feat"]);
 
         let theme = Theme::dark();
@@ -2012,7 +2093,7 @@ mod tests {
         };
         let (line, _chips) = render_graph_line(
             &node, 4, false, false, 200, None, &theme, Local::now(), false,
-            &["origin".to_string()], &open, cols, None, MergedFilter::default(),
+            &["origin".to_string()], Some(&pr), cols, None, MergedFilter::default(),
         );
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
@@ -2020,6 +2101,52 @@ mod tests {
         assert!(text.contains("#35"), "PR number present: {text:?}");
         assert!(text.contains(PR_APPROVED_ICON), "approved ✓ present: {text:?}");
         assert!(text.contains(PR_COMMENT_ICON), "outside-comment glyph present: {text:?}");
+    }
+
+    /// A branch chip's foreground, extracted from a rendered line by matching
+    /// the label text. Panics if no span carries that text.
+    fn chip_fg(line: &Line, label_contains: &str) -> Color {
+        line.spans
+            .iter()
+            .find(|s| s.content.contains(label_contains))
+            .unwrap_or_else(|| panic!("no span containing {label_contains:?}"))
+            .style
+            .fg
+            .expect("chip has an fg")
+    }
+
+    #[test]
+    fn chip_color_matches_rasterized_line_in_pixel_mode() {
+        // Regression (#8): the pixel graph line rasterizes `color_to_rgb(lane)`,
+        // but the chip was emitted with the ANSI-named lane color, which the
+        // terminal remaps to a different hue. In pixel mode the chip fg must be
+        // the exact same RGB the line is drawn with. Uses color_index 3 (Yellow),
+        // whose ANSI form the terminal would otherwise render as orange.
+        let theme = Theme::dark();
+        let cols = MetadataColumns {
+            author: false, hash: false, date: false, mute_merges: false, avatars: false,
+        };
+        let mut node = node_on(oid_a(), &["feat"]);
+        node.color_index = 3;
+
+        let expected = {
+            let [r, g, b] = crate::ui::graph_pixels::color_to_rgb(theme.lane_color(3));
+            Color::Rgb(r, g, b)
+        };
+
+        // Pixel mode: chip fg is the exact rasterized RGB.
+        let (pixel_line, _) = render_graph_line(
+            &node, 4, false, false, 200, None, &theme, Local::now(), true,
+            &["origin".to_string()], None, cols, None, MergedFilter::default(),
+        );
+        assert_eq!(chip_fg(&pixel_line, "feat"), expected);
+
+        // Unicode mode: left as the ANSI-named color (line is also ANSI-named).
+        let (unicode_line, _) = render_graph_line(
+            &node, 4, false, false, 200, None, &theme, Local::now(), false,
+            &["origin".to_string()], None, cols, None, MergedFilter::default(),
+        );
+        assert_eq!(chip_fg(&unicode_line, "feat"), theme.lane_color(3));
     }
 
     // ── merged-PR branch dimming / hiding ────────────────────────────
@@ -2512,7 +2639,7 @@ mod tests {
             Local::now(),
             false,
             &[],
-            &HashMap::new(),
+            None,
             cols,
             None,
             MergedFilter::default(),

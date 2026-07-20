@@ -264,18 +264,44 @@ pub fn delete_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve a branch name to an annotated commit for merge/rebase, accepting more
+/// than just local branches.
+///
+/// `git2::Repository::find_branch(name, Local)` only searches `refs/heads/`, so a
+/// remote-tracking ref like `origin/dev` (which lives under `refs/remotes/`) was
+/// reported "not found" even though the CLI `git merge origin/dev` resolves it.
+/// This tries, in order: a local branch, a remote-tracking branch, then a general
+/// revparse (any ref, tag, or raw OID) — mirroring what git itself accepts.
+fn resolve_to_annotated_commit<'r>(
+    repo: &'r Repository,
+    name: &str,
+) -> Result<git2::AnnotatedCommit<'r>> {
+    // Local branch (refs/heads/…).
+    if let Ok(branch) = repo.find_branch(name, BranchType::Local) {
+        return Ok(repo.reference_to_annotated_commit(branch.get())?);
+    }
+    // Remote-tracking branch (refs/remotes/…), e.g. "origin/dev".
+    if let Ok(branch) = repo.find_branch(name, BranchType::Remote) {
+        return Ok(repo.reference_to_annotated_commit(branch.get())?);
+    }
+    // Fall back to a general revision lookup: any ref (tags included) or a raw
+    // OID. `from_annotated_commit` preserves the resolved OID for merge analysis.
+    let obj = repo
+        .revparse_single(name)
+        .context(format!("Branch '{}' not found", name))?;
+    let commit = obj
+        .peel_to_commit()
+        .context(format!("'{}' does not point to a commit", name))?;
+    Ok(repo.find_annotated_commit(commit.id())?)
+}
+
 /// Perform a merge.
 ///
 /// On a conflicting normal merge this returns `Ok(OpOutcome::Conflicts)` and
 /// deliberately leaves the repo mid-merge (conflicted index + MERGE_HEAD), so
 /// the caller can offer resolve/continue/abort. It is NOT an error.
 pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
-    let branch = repo
-        .find_branch(branch_name, BranchType::Local)
-        .context(format!("Branch '{}' not found", branch_name))?;
-
-    let reference = branch.get();
-    let annotated_commit = repo.reference_to_annotated_commit(reference)?;
+    let annotated_commit = resolve_to_annotated_commit(repo, branch_name)?;
 
     let (analysis, _) = repo.merge_analysis(&[&annotated_commit])?;
 
@@ -285,7 +311,7 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
 
     if analysis.is_fast_forward() {
         // Fast-forward merge
-        let target_oid = reference.target().unwrap();
+        let target_oid = annotated_commit.id();
         let target_commit = repo.find_commit(target_oid)?;
         let tree = target_commit.tree()?;
 
@@ -344,11 +370,7 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
 /// rebase in progress (REBASE_HEAD etc.) for resolve/continue/abort — it does
 /// NOT abort automatically.
 pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<OpOutcome> {
-    let onto = repo
-        .find_branch(onto_branch, BranchType::Local)
-        .context(format!("Branch '{}' not found", onto_branch))?;
-
-    let onto_annotated = repo.reference_to_annotated_commit(onto.get())?;
+    let onto_annotated = resolve_to_annotated_commit(repo, onto_branch)?;
 
     let mut rebase = repo.rebase(None, Some(&onto_annotated), None, None)?;
 
@@ -388,9 +410,13 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
     fetch_remote(repo_path, "origin", None)
 }
 
-/// Fetch from every configured remote (`git fetch --all`).
+/// Fetch from every configured remote and prune stale remote-tracking refs
+/// (`git fetch --all --prune`). This is the F5 "full update" path, so branches
+/// deleted upstream stop lingering in the graph. The single-remote `fetch_remote`
+/// (manual `f`) deliberately does NOT prune, leaving an explicit non-destructive
+/// fetch available.
 pub fn fetch_all(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
-    run_git_creds(repo_path, &["fetch", "--all"], creds)?;
+    run_git_creds(repo_path, &["fetch", "--all", "--prune"], creds)?;
     Ok(())
 }
 
@@ -1148,6 +1174,67 @@ mod tests {
     fn signature_label_unknown_code_is_labelled_unknown() {
         assert_eq!(signature_status_label('Z'), "unknown");
         assert_eq!(signature_status_label(' '), "unknown");
+    }
+
+    // ── remote-branch merge/rebase resolution (issue #2) ─────────────────
+
+    use super::{merge_branch, resolve_to_annotated_commit, OpOutcome};
+    use git2::{Oid, Repository, Signature, Time};
+
+    /// Commit a one-file tree onto `refname` with the given parents; returns the
+    /// new commit OID. Pure object plumbing (no workdir churn).
+    fn commit_on(
+        repo: &Repository,
+        refname: &str,
+        secs: i64,
+        parents: &[Oid],
+        content: &str,
+    ) -> Oid {
+        let blob = repo.blob(content.as_bytes()).unwrap();
+        let mut tb = repo.treebuilder(None).unwrap();
+        tb.insert("f.txt", blob, 0o100644).unwrap();
+        let tree = repo.find_tree(tb.write().unwrap()).unwrap();
+        let sig = Signature::new("Dev", "dev@example.com", &Time::new(secs, 0)).unwrap();
+        let parent_commits: Vec<_> = parents.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+        let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
+        repo.commit(Some(refname), &sig, &sig, "m", &tree, &parent_refs)
+            .unwrap()
+    }
+
+    #[test]
+    fn resolves_remote_tracking_branch_for_merge() {
+        // Regression (#2): merging a remote-tracking ref (`origin/dev`) reported
+        // "not found" because resolution used BranchType::Local only. Here HEAD
+        // (main) sits at `a`; origin/dev is a fast-forward ahead at `b`.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit_on(&repo, "refs/heads/main", 1000, &[], "a");
+        repo.set_head("refs/heads/main").unwrap();
+        repo.checkout_head(None).ok();
+        let b = commit_on(&repo, "refs/remotes/origin/dev", 2000, &[a], "b");
+
+        // The resolver finds the remote-tracking ref and its tip commit.
+        let ann_id = resolve_to_annotated_commit(&repo, "origin/dev")
+            .map(|a| a.id())
+            .expect("origin/dev resolves");
+        assert_eq!(ann_id, b, "resolves origin/dev to its tip");
+
+        // And a full merge of it fast-forwards to completion (no "not found").
+        let outcome = merge_branch(&repo, "origin/dev").unwrap();
+        assert!(matches!(outcome, OpOutcome::Completed));
+        assert_eq!(repo.head().unwrap().target(), Some(b), "HEAD fast-forwarded");
+    }
+
+    #[test]
+    fn unknown_ref_still_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        commit_on(&repo, "refs/heads/main", 1000, &[], "a");
+        let err = match resolve_to_annotated_commit(&repo, "origin/nope") {
+            Ok(_) => panic!("unknown ref should not resolve"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("not found"), "got: {err}");
     }
 }
 

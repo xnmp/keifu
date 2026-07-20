@@ -5,6 +5,30 @@ All items implemented in the `feat/panel-system-and-features` branch.
 
 ---
 
+## Graph fixes batch — 2026-07-20 (`fix/graph-batch-9issues`)
+
+- [ ] #9 PR badges not showing (regression from `a5d0ec3`): `pr_badge_for_node`
+  required `head_oid == commit.oid`, suppressing the badge when the head oid
+  isn't the label-carrying row. Relax head_oid to a preference, not a filter.
+- [ ] #8 Branch `[chip]` color mismatches the graph line in pixel mode: line
+  rasterizes lane color to RGB, chip emits the ANSI-named color. Convert the
+  chip fg through `color_to_rgb` in pixel mode.
+- [ ] #2 Merge/rebase of a remote branch (`origin/dev`) fails "not found":
+  `merge_branch`/`rebase_branch` resolve `BranchType::Local` only. Add a
+  Local→Remote→revparse resolver.
+- [ ] #3 F5 (full update) prunes stale remote-tracking refs (`fetch --all --prune`).
+- [ ] #4 "Fetching remotes" shown as a toast, not a status-bar message.
+- [ ] #5 Multi-branch label order stays stable while navigating (stop the
+  selected-first reshuffle in `optimize_branch_display`).
+- [ ] #7 Merge commits made via a PR get a grey `#N` badge (parsed from the
+  merge/squash subject).
+- [ ] #1 Trunk always pinned to the far-left lane (lane 0) with the main color,
+  via `detect_trunk_tip` (origin/HEAD symref → name heuristic) + lane-0 pre-seed.
+- [ ] #6 Laggy navigation on large graphs: cache `oid→row`, memoize the trace
+  lineage per (generation, selection), window `trace_lit_edges` to visible rows.
+
+---
+
 ## Graph Pane
 
 ### [DONE] 2026-07-18 Pixel-rendered graph lines

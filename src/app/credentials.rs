@@ -26,6 +26,11 @@ impl App {
             .and_then(|h| self.credentials.get(h).cloned());
         let had_creds = creds.is_some();
         let silent = matches!(&op, RetryableOp::Fetch { silent: true, .. });
+        // Fetch progress ("Fetching from origin…" / "Fetching all remotes…") is
+        // surfaced as a one-shot toast rather than a status-bar message; the
+        // busy spinner still conveys in-progress, and the completion toast
+        // ("Fetched — …") follows. Push/pull keep the status-bar message.
+        let is_fetch = matches!(&op, RetryableOp::Fetch { .. } | RetryableOp::FetchAll);
 
         let message = match op.clone() {
             RetryableOp::Fetch { remote, show_message, silent } => {
@@ -46,7 +51,14 @@ impl App {
 
         self.in_flight_op = Some(InFlightOp { op, host, had_creds, silent, attempts });
         if let Some(msg) = message {
-            self.set_message(msg);
+            // `silent` fetches (background auto-fetch) stay quiet entirely.
+            if is_fetch {
+                if !silent {
+                    self.toast(crate::toast::ToastKind::Info, msg);
+                }
+            } else {
+                self.set_message(msg);
+            }
         }
     }
 
