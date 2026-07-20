@@ -919,22 +919,24 @@ fn test_uncommitted_node_connects_to_head_on_lane_zero() {
 
 #[test]
 fn test_uncommitted_node_connects_to_head_on_nonzero_lane() {
-    // HEAD (f1) is the second parent of a fork commit `m`, so it starts life
-    // on lane 1. `m`'s own row already occupies lane 1's column (with a
-    // BranchLeft glyph), so by the time the uncommitted-changes placement
-    // logic runs, lane 1 is *not* available for every row above HEAD - it
-    // must pick a fresh lane (2) and draw a horizontal connector back to
-    // HEAD's lane.
+    // HEAD (foo) is anchored to lane 0, but a branch `bar` is one commit ahead
+    // of it (b1's first parent is foo), so b1 shares HEAD's lane 0 *above* HEAD.
+    // HEAD's own column is therefore occupied above it, so the uncommitted-
+    // changes node cannot sit on lane 0 - it takes a fresh lane and draws a
+    // horizontal connector back to HEAD's lane.
     //
-    // m -> main_child, f1   (fork: main_child lane 0, f1 lane 1)
-    // main_child (root)
-    // f1 (root, HEAD)
+    // b1 (bar tip, one commit ahead of HEAD; first parent foo)
+    // foo (HEAD)
+    // base (root)
     let commits = vec![
-        make_commit("m", vec!["main_child", "f1"]),
-        make_commit("main_child", vec![]),
-        make_commit("f1", vec![]),
+        make_commit("b1", vec!["foo"]),
+        make_commit("foo", vec!["base"]),
+        make_commit("base", vec![]),
     ];
-    let branches = vec![make_branch("feature", "f1", true)];
+    let branches = vec![
+        make_branch("bar", "b1", false),
+        make_branch("feature", "foo", true),
+    ];
 
     let layout = build_graph(
         &commits,
@@ -942,7 +944,7 @@ fn test_uncommitted_node_connects_to_head_on_nonzero_lane() {
         &[],
         &[],
         Some(Some(2)),
-        Some(make_oid("f1")),
+        Some(make_oid("foo")),
     );
 
     println!("\nUncommitted, HEAD on non-zero lane:");
@@ -966,13 +968,13 @@ fn test_uncommitted_node_connects_to_head_on_nonzero_lane() {
         .iter()
         .find(|n| n.is_head)
         .expect("HEAD node not found");
-    assert_eq!(head_node.commit.as_ref().unwrap().short_id, "f1");
-    assert_eq!(head_node.lane, 1, "HEAD (f1) starts on lane 1 (fork sibling)");
+    assert_eq!(head_node.commit.as_ref().unwrap().short_id, "foo");
+    assert_eq!(head_node.lane, 0, "HEAD (foo) is anchored to lane 0");
 
     let uncommitted_lane = layout.nodes[0].lane;
     assert_ne!(
         uncommitted_lane, head_node.lane,
-        "lane 1 should be blocked by m's own row, forcing a different lane"
+        "HEAD's lane 0 is occupied above by the branch-ahead commit, forcing a different lane"
     );
 
     // A horizontal connector (MergeLeft, since the uncommitted lane is to

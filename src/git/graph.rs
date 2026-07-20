@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use git2::Oid;
 
 use super::{BranchInfo, CommitInfo};
-use crate::graph::colors::{ColorAssigner, UNCOMMITTED_COLOR_INDEX};
+use crate::graph::colors::{ColorAssigner, MAIN_BRANCH_COLOR, UNCOMMITTED_COLOR_INDEX};
 
 /// Graph node
 #[derive(Debug, Clone)]
@@ -106,11 +106,70 @@ pub struct GraphLayout {
     pub max_lane: usize,
 }
 
+/// The first-parent "line" through HEAD among the loaded commits: HEAD, its
+/// first-parent ancestors walking DOWN, and any descendants that continue the
+/// same line via *their* first parent walking UP. This is the run of commits
+/// pinned to lane 0 so the checked-out work is anchored at the far left (like
+/// VSCode Git Graph).
+///
+/// The upward walk matters when a branch is fast-forwarded ahead of HEAD: those
+/// newer commits share HEAD's line, so they take lane 0 too rather than shoving
+/// HEAD's tip off it. When two children share a first parent (a fork), the first
+/// one encountered (newest, by walk order) wins the continuation — an arbitrary
+/// but harmless tie-break, since it only decides which descendant shares lane 0.
+///
+/// Returns an empty set when HEAD is unknown or not loaded, in which case
+/// `build_graph` falls back to its historical "first tip processed owns lane 0"
+/// behaviour.
+fn head_first_parent_line(
+    commits: &[CommitInfo],
+    oid_to_row: &HashMap<Oid, usize>,
+    head_oid: Option<Oid>,
+) -> HashSet<Oid> {
+    let mut line = HashSet::new();
+    let Some(head) = head_oid.filter(|h| oid_to_row.contains_key(h)) else {
+        return line;
+    };
+
+    // DOWN: HEAD and its first-parent ancestors, while they stay loaded.
+    let mut cur = head;
+    loop {
+        if !line.insert(cur) {
+            break; // cycle guard (should not happen in a DAG)
+        }
+        let row = oid_to_row[&cur];
+        match commits[row].parent_oids.first().copied() {
+            Some(p) if oid_to_row.contains_key(&p) => cur = p,
+            _ => break,
+        }
+    }
+
+    // UP: descendants whose FIRST parent continues this line (a branch ahead of
+    // HEAD shares its lane instead of displacing it).
+    let mut cur = head;
+    loop {
+        let child = commits
+            .iter()
+            .find(|c| c.parent_oids.first() == Some(&cur) && !line.contains(&c.oid))
+            .map(|c| c.oid);
+        match child {
+            Some(ch) => {
+                line.insert(ch);
+                cur = ch;
+            }
+            None => break,
+        }
+    }
+
+    line
+}
+
 /// Build a graph from commit list
 /// uncommitted_count: None if no uncommitted changes, Some(count) if there
 /// are uncommitted changes.  The inner Option is None when the exact file
 /// count is unavailable (e.g. collapsed untracked directories).
-/// head_commit_oid: The OID of the commit that HEAD points to (for uncommitted changes)
+/// head_commit_oid: The OID of the commit that HEAD points to (for uncommitted
+/// changes and for anchoring HEAD's first-parent line to lane 0)
 pub fn build_graph(
     commits: &[CommitInfo],
     branches: &[BranchInfo],
@@ -182,6 +241,25 @@ pub fn build_graph(
         .map(|(i, c)| (c.oid, i))
         .collect();
 
+    // HEAD's first-parent line is pinned to lane 0 (leftmost), so the
+    // checked-out work is anchored at the far left. When HEAD is unknown or not
+    // loaded this is empty and lane assignment keeps its historical behaviour.
+    // `head_commit_oid` (not the branch-derived `head_oid` above) is used so a
+    // detached HEAD is anchored too.
+    let head_line = head_first_parent_line(commits, &oid_to_row, head_commit_oid);
+    // Whether lane 0 is reserved for HEAD's line. When true, only commits on
+    // `head_line` may occupy lane 0; every other tip shifts one lane right.
+    let head_line_reserved = !head_line.is_empty();
+
+    // Lowest free lane a commit may take. Lane 0 is off-limits unless the commit
+    // is on HEAD's line (or nothing is reserved). Returns None when every
+    // eligible lane is occupied and a new one must be pushed.
+    let eligible_empty_lane = |lanes: &[Option<Oid>], zero_ok: bool| -> Option<usize> {
+        lanes.iter().enumerate().find_map(|(i, l)| {
+            (l.is_none() && (zero_ok || !head_line_reserved || i != 0)).then_some(i)
+        })
+    };
+
     // Detect fork points (commits with multiple children)
     // parent_oid -> list of child commits
     // Check ALL parents, not just first parent, to detect fork points like
@@ -212,11 +290,29 @@ pub fn build_graph(
     // needed for the pair-identity trace. Kept in lock-step with every `lanes`
     // mutation below.
     let mut lane_children: Vec<Option<Oid>> = Vec::new();
+    // Reserve lane 0 for HEAD's line by seeding it empty: a non-HEAD tip then
+    // skips it (via `eligible_empty_lane`) and, crucially, the push-a-new-lane
+    // fallback lands at lane 1+ instead of claiming index 0 when `lanes` is
+    // empty. The slot stays `None` (unrendered) until HEAD's line fills it.
+    if head_line_reserved {
+        lanes.push(None);
+        lane_children.push(None);
+    }
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut max_lane: usize = 0;
+    // The main (blue, reserved) colour is claimed once, by the first commit that
+    // lands on lane 0 — HEAD's line when it is anchored there, otherwise the
+    // first tip processed (the historical main branch).
+    let mut main_color_assigned = false;
 
     // Color management
     let mut color_assigner = ColorAssigner::new();
+    // When HEAD's line is anchored to lane 0, its main (blue) colour is claimed
+    // partway through the walk (at HEAD's row, not row 0). Reserve blue up front
+    // so an earlier-processed branch cannot grab it and collide with HEAD's line.
+    if head_line_reserved {
+        color_assigner.reserve_color(MAIN_BRANCH_COLOR);
+    }
     // OID -> color index mapping
     let mut oid_color_index: HashMap<Oid, usize> = HashMap::new();
     // Lane -> color index mapping (keep colors during forks)
@@ -235,9 +331,10 @@ pub fn build_graph(
         let lane = if let Some(l) = commit_lane_opt {
             l
         } else {
-            // Find an empty lane or create one
-            let empty = lanes.iter().position(|l| l.is_none());
-            if let Some(l) = empty {
+            // Find an empty lane or create one. Lane 0 is reserved for HEAD's
+            // line, so a tip not on that line takes the next lane instead.
+            let zero_ok = head_line.contains(&commit.oid);
+            if let Some(l) = eligible_empty_lane(&lanes, zero_ok) {
                 l
             } else {
                 lanes.push(None);
@@ -320,13 +417,22 @@ pub fn build_graph(
             }
         }
 
-        // Determine color index
-        let commit_color_index = if commit_lane_opt.is_some() {
+        // Determine color index.
+        //
+        // The line pinned to lane 0 owns the reserved main colour (blue): HEAD's
+        // line when it is anchored there, otherwise the first tip processed (the
+        // historical main branch). The very first commit to land on lane 0 claims
+        // it — checked here before the continue/new-branch split so a lane-0 line
+        // first reached via first-parent inheritance still gets the main colour.
+        let commit_color_index = if lane == 0
+            && !main_color_assigned
+            && (head_line_reserved || nodes.is_empty())
+        {
+            main_color_assigned = true;
+            color_assigner.assign_main_color(lane)
+        } else if commit_lane_opt.is_some() {
             // Continue existing branch
             color_assigner.continue_lane(lane)
-        } else if nodes.is_empty() {
-            // First commit (main branch) - reserve color so others cannot use it
-            color_assigner.assign_main_color(lane)
         } else {
             // New branch start - assign a new color (exclude reserved)
             color_assigner.assign_color(lane)
@@ -413,7 +519,9 @@ pub fn build_graph(
             } else {
                 // Subsequent parents use new lanes - assign fork sibling colors.
                 // A new lane is spawned by this (merge) commit toward the parent.
-                let empty = lanes.iter().position(|l| l.is_none());
+                // Lane 0 stays reserved unless this parent is on HEAD's line.
+                let zero_ok = head_line.contains(parent_oid);
+                let empty = eligible_empty_lane(&lanes, zero_ok);
                 let new_lane = if let Some(l) = empty {
                     l
                 } else {
@@ -1528,5 +1636,144 @@ mod tests {
         // Out-of-range index.
         assert_eq!(same_lane_ancestor_row(&layout, layout.nodes.len()), None);
         assert_eq!(same_lane_descendant_row(&layout, layout.nodes.len()), None);
+    }
+
+    // ── HEAD anchored to lane 0 (leftmost, VSCode-like) ───────────────────
+
+    fn branch(name: &str, tip: Oid, is_head: bool) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            is_head,
+            is_remote: false,
+            upstream: None,
+            tip_oid: tip,
+            ahead: 0,
+            behind: 0,
+        }
+    }
+
+    /// Two branches diverging from a shared base Z: `main` (M1—M2—Z) and a
+    /// feature (F1—Z). Rows are ordered newest-first so the feature tip is NOT
+    /// row 0 — M1 is processed before it — which exercises the anchoring rather
+    /// than the incidental "first tip processed owns lane 0". Returns the commit
+    /// list and `[M1, M2, F1, Z]`.
+    fn diverged_fixture() -> (Vec<CommitInfo>, [Oid; 4]) {
+        let (m1, m2, f1, z) = (oid(1), oid(2), oid(3), oid(9));
+        let commits = vec![
+            ci(m1, vec![m2]),
+            ci(f1, vec![z]),
+            ci(m2, vec![z]),
+            ci(z, vec![]),
+        ];
+        (commits, [m1, m2, f1, z])
+    }
+
+    #[test]
+    fn head_feature_branch_claims_lane_zero() {
+        let (commits, [m1, m2, f1, z]) = diverged_fixture();
+        let branches = [branch("main", m1, false), branch("feature", f1, true)];
+        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1));
+
+        // HEAD's line (F1 and its ancestor Z) sits at the far-left lane 0...
+        assert_eq!(layout.nodes[row_of(&layout, f1)].lane, 0, "HEAD tip at lane 0");
+        assert_eq!(
+            layout.nodes[row_of(&layout, z)].lane, 0,
+            "HEAD's first-parent ancestor stays at lane 0"
+        );
+        // ...even though an older branch's commit (M1) is drawn first (row 0),
+        // and that branch shifts one lane to the right.
+        assert!(layout.nodes[row_of(&layout, m1)].lane >= 1, "other branch shifts right");
+        assert!(layout.nodes[row_of(&layout, m2)].lane >= 1, "other branch shifts right");
+    }
+
+    #[test]
+    fn head_line_owns_the_main_color_others_do_not() {
+        let (commits, [m1, _m2, f1, _z]) = diverged_fixture();
+        let branches = [branch("main", m1, false), branch("feature", f1, true)];
+        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1));
+
+        // The lane-0 HEAD line owns the reserved main (blue) colour; the other
+        // branch, though processed first, cannot claim it.
+        assert_eq!(
+            layout.nodes[row_of(&layout, f1)].color_index, MAIN_BRANCH_COLOR,
+            "HEAD's line is the blue main line"
+        );
+        assert_ne!(
+            layout.nodes[row_of(&layout, m1)].color_index, MAIN_BRANCH_COLOR,
+            "a non-HEAD branch must not collide with the main colour"
+        );
+    }
+
+    #[test]
+    fn detached_head_still_anchored_to_lane_zero() {
+        // No branch carries is_head (detached HEAD). Anchoring must use the
+        // passed HEAD oid, not branch identity.
+        let (commits, [_m1, _m2, f1, z]) = diverged_fixture();
+        let layout = build_graph(&commits, &[], &[], &[], None, Some(f1));
+
+        assert_eq!(layout.nodes[row_of(&layout, f1)].lane, 0, "detached HEAD at lane 0");
+        assert_eq!(layout.nodes[row_of(&layout, z)].lane, 0);
+        assert_eq!(
+            layout.nodes[row_of(&layout, f1)].color_index, MAIN_BRANCH_COLOR,
+            "detached HEAD's line is still the blue main line"
+        );
+    }
+
+    #[test]
+    fn without_head_first_tip_owns_lane_zero() {
+        // Fallback: with no HEAD oid, the historical behaviour holds — the
+        // first-processed tip keeps lane 0 and the main colour.
+        let (commits, [m1, _m2, f1, _z]) = diverged_fixture();
+        let layout = build_graph(&commits, &[], &[], &[], None, None);
+
+        assert_eq!(layout.nodes[row_of(&layout, m1)].lane, 0);
+        assert_eq!(layout.nodes[row_of(&layout, m1)].color_index, MAIN_BRANCH_COLOR);
+        assert!(layout.nodes[row_of(&layout, f1)].lane >= 1);
+    }
+
+    #[test]
+    fn branch_ahead_of_head_shares_lane_zero() {
+        // `bar` is HEAD (`foo`) plus one commit B1 ahead: B1's first parent is
+        // HEAD. The shared first-parent line keeps HEAD at lane 0 with B1 above
+        // it, rather than B1 pushing HEAD onto lane 1 and leaving lane 0 empty.
+        // A diverged `other` tip is newest (row 0), processed before the line.
+        let (foo, b1, other, z) = (oid(1), oid(2), oid(5), oid(9));
+        let commits = vec![
+            ci(other, vec![z]),
+            ci(b1, vec![foo]),
+            ci(foo, vec![z]),
+            ci(z, vec![]),
+        ];
+        let layout = build_graph(&commits, &[], &[], &[], None, Some(foo));
+
+        assert_eq!(layout.nodes[row_of(&layout, foo)].lane, 0, "HEAD stays leftmost");
+        assert_eq!(
+            layout.nodes[row_of(&layout, b1)].lane, 0,
+            "a commit fast-forwarded ahead of HEAD shares lane 0"
+        );
+        assert!(
+            layout.nodes[row_of(&layout, other)].lane >= 1,
+            "the diverged branch shifts right"
+        );
+    }
+
+    #[test]
+    fn anchoring_preserves_first_parent_lane_inheritance() {
+        // Same-lane navigation relies on first-parent edges inheriting the
+        // child's lane. Anchoring only reorders which lane a tip starts on, so
+        // the HEAD line's first-parent chain must remain walkable end to end.
+        let (commits, [_m1, _m2, f1, z]) = diverged_fixture();
+        let layout = build_graph(&commits, &[], &[], &[], None, Some(f1));
+
+        // F1 -> Z along the (anchored) lane 0.
+        assert_eq!(
+            same_lane_ancestor_row(&layout, row_of(&layout, f1)),
+            Some(row_of(&layout, z))
+        );
+        // ...and back up, Z -> F1 on the same lane.
+        assert_eq!(
+            same_lane_descendant_row(&layout, row_of(&layout, z)),
+            Some(row_of(&layout, f1))
+        );
     }
 }
