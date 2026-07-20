@@ -679,8 +679,11 @@ pub struct PendingAuth {
 /// Confirmation action kinds
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
-    /// Check out a branch (from clicking its chip in the graph).
-    Checkout(String),
+    /// Check out `name`. `is_remote` is the branch's authoritative
+    /// remote/local status, threaded through so the checkout creates/tracks a
+    /// local branch off a remote-tracking ref instead of guessing from an
+    /// "origin/" prefix (mirrors [`ConfirmAction::Merge`]'s `is_remote`).
+    Checkout { name: String, is_remote: bool },
     /// Load the entire commit history (may be a large walk).
     LoadAllCommits,
     /// Apply the newest undo-ledger entry (branch/tag delete, merge, pull, rename).

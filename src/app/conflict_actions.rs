@@ -366,7 +366,7 @@ mod tests {
         assert!(app.conflict_count > 0, "expected unmerged paths");
 
         let head_before = app.repo.head_oid();
-        app.checkout_branch_by_name("feature")
+        app.checkout_branch_by_name("feature", false)
             .expect("guarded checkout returns Ok");
 
         // HEAD did not move, and the user was told why (via a toast).

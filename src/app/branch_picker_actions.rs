@@ -23,7 +23,10 @@ impl App {
                 if let Some(branch_name) = branches.get(selected) {
                     let name = branch_name.clone();
                     self.mode = AppMode::Normal;
-                    self.checkout_branch_by_name(&name)?;
+                    // Picker entries are raw graph labels; resolve remoteness
+                    // via the remotes()-aware splitter.
+                    let is_remote = self.split_remote_ref(&name).is_some();
+                    self.checkout_branch_by_name(&name, is_remote)?;
                 }
             }
             Action::Cancel | Action::Quit => {

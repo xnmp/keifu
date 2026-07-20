@@ -48,8 +48,9 @@ impl PaletteKind {
 pub enum PaletteAction {
     /// Dispatch an app action (focused on the graph panel).
     Dispatch(Action),
-    /// Open the checkout confirmation for a branch.
-    Checkout(String),
+    /// Open the checkout confirmation for a branch. `is_remote` carries the
+    /// branch's authoritative remote/local status from its `BranchInfo`.
+    Checkout { name: String, is_remote: bool },
     /// Jump the graph selection to a commit by its full node index.
     JumpToCommit(usize),
 }

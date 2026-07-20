@@ -7,23 +7,24 @@ use crate::git::BranchInfo;
 
 /// Filter branch names to exclude remote branches that have matching local branches.
 /// Returns branches in order: local branches first, then remote-only branches.
-fn filter_remote_duplicates(branch_names: &[String]) -> Vec<&str> {
+///
+/// `remotes` is the repo's configured remote list; pairing a remote ref with
+/// its local twin goes through the shared [`crate::git::split_remote_ref`], so a
+/// non-`origin` remote (e.g. `upstream/foo` ↔ `foo`) dedups correctly.
+fn filter_remote_duplicates<'a>(branch_names: &'a [String], remotes: &[String]) -> Vec<&'a str> {
     use std::collections::HashSet;
 
     let local_branches: HashSet<&str> = branch_names
         .iter()
-        .filter(|n| !n.starts_with("origin/"))
+        .filter(|n| crate::git::split_remote_ref(remotes, n).is_none())
         .map(|s| s.as_str())
         .collect();
 
     branch_names
         .iter()
-        .filter(|name| {
-            if let Some(local_name) = name.strip_prefix("origin/") {
-                !local_branches.contains(local_name)
-            } else {
-                true
-            }
+        .filter(|name| match crate::git::split_remote_ref(remotes, name) {
+            Some((_remote, local_name)) => !local_branches.contains(local_name.as_str()),
+            None => true,
         })
         .map(|s| s.as_str())
         .collect()
@@ -56,13 +57,18 @@ impl GraphNav {
     }
 
     /// Build a flat list of (node_index, branch_name) for all branches.
-    pub fn build_branch_positions(graph_layout: &GraphLayout) -> Vec<(usize, String)> {
+    /// `remotes` is the repo's configured remote list, used to pair remote refs
+    /// with their local twins for dedup.
+    pub fn build_branch_positions(
+        graph_layout: &GraphLayout,
+        remotes: &[String],
+    ) -> Vec<(usize, String)> {
         graph_layout
             .nodes
             .iter()
             .enumerate()
             .flat_map(|(node_idx, node)| {
-                filter_remote_duplicates(&node.branch_names)
+                filter_remote_duplicates(&node.branch_names, remotes)
                     .into_iter()
                     .map(move |name| (node_idx, name.to_string()))
             })
@@ -70,8 +76,8 @@ impl GraphNav {
     }
 
     /// Rebuild branch positions from the current graph layout.
-    pub fn rebuild_branch_positions(&mut self, graph_layout: &GraphLayout) {
-        self.branch_positions = Self::build_branch_positions(graph_layout);
+    pub fn rebuild_branch_positions(&mut self, graph_layout: &GraphLayout, remotes: &[String]) {
+        self.branch_positions = Self::build_branch_positions(graph_layout, remotes);
     }
 
     /// Get the currently selected node index.
@@ -232,5 +238,47 @@ impl GraphNav {
             .filter(|(idx, _)| *idx == node_idx)
             .map(|(_, name)| name.as_str())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_remote_duplicates;
+
+    fn strings(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn pairs_non_origin_remote_with_its_local_twin() {
+        // `upstream/foo` is the remote twin of local `foo` -> deduped away;
+        // `upstream/lonely` has no local twin -> kept.
+        let names = strings(&["foo", "upstream/foo", "upstream/lonely"]);
+        let remotes = strings(&["upstream"]);
+        assert_eq!(
+            filter_remote_duplicates(&names, &remotes),
+            vec!["foo", "upstream/lonely"]
+        );
+    }
+
+    #[test]
+    fn origin_dedup_still_works() {
+        let names = strings(&["main", "origin/main", "origin/solo"]);
+        let remotes = strings(&["origin"]);
+        assert_eq!(
+            filter_remote_duplicates(&names, &remotes),
+            vec!["main", "origin/solo"]
+        );
+    }
+
+    #[test]
+    fn local_branch_with_slash_is_not_treated_as_remote() {
+        // No remote named `feature`, so `feature/x` is a local branch kept as-is.
+        let names = strings(&["feature/x", "origin/main"]);
+        let remotes = strings(&["origin"]);
+        assert_eq!(
+            filter_remote_duplicates(&names, &remotes),
+            vec!["feature/x", "origin/main"]
+        );
     }
 }

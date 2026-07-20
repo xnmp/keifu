@@ -424,7 +424,10 @@ impl App {
                 }
             }
             1 => {
-                self.checkout_branch_by_name(&branches[0])?;
+                // A graph label is a raw name; resolve remoteness via the
+                // remotes()-aware splitter rather than an "origin/" guess.
+                let is_remote = self.split_remote_ref(&branches[0]).is_some();
+                self.checkout_branch_by_name(&branches[0], is_remote)?;
             }
             _ => {
                 self.mode = AppMode::BranchPicker {
@@ -436,11 +439,21 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn checkout_branch_by_name(&mut self, branch_name: &str) -> Result<()> {
+    /// Check out `branch_name`. `is_remote` is the branch's authoritative
+    /// remote/local status (from `BranchInfo::is_remote` where a caller has it,
+    /// else resolved via the remotes()-aware [`App::split_remote_ref`]) — it
+    /// selects between creating/tracking a local branch off a remote-tracking
+    /// ref and a plain local checkout, without string-guessing an "origin/"
+    /// prefix.
+    pub(crate) fn checkout_branch_by_name(
+        &mut self,
+        branch_name: &str,
+        is_remote: bool,
+    ) -> Result<()> {
         if self.block_if_op_in_progress("checkout") {
             return Ok(());
         }
-        if branch_name.starts_with("origin/") {
+        if is_remote {
             checkout_remote_branch(self.repo.repo(), branch_name)?;
         } else {
             checkout_branch(self.repo.repo(), branch_name)?;

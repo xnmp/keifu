@@ -182,10 +182,16 @@ pub fn checkout_commit(repo: &Repository, oid: Oid) -> Result<()> {
 
 /// Checkout a remote branch (create and track a local branch)
 pub fn checkout_remote_branch(repo: &Repository, remote_branch: &str) -> Result<()> {
-    // Extract "branch-name" from "origin/branch-name"
-    let local_name = remote_branch
-        .strip_prefix("origin/")
+    // Peel "<remote>/branch-name" into its branch part using the repo's actual
+    // remotes, so a branch tracked from a non-`origin` remote (e.g. `upstream`)
+    // resolves correctly instead of failing a hardcoded "origin/" strip.
+    let remotes: Vec<String> = repo
+        .remotes()
+        .map(|arr| arr.iter().flatten().map(String::from).collect())
+        .unwrap_or_default();
+    let (_remote, local_name) = crate::git::split_remote_ref(&remotes, remote_branch)
         .context("Invalid remote branch format")?;
+    let local_name = local_name.as_str();
 
     // Look up the remote branch
     let remote_ref = repo
@@ -1496,6 +1502,66 @@ mod tests {
             "targeted find_branch on the pre-fetch handle should already see \
              the externally-fetched update: got {observed:?}, stale was {stale_oid}"
         );
+    }
+
+    /// Regression: checking out a remote-tracking branch whose remote is NOT
+    /// named `origin` (here `upstream`) must create and track the right local
+    /// branch. The old `strip_prefix("origin/")` returned `None` for
+    /// `upstream/feature`, so checkout failed for every non-origin remote.
+    #[test]
+    fn checkout_remote_branch_from_non_origin_remote_creates_tracking_local() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        // The remote is deliberately named `upstream`, not `origin`.
+        git(&local, &["remote", "add", "upstream", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["push", "-q", "upstream", "master"]);
+
+        // A second clone adds a `feature` branch and pushes it to the shared repo.
+        let other = tmp.path().join("other");
+        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        git(&other, &["config", "user.email", "t@t.com"]);
+        git(&other, &["config", "user.name", "t"]);
+        git(&other, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(other.join("b.txt"), "b").unwrap();
+        git(&other, &["add", "b.txt"]);
+        git(&other, &["commit", "-qm", "feature work"]);
+        git(&other, &["push", "-q", "origin", "feature"]);
+
+        // Local fetches: it now has refs/remotes/upstream/feature but no local
+        // `feature`, so checkout must create and track it.
+        git(&local, &["fetch", "-q", "upstream", "feature"]);
+
+        let repo = Repository::open(&local).unwrap();
+        assert!(
+            repo.find_branch("feature", BranchType::Local).is_err(),
+            "no local `feature` before checkout"
+        );
+
+        super::checkout_remote_branch(&repo, "upstream/feature")
+            .expect("checkout of upstream/feature must create and track a local branch");
+
+        // A local `feature` now exists and tracks `upstream/feature`.
+        let local_branch = repo
+            .find_branch("feature", BranchType::Local)
+            .expect("local `feature` created");
+        let upstream = local_branch.upstream().expect("upstream set on local branch");
+        assert_eq!(
+            upstream.name().unwrap(),
+            Some("upstream/feature"),
+            "local branch must track the upstream remote's ref, not a guessed origin"
+        );
+
+        // HEAD is on the new local branch, with the remote-only content present.
+        assert_eq!(repo.head().unwrap().shorthand(), Some("feature"));
+        assert!(local.join("b.txt").exists(), "feature content checked out");
     }
 }
 

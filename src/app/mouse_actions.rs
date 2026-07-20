@@ -159,9 +159,12 @@ impl App {
         match target {
             ChipTarget::PrBadge => self.open_selected_pr(),
             ChipTarget::Branch(name) => {
+                // A graph chip carries a raw label; resolve remoteness via the
+                // remotes()-aware splitter rather than an "origin/" guess.
+                let is_remote = self.split_remote_ref(&name).is_some();
                 self.mode = AppMode::Confirm {
                     message: format!("Checkout branch '{name}'?"),
-                    action: ConfirmAction::Checkout(name),
+                    action: ConfirmAction::Checkout { name, is_remote },
                 };
             }
         }

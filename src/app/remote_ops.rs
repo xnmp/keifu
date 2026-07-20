@@ -220,14 +220,12 @@ impl App {
     // ── Delete remote branch ────────────────────────────────────────────
 
     /// Split a remote-tracking ref ("origin/feature/x") into its remote and
-    /// branch parts, matching against the configured remotes so branch names
-    /// containing slashes are handled correctly.
+    /// branch parts. Delegates to the single shared splitter
+    /// [`crate::git::split_remote_ref`], supplying this repo's configured
+    /// remotes so branch names containing slashes and non-`origin` remotes are
+    /// handled correctly.
     pub(crate) fn split_remote_ref(&self, refname: &str) -> Option<(String, String)> {
-        self.repo.remotes().into_iter().find_map(|remote| {
-            refname
-                .strip_prefix(&format!("{remote}/"))
-                .map(|branch| (remote.clone(), branch.to_string()))
-        })
+        crate::git::split_remote_ref(&self.repo.remotes(), refname)
     }
 }
 

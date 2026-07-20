@@ -133,6 +133,29 @@ pub fn remote_only_branch_names(branches: &[BranchInfo]) -> HashSet<String> {
         .collect()
 }
 
+/// Split a remote-tracking ref ("origin/feature/x", "upstream/dev") into its
+/// `(remote, branch)` parts by matching against the repo's configured `remotes`.
+///
+/// Matching against the *actual* set of remote names — rather than a hardcoded
+/// `"origin/"` prefix or the first `/` — is what makes this correct: a remote
+/// can be named anything (`upstream`, `fork`), and branch names themselves
+/// contain slashes (`feature/x`), so only the real remote list disambiguates
+/// where the remote name ends and the branch name begins. Returns `None` for a
+/// local ref: one whose leading segment is not a configured remote (e.g.
+/// `feature/x` when there is no remote literally named `feature`).
+///
+/// This is the single remote-name splitter — `App::split_remote_ref`,
+/// `checkout_remote_branch`, and the graph's remote/local dedup all route
+/// through it so there is exactly one place that knows how to peel a remote.
+pub fn split_remote_ref(remotes: &[String], refname: &str) -> Option<(String, String)> {
+    remotes.iter().find_map(|remote| {
+        refname
+            .strip_prefix(remote.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .map(|branch| (remote.clone(), branch.to_string()))
+    })
+}
+
 /// Attribute an author (name) to each branch in `branches`.
 ///
 /// A branch's author is the author of the **oldest commit unique to that
@@ -192,6 +215,26 @@ mod tests {
 
     fn oid(byte: u8) -> Oid {
         Oid::from_bytes(&[byte; 20]).unwrap()
+    }
+
+    #[test]
+    fn split_remote_ref_matches_any_configured_remote() {
+        let remotes = vec!["origin".to_string(), "upstream".to_string()];
+        // Non-origin remote splits correctly (the old "origin/" strip could not).
+        assert_eq!(
+            split_remote_ref(&remotes, "upstream/dev"),
+            Some(("upstream".to_string(), "dev".to_string()))
+        );
+        // Branch names with slashes keep everything after the remote segment.
+        assert_eq!(
+            split_remote_ref(&remotes, "origin/feature/x"),
+            Some(("origin".to_string(), "feature/x".to_string()))
+        );
+        // A local branch whose first segment is not a remote is not a remote ref.
+        assert_eq!(split_remote_ref(&remotes, "feature/x"), None);
+        assert_eq!(split_remote_ref(&remotes, "main"), None);
+        // No remotes configured -> nothing is a remote ref.
+        assert_eq!(split_remote_ref(&[], "origin/main"), None);
     }
 
     fn local(name: &str, tip: Oid, upstream: Option<&str>) -> BranchInfo {

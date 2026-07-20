@@ -277,7 +277,8 @@ impl App {
         self.head_detached = self.repo.is_head_detached();
 
         // Rebuild branch positions
-        self.graph_nav.rebuild_branch_positions(&self.graph_layout);
+        self.graph_nav
+            .rebuild_branch_positions(&self.graph_layout, &self.repo.remotes());
 
         // Restore selection state
         // Check if uncommitted node still exists in the new graph
