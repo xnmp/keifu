@@ -466,8 +466,39 @@ fn apply_trace_dim(
     }
 }
 
+/// The half-open range of list rows worth building fully, given `n` total rows,
+/// the current scroll `offset`, the drawable `viewport` height, and the selected
+/// row's filtered position (if any).
+///
+/// Every list item is one line tall, so ratatui draws exactly the window
+/// `[final_offset, final_offset + viewport)`, where `final_offset` is `offset`
+/// clamped so the selection stays visible — always within
+/// `[min(offset, selected), max(offset + viewport, selected + 1))`. Building that
+/// span (plus a small margin for scroll-adjust and folding slack) is sufficient
+/// to render an identical frame; everything else is off-screen. Returns
+/// `[0, n)` degenerately for tiny graphs so nothing is ever clipped.
+fn visible_row_window(
+    n: usize,
+    offset: usize,
+    viewport: usize,
+    selected_pos: Option<usize>,
+) -> (usize, usize) {
+    const MARGIN: usize = 8;
+    let lo = selected_pos.map_or(offset, |s| s.min(offset));
+    let hi = selected_pos.map_or(offset + viewport, |s| (s + 1).max(offset + viewport));
+    let start = lo.saturating_sub(MARGIN);
+    let end = hi.saturating_add(MARGIN).min(n);
+    (start.min(end), end)
+}
+
 impl<'a> GraphViewWidget<'a> {
-    pub fn new(app: &App, width: u16, theme: &'a Theme, pixel_mode: bool) -> Self {
+    pub fn new(
+        app: &App,
+        width: u16,
+        theme: &'a Theme,
+        pixel_mode: bool,
+        viewport_height: u16,
+    ) -> Self {
         let needed = (app.graph_layout.max_lane + 1) * 2;
         let graph_width = effective_graph_width(needed, app.graph_width_cap);
         let inner_width = width.saturating_sub(2) as usize;
@@ -493,11 +524,33 @@ impl<'a> GraphViewWidget<'a> {
         // space). In Unicode mode connectors remain their own rows.
         let rows = visible_rows(app, pixel_mode);
 
+        // Only the rows the list can actually draw are worth the (per-row
+        // non-trivial) `render_graph_line` cost. Every list item is exactly one
+        // line tall, so ratatui's scroll math is unaffected by keeping the item
+        // count at `rows.len()` while filling out-of-window rows with cheap blank
+        // placeholders. See `visible_row_window` for why the window is correct.
+        let n = rows.len();
+        let offset = app.graph_nav.graph_list_state.offset();
+        let selected_pos = current_selected.and_then(|sel| {
+            rows.iter().position(|r| r.full_idx == sel)
+        });
+        let (win_start, win_end) =
+            visible_row_window(n, offset, viewport_height as usize, selected_pos);
+
         let mut selected_in_filtered = None;
-        let mut items: Vec<ListItem> = Vec::new();
-        let mut chip_hits: Vec<Vec<ChipHit>> = Vec::new();
+        let mut items: Vec<ListItem> = Vec::with_capacity(n);
+        let mut chip_hits: Vec<Vec<ChipHit>> = Vec::with_capacity(n);
 
         for (filtered_pos, row) in rows.into_iter().enumerate() {
+            // Out-of-window rows are never drawn: emit a blank one-line item so
+            // the list keeps its full length (offset/selection indices, the
+            // scrollbar, and `graph_chip_hits`' row alignment all stay intact)
+            // without paying to build a line the user cannot see.
+            if filtered_pos < win_start || filtered_pos >= win_end {
+                items.push(ListItem::new(""));
+                chip_hits.push(Vec::new());
+                continue;
+            }
             let (full_idx, node) = (row.full_idx, row.node);
             let is_selected = current_selected == Some(full_idx);
             if is_selected {
@@ -1480,6 +1533,83 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
 mod tests {
     use super::*;
     use chrono::Duration;
+
+    // ── visible_row_window (viewport slice for lazy row building) ─────
+    //
+    // Contract: whatever rows ratatui may draw for a given scroll offset and
+    // selection must lie inside the window, so the placeholder rows outside it
+    // are never visible. ratatui draws `[final_offset, final_offset + viewport)`
+    // where `final_offset` is `offset` clamped so the selection stays visible.
+
+    /// Every row ratatui could draw after scrolling to `selected` must be inside
+    /// the window `[start, end)`. Emulates ratatui's offset clamp.
+    fn assert_covers(n: usize, offset: usize, viewport: usize, selected: usize) {
+        let (start, end) = visible_row_window(n, offset, viewport, Some(selected));
+        // ratatui's scroll clamp: keep `selected` within the drawn viewport.
+        let final_offset = if selected < offset {
+            selected
+        } else if viewport > 0 && selected >= offset + viewport {
+            selected + 1 - viewport
+        } else {
+            offset
+        };
+        let drawn_end = (final_offset + viewport).min(n);
+        assert!(
+            start <= final_offset && drawn_end <= end,
+            "window [{start},{end}) fails to cover drawn [{final_offset},{drawn_end}) \
+             (n={n}, offset={offset}, viewport={viewport}, selected={selected})"
+        );
+        // The selection itself is always inside the window.
+        assert!(
+            selected >= start && selected < end,
+            "selection {selected} outside window [{start},{end})"
+        );
+    }
+
+    #[test]
+    fn window_covers_drawn_range_for_all_scroll_positions() {
+        let n = 5000;
+        let viewport = 40;
+        // Selection above, inside, and below the current viewport.
+        for &offset in &[0usize, 100, 2000, 4960, 4999] {
+            for &selected in &[0usize, offset, offset + 20, offset + 200, 4999] {
+                let sel = selected.min(n - 1);
+                assert_covers(n, offset, viewport, sel);
+            }
+        }
+        // A jump far past the viewport (PageDown / G) still covers the target.
+        assert_covers(n, 0, viewport, 4999);
+        assert_covers(n, 4999, viewport, 0);
+    }
+
+    #[test]
+    fn window_never_exceeds_bounds_and_is_ordered() {
+        for &(n, offset, vp, sel) in &[
+            (0usize, 0usize, 40usize, 0usize),
+            (1, 0, 40, 0),
+            (5, 0, 40, 4),
+            (10, 100, 40, 5), // stale offset past the end
+        ] {
+            let (start, end) = visible_row_window(n, offset, vp, (sel < n).then_some(sel));
+            assert!(start <= end, "start {start} > end {end}");
+            assert!(end <= n, "end {end} > n {n}");
+        }
+    }
+
+    #[test]
+    fn small_graph_builds_every_row() {
+        // A graph shorter than the viewport must build all of its rows.
+        let (start, end) = visible_row_window(12, 0, 40, Some(3));
+        assert_eq!((start, end), (0, 12));
+    }
+
+    #[test]
+    fn window_without_selection_tracks_offset() {
+        // No selection: the window follows the scroll offset's viewport.
+        let (start, end) = visible_row_window(5000, 2000, 40, None);
+        assert!(start <= 2000 && end >= 2040, "window [{start},{end})");
+        assert!(end <= 5000);
+    }
 
     /// `now` minus `secs_ago` seconds. Duration arithmetic on `DateTime<Tz>`
     /// operates on the underlying instant, so this is exact regardless of
