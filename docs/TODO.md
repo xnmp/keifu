@@ -93,6 +93,23 @@ Calling `repo.clear_ignore_rules()` before status queries ensures .gitignore edi
 ### [DONE] Delete Key to Recycle Bin
 Pressing Delete in the files pane shows a confirmation modal, then moves the file to the system recycle bin via the `trash` crate. Works with folder headers to trash all files in a folder.
 
+### [DONE] 2026-07-20 Restore (`r`) updates the changed-files list immediately
+`r` restore left the discarded file lingering in the Changed Files pane until the
+async full-diff reload completed (the graph node count and Commit Detail updated
+instantly, but the file row did not). Root cause in `diff_cache.rs`:
+`refresh_after_file_op` keeps the stale full-diff data (anti-flicker) then calls
+`reclassify_uncommitted_staging` to relabel it in place. That fast path can only
+*relabel* rows, not add/remove them — but its guard only caught row-count changes
+for paths present in *both* diffs, so a restored file (present in the full diff,
+absent from the fresh quick diff) slipped through, was left in `full.files`, and
+the cache key got sealed → `cached_diff` returned the stale full diff over the
+correct quick diff and `poll()` never reloaded. Fix: the fast path now runs only
+when both diffs describe the same `(path, row-count)` multiset; otherwise it drops
+the structurally-stale full data and leaves the key unsealed, so the fresh quick
+diff renders on the same frame and `poll()` reloads the real line stats. Reproduced
+and re-verified live via debug-tui. Unit tests cover restore-away, new-file, and
+partial-stage-split cases.
+
 ---
 
 ## Commit Pane
@@ -132,6 +149,58 @@ j/k removed from graph panel movement (arrow keys only). j/k retained in FileSel
 ---
 
 ## GitHub Integration
+
+### [DONE] 2026-07-20 Dim (or hide) branches merged via PR — Shift+D toggle
+Branches whose PR was merged are now dimmed in the graph; `Shift+D` toggles them
+between dimmed-visible (default) and hidden (label only — the commits always stay).
+The background PR fetch was widened from `gh pr list` to `gh pr list --state all`;
+`parse_pr_data` splits the result into open PRs (`App.open_prs`, unchanged) and
+merged head-branch names (`App.merged_pr_branches`); CLOSED-without-merge PRs are
+ignored. Rendering threads a `Copy` `MergedFilter` (merged set + show flag) through
+`render_graph_line` → `render_graph_line_tail` → `optimize_branch_display`: a chip
+whose bare name is in the set gets `Modifier::DIM` (matched on the stripped name so
+a local ref and its remote twin dim together), or is dropped pre-layout when
+hidden. State persists in `UiState.show_merged_pr_branches` (default true). Toggle
+verified live via debug-tui (status flips "hidden" ↔ "shown (dimmed)"); the dim/hide
+styling and the open/merged parse split are unit-tested (the repo has no MERGED PR
+to show the dim on screen). Note: `--state all --limit 100` could push open PRs out
+on a repo with >100 recent non-open PRs — acceptable; open PRs are few and recent.
+
+### [DONE] 2026-07-20 PR actioned/approved icons verified (comment + review markers)
+Request: show an icon in the graph when a PR is approved, has a change-request, or
+has an outside comment (non-author). Investigation found this was already built
+(commit a1cbc7c): `parse_pr_list` derives `review` from `reviewDecision` and
+`outside_activity` from non-author comments; `pr_badge_text` appends ✓ (approved),
+± (changes-requested), and a comment glyph; the render site emits them. Live PR #35
+shows none only because its sole comment is self-authored and it has no review — no
+actioned state, not a gap. Work done: added the missing end-to-end coverage — a
+`render_graph_line` test asserting the badge + ✓ + comment glyphs appear in the
+rendered line text for an approved PR with an outside comment (parse-side and
+badge-text tests already existed).
+
+### [DONE] 2026-07-20 PR badge anchors to head commit (no duplicate badges)
+A PR badge rendered on every graph row whose branch label matched the PR's head
+branch name (`pr_for_branch_labels` strips the remote prefix, so a local `feat`
+and `origin/feat` both matched). When those refs sat on different commits the same
+PR showed a badge twice. Fix: `gh pr list` now also requests `headRefOid`, stored
+as `PrInfo.head_oid`; new `pr_badge_for_node` (src/ui/graph_view.rs) renders the
+badge only on the row whose commit *is* that head oid, falling back to the old
+name match when the oid is unknown (older `gh`, or a connector row with no commit).
+Interactions (`o`/`v`/`c`, status-bar hints) still use `pr_for_branch_labels` so
+they work from whichever ref row the cursor is on. Verified live via debug-tui with
+a divergent local/remote `test-pr`: badge count dropped from 2 to 1 (on the head
+commit). Unit tests in pr.rs (oid parse) and graph_view.rs (anchor + fallback).
+
+### [DONE] 2026-07-20 Stale "Opening PR in browser" status stopped flashing
+The one-shot "Opening PR #N in browser" status re-appeared every ~60s. Root cause
+in `src/app/status_message.rs`: `self.message` is never cleared — `get_message`
+only *hides* it after a 5s timeout, and it skipped that timeout entirely while
+`is_network_busy()`. Silent auto-fetch (default `fetch_interval` 60s) flips busy
+true each cycle, so the never-cleared old message re-surfaced for the fetch's
+duration. Fix: the 5s timeout now applies regardless of busy state (both
+`get_message` and `message_expiry_time`); network op progress/results are surfaced
+via toasts, which carry their own TTL, so no `set_message` string needs the old
+busy-immortality. Regression test in `app_behavior_test.rs`.
 
 ### [DONE] 2026-07-19 GitHub issue viewing/management (issue #37)
 Issues from the TUI, mirroring the PR feature's architecture 1:1: `Shift+I`

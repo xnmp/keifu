@@ -170,6 +170,10 @@ fn graph_mode_actions() {
         Some(Action::OpenBranchFilter)
     );
     assert_eq!(
+        map_normal_graph(key_mod(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+        Some(Action::ToggleMergedPrBranches)
+    );
+    assert_eq!(
         map_normal_graph(key(KeyCode::Char('/'))),
         Some(Action::Search)
     );

@@ -34,6 +34,8 @@ pub enum Action {
     OpenBranchFilter,
     /// Show/hide all remote-only branches in the graph.
     ToggleRemoteBranches,
+    /// Show (dimmed) / hide branch chips whose PR has been merged.
+    ToggleMergedPrBranches,
     MenuSelect,
     SelectAll,
     SelectNone,

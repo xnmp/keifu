@@ -399,6 +399,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             outside_activity: false,
+            head_oid: None,
         }
     }
 

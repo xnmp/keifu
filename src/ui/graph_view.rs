@@ -477,6 +477,10 @@ impl<'a> GraphViewWidget<'a> {
         let now = Local::now();
         let remotes = &app.remotes;
         let open_prs = &app.open_prs;
+        let merged = MergedFilter {
+            branches: Some(&app.merged_pr_branches),
+            show: app.show_merged_pr_branches,
+        };
         let metadata_columns = app.metadata_columns;
         // Selected commit's lit-edge set for tracing (Unicode dim); None =
         // off. In pixel mode the dim lives in the row specs, not the text
@@ -525,6 +529,7 @@ impl<'a> GraphViewWidget<'a> {
                 open_prs,
                 metadata_columns,
                 trace.as_ref(),
+                merged,
             );
             items.push(ListItem::new(line));
             chip_hits.push(chips);
@@ -598,6 +603,30 @@ pub fn pr_for_branch_labels<'p>(
     })
 }
 
+/// The PR whose badge should render on a specific graph node — used at the badge
+/// site so a PR appears on exactly one row.
+///
+/// Starts from the branch-label match (`pr_for_branch_labels`), then, when that
+/// PR carries a known head commit (`head_oid`), keeps the badge only on the row
+/// that *is* that commit. This suppresses the duplicate that appeared when a
+/// local branch and its remote-tracking ref (both stripping to the same head
+/// branch name) sat on different commits — each row matched by name, so both got
+/// a badge. When `head_oid` is unknown, or the node has no commit, it falls back
+/// to the name match so the badge still shows (pre-`headRefOid` behavior).
+pub fn pr_badge_for_node<'p>(
+    node: &crate::git::graph::GraphNode,
+    remotes: &[String],
+    open_prs: &'p HashMap<String, PrInfo>,
+) -> Option<&'p PrInfo> {
+    let pr = pr_for_branch_labels(&node.branch_names, remotes, open_prs)?;
+    match (pr.head_oid, node.commit.as_ref()) {
+        // Known head commit: badge only on the row that is that commit.
+        (Some(head), Some(commit)) => (head == commit.oid).then_some(pr),
+        // Unknown head oid (or no commit on the node): fall back to name match.
+        _ => Some(pr),
+    }
+}
+
 /// Compact badge text for an open PR, e.g. ` #12 ✓ ` (approved with outside
 /// comments). Review marker first (approved / changes-requested), then a
 /// comment marker when a non-author has commented.
@@ -636,12 +665,38 @@ pub const REMOTE_ONLY_ICON: &str = "\u{f0c2}"; //
 /// Marks a local branch whose remote counterpart points at the same commit.
 const SYNCED_ICON: &str = "↔";
 
+/// How a commit's branch chips should treat branches whose PR has been merged.
+/// `branches` is the set of merged head-branch names (bare, no remote prefix);
+/// `show` decides whether a merged chip is dimmed (true) or hidden (false).
+/// `Default` is the inert filter (no merged branches known) used by tests and
+/// any caller without PR data.
+#[derive(Clone, Copy)]
+pub struct MergedFilter<'a> {
+    branches: Option<&'a std::collections::HashSet<String>>,
+    show: bool,
+}
+
+impl Default for MergedFilter<'_> {
+    fn default() -> Self {
+        Self { branches: None, show: true }
+    }
+}
+
+impl MergedFilter<'_> {
+    /// Whether `bare` (a remote-stripped branch name) belongs to a merged PR.
+    fn is_merged(&self, bare: &str) -> bool {
+        self.branches.is_some_and(|s| s.contains(bare))
+    }
+}
+
 /// Optimize branch name display
 /// - A lone remote ref gets a cloud icon; a local+remote pair collapses to one ↔ label
 /// - If a local branch matches its origin/xxx among other branches, show "xxx <-> origin"
 /// - Otherwise, show each name separately
 /// - Render in bold with the graph color, wrapped in brackets
 /// - Selected branch is shown with inverted colors
+/// - A branch whose PR was merged is dimmed (or, when `merged.show` is false,
+///   dropped before any chips are built)
 fn optimize_branch_display(
     branch_names: &[String],
     is_head: bool,
@@ -649,8 +704,24 @@ fn optimize_branch_display(
     selected_branch_name: Option<&str>,
     theme: &Theme,
     remotes: &[String],
+    merged: MergedFilter,
 ) -> Vec<(String, Style)> {
     use std::collections::HashSet;
+
+    // When merged-PR branches are hidden, drop their names before any layout so
+    // collapse counts and icon logic never see them. Dimming (the default) keeps
+    // them and is applied per-chip in `make_style`.
+    let hidden_storage: Vec<String>;
+    let branch_names: &[String] = if !merged.show && merged.branches.is_some() {
+        hidden_storage = branch_names
+            .iter()
+            .filter(|n| !merged.is_merged(strip_remote(n, remotes).unwrap_or(n)))
+            .cloned()
+            .collect();
+        &hidden_storage
+    } else {
+        branch_names
+    };
 
     if branch_names.is_empty() {
         return Vec::new();
@@ -684,6 +755,11 @@ fn optimize_branch_display(
         let mut style = Style::default().fg(base_color);
         if is_head {
             style = style.add_modifier(Modifier::BOLD);
+        }
+        // Merged-via-PR branches are dimmed (when shown at all). Matched on the
+        // bare name so a local ref and its remote twin dim consistently.
+        if merged.is_merged(strip_remote(branch_name, remotes).unwrap_or(branch_name)) {
+            style = style.add_modifier(Modifier::DIM);
         }
         if selected_branch_name == Some(branch_name) {
             // Reverse video rather than an explicit bg: when this branch's row
@@ -1013,6 +1089,7 @@ fn render_graph_line<'a>(
     open_prs: &HashMap<String, PrInfo>,
     metadata_columns: MetadataColumns,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
+    merged: MergedFilter,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -1072,6 +1149,7 @@ fn render_graph_line<'a>(
         remotes,
         open_prs,
         metadata_columns,
+        merged,
     )
 }
 
@@ -1213,6 +1291,7 @@ fn render_graph_line_tail<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     metadata_columns: MetadataColumns,
+    merged: MergedFilter,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
     // Separator between graph and commit info
@@ -1272,14 +1351,16 @@ fn render_graph_line_tail<'a>(
         selected_branch_name,
         theme,
         remotes,
+        merged,
     );
 
     // Tag labels render after branch labels with a distinct color.
     let tag_display = build_tag_labels(&node.tag_names, theme);
 
     // Open-PR badge: chip after the branch labels when one of this node's
-    // branches has an open PR. Colored by CI status, with review/comment markers.
-    let pr_badge = pr_for_branch_labels(&node.branch_names, remotes, open_prs)
+    // branches has an open PR. Anchored to the PR's head commit so a PR shows on
+    // exactly one row. Colored by CI status, with review/comment markers.
+    let pr_badge = pr_badge_for_node(node, remotes, open_prs)
         .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
     // Chip plus a trailing space.
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
@@ -1540,7 +1621,7 @@ mod tests {
         let names: Vec<String> = branch_names.iter().map(|s| s.to_string()).collect();
         let remotes: Vec<String> = remotes.iter().map(|s| s.to_string()).collect();
         let theme = Theme::dark();
-        optimize_branch_display(&names, false, 0, None, &theme, &remotes)
+        optimize_branch_display(&names, false, 0, None, &theme, &remotes, MergedFilter::default())
             .into_iter()
             .map(|(label, _)| label)
             .collect()
@@ -1735,7 +1816,7 @@ mod tests {
             "dev".to_string(),
         ];
         let remotes = vec!["upstream".to_string()];
-        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes);
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes, MergedFilter::default());
         // Collapses to a single combined label.
         assert_eq!(out.len(), 1);
         let label = &out[0].0;
@@ -1755,7 +1836,7 @@ mod tests {
         // "feature/x" contains a slash but "feature" is not a remote.
         let names = vec!["feature/x".to_string()];
         let remotes = vec!["origin".to_string()];
-        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes);
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes, MergedFilter::default());
         assert_eq!(out.len(), 1);
         // No cloud icon (remote-only marker); rendered as a plain local label.
         assert!(
@@ -1775,6 +1856,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             outside_activity: false,
+            head_oid: None,
         }
     }
 
@@ -1786,6 +1868,7 @@ mod tests {
             ci,
             review,
             outside_activity: outside,
+            head_oid: None,
         }
     }
 
@@ -1833,6 +1916,173 @@ mod tests {
         // Labels checked in order; "a" comes first, so PR #1.
         let names = vec!["a".to_string(), "b".to_string()];
         assert_eq!(pr_for_branch_labels(&names, &[], &open).map(|p| p.number), Some(1));
+    }
+
+    /// A commit node carrying `branch_names`, sitting on `oid`.
+    fn node_on(oid: git2::Oid, branch_names: &[&str]) -> GraphNode {
+        use crate::git::CommitInfo;
+        let commit = CommitInfo {
+            oid,
+            short_id: "abc1234".to_string(),
+            author_name: "a".to_string(),
+            author_email: "a@b".to_string(),
+            timestamp: Local::now(),
+            message: "m".to_string(),
+            full_message: "m".to_string(),
+            parent_oids: vec![],
+        };
+        GraphNode {
+            commit: Some(commit),
+            lane: 0,
+            color_index: 0,
+            branch_names: branch_names.iter().map(|s| s.to_string()).collect(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells: vec![CellType::Commit(0)],
+            cell_oids: Vec::new(),
+        }
+    }
+
+    fn oid_a() -> git2::Oid {
+        git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap()
+    }
+    fn oid_b() -> git2::Oid {
+        git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap()
+    }
+
+    #[test]
+    fn pr_badge_anchors_to_head_commit_when_oid_known() {
+        // Local `feat` (ahead, on oid_a) and remote `origin/feat` (on oid_b, the
+        // pushed head) both strip to "feat" and match the PR by name. With the
+        // PR's head_oid = oid_b, only the remote row should carry the badge.
+        let mut pr = pr(340);
+        pr.head_oid = Some(oid_b());
+        let open: HashMap<String, PrInfo> = [("feat".to_string(), pr)].into_iter().collect();
+        let remotes = vec!["origin".to_string()];
+
+        let local = node_on(oid_a(), &["feat"]);
+        let remote = node_on(oid_b(), &["origin/feat"]);
+
+        assert!(
+            pr_badge_for_node(&local, &remotes, &open).is_none(),
+            "local ref on a different commit must not get the badge"
+        );
+        assert_eq!(
+            pr_badge_for_node(&remote, &remotes, &open).map(|p| p.number),
+            Some(340),
+            "the PR's head commit row gets the badge"
+        );
+    }
+
+    #[test]
+    fn pr_badge_falls_back_to_name_match_when_oid_unknown() {
+        // No head_oid → keep pre-headRefOid behavior: badge by branch label on
+        // whichever row carries the name (both, as before).
+        let open = prs(&[("feat", 7)]); // pr() has head_oid: None
+        let remotes = vec!["origin".to_string()];
+        let local = node_on(oid_a(), &["feat"]);
+        let remote = node_on(oid_b(), &["origin/feat"]);
+        assert_eq!(pr_badge_for_node(&local, &remotes, &open).map(|p| p.number), Some(7));
+        assert_eq!(pr_badge_for_node(&remote, &remotes, &open).map(|p| p.number), Some(7));
+    }
+
+    #[test]
+    fn actioned_pr_renders_badge_and_markers_end_to_end() {
+        // End-to-end: an approved PR with an outside comment, anchored to the
+        // node's commit, renders the PR badge plus the approved ✓ and comment
+        // glyphs in the actual line text (data → pr_badge_for_node →
+        // pr_badge_text → span). Substitutes for a hard-to-create live actioned
+        // PR; the earlier live #35 dump confirmed the plain badge on screen.
+        let mut pr = pr_with(35, CiStatus::Pass, ReviewState::Approved, true);
+        pr.head_oid = Some(oid_a());
+        let open: HashMap<String, PrInfo> = [("feat".to_string(), pr)].into_iter().collect();
+        let node = node_on(oid_a(), &["feat"]);
+
+        let theme = Theme::dark();
+        let cols = MetadataColumns {
+            author: false,
+            hash: false,
+            date: false,
+            mute_merges: false,
+            avatars: false,
+        };
+        let (line, _chips) = render_graph_line(
+            &node, 4, false, false, 200, None, &theme, Local::now(), false,
+            &["origin".to_string()], &open, cols, None, MergedFilter::default(),
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        assert!(text.contains(PR_BADGE_ICON), "PR badge icon present: {text:?}");
+        assert!(text.contains("#35"), "PR number present: {text:?}");
+        assert!(text.contains(PR_APPROVED_ICON), "approved ✓ present: {text:?}");
+        assert!(text.contains(PR_COMMENT_ICON), "outside-comment glyph present: {text:?}");
+    }
+
+    // ── merged-PR branch dimming / hiding ────────────────────────────
+
+    fn merged_set(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn merged_branch_chip_is_dimmed_when_shown() {
+        let theme = Theme::dark();
+        let merged = merged_set(&["feat"]);
+        let filter = MergedFilter { branches: Some(&merged), show: true };
+        let out = optimize_branch_display(
+            &["feat".to_string()], false, 0, None, &theme, &["origin".to_string()], filter,
+        );
+        assert_eq!(out.len(), 1, "chip still shown when dimming");
+        assert!(
+            out[0].1.add_modifier.contains(Modifier::DIM),
+            "merged branch chip is dimmed: {:?}",
+            out[0].1
+        );
+    }
+
+    #[test]
+    fn merged_remote_ref_dims_by_bare_name() {
+        // The merged set holds bare names; a remote ref must still dim.
+        let theme = Theme::dark();
+        let merged = merged_set(&["feat"]);
+        let filter = MergedFilter { branches: Some(&merged), show: true };
+        let out = optimize_branch_display(
+            &["origin/feat".to_string()], false, 0, None, &theme, &["origin".to_string()], filter,
+        );
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.add_modifier.contains(Modifier::DIM), "{:?}", out[0].1);
+    }
+
+    #[test]
+    fn merged_branch_chip_is_hidden_when_show_false() {
+        let theme = Theme::dark();
+        let merged = merged_set(&["feat"]);
+        let filter = MergedFilter { branches: Some(&merged), show: false };
+        // Only the merged branch on this commit → hiding it yields no chips.
+        let out = optimize_branch_display(
+            &["feat".to_string()], false, 0, None, &theme, &["origin".to_string()], filter,
+        );
+        assert!(out.is_empty(), "hidden merged branch produces no chip: {out:?}");
+    }
+
+    #[test]
+    fn non_merged_branch_is_untouched() {
+        let theme = Theme::dark();
+        let merged = merged_set(&["feat"]);
+        let filter = MergedFilter { branches: Some(&merged), show: true };
+        let out = optimize_branch_display(
+            &["other".to_string()], false, 0, None, &theme, &["origin".to_string()], filter,
+        );
+        assert_eq!(out.len(), 1);
+        assert!(
+            !out[0].1.add_modifier.contains(Modifier::DIM),
+            "un-merged branch not dimmed: {:?}",
+            out[0].1
+        );
     }
 
     #[test]
@@ -1956,6 +2206,7 @@ mod tests {
             None,
             &theme,
             &["origin".to_string()],
+            MergedFilter::default(),
         );
         assert_eq!(out.len(), 1);
         let label = &out[0].0;
@@ -1974,6 +2225,7 @@ mod tests {
             None,
             &theme,
             &["upstream".to_string()],
+            MergedFilter::default(),
         );
         assert_eq!(out.len(), 1);
         assert!(out[0].0.contains("main"));
@@ -1990,6 +2242,7 @@ mod tests {
             None,
             &theme,
             &["origin".to_string(), "upstream".to_string()],
+            MergedFilter::default(),
         );
         assert_eq!(out.len(), 1);
         assert!(
@@ -2009,6 +2262,7 @@ mod tests {
             None,
             &theme,
             &["origin".to_string()],
+            MergedFilter::default(),
         );
         // The local+remote pair collapses to one ↔ chip — no duplicate [main].
         assert_eq!(out.len(), 1);
@@ -2031,6 +2285,7 @@ mod tests {
             None,
             &theme,
             &["origin".to_string()],
+            MergedFilter::default(),
         );
         assert_eq!(out.len(), 1);
         let label = &out[0].0;
@@ -2054,6 +2309,7 @@ mod tests {
             None,
             &theme,
             &["origin".to_string()],
+            MergedFilter::default(),
         );
         assert_eq!(out.len(), 1);
         let label = &out[0].0;
@@ -2259,6 +2515,7 @@ mod tests {
             &HashMap::new(),
             cols,
             None,
+            MergedFilter::default(),
         );
         line.spans
             .iter()

@@ -274,6 +274,10 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Shift+B (the per-branch filter), the other branch-visibility control.
         (KeyModifiers::SHIFT, KeyCode::Char('O')) => Some(Action::ToggleRemoteBranches),
 
+        // Show (dimmed) / hide branches whose PR was merged. Shift+D — mnemonic
+        // "Dim merged"; plain 'd' is delete-branch.
+        (KeyModifiers::SHIFT, KeyCode::Char('D')) => Some(Action::ToggleMergedPrBranches),
+
         // UI
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),

@@ -182,6 +182,9 @@ impl App {
             Action::ToggleRemoteBranches => {
                 self.toggle_remote_branches()?;
             }
+            Action::ToggleMergedPrBranches => {
+                self.toggle_merged_pr_branches();
+            }
             Action::CreateBranch => {
                 self.mode = AppMode::Input {
                     title: "New Branch Name".to_string(),

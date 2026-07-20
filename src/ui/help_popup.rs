@@ -65,6 +65,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("P", "Push current branch (publishes if no upstream)"),
         Row("B", "Branch filter (type to filter by name, @ by author)"),
         Row("O", "Show/hide remote-only branches"),
+        Row("D", "Dim/hide branches merged via PR"),
         Row("Ctrl+f", "Filter commits (message/author/hash)"),
         Row("m", "Mark / compare two commits (Esc clears)"),
         Row("o", "Open PR in browser (badge color = CI: green/yellow/red)"),

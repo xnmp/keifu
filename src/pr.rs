@@ -71,6 +71,12 @@ pub struct PrInfo {
     pub review: ReviewState,
     /// Any comment authored by someone other than the PR author.
     pub outside_activity: bool,
+    /// The PR's head commit (`headRefOid`), when `gh` reported a parseable one.
+    /// Used to anchor the graph badge to exactly one row — the commit the PR's
+    /// head branch points at — instead of every ref that shares the head branch
+    /// name (a local `feat` and `origin/feat` on different commits would
+    /// otherwise both render a badge). `None` falls back to branch-name matching.
+    pub head_oid: Option<git2::Oid>,
 }
 
 /// One `statusCheckRollup` entry. Both shapes appear: `CheckRun`
@@ -107,6 +113,8 @@ struct GhPr {
     url: String,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
+    #[serde(default, rename = "headRefOid")]
+    head_ref_oid: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -180,34 +188,72 @@ fn has_outside_activity(pr_author: &str, comments: &[Comment]) -> bool {
     })
 }
 
-/// Parse `gh pr list --json …` output into a map from head branch name to PR.
-/// Malformed JSON yields an empty map. Only open PRs are kept (defensive — `gh
-/// pr list` already defaults to open). When two PRs share a head branch the
-/// later record wins.
+/// Open PRs plus the head-branch names of merged PRs. Fetched together so the
+/// graph can badge open PRs and dim branches already merged via a PR.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrData {
+    /// Open PRs, keyed by head branch name.
+    pub open: HashMap<String, PrInfo>,
+    /// Head branch names of PRs that were merged (state MERGED).
+    pub merged_branches: std::collections::HashSet<String>,
+}
+
+/// Convert one raw record into `(head_branch, PrInfo)`.
+fn pr_info_from(p: GhPr) -> (String, PrInfo) {
+    let ci = aggregate_ci(p.status_check_rollup.as_deref().unwrap_or_default());
+    let review = ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
+    let pr_author = p.author.as_ref().map(|a| a.login.as_str()).unwrap_or_default();
+    let outside_activity =
+        has_outside_activity(pr_author, p.comments.as_deref().unwrap_or_default());
+    let head_oid = p
+        .head_ref_oid
+        .as_deref()
+        .and_then(|s| git2::Oid::from_str(s).ok());
+    (
+        p.head_ref_name,
+        PrInfo {
+            number: p.number,
+            url: p.url,
+            title: p.title,
+            ci,
+            review,
+            outside_activity,
+            head_oid,
+        },
+    )
+}
+
+/// Parse `gh pr list --json …` output into a map from head branch name to open
+/// PR. Malformed JSON yields an empty map. Only open PRs are kept (a missing
+/// state is treated as open — `gh pr list` defaults to open). When two PRs share
+/// a head branch the later record wins.
 pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
     let records: Vec<GhPr> = serde_json::from_str(json).unwrap_or_default();
     records
         .into_iter()
         .filter(|p| p.state.is_empty() || p.state.eq_ignore_ascii_case("open"))
-        .map(|p| {
-            let ci = aggregate_ci(p.status_check_rollup.as_deref().unwrap_or_default());
-            let review = ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
-            let pr_author = p.author.as_ref().map(|a| a.login.as_str()).unwrap_or_default();
-            let outside_activity =
-                has_outside_activity(pr_author, p.comments.as_deref().unwrap_or_default());
-            (
-                p.head_ref_name,
-                PrInfo {
-                    number: p.number,
-                    url: p.url,
-                    title: p.title,
-                    ci,
-                    review,
-                    outside_activity,
-                },
-            )
-        })
+        .map(pr_info_from)
         .collect()
+}
+
+/// Parse `gh pr list --state all …` output into open PRs and merged head
+/// branches. Open PRs (or state-less records) populate `open`; records with
+/// state MERGED contribute their head branch to `merged_branches`. Closed
+/// (unmerged) PRs are ignored — a closed-without-merge branch isn't "merged via
+/// PR". Malformed JSON yields empty data.
+pub fn parse_pr_data(json: &str) -> PrData {
+    let records: Vec<GhPr> = serde_json::from_str(json).unwrap_or_default();
+    let mut data = PrData::default();
+    for p in records {
+        if p.state.eq_ignore_ascii_case("merged") {
+            data.merged_branches.insert(p.head_ref_name);
+        } else if p.state.is_empty() || p.state.eq_ignore_ascii_case("open") {
+            let (branch, info) = pr_info_from(p);
+            data.open.insert(branch, info);
+        }
+        // CLOSED (unmerged) → ignored.
+    }
+    data
 }
 
 /// Summarize what changed between two open-PR maps, for a refresh toast, or
@@ -262,26 +308,30 @@ pub fn pr_refresh_summary(
     })
 }
 
-/// Run `gh pr list` in `repo_path`, returning open PRs by head branch. `None`
-/// on any failure (gh missing, non-zero exit, timeout, non-UTF8 output).
-fn fetch_open_prs(repo_path: &str) -> Option<HashMap<String, PrInfo>> {
+/// Run `gh pr list --state all` in `repo_path`, returning open PRs plus merged
+/// head branches. `None` on any failure (gh missing, non-zero exit, timeout,
+/// non-UTF8 output).
+fn fetch_pr_data(repo_path: &str) -> Option<PrData> {
     let output = run_gh_pr_list(repo_path)?;
     if !output.status.success() {
         return None;
     }
     let json = String::from_utf8(output.stdout).ok()?;
-    Some(parse_pr_list(&json))
+    Some(parse_pr_data(&json))
 }
 
-/// Spawn `gh pr list` with a timeout, killing it if it overruns `GH_TIMEOUT`.
-/// Runs on a background thread, so the polling sleep never touches the UI.
+/// Spawn `gh pr list --state all` with a timeout, killing it if it overruns
+/// `GH_TIMEOUT`. Runs on a background thread, so the polling sleep never touches
+/// the UI. `--state all` returns open + closed + merged; the parser splits them.
 fn run_gh_pr_list(repo_path: &str) -> Option<std::process::Output> {
     let mut child = Command::new("gh")
         .args([
             "pr",
             "list",
+            "--state",
+            "all",
             "--json",
-            "number,url,headRefName,title,state,statusCheckRollup,reviewDecision,comments,author",
+            "number,url,headRefName,headRefOid,title,state,statusCheckRollup,reviewDecision,comments,author",
             "--limit",
             "100",
         ])
@@ -309,10 +359,11 @@ fn run_gh_pr_list(repo_path: &str) -> Option<std::process::Output> {
     }
 }
 
-/// Background fetcher for open PRs. Fetches once at startup and every
-/// `PR_FETCH_INTERVAL` thereafter; never blocks the UI thread.
+/// Background fetcher for PR data (open PRs + merged head branches). Fetches
+/// once at startup and every `PR_FETCH_INTERVAL` thereafter; never blocks the UI
+/// thread.
 pub struct PrFetch {
-    receiver: Option<Receiver<HashMap<String, PrInfo>>>,
+    receiver: Option<Receiver<PrData>>,
     last_fetch: Option<Instant>,
 }
 
@@ -351,21 +402,21 @@ impl PrFetch {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
         thread::spawn(move || {
-            let _ = tx.send(fetch_open_prs(&path).unwrap_or_default());
+            let _ = tx.send(fetch_pr_data(&path).unwrap_or_default());
         });
         self.receiver = Some(rx);
     }
 
-    /// Poll for a completed fetch. Returns the new PR map on completion (empty
+    /// Poll for a completed fetch. Returns the new PR data on completion (empty
     /// on any failure), else `None`. Records the completion time so the next
     /// fetch waits a full interval — no retry storm.
-    pub fn poll(&mut self) -> Option<HashMap<String, PrInfo>> {
+    pub fn poll(&mut self) -> Option<PrData> {
         let rx = self.receiver.as_ref()?;
         match rx.try_recv() {
-            Ok(map) => {
+            Ok(data) => {
                 self.receiver = None;
                 self.last_fetch = Some(Instant::now());
-                Some(map)
+                Some(data)
             }
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
@@ -399,9 +450,45 @@ mod tests {
                 ci: CiStatus::None,
                 review: ReviewState::None,
                 outside_activity: false,
+                head_oid: None,
             })
         );
         assert_eq!(map.get("fix/y").map(|p| p.number), Some(7));
+    }
+
+    #[test]
+    fn head_ref_oid_is_parsed_when_present_and_none_when_absent_or_bad() {
+        let json = r#"[
+            {"number": 1, "url": "u", "headRefName": "a", "headRefOid": "0123456789012345678901234567890123456789", "state": "OPEN"},
+            {"number": 2, "url": "u", "headRefName": "b", "headRefOid": "not-a-sha", "state": "OPEN"},
+            {"number": 3, "url": "u", "headRefName": "c", "state": "OPEN"}
+        ]"#;
+        let map = parse_pr_list(json);
+        assert_eq!(
+            map.get("a").unwrap().head_oid,
+            Some(git2::Oid::from_str("0123456789012345678901234567890123456789").unwrap()),
+            "valid headRefOid parses"
+        );
+        assert_eq!(map.get("b").unwrap().head_oid, None, "unparseable oid → None");
+        assert_eq!(map.get("c").unwrap().head_oid, None, "missing oid → None");
+    }
+
+    #[test]
+    fn parse_pr_data_splits_open_and_merged_ignoring_closed() {
+        let json = r#"[
+            {"number": 1, "url": "u", "headRefName": "open-branch", "title": "t", "state": "OPEN"},
+            {"number": 2, "url": "u", "headRefName": "merged-branch", "title": "t", "state": "MERGED"},
+            {"number": 3, "url": "u", "headRefName": "closed-branch", "title": "t", "state": "CLOSED"}
+        ]"#;
+        let data = parse_pr_data(json);
+        assert_eq!(data.open.len(), 1);
+        assert!(data.open.contains_key("open-branch"));
+        assert!(data.merged_branches.contains("merged-branch"));
+        assert!(
+            !data.merged_branches.contains("closed-branch"),
+            "closed-without-merge is not a merged branch"
+        );
+        assert!(!data.open.contains_key("merged-branch"));
     }
 
     #[test]
@@ -572,6 +659,7 @@ mod tests {
             ci,
             review: ReviewState::None,
             outside_activity: false,
+            head_oid: None,
         }
     }
 
