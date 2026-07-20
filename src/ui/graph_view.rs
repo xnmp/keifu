@@ -240,15 +240,40 @@ fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<Rende
             })
             .collect();
     }
+    // The whole (folded) range: identical to the pre-windowing behavior.
+    fold_rows_windowed(base.into_iter(), 0, usize::MAX)
+}
 
-    let mut rows: Vec<RenderRow> = Vec::new();
+/// Fold connectors into their following commit row, but materialize only the
+/// folded rows whose index falls in `[win_start, win_end)`. The walk still
+/// advances the folded index across every visible node (folding is sequential —
+/// a windowed commit needs the connectors that precede it), but it allocates a
+/// `RenderRow` (and its per-connector underlay) ONLY for windowed rows and stops
+/// once the window is passed. On a scrolled multi-thousand-commit graph this is
+/// O(window) allocations per redraw instead of O(total commits) — see #73.
+///
+/// Rows are dense in folded-index space, so the returned `Vec`'s element `k` is
+/// folded row `win_start + k`. Passing `(0, usize::MAX)` yields every row, in the
+/// exact order and content the old full fold produced.
+fn fold_rows_windowed<'a>(
+    base: impl Iterator<Item = (usize, &'a GraphNode)>,
+    win_start: usize,
+    win_end: usize,
+) -> Vec<RenderRow<'a>> {
+    let mut rows: Vec<RenderRow<'a>> = Vec::new();
     let mut pending: Vec<(usize, &GraphNode)> = Vec::new();
+    let mut folded = 0usize;
     for (full_idx, node) in base {
+        // Everything from here on has a folded index >= win_end.
+        if folded >= win_end {
+            return rows;
+        }
         if node.is_connector() {
             pending.push((full_idx, node));
-        } else {
+            continue;
+        }
+        if folded >= win_start {
             let (underlay, underlay_oids) = merge_connector_cells(&pending);
-            pending.clear();
             rows.push(RenderRow {
                 full_idx,
                 node,
@@ -256,15 +281,23 @@ fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<Rende
                 underlay_oids,
             });
         }
+        pending.clear();
+        folded += 1;
     }
     // Trailing connectors with no following commit: render standalone.
     for (full_idx, node) in pending {
-        rows.push(RenderRow {
-            full_idx,
-            node,
-            underlay: Vec::new(),
-            underlay_oids: Vec::new(),
-        });
+        if folded >= win_end {
+            break;
+        }
+        if folded >= win_start {
+            rows.push(RenderRow {
+                full_idx,
+                node,
+                underlay: Vec::new(),
+                underlay_oids: Vec::new(),
+            });
+        }
+        folded += 1;
     }
     rows
 }
@@ -417,58 +450,99 @@ pub fn dim_pixel_specs_window(
         .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, l))
         .unwrap_or_default();
     // Commit → its lane color, for recoloring lit strokes by the commit the
-    // lit-edge relation picked (see apply_trace_dim).
-    let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = app
-        .graph_layout
-        .nodes
-        .iter()
-        .filter_map(|n| {
-            n.commit.as_ref().map(|c| {
-                let rgb =
-                    crate::ui::graph_pixels::color_to_rgb(theme.lane_color(n.color_index));
-                (c.oid, rgb)
+    // lit-edge relation picked (see apply_trace_dim). Only lineage commits are
+    // ever looked up (via `lit`), so restrict the map to them: on a big graph a
+    // full-node map is a needless per-redraw allocation (#73). Empty when
+    // tracing is off (base-update-only dim never recolors).
+    let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = match lineage {
+        Some(lineage) => app
+            .graph_layout
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                n.commit
+                    .as_ref()
+                    .filter(|c| lineage.contains(&c.oid))
+                    .map(|c| {
+                        let rgb = crate::ui::graph_pixels::color_to_rgb(
+                            theme.lane_color(n.color_index),
+                        );
+                        (c.oid, rgb)
+                    })
             })
-        })
-        .collect();
-    // `visible_rows` yields the same folded rows, in the same order, that `base`
-    // was built from (both keyed by the graph generation via the cache), so
-    // `rows[i]` aligns with `base[i]`.
-    let rows = visible_rows(app, true);
-    let row_oids: Vec<RowOids> = rows
-        .iter()
-        .map(|r| RowOids {
+            .collect(),
+        None => std::collections::HashMap::new(),
+    };
+    // Fold only the rows the window can draw: `fold_rows_windowed` allocates a
+    // RenderRow (and per-connector underlay) for windowed rows alone, instead of
+    // `visible_rows`' O(total-commits) full fold every redraw (#73). Rows are
+    // dense in folded-index space, so `win_rows[k]` is folded row `win_start + k`
+    // — the same index space `base`/the overlay use.
+    let win_rows = if app.commit_filter.is_empty() {
+        fold_rows_windowed(
+            app.graph_layout.nodes.iter().enumerate(),
+            win_start,
+            win_end,
+        )
+    } else {
+        fold_rows_windowed(
+            app.visible_commit_indices
+                .iter()
+                .map(|&i| (i, &app.graph_layout.nodes[i])),
+            win_start,
+            win_end,
+        )
+    };
+    // Absolute-indexed sparse inputs the core expects: only windowed positions
+    // are filled; the rest are cheap defaults the core never reads (it touches
+    // `[win_start, win_end)` only). Two single allocations, no per-row work.
+    let mut row_oids: Vec<RowOids> = vec![RowOids::EMPTY; base.len()];
+    // Per-row base-update flag, via the same `is_base_update_row` predicate the
+    // unicode renderer uses, so pixel and unicode connectors dim on identical
+    // rows. Frame/scroll-varying, so it lives here, never in the cached base.
+    let mut force_dim: Vec<bool> = vec![false; base.len()];
+    for (k, r) in win_rows.iter().enumerate() {
+        let abs = win_start + k;
+        if abs >= base.len() {
+            break;
+        }
+        row_oids[abs] = RowOids {
             cells: &r.node.cell_oids,
             underlay: &r.underlay_oids,
-        })
-        .collect();
-    // Per-row base-update flag, computed via the same `is_base_update_row`
-    // predicate the unicode renderer uses — so the pixel connector and the
-    // unicode connector dim on exactly the same rows. This lives in the
-    // per-frame windowed pass (never in the cached base specs), keeping the
-    // geometry cache free of this scroll/frame-varying data.
-    let force_dim: Vec<bool> = rows
-        .iter()
-        .map(|r| {
-            is_base_update_row(
-                r.node,
-                app.metadata_columns.mute_base_merges,
-                app.merged.base_update.value(),
-            )
-        })
-        .collect();
+        };
+        force_dim[abs] = is_base_update_row(
+            r.node,
+            app.metadata_columns.mute_base_merges,
+            app.merged.base_update.value(),
+        );
+    }
     dim_specs_window_core(base, &row_oids, &force_dim, &lit, &lane_rgb, win_start, win_end)
 }
 
 /// Per-row edge identities for dimming: parallel to a row's pixel `cells` and
 /// `underlay`.
+#[derive(Clone, Copy)]
 struct RowOids<'a> {
     cells: &'a [crate::git::graph::CellOids],
     underlay: &'a [crate::git::graph::CellOids],
 }
 
+impl RowOids<'_> {
+    /// A placeholder for out-of-window rows the dim core never reads.
+    const EMPTY: RowOids<'static> = RowOids {
+        cells: &[],
+        underlay: &[],
+    };
+}
+
 /// Pure core of [`dim_pixel_specs_window`]: clone and dim only the base specs in
 /// `[win_start, win_end)`, leaving empty placeholders elsewhere. Independent of
 /// `App`, so the windowing/placeholder contract is unit-testable directly.
+///
+/// The full-length result keeps absolute row indexing valid for the overlay, but
+/// the (per-cell hashmap) dim work runs only for the window: out-of-window rows
+/// are bulk-filled with empty placeholders (`Default`, no heap), never
+/// per-element-branched over the whole graph (#73).
 ///
 /// Invariant: for any row inside the window the result is byte-identical to
 /// dimming that row over the full range — dimming is per-row (`apply_trace_dim`
@@ -483,32 +557,28 @@ fn dim_specs_window_core(
     win_start: usize,
     win_end: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
-    (0..base.len())
-        .map(|i| {
-            if i < win_start || i >= win_end {
-                return crate::ui::graph_pixels::RowSpec {
-                    cells: Vec::new(),
-                    underlay: Vec::new(),
-                };
-            }
-            let mut spec = base[i].clone();
-            if force_dim.get(i).copied().unwrap_or(false) {
-                // Base-update back-merge (#55): force-dim the entire connector,
-                // mirroring the unicode `force_dim` branch. This wins over trace
-                // dimming (the unicode path OR-s them), so every cell fades
-                // regardless of lineage and no recolor is applied.
-                force_dim_all_cells(&mut spec.cells);
-                force_dim_all_cells(&mut spec.underlay);
-            } else if let Some(o) = row_oids.get(i) {
-                // `spec.cells`/`spec.underlay` are (truncated) 1:1 with the
-                // node's cells/underlay, so their OIDs align by index; dimming
-                // only reads the cells that survived truncation.
-                apply_trace_dim(&mut spec.cells, o.cells, lit, lane_rgb);
-                apply_trace_dim(&mut spec.underlay, o.underlay, lit, lane_rgb);
-            }
-            spec
-        })
-        .collect()
+    let mut out: Vec<crate::ui::graph_pixels::RowSpec> =
+        vec![crate::ui::graph_pixels::RowSpec::default(); base.len()];
+    let end = win_end.min(base.len());
+    for i in win_start..end {
+        let mut spec = base[i].clone();
+        if force_dim.get(i).copied().unwrap_or(false) {
+            // Base-update back-merge (#55): force-dim the entire connector,
+            // mirroring the unicode `force_dim` branch. This wins over trace
+            // dimming (the unicode path OR-s them), so every cell fades
+            // regardless of lineage and no recolor is applied.
+            force_dim_all_cells(&mut spec.cells);
+            force_dim_all_cells(&mut spec.underlay);
+        } else if let Some(o) = row_oids.get(i) {
+            // `spec.cells`/`spec.underlay` are (truncated) 1:1 with the node's
+            // cells/underlay, so their OIDs align by index; dimming only reads
+            // the cells that survived truncation.
+            apply_trace_dim(&mut spec.cells, o.cells, lit, lane_rgb);
+            apply_trace_dim(&mut spec.underlay, o.underlay, lit, lane_rgb);
+        }
+        out[i] = spec;
+    }
+    out
 }
 
 /// Force every pixel cell in a row to its dimmed (low-alpha) variant, both
@@ -1020,18 +1090,22 @@ fn optimize_branch_display(
         let shown = SHOWN_LABELS.min(result.len());
         let extra_count = result.len() - shown;
 
-        // Helper: strip "[...]", a leading icon prefix, and any suffix to
-        // recover the bare branch name.
-        let clean = |label: &str| -> String {
+        // Helper: split a formatted label into its leading icon prefix (cloud
+        // for a remote-only chip, ↔ for a synced local, or empty) and the bare
+        // branch name. The name is recovered for re-abbreviation; the icon is
+        // returned separately so the collapse below can re-attach it — a
+        // multi-branch row must keep its remote/synced markers, not drop them.
+        let split_label = |label: &str| -> (String, String) {
             let s = label.trim_start_matches('[');
-            // Drop a leading remote-only/synced icon (+ its trailing space) so a
-            // stripped remote-only chip resolves to its name, not the glyph.
-            let s = s
-                .strip_prefix(REMOTE_ONLY_ICON)
-                .or_else(|| s.strip_prefix(SYNCED_ICON))
-                .map(str::trim_start)
-                .unwrap_or(s);
-            s.split([']', ' ']).next().unwrap_or(label).to_string()
+            let (icon, rest) = if let Some(r) = s.strip_prefix(REMOTE_ONLY_ICON) {
+                (format!("{} ", REMOTE_ONLY_ICON), r.trim_start())
+            } else if let Some(r) = s.strip_prefix(SYNCED_ICON) {
+                (format!("{} ", SYNCED_ICON), r.trim_start())
+            } else {
+                (String::new(), s)
+            };
+            let bare = rest.split([']', ' ']).next().unwrap_or(label).to_string();
+            (icon, bare)
         };
 
         // Budget the available width across the shown labels
@@ -1044,10 +1118,20 @@ fn optimize_branch_display(
         // as the cursor moves, which is the bug this fixes.
         let mut combined = String::new();
         for (pos, (label, _)) in result.iter().take(shown).enumerate() {
-            let clean_name = clean(label);
+            let (icon, clean_name) = split_label(label);
             // Only the last shown label carries the "+N" suffix
             let extra = if pos == shown - 1 { extra_count } else { 0 };
-            combined.push_str(&abbreviate_branch_label(&clean_name, per_label, extra));
+            // Reserve budget for the icon so the abbreviated name plus its
+            // re-attached marker still fits the per-label allowance.
+            let budget = per_label.saturating_sub(display_width(&icon));
+            let abbrev = abbreviate_branch_label(&clean_name, budget, extra);
+            // Re-attach the icon marker inside the brackets (mirrors make_label).
+            let abbrev = if icon.is_empty() {
+                abbrev
+            } else {
+                abbrev.replacen('[', &format!("[{}", icon), 1)
+            };
+            combined.push_str(&abbrev);
         }
 
         // Style follows the selected branch when it's among these labels
@@ -2001,12 +2085,21 @@ mod tests {
 
     #[test]
     fn two_unrelated_refs_do_not_collapse() {
+        // A local `main` and an unrelated remote `origin/dev` (no local twin):
+        // they must NOT merge into a single ↔ synced label, but the remote-only
+        // ref still carries its cloud marker (issue #74 — the cloud must not be
+        // dropped just because another chip shares the row).
         let out = labels(&["main", "origin/dev"], &["origin"]);
         assert!(
-            !out.iter()
-                .any(|l| l.contains(SYNCED_ICON) || l.contains(REMOTE_ONLY_ICON)),
+            !out.iter().any(|l| l.contains(SYNCED_ICON)),
             "unrelated local+remote must not be treated as synced: {out:?}"
         );
+        let joined = out.join("");
+        assert!(
+            joined.contains(REMOTE_ONLY_ICON),
+            "remote-only ref keeps its cloud: {out:?}"
+        );
+        assert!(joined.contains("main") && joined.contains("dev"), "{out:?}");
     }
 
     #[test]
@@ -2619,6 +2712,88 @@ mod tests {
         let label = &out[0].0;
         assert!(label.contains("lonely"), "stripped name present: {label:?}");
         assert!(!label.contains("origin/"), "{label:?}");
+    }
+
+    // ── issue #74: multi-branch rows keep their cloud/synced markers ──
+    //
+    // Regression: the collapse path (result.len() > 1) rebuilt each chip from
+    // the cleaned bare name and dropped the icon prefix, so a row with two
+    // remote refs — or a synced pair alongside another branch — rendered as
+    // bare local-looking labels (`[mac][main]`). Assert the markers survive.
+
+    #[test]
+    fn two_remote_refs_on_one_commit_both_keep_cloud_icon() {
+        // The #74 repro: origin/mac + origin/main sit together on an older
+        // commit (no local ref there). Single remote → prefix dropped, but each
+        // chip must carry the cloud so it still reads as remote-only.
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["origin/mac".to_string(), "origin/main".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(label.contains("mac") && label.contains("main"), "{label:?}");
+        assert!(!label.contains("origin/"), "prefix dropped: {label:?}");
+        // Two cloud glyphs — one per remote-only chip.
+        assert_eq!(
+            label.matches(REMOTE_ONLY_ICON).count(),
+            2,
+            "cloud on both remote chips: {label:?}"
+        );
+        assert!(!label.contains(SYNCED_ICON), "not synced: {label:?}");
+    }
+
+    #[test]
+    fn synced_pair_in_multi_branch_row_keeps_synced_icon() {
+        // A synced local+remote pair (main / origin/main) alongside an
+        // unrelated local branch: the pair collapses to one ↔ chip and the ↔
+        // marker must survive the multi-branch collapse.
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &[
+                "main".to_string(),
+                "origin/main".to_string(),
+                "dev".to_string(),
+            ],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(label.contains(SYNCED_ICON), "synced marker kept: {label:?}");
+        assert!(label.contains("main") && label.contains("dev"), "{label:?}");
+        assert!(!label.contains("origin/"), "{label:?}");
+    }
+
+    #[test]
+    fn local_only_multi_branch_row_never_gets_a_cloud() {
+        // Two purely local branches with no remote counterparts: neither chip
+        // may acquire a cloud (or synced) marker.
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["feature".to_string(), "hotfix".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(
+            !label.contains(REMOTE_ONLY_ICON),
+            "no cloud on local chips: {label:?}"
+        );
+        assert!(!label.contains(SYNCED_ICON), "no synced marker: {label:?}");
+        assert!(label.contains("feature") && label.contains("hotfix"), "{label:?}");
     }
 
     // ── badge order is stable regardless of selection (issue #50) ────
@@ -3253,6 +3428,58 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1].full_idx, 1);
         assert!(rows[1].underlay.is_empty());
+    }
+
+    #[test]
+    fn windowed_fold_matches_the_full_fold_sliced() {
+        // A mix of commits and connectors; every window must produce exactly the
+        // rows the full fold produces at those folded indices (#73 windowing).
+        let a = commit_row(vec![CellType::Commit(0)]);
+        let c1 = connector_node(vec![CellType::TeeRight(0)]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let c2 = connector_node(vec![CellType::MergeLeft(1)]);
+        let d = commit_row(vec![CellType::Commit(0)]);
+        let e = commit_row(vec![CellType::Commit(0)]);
+        let c3 = connector_node(vec![CellType::TeeRight(0)]); // trailing
+        let nodes = [&a, &c1, &b, &c2, &d, &e, &c3];
+        let base: Vec<(usize, &GraphNode)> =
+            nodes.iter().enumerate().map(|(i, n)| (i, *n)).collect();
+
+        let full = fold_rows(base.clone(), true);
+        // Folded rows: a(0), b(2), d(4), e(5), then trailing c3 standalone.
+        assert_eq!(full.len(), 5);
+
+        let same = |r: &RenderRow, s: &RenderRow| {
+            r.full_idx == s.full_idx && r.underlay == s.underlay
+        };
+        for win_start in 0..=full.len() {
+            for win_end in win_start..=full.len() {
+                let win = fold_rows_windowed(base.clone().into_iter(), win_start, win_end);
+                let expected = &full[win_start..win_end];
+                assert_eq!(
+                    win.len(),
+                    expected.len(),
+                    "window [{win_start},{win_end}) row count"
+                );
+                for (w, e) in win.iter().zip(expected) {
+                    assert!(
+                        same(w, e),
+                        "window [{win_start},{win_end}) row full_idx={} != {}",
+                        w.full_idx,
+                        e.full_idx
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn windowed_fold_past_the_end_yields_no_rows() {
+        let a = commit_row(vec![CellType::Commit(0)]);
+        let b = commit_row(vec![CellType::Commit(0)]);
+        let base = vec![(0, &a), (1, &b)];
+        let win = fold_rows_windowed(base.into_iter(), 5, 9);
+        assert!(win.is_empty(), "a window entirely past the graph is empty");
     }
 
     #[test]
