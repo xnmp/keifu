@@ -361,7 +361,7 @@ impl App {
     /// pull.
     pub(crate) fn rerun_pull_with_mode(&mut self, mode: PullMode) {
         if self.network.is_busy() {
-            self.toast(crate::toast::ToastKind::Info, "busy: pull in progress");
+            self.toast(crate::toast::ToastKind::Info, BUSY_PULL_IN_PROGRESS);
             return;
         }
         let Some((remote, branch)) = self.last_pull.clone() else {

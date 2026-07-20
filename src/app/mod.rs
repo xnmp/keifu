@@ -785,6 +785,10 @@ pub const COMMIT_CHUNK: usize = 500;
 /// rows of the last loaded commit.
 pub const AUTOLOAD_THRESHOLD: usize = 50;
 
+/// Guard message shown when an index-mutating action or pull re-run is
+/// blocked by a pull already in flight (both touch `.git/index.lock`).
+pub const BUSY_PULL_IN_PROGRESS: &str = "busy: pull in progress";
+
 /// Application state
 pub struct App {
     pub mode: AppMode,
