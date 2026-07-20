@@ -922,6 +922,13 @@ pub struct App {
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
     pub pr_fetch: crate::pr::PrFetch,
 
+    // Squash-merge detection via GitHub: head-branch names of *merged* PRs,
+    // refreshed in the background via `gh pr list --state merged`. The primary
+    // signal for catching squash-merged branches whose local ref survives (the
+    // remote copy having been deleted on merge). Empty when gh is unavailable.
+    pub merged_pr_branches: std::collections::HashSet<String>,
+    pub merged_branch_fetch: crate::merged_branches::MergedBranchFetch,
+
     // The last pull's (remote, branch) so a divergence prompt can rerun it with
     // an explicit merge/rebase strategy.
     pub last_pull: Option<(Option<String>, Option<String>)>,
@@ -992,6 +999,18 @@ pub struct App {
     /// branch) are hidden from the graph — their labels and their exclusive
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_remote_branches: bool,
+
+    /// Local branches classified as already merged into the trunk (merge commit,
+    /// fast-forward, or squash-merged via a GitHub PR). Delivered by the
+    /// background classifier; drives the dimmed rendering and the hide-merged
+    /// toggle. Not persisted — it's derived from the repo + PR state.
+    pub merged_branches: std::collections::HashSet<String>,
+    /// Background classifier that computes `merged_branches` off the UI thread, so
+    /// a refresh never does per-branch git diffing inline.
+    pub merged_classify: crate::merged_branches::MergedClassifier,
+    /// When true, merged branches are removed from the graph entirely rather than
+    /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
+    pub hide_merged_branches: bool,
 
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
@@ -1356,6 +1375,43 @@ impl App {
         Ok(())
     }
 
+    /// Toggle whether merged branches are hidden from the graph (persisted).
+    /// Rebuilds the graph so a squash-merged branch's now-dangling commits appear
+    /// or disappear, not just its label. When shown, merged branches stay dimmed.
+    pub(crate) fn toggle_merged_branches(&mut self) -> Result<()> {
+        self.hide_merged_branches = !self.hide_merged_branches;
+        self.save_ui_state();
+        self.refresh(true)?;
+        let state = if self.hide_merged_branches {
+            "hidden"
+        } else {
+            "dimmed"
+        };
+        self.set_message(format!("Merged branches {state}"));
+        Ok(())
+    }
+
+    /// Hand the current branch/base/PR state to the background classifier, which
+    /// recomputes `merged_branches` off the UI thread (ancestry + bounded patch-id
+    /// scans per branch). Idempotent when inputs are unchanged — the classifier's
+    /// signature guard skips redundant work — so it's safe to call every refresh.
+    /// The result is applied later by [`Self::update_merged_classification`].
+    pub(crate) fn kick_merged_classification(&mut self) {
+        let Some(base) = crate::git::merged::base_branch(&self.branches) else {
+            // No base branch to measure against → nothing can be merged.
+            self.merged_branches.clear();
+            return;
+        };
+        let input = crate::merged_branches::ClassifyInput {
+            repo_path: self.repo_path.clone(),
+            branches: self.branches.clone(),
+            base_name: base.name.clone(),
+            base_tip: base.tip_oid,
+            gh_merged: self.merged_pr_branches.clone(),
+        };
+        self.merged_classify.maybe_start(input);
+    }
+
     /// Toggle soft line-wrapping in the file-diff viewer (persisted). The next
     /// render re-lays-out the diff via `ensure_diff_layout`, so the toggle only
     /// flips the flag and reports the new state.
@@ -1425,6 +1481,7 @@ impl App {
             trace_enabled: self.trace_enabled,
             hide_remote_branches: self.hide_remote_branches,
             diff_word_wrap: self.diff_word_wrap,
+            hide_merged_branches: self.hide_merged_branches,
             metadata_columns: self.metadata_columns,
         }
         .save();
@@ -1465,6 +1522,7 @@ impl App {
         SettingsModel {
             trace_enabled: self.trace_enabled,
             hide_remote_branches: self.hide_remote_branches,
+            hide_merged_branches: self.hide_merged_branches,
             mute_merges: self.metadata_columns.mute_merges,
             avatars: self.metadata_columns.avatars,
             col_author: self.metadata_columns.author,
@@ -1490,6 +1548,7 @@ impl App {
     pub(crate) fn apply_settings_model(&mut self, m: &crate::settings::SettingsModel) {
         self.trace_enabled = m.trace_enabled;
         self.hide_remote_branches = m.hide_remote_branches;
+        self.hide_merged_branches = m.hide_merged_branches;
         self.metadata_columns.mute_merges = m.mute_merges;
         self.metadata_columns.avatars = m.avatars;
         self.metadata_columns.author = m.col_author;
@@ -1523,13 +1582,17 @@ impl App {
     }
 
     /// Apply an edited settings model, persist it, and rebuild the graph if the
-    /// change was one a bare field write can't realize on its own (currently
-    /// only `hide_remote_branches`, which changes which commits are in the graph).
+    /// change was one a bare field write can't realize on its own — the branch
+    /// visibility toggles (`hide_remote_branches` / `hide_merged_branches`), which
+    /// change which commits are in the graph.
     fn commit_settings(&mut self, model: &crate::settings::SettingsModel) -> Result<()> {
-        let old_hide = self.hide_remote_branches;
+        let old_hide_remote = self.hide_remote_branches;
+        let old_hide_merged = self.hide_merged_branches;
         self.apply_settings_model(model);
         self.persist_settings();
-        if self.hide_remote_branches != old_hide {
+        if self.hide_remote_branches != old_hide_remote
+            || self.hide_merged_branches != old_hide_merged
+        {
             self.refresh(true)?;
         }
         Ok(())

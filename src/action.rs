@@ -40,6 +40,8 @@ pub enum Action {
     OpenBranchFilter,
     /// Show/hide all remote-only branches in the graph.
     ToggleRemoteBranches,
+    /// Show/hide branches already merged into the trunk (merge/squash) in the graph.
+    ToggleMergedBranches,
     MenuSelect,
     SelectAll,
     SelectNone,

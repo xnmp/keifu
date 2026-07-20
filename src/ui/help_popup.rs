@@ -68,6 +68,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
             "Branch filter (type to filter by name, @ by author)",
         ),
         Row("Shift+O", "Show/hide remote-only branches"),
+        Row("Shift+H", "Hide/dim branches merged into the trunk (incl. squash)"),
         Row("Ctrl+f", "Filter commits (message/author/hash)"),
         Row("m", "Mark / compare two commits (Esc clears)"),
         Row("o", "Open PR in browser (badge color = CI: green/yellow/red)"),
@@ -269,8 +270,8 @@ mod tests {
         // rendered as "Shift+<Key>" here, not a bare capital letter, and no
         // abbreviations like "S-Tab" / "C-k" should remain.
         let shift_bound_keys = [
-            "Shift+G", "Shift+P", "Shift+B", "Shift+O", "Shift+M", "Shift+A", "Shift+N",
-            "Shift+I", "Shift+R", "Shift+S", "Shift+U", "Shift+Tab",
+            "Shift+G", "Shift+P", "Shift+B", "Shift+O", "Shift+H", "Shift+M", "Shift+A",
+            "Shift+N", "Shift+I", "Shift+R", "Shift+S", "Shift+U", "Shift+Tab",
         ];
         let text: String = entries(true)
             .iter()

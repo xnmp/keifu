@@ -10,7 +10,7 @@ use ratatui::{
 use chrono::{DateTime, Local};
 use unicode_width::UnicodeWidthChar;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     app::App,
@@ -512,6 +512,7 @@ impl<'a> GraphViewWidget<'a> {
         // O(#commits)): lets each row answer "is this a PR head / PR merge?" in
         // O(1) without any per-render scan, keeping the work windowed.
         let pr_ctx = PrContext::new(open_prs);
+        let merged_branches = &app.merged_branches;
         let metadata_columns = app.metadata_columns;
         // Selected commit's lit-edge set for tracing (Unicode dim); None =
         // off. In pixel mode the dim lives in the row specs, not the text
@@ -581,6 +582,7 @@ impl<'a> GraphViewWidget<'a> {
                 remotes,
                 open_prs,
                 &pr_ctx,
+                merged_branches,
                 metadata_columns,
                 trace.as_ref(),
             );
@@ -640,6 +642,18 @@ const PR_BADGE_ICON: char = '\u{f407}'; // nf-oct-git_pull_request
 const PR_APPROVED_ICON: char = '\u{f42e}'; // nf-oct-check
 const PR_CHANGES_ICON: char = '\u{f440}'; // nf-oct-diff (±)
 const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
+
+/// Badge appended to a branch already merged into the trunk (merge or squash).
+/// Rendered muted/dimmed; the branch chips themselves are dimmed to match.
+const MERGED_BADGE: &str = "\u{f419} merged"; // nf-oct-git_merge
+
+/// Style for merged-branch decorations: muted and dimmed, so a landed branch
+/// recedes without disappearing (the hide-merged toggle removes it entirely).
+fn merged_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.text_muted)
+        .add_modifier(Modifier::DIM)
+}
 
 /// The first open PR (in branch-label order) whose head branch matches one of
 /// this node's branch labels. Remote refs are matched by their stripped name
@@ -1090,6 +1104,7 @@ fn render_graph_line<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     pr_ctx: &PrContext,
+    merged_branches: &HashSet<String>,
     metadata_columns: MetadataColumns,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
 ) -> (Line<'a>, Vec<ChipHit>) {
@@ -1151,6 +1166,7 @@ fn render_graph_line<'a>(
         remotes,
         open_prs,
         pr_ctx,
+        merged_branches,
         metadata_columns,
     )
 }
@@ -1293,6 +1309,7 @@ fn render_graph_line_tail<'a>(
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
     pr_ctx: &PrContext,
+    merged_branches: &HashSet<String>,
     metadata_columns: MetadataColumns,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
@@ -1380,6 +1397,20 @@ fn render_graph_line_tail<'a>(
     // Chip plus a trailing space.
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
 
+    // Merged badge: shown when one of this node's local branches has already
+    // landed on the trunk (merge commit, fast-forward, or squash). The branch
+    // chips are dimmed to match. Only reachable when the hide-merged toggle is
+    // off — hidden merged branches drop out of the graph entirely.
+    let has_merged_branch = node
+        .branch_names
+        .iter()
+        .any(|n| merged_branches.contains(n));
+    let merged_badge_width = if has_merged_branch {
+        display_width(MERGED_BADGE) + 1
+    } else {
+        0
+    };
+
     // === Right-aligned: date author hash (fixed width) ===
     let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
     let author = truncate_to_width(&commit.author_name, 8);
@@ -1419,18 +1450,29 @@ fn render_graph_line_tail<'a>(
         left_width += display_width(label);
         // Record a clickable region resolving to the underlying branch, so a
         // click on the chip can check that branch out.
-        if let Some(name) = resolve_chip_branch(label, &node.branch_names, remotes) {
+        let branch = resolve_chip_branch(label, &node.branch_names, remotes);
+        let is_merged = branch.as_deref().is_some_and(|n| merged_branches.contains(n));
+        if let Some(name) = branch {
             chips.push(ChipHit {
                 x_start: chip_start as u16,
                 x_end: left_width as u16,
                 target: ChipTarget::Branch(name),
             });
         }
-        spans.push(Span::styled(label.clone(), *style));
+        // A merged branch's chip is dimmed (line color included) so it recedes.
+        let style = if is_merged { merged_style(theme) } else { *style };
+        spans.push(Span::styled(label.clone(), style));
     }
     if !branch_display.is_empty() {
         spans.push(Span::raw(" "));
         left_width += 1;
+    }
+
+    // Render merged badge (after branch labels, before the PR badge)
+    if has_merged_branch {
+        spans.push(Span::styled(MERGED_BADGE, merged_style(theme)));
+        spans.push(Span::raw(" "));
+        left_width += display_width(MERGED_BADGE) + 1;
     }
 
     // Render open-PR badge (after branch labels, before tags)
@@ -1472,6 +1514,7 @@ fn render_graph_line_tail<'a>(
     // Compute max message width (remaining space after branch, stash label, and right side)
     let available_for_message = remaining_for_content
         .saturating_sub(branch_width)
+        .saturating_sub(merged_badge_width)
         .saturating_sub(pr_badge_width)
         .saturating_sub(tag_width)
         .saturating_sub(stash_width)
@@ -2660,6 +2703,7 @@ mod tests {
             &[],
             open_prs,
             &pr_ctx,
+            &HashSet::new(),
             cols,
             None,
         );

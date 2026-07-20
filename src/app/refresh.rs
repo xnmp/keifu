@@ -222,26 +222,36 @@ impl App {
         self.conflict_count = self.repo.conflicted_count();
 
         let stashes = self.repo.get_stashes();
-        self.branches = self.repo.get_branches()?;
+        let branches = self.repo.get_branches()?;
         self.remotes = self.repo.remotes();
+        // Merged-branch classification runs off the UI thread; this refresh uses
+        // the most recently delivered set (`self.merged_branches`) for both the
+        // dimmed rendering and the hide filter. When branch tips have moved the
+        // set may be one generation stale until the worker returns, at which point
+        // `update_merged_classification` triggers another refresh.
+        let merged = self.merged_branches.clone();
         // Excluded branches are dropped from the revwalk, so their exclusive
-        // commits are removed from the graph — not merely their labels. Two
-        // filters compose: the per-branch picker (`hidden_branches`) and the
-        // show/hide-remotes toggle, which hides every remote-only ref (a remote
-        // branch with no matching local one). A branch is visible iff neither
-        // filter excludes it.
+        // commits are removed from the graph — not merely their labels. Three
+        // filters compose: the per-branch picker (`hidden_branches`), the
+        // show/hide-remotes toggle (every remote-only ref), and the hide-merged
+        // toggle (branches already landed on the trunk). A branch is visible iff
+        // no filter excludes it.
         let remote_only = if self.hide_remote_branches {
-            remote_only_branch_names(&self.branches)
+            remote_only_branch_names(&branches)
         } else {
             std::collections::HashSet::new()
         };
-        let visible_branches: Vec<BranchInfo> = self
-            .branches
+        let visible_branches: Vec<BranchInfo> = branches
             .iter()
             .filter(|b| !self.hidden_branches.contains(&b.name))
             .filter(|b| !remote_only.contains(&b.name))
+            .filter(|b| !(self.hide_merged_branches && merged.contains(&b.name)))
             .cloned()
             .collect();
+        self.branches = branches;
+        // Re-run classification against the just-loaded branches (no-op when the
+        // inputs are unchanged, per the classifier's signature guard).
+        self.kick_merged_classification();
         self.commits = self
             .repo
             .get_commits(self.commit_load_limit, &visible_branches, &stashes)?;
