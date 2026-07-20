@@ -256,6 +256,37 @@ pub fn parse_pr_data(json: &str) -> PrData {
     data
 }
 
+/// Extract the PR number from a commit's subject line, for commits that were
+/// merged via a pull request. Recognizes the two GitHub conventions:
+///   - Merge commit:  `Merge pull request #346 from user/branch`
+///   - Squash/rebase: `Some title (#346)` (the trailing `(#N)` GitHub appends)
+///
+/// Returns `None` for ordinary commits. Only the first line matters, so pass the
+/// subject (not the full body). A `#N` that isn't in one of these positions
+/// (e.g. an issue reference mid-message) is deliberately ignored to avoid false
+/// badges.
+pub fn pr_number_from_subject(subject: &str) -> Option<u64> {
+    let line = subject.lines().next().unwrap_or(subject).trim();
+
+    // "Merge pull request #N from …" — take the digits after the marker.
+    if let Some(rest) = line.strip_prefix("Merge pull request #") {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            return digits.parse().ok();
+        }
+    }
+
+    // Trailing "(#N)" (squash/rebase merges). Must be the last token and fully
+    // enclosed, so a mid-subject "(#12)" reference doesn't count.
+    if let Some(inner) = line.strip_suffix(')').and_then(|s| s.rfind("(#").map(|i| &s[i + 2..])) {
+        if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+            return inner.parse().ok();
+        }
+    }
+
+    None
+}
+
 /// Summarize what changed between two open-PR maps, for a refresh toast, or
 /// `None` when nothing worth surfacing changed. Surfaces a newly-appeared PR or
 /// a CI-status change on an existing PR; a no-op refresh (equal maps, or only
@@ -432,6 +463,37 @@ impl PrFetch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_number_from_merge_commit_subject() {
+        assert_eq!(
+            pr_number_from_subject("Merge pull request #346 from octo/feature"),
+            Some(346)
+        );
+        // Full body: only the first line is inspected.
+        assert_eq!(
+            pr_number_from_subject("Merge pull request #7 from a/b\n\nbody text #999"),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn pr_number_from_squash_subject() {
+        assert_eq!(pr_number_from_subject("Add the widget (#123)"), Some(123));
+        assert_eq!(pr_number_from_subject("Fix: handle nulls (#1)"), Some(1));
+    }
+
+    #[test]
+    fn pr_number_ignores_non_pr_subjects() {
+        // Plain commit.
+        assert_eq!(pr_number_from_subject("Refactor the parser"), None);
+        // Mid-subject issue reference is not a merge marker.
+        assert_eq!(pr_number_from_subject("Closes #42 in the loader"), None);
+        // Malformed markers.
+        assert_eq!(pr_number_from_subject("Merge pull request #from x"), None);
+        assert_eq!(pr_number_from_subject("title (#)"), None);
+        assert_eq!(pr_number_from_subject("title (#12x)"), None);
+    }
 
     #[test]
     fn parses_open_prs_keyed_by_head_branch() {

@@ -897,28 +897,25 @@ fn optimize_branch_display(
         }
     }
 
-    // Collapse multiple branches: show up to two labels, then "+N" for the rest
+    // Collapse multiple branches: show up to two labels, then "+N" for the rest.
     if result.len() > 1 {
         // Number of labels to display inline before collapsing the remainder
         const SHOWN_LABELS: usize = 2;
+        let shown = SHOWN_LABELS.min(result.len());
+        let extra_count = result.len() - shown;
 
-        // Find selected index directly from branch_names, clamped to result bounds
+        // Chips render in the stable `branch_names` order (HEAD-first, then
+        // alphabetical) and are NOT reordered by which branch is selected —
+        // otherwise a commit's labels reshuffle (`[mac][origin/mac]` ->
+        // `[origin/mac][mac]`) as the graph selection moves. Selection only
+        // affects the style, and only when the selected chip is among the shown.
         let selected_idx = selected_branch_name
             .and_then(|sel| {
                 branch_names
                     .iter()
                     .position(|n| n == sel || n.ends_with(&format!("/{}", sel)))
             })
-            .unwrap_or(0)
-            .min(result.len().saturating_sub(1));
-
-        // Display order: selected first, then remaining in original order
-        let order: Vec<usize> = std::iter::once(selected_idx)
-            .chain((0..result.len()).filter(|&i| i != selected_idx))
-            .collect();
-
-        let shown = SHOWN_LABELS.min(result.len());
-        let extra_count = result.len() - shown;
+            .filter(|&i| i < shown);
 
         // Helper: strip "[...]", a leading icon prefix, and any suffix to
         // recover the bare branch name.
@@ -938,15 +935,17 @@ fn optimize_branch_display(
         let per_label = MAX_LABEL_WIDTH / shown;
 
         let mut combined = String::new();
-        for (pos, &idx) in order.iter().take(shown).enumerate() {
-            let clean_name = clean(&result[idx].0);
+        for (pos, (label, _)) in result.iter().take(shown).enumerate() {
+            let clean_name = clean(label);
             // Only the last shown label carries the "+N" suffix
             let extra = if pos == shown - 1 { extra_count } else { 0 };
             combined.push_str(&abbreviate_branch_label(&clean_name, per_label, extra));
         }
 
-        // Style follows the selected branch
-        let style = result[selected_idx].1;
+        // Style follows the selected branch when it is among the shown chips,
+        // else the first (stable) chip — so the combined label still reverses to
+        // signal "a ref here is selected" without changing chip order.
+        let style = result[selected_idx.unwrap_or(0)].1;
         return vec![(combined, style)];
     }
 
@@ -1411,7 +1410,16 @@ fn render_graph_line_tail<'a>(
     // Open-PR badge: chip after the branch labels when one of this node's
     // branches has an open PR. Anchored to the PR's head commit so a PR shows on
     // exactly one row. Colored by CI status, with review/comment markers.
-    let pr_badge = pr_badge_pr.map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
+    //
+    // When there's no open PR, a merge/squash commit that came FROM a PR gets a
+    // muted grey `#N` badge (parsed from its subject) — same chip shape, but
+    // clearly historical rather than an actionable open PR.
+    let pr_badge = pr_badge_pr
+        .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)))
+        .or_else(|| {
+            crate::pr::pr_number_from_subject(&commit.message)
+                .map(|n| (format!("{} #{}", PR_BADGE_ICON, n), theme.text_muted))
+        });
     // Chip plus a trailing space.
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
 
@@ -1468,16 +1476,20 @@ fn render_graph_line_tail<'a>(
         left_width += 1;
     }
 
-    // Render open-PR badge (after branch labels, before tags)
+    // Render the PR badge (after branch labels, before tags). Only an OPEN PR
+    // badge is clickable (opens the PR); the grey merged-via-PR badge is
+    // historical, so it gets no chip hit.
     if let Some((badge, color)) = &pr_badge {
         let style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
         let chip_start = left_width;
         left_width += display_width(badge) + 1;
-        chips.push(ChipHit {
-            x_start: chip_start as u16,
-            x_end: (chip_start + display_width(badge)) as u16,
-            target: ChipTarget::PrBadge,
-        });
+        if pr_badge_pr.is_some() {
+            chips.push(ChipHit {
+                x_start: chip_start as u16,
+                x_end: (chip_start + display_width(badge)) as u16,
+                target: ChipTarget::PrBadge,
+            });
+        }
         spans.push(Span::styled(badge.clone(), style));
         spans.push(Span::raw(" "));
     }
@@ -1725,6 +1737,31 @@ mod tests {
             !out.iter()
                 .any(|l| l.contains(SYNCED_ICON) || l.contains(REMOTE_ONLY_ICON)),
             "unrelated local+remote must not be treated as synced: {out:?}"
+        );
+    }
+
+    #[test]
+    fn multi_branch_label_order_is_stable_across_selection() {
+        // Regression (#5): the collapsed label reshuffled selected-first, so a
+        // commit's chips changed order (`[mac][origin/mac]` -> `[origin/mac]...`)
+        // as the graph selection moved. The chip TEXT must be identical no matter
+        // which of the commit's branches is selected; only the style may differ.
+        let names: Vec<String> =
+            ["main", "dev", "feature"].iter().map(|s| s.to_string()).collect();
+        let theme = Theme::dark();
+        let render = |selected: Option<&str>| -> Vec<String> {
+            optimize_branch_display(&names, false, 0, selected, &theme, &[], MergedFilter::default())
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect()
+        };
+        let none = render(None);
+        assert_eq!(render(Some("main")), none, "selecting 'main' must not reorder");
+        assert_eq!(render(Some("dev")), none, "selecting 'dev' must not reorder");
+        assert_eq!(
+            render(Some("feature")),
+            none,
+            "selecting a branch beyond the shown two must not reorder"
         );
     }
 
@@ -2101,6 +2138,57 @@ mod tests {
         assert!(text.contains("#35"), "PR number present: {text:?}");
         assert!(text.contains(PR_APPROVED_ICON), "approved ✓ present: {text:?}");
         assert!(text.contains(PR_COMMENT_ICON), "outside-comment glyph present: {text:?}");
+    }
+
+    #[test]
+    fn pr_merge_commit_gets_grey_badge_end_to_end() {
+        // Issue #7: a commit merged via a PR shows a muted grey #N badge parsed
+        // from its subject, with no open PR present, and it is not clickable.
+        let theme = Theme::dark();
+        let cols = MetadataColumns {
+            author: false, hash: false, date: false, mute_merges: false, avatars: false,
+        };
+        let mut node = node_on(oid_a(), &[]);
+        node.commit.as_mut().unwrap().message =
+            "Merge pull request #346 from octo/feature".to_string();
+
+        let (line, chips) = render_graph_line(
+            &node, 4, false, false, 200, None, &theme, Local::now(), false,
+            &["origin".to_string()], None, cols, None, MergedFilter::default(),
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("#346"), "grey merged badge shows the PR number: {text:?}");
+
+        // The badge span is the muted grey color, not an open-PR/CI color.
+        let badge_fg = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("#346"))
+            .unwrap()
+            .style
+            .fg;
+        assert_eq!(badge_fg, Some(theme.text_muted), "merged badge is muted grey");
+
+        // Not clickable: no PrBadge chip hit for a historical merge.
+        assert!(
+            !chips.iter().any(|c| matches!(c.target, ChipTarget::PrBadge)),
+            "grey merged badge must not register a clickable chip"
+        );
+    }
+
+    #[test]
+    fn plain_commit_gets_no_pr_badge() {
+        let theme = Theme::dark();
+        let cols = MetadataColumns {
+            author: false, hash: false, date: false, mute_merges: false, avatars: false,
+        };
+        let node = node_on(oid_a(), &[]); // message "m", no PR marker
+        let (line, _chips) = render_graph_line(
+            &node, 4, false, false, 200, None, &theme, Local::now(), false,
+            &["origin".to_string()], None, cols, None, MergedFilter::default(),
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!text.contains(PR_BADGE_ICON), "no badge on a plain commit: {text:?}");
     }
 
     /// A branch chip's foreground, extracted from a rendered line by matching
