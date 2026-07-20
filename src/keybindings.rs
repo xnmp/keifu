@@ -190,6 +190,13 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
 
+        // Follow the selected commit's lane to the adjacent commit on the
+        // SAME graph line (skipping interleaved commits from other
+        // branches). Matches any modifier combo that includes CONTROL since
+        // some terminals also report SHIFT on Ctrl+Arrow.
+        (m, KeyCode::Up) if m.contains(KeyModifiers::CONTROL) => Some(Action::SameLaneUp),
+        (m, KeyCode::Down) if m.contains(KeyModifiers::CONTROL) => Some(Action::SameLaneDown),
+
         // Page scroll
         (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
             Some(Action::PageDown)

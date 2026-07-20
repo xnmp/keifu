@@ -72,6 +72,8 @@ impl App {
                 | Action::JumpToHead
                 | Action::NextBranch
                 | Action::PrevBranch
+                | Action::SameLaneUp
+                | Action::SameLaneDown
         ) {
             self.commit_detail_scroll = 0;
         }
@@ -156,6 +158,12 @@ impl App {
             }
             Action::PrevBranch => {
                 self.move_to_prev_branch();
+            }
+            Action::SameLaneUp => {
+                self.jump_same_lane(crate::git::graph::same_lane_descendant_row);
+            }
+            Action::SameLaneDown => {
+                self.jump_same_lane(crate::git::graph::same_lane_ancestor_row);
             }
             Action::ToggleHelp => {
                 self.mode = AppMode::Help;
@@ -530,6 +538,21 @@ impl App {
             },
             ForkTarget::Linear => self.set_message("No divergence — linear history"),
             ForkTarget::NoBase => self.set_message("No merge base found"),
+        }
+    }
+
+    /// Move the selection to the row `lookup` finds relative to the current
+    /// selection — the shared plumbing for Ctrl+Up/Ctrl+Down same-lane
+    /// navigation (see `same_lane_ancestor_row` / `same_lane_descendant_row`
+    /// in `git::graph`). A subtle bound stop: no-op (selection unchanged)
+    /// when the lane ends — no error message, matching `move_selection`'s
+    /// clamp-at-the-edge behavior.
+    fn jump_same_lane(&mut self, lookup: fn(&crate::git::graph::GraphLayout, usize) -> Option<usize>) {
+        let Some(current) = self.graph_nav.selected_index() else {
+            return;
+        };
+        if let Some(target) = lookup(&self.graph_layout, current) {
+            self.select_commit_by_full_idx(target);
         }
     }
 }

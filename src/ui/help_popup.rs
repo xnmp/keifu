@@ -80,6 +80,10 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("< / >", "Shrink / widen the graph column (… = truncated)"),
         Row("t", "Toggle branch tracing (dim off-lineage lanes)"),
         Row("^", "Jump to fork point (merge base with main / HEAD)"),
+        Row(
+            "Ctrl+↑ / Ctrl+↓",
+            "Jump to previous/next commit on the same graph line",
+        ),
         Row("Ctrl+Z", "Undo last op — branch/tag delete, merge, pull, rename"),
         Blank,
         Header("Files Panel"),
