@@ -138,6 +138,7 @@ fn make_base_app(
         wt_status_error_latched: false,
         auto_refresh_error_latched: false,
         watch_refresh_error_latched: false,
+        auto_fetch_error_latched: false,
         toasts: keifu::toast::ToastQueue::new(),
         pr_toasts_armed: false,
         network: NetworkManager::new(),

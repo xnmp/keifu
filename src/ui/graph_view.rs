@@ -714,14 +714,18 @@ const PR_APPROVED_ICON: char = '\u{f42e}'; // nf-oct-check
 const PR_CHANGES_ICON: char = '\u{f440}'; // nf-oct-diff (±)
 const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
 
+/// The bare merge glyph a collapsed merge commit shows in place of its message
+/// (#59), and the icon [`merged_badge`] prefixes its "merged" label with — the
+/// same nf-oct-git_merge icon, so a collapsed merge or a landed branch both
+/// read as "this is a merge" at a glance.
+const MERGE_ICON: &str = "\u{f419}"; // nf-oct-git_merge
+
 /// Badge appended to a branch already merged into the trunk (merge or squash).
 /// Rendered muted/dimmed; the branch chips themselves are dimmed to match.
-const MERGED_BADGE: &str = "\u{f419} merged"; // nf-oct-git_merge
-
-/// The bare merge glyph a collapsed merge commit shows in place of its message
-/// (#59): the same nf-oct-git_merge icon used by [`MERGED_BADGE`], so a
-/// collapsed merge reads as "this is a merge" at a glance.
-const MERGE_ICON: &str = "\u{f419}"; // nf-oct-git_merge
+/// Derived from [`MERGE_ICON`] so the glyph's codepoint exists in one place.
+fn merged_badge() -> String {
+    format!("{MERGE_ICON} merged")
+}
 
 /// Style for merged-branch decorations: muted and dimmed, so a landed branch
 /// recedes without disappearing (the hide-merged toggle removes it entirely).
@@ -1519,11 +1523,12 @@ fn render_graph_line_tail<'a>(
         .branch_names
         .iter()
         .any(|n| merged_branches.contains(n));
-    let merged_badge_width = if has_merged_branch {
-        display_width(MERGED_BADGE) + 1
-    } else {
-        0
-    };
+    // Computed once and reused below (render section) so the badge text is
+    // built at most once per row.
+    let merged_badge_text = has_merged_branch.then(merged_badge);
+    let merged_badge_width = merged_badge_text
+        .as_deref()
+        .map_or(0, |b| display_width(b) + 1);
 
     // === Right-aligned: date author hash (fixed width) ===
     let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
@@ -1583,10 +1588,10 @@ fn render_graph_line_tail<'a>(
     }
 
     // Render merged badge (after branch labels, before the PR badge)
-    if has_merged_branch {
-        spans.push(Span::styled(MERGED_BADGE, merged_style(theme)));
+    if let Some(badge) = &merged_badge_text {
+        left_width += display_width(badge) + 1;
+        spans.push(Span::styled(badge.clone(), merged_style(theme)));
         spans.push(Span::raw(" "));
-        left_width += display_width(MERGED_BADGE) + 1;
     }
 
     // Render open-PR badge (after branch labels, before tags)

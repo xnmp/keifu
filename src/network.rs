@@ -260,4 +260,16 @@ impl NetworkManager {
     pub fn mark_refreshed(&mut self) {
         self.last_refresh_time = Instant::now();
     }
+
+    /// Test-only: complete a fetch synchronously with `result`/`silent`,
+    /// without spawning a background thread, so `poll_fetch` immediately
+    /// yields it. Lets latch/timer behavior in `update_fetch_status` be
+    /// exercised deterministically.
+    #[cfg(test)]
+    pub(crate) fn complete_fetch_for_test(&mut self, result: Result<(), String>, silent: bool) {
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(result);
+        self.fetch_receiver = Some(rx);
+        self.fetch_silent = silent;
+    }
 }

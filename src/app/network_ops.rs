@@ -9,9 +9,14 @@ impl App {
             return false;
         };
         let flight = self.in_flight_op.take();
+        // Re-arm the auto-fetch/refresh timers on every completion, success or
+        // failure. Resetting only on Ok left the timer stale after a failure, so
+        // check_auto_timers saw the interval as already elapsed and re-fired the
+        // auto-fetch on the very next tick — storming toasts while offline.
+        self.network.reset_timers();
         match result {
             Ok(()) => {
-                self.network.reset_timers();
+                self.auto_fetch_error_latched = false;
                 if matches!(self.mode, AppMode::FileDiff { .. }) {
                     self.pending_refresh = true;
                 } else {
@@ -35,14 +40,19 @@ impl App {
                     }
                 }
             }
-            // A silent auto-fetch error was previously swallowed; surface it as a
-            // toast. A user-initiated fetch keeps the full error dialog. An HTTPS
-            // auth failure on a user-initiated fetch opens the credential prompt.
+            // A silent auto-fetch error was previously toasted unconditionally,
+            // storming the status bar on a persistent failure (e.g. offline).
+            // Latch it: report once per failure episode, re-arm on success. A
+            // user-initiated fetch keeps the full error dialog. An HTTPS auth
+            // failure on a user-initiated fetch opens the credential prompt.
             Err(e) => {
                 if self.try_prompt_credentials(&e, flight) {
                     // Prompt opened.
                 } else if silent {
-                    self.toast(ToastKind::Error, format!("Auto-fetch failed: {e}"));
+                    if !self.auto_fetch_error_latched {
+                        self.auto_fetch_error_latched = true;
+                        self.set_message(format!("Auto-fetch failed: {e}"));
+                    }
                 } else {
                     self.show_git_error(e);
                 }
@@ -388,5 +398,57 @@ impl App {
 
     pub(crate) fn reset_timers(&mut self) {
         self.network.reset_timers();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::GitRepository;
+
+    /// A minimal App over a freshly-initialized (unborn HEAD) repo — enough to
+    /// exercise `update_fetch_status` without any commits or remotes.
+    fn test_app() -> (tempfile::TempDir, App) {
+        let tempdir = tempfile::tempdir().unwrap();
+        git2::Repository::init(tempdir.path()).unwrap();
+        let repo = GitRepository::open(tempdir.path()).unwrap();
+        let app = App::from_repo(repo).unwrap();
+        (tempdir, app)
+    }
+
+    /// A persistently-failing silent auto-fetch (e.g. offline) must report
+    /// exactly once per failure episode — not storm the status bar on every
+    /// retry — and a success must clear the latch so the next episode reports
+    /// again.
+    #[test]
+    fn silent_auto_fetch_error_reports_once_until_success_clears_latch() {
+        let (_tempdir, mut app) = test_app();
+
+        // First failure of the episode: latched and reported.
+        app.network.complete_fetch_for_test(Err("offline".to_string()), true);
+        assert!(app.update_fetch_status());
+        assert!(app.auto_fetch_error_latched);
+        assert_eq!(app.message.as_deref(), Some("Auto-fetch failed: offline"));
+
+        // Repeated failures within the same episode must not re-report.
+        for _ in 0..5 {
+            app.message = None;
+            app.network.complete_fetch_for_test(Err("offline".to_string()), true);
+            assert!(app.update_fetch_status());
+            assert!(app.auto_fetch_error_latched);
+            assert_eq!(app.message, None, "latched failure must not re-report");
+        }
+
+        // A success clears the latch.
+        app.network.complete_fetch_for_test(Ok(()), true);
+        assert!(app.update_fetch_status());
+        assert!(!app.auto_fetch_error_latched);
+
+        // The next failure starts a new episode and reports again.
+        app.message = None;
+        app.network.complete_fetch_for_test(Err("offline".to_string()), true);
+        assert!(app.update_fetch_status());
+        assert!(app.auto_fetch_error_latched);
+        assert_eq!(app.message.as_deref(), Some("Auto-fetch failed: offline"));
     }
 }
