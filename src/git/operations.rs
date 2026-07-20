@@ -1212,5 +1212,164 @@ mod tests {
             "origin/feature must be pruned after upstream deletion + fetch"
         );
     }
+
+    /// Regression coverage for GitHub issue #46 ("merge origin/dev" fails with
+    /// "not found" in the TUI while `git merge origin/dev` works in a shell).
+    ///
+    /// The issue's working hypothesis was that the TUI's long-lived
+    /// `git2::Repository` handle caches refs, so a remote-tracking ref updated
+    /// by an external fetch is invisible — supposedly fixed by
+    /// `GitRepository::reopen()` (added for #48, now called at the start of
+    /// every refresh).
+    ///
+    /// This test reproduces the *exact* call the UI makes — `MergeIntoCurrent`
+    /// on a selected branch calls `merge_branch(repo, &branch.name)`, and for a
+    /// remote-tracking branch `branch.name` is the full `origin/<branch>` form
+    /// (see `BranchInfo::list_all` in `git/branch.rs`, and the menu build in
+    /// `app/commit_menu_actions.rs` which offers `MergeIntoCurrent` for *any*
+    /// non-HEAD branch, local or remote, with no filtering).
+    ///
+    /// Finding: the merge fails identically — same "Branch 'origin/dev' not
+    /// found" error — whether the handle is freshly opened, made stale by an
+    /// external fetch, or explicitly reopened. Ref staleness is not the cause.
+    /// The real bug is that `merge_branch` hardcodes
+    /// `repo.find_branch(branch_name, BranchType::Local)`, which can never
+    /// resolve a remote-tracking ref name like `origin/dev` — that lookup only
+    /// searches `refs/heads/*`. `reopen()` cannot fix this because the ref
+    /// being searched for under `BranchType::Local` genuinely doesn't exist
+    /// there, cached or not.
+    #[test]
+    fn merge_into_current_of_remote_branch_fails_not_found_regardless_of_handle_freshness() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["push", "-q", "origin", "master"]);
+        git(&local, &["branch", "dev"]);
+        git(&local, &["push", "-q", "origin", "dev"]);
+
+        // Long-lived handle, exactly like the one `App` keeps across refreshes.
+        let mut repo = crate::git::GitRepository::open(&local).unwrap();
+
+        // 1) Fresh handle, never stale: the merge already fails "not found".
+        // This alone falsifies the pure ref-caching hypothesis for this code
+        // path — there is no staleness yet, and it still fails.
+        let fresh_err = super::merge_branch(repo.repo(), "origin/dev")
+            .expect_err("merge_branch(\"origin/dev\") must fail even on a fresh handle");
+        assert!(
+            fresh_err.to_string().contains("Branch 'origin/dev' not found"),
+            "unexpected error on fresh handle: {fresh_err}"
+        );
+
+        // Advance `dev` on the remote from a second clone, then update the
+        // local remote-tracking ref via an external `git fetch` — bypassing
+        // our long-lived handle entirely, as the original bug report described.
+        let other = tmp.path().join("other");
+        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        git(&other, &["config", "user.email", "t@t.com"]);
+        git(&other, &["config", "user.name", "t"]);
+        git(&other, &["checkout", "-q", "dev"]);
+        std::fs::write(other.join("b.txt"), "b").unwrap();
+        git(&other, &["add", "b.txt"]);
+        git(&other, &["commit", "-qm", "advance dev"]);
+        git(&other, &["push", "-q", "origin", "dev"]);
+        git(&local, &["fetch", "-q", "origin", "dev"]);
+
+        // 2) Now genuinely stale (per the #48 fix's own definition of stale):
+        // still the exact same "not found" error, not a different failure.
+        let stale_err = super::merge_branch(repo.repo(), "origin/dev")
+            .expect_err("merge_branch(\"origin/dev\") must fail on the stale handle too");
+        assert!(
+            stale_err.to_string().contains("Branch 'origin/dev' not found"),
+            "unexpected error on stale handle: {stale_err}"
+        );
+
+        // 3) Reopened, exactly as `refresh_inner` now does before every
+        // refresh: the #48 fix changes nothing here either.
+        repo.reopen().unwrap();
+        let reopened_err = super::merge_branch(repo.repo(), "origin/dev")
+            .expect_err("merge_branch(\"origin/dev\") must fail after reopen() too");
+        assert!(
+            reopened_err.to_string().contains("Branch 'origin/dev' not found"),
+            "unexpected error after reopen(): {reopened_err}"
+        );
+    }
+
+    /// Companion finding to the test above: isolates whether a *targeted*
+    /// `find_branch` lookup (as opposed to the `branches()` enumeration the
+    /// existing `reopen_observes_remote_ref_created_after_open` test in
+    /// `repository.rs` covers) needs `reopen()` to observe a remote-tracking
+    /// ref that an external `git fetch` *updated* on a handle opened before
+    /// the fetch.
+    ///
+    /// Finding: it does not. The stale handle resolves `origin/dev` to the new
+    /// OID immediately after the external fetch, with no `reopen()` needed.
+    /// The staleness `reopen()` fixes is specific to enumerating *newly
+    /// created* refs (per the #48 test); it does not extend to targeted
+    /// lookups of refs that already existed and were merely updated. This is
+    /// further evidence that `merge_branch`'s "not found" failure (above) is
+    /// not a ref-caching symptom.
+    #[test]
+    fn stale_handle_targeted_lookup_sees_externally_fetched_ref_update_without_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["push", "-q", "origin", "master"]);
+        git(&local, &["branch", "dev"]);
+        git(&local, &["push", "-q", "origin", "dev"]);
+
+        let repo = crate::git::GitRepository::open(&local).unwrap();
+        let stale_oid = repo
+            .repo()
+            .find_branch("origin/dev", BranchType::Remote)
+            .unwrap()
+            .get()
+            .target()
+            .unwrap();
+
+        let other = tmp.path().join("other");
+        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        git(&other, &["config", "user.email", "t@t.com"]);
+        git(&other, &["config", "user.name", "t"]);
+        git(&other, &["checkout", "-q", "dev"]);
+        std::fs::write(other.join("b.txt"), "b").unwrap();
+        git(&other, &["add", "b.txt"]);
+        git(&other, &["commit", "-qm", "advance dev"]);
+        git(&other, &["push", "-q", "origin", "dev"]);
+        git(&local, &["fetch", "-q", "origin", "dev"]);
+
+        let observed = repo
+            .repo()
+            .find_branch("origin/dev", BranchType::Remote)
+            .ok()
+            .and_then(|b| b.get().target());
+
+        assert_ne!(
+            observed,
+            Some(stale_oid),
+            "targeted find_branch on the pre-fetch handle must not silently \
+             return the stale OID"
+        );
+        assert!(
+            observed.is_some() && observed != Some(stale_oid),
+            "targeted find_branch on the pre-fetch handle should already see \
+             the externally-fetched update: got {observed:?}, stale was {stale_oid}"
+        );
+    }
 }
 
