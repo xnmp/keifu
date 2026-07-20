@@ -47,10 +47,10 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Header("Navigation"),
         Row("↑ / ↓", "Move up/down"),
         Row("← / →", "Switch panels"),
-        Row("Tab / S-Tab", "Switch panels (forward/back)"),
+        Row("Tab / Shift+Tab", "Switch panels (forward/back)"),
         Row("Ctrl+d/u", "Page down/up"),
         Row("g / Home", "Go to top"),
-        Row("G / End", "Go to bottom"),
+        Row("Shift+G / End", "Go to bottom"),
         Row("@", "Jump to HEAD"),
         Row("Esc", "Return to graph / stop editing / quit (from graph)"),
         Blank,
@@ -62,15 +62,21 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("d", "Delete branch"),
         Row("f", "Fetch from remote"),
         Row("p", "Pull (fetch + integrate)"),
-        Row("P", "Push current branch (publishes if no upstream)"),
-        Row("B", "Branch filter (type to filter by name, @ by author)"),
-        Row("O", "Show/hide remote-only branches"),
+        Row("Shift+P", "Push current branch (publishes if no upstream)"),
+        Row(
+            "Shift+B",
+            "Branch filter (type to filter by name, @ by author)",
+        ),
+        Row("Shift+O", "Show/hide remote-only branches"),
         Row("Ctrl+f", "Filter commits (message/author/hash)"),
         Row("m", "Mark / compare two commits (Esc clears)"),
         Row("o", "Open PR in browser (badge color = CI: green/yellow/red)"),
         Row("c", "CI check details (see failure logs without a browser)"),
         Row("v", "View PR conversation (comments, reviews, threads)"),
-        Row("M", "Toggle author/hash/date, muted merges & avatars"),
+        Row(
+            "Shift+M",
+            "Toggle author/hash/date, muted merges & avatars",
+        ),
         Row("< / >", "Shrink / widen the graph column (… = truncated)"),
         Row("t", "Toggle branch tracing (dim off-lineage lanes)"),
         Row("^", "Jump to fork point (merge base with main / HEAD)"),
@@ -82,7 +88,8 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
     if is_uncommitted {
         e.extend([
             Row("s", "Stage/unstage file"),
-            Row("S / U", "Stage all / unstage all"),
+            Row("Shift+S", "Stage all"),
+            Row("Shift+U", "Unstage all"),
             Row("i", "Add to .gitignore (folder in folder mode)"),
             Row("v", "Archive to .archive/ (folder in folder mode)"),
             Row("r", "Restore file (discard changes)"),
@@ -93,7 +100,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
             Row("o", "Accept ours (on conflicted file)"),
             Row("t", "Accept theirs (on conflicted file)"),
             Row("c", "Continue merge/rebase/cherry-pick/revert"),
-            Row("A", "Abort the in-progress operation"),
+            Row("Shift+A", "Abort the in-progress operation"),
         ]);
     }
 
@@ -107,7 +114,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("File Diff Viewer"),
         Row("[ / ]", "Previous / next hunk"),
-        Row("n / N", "Next / previous file"),
+        Row("n / Shift+N", "Next / previous file"),
         Row("s", "Stage hunk under cursor"),
         Row("u", "Unstage hunk under cursor"),
         Row("x", "Discard hunk (working tree)"),
@@ -121,7 +128,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Ctrl+S", "Stash changes (staged / all / +untracked)"),
         Blank,
         Header("GitHub Issues"),
-        Row("I", "Open the issue list (from any panel)"),
+        Row("Shift+I", "Open the issue list (from any panel)"),
         Row("Enter", "Open the selected issue's detail"),
         Row("Tab / f", "Cycle status filter (open / closed / all)"),
         Row("t", "Filter by label (checkbox picker)"),
@@ -146,7 +153,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("Other"),
         Row("Ctrl+P / :", "Command palette (commands, branches, commits)"),
-        Row("R", "Refresh"),
+        Row("Shift+R", "Refresh"),
         Row("F5", "Full update (fetch all remotes + PRs + refresh)"),
         Row("?", "Toggle this help"),
         Row("Ctrl+Q", "Quit (from anywhere)"),
@@ -183,7 +190,7 @@ impl<'a> Widget for HelpPopup<'a> {
 
         let entries = entries(self.is_uncommitted);
         // Fixed key column sized to the longest key, guaranteeing a ≥ KEY_GAP
-        // gap so keys and descriptions never collide (e.g. "Tab / S-Tab").
+        // gap so keys and descriptions never collide (e.g. "Tab / Shift+Tab").
         let kw = key_column_width(&entries);
 
         let lines: Vec<Line> = entries
@@ -216,7 +223,7 @@ mod tests {
     fn key_column_leaves_a_gap_after_the_longest_key() {
         let e = entries(true);
         let kw = key_column_width(&e);
-        // Widest key label present in the sheet ("Double-click" / "Drag divider").
+        // Widest key label present in the sheet.
         let widest = e
             .iter()
             .filter_map(|entry| match entry {
@@ -227,7 +234,8 @@ mod tests {
             .unwrap();
         assert_eq!(kw, widest + KEY_GAP);
         // Every key padded to `kw` keeps at least KEY_GAP trailing spaces before
-        // the description — the fix for the "Tab / S-TabSwitch panels" collision.
+        // the description — the fix for the "Tab / Shift+TabSwitch panels"
+        // collision.
         for entry in &e {
             if let HelpEntry::Row(k, _) = entry {
                 let padded = format!("{k:<kw$}");
@@ -248,5 +256,33 @@ mod tests {
             key_column_width(&entries(false)),
             key_column_width(&entries(true))
         );
+    }
+
+    #[test]
+    fn shift_bindings_are_labelled_with_shift_prefix() {
+        // Every key that keybindings.rs binds via KeyModifiers::SHIFT should be
+        // rendered as "Shift+<Key>" here, not a bare capital letter, and no
+        // abbreviations like "S-Tab" / "C-k" should remain.
+        let shift_bound_keys = [
+            "Shift+G", "Shift+P", "Shift+B", "Shift+O", "Shift+M", "Shift+A", "Shift+N",
+            "Shift+I", "Shift+R", "Shift+S", "Shift+U", "Shift+Tab",
+        ];
+        let text: String = entries(true)
+            .iter()
+            .filter_map(|entry| match entry {
+                HelpEntry::Row(k, _) => Some(*k),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        for key in shift_bound_keys {
+            assert!(
+                text.contains(key),
+                "expected help text to contain {key:?}, got: {text}"
+            );
+        }
+        assert!(!text.contains("S-Tab"), "abbreviated modifier remained");
+        assert!(!text.contains("C-k"), "abbreviated modifier remained");
+        assert!(!text.contains("C-j"), "abbreviated modifier remained");
     }
 }
