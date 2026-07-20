@@ -69,11 +69,25 @@ notify = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Test-only: throwaway temp repos for the `test-support` feature (App::test_fixture).
+# Optional so it stays out of production builds; enabled by the `test-support`
+# feature, which the self dev-dependency below turns on for our own test targets.
+tempfile = { version = "3.17", optional = true }
+
+[features]
+# Exposes test-only lib helpers (e.g. App::test_fixture) to the black-box
+# integration tests under tests/, which link the lib built WITHOUT cfg(test)
+# and so cannot see `#[cfg(test)]` items. Never enabled in release builds.
+test-support = ["dep:tempfile"]
+
 [profile.release]
 lto = true
 codegen-units = 1
 panic = "abort"
 
 [dev-dependencies]
-tempfile = "3.17"
+# Self dev-dependency enabling `test-support` for our own test/bench targets,
+# so integration tests can call App::test_fixture without shipping tempfile in
+# release builds. tempfile itself comes in via the enabled feature.
+keifu = { path = ".", features = ["test-support"] }
 filetime = "0.2"

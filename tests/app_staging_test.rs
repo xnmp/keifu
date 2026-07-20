@@ -1,7 +1,6 @@
 //! Integration tests for file staging selection behavior and diff cache
 //! interaction through App. Uses real git repos.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -9,31 +8,19 @@ use std::time::Instant;
 
 use chrono::Local;
 use git2::{Oid, Repository, Signature};
-use tempfile::TempDir;
 
 use keifu::action::Action;
-use keifu::app::{App, AppMode, FocusedPanel, SearchState};
-use keifu::config::Config;
-use keifu::diff_cache::{DiffCache, DiffResult, DiffTarget, DIFF_LOAD_DEBOUNCE};
-use keifu::files_pane_state::{FileSelection, FilesPaneItem, FilesPaneState, section_of};
+use keifu::app::{App, AppMode, FocusedPanel};
+use keifu::diff_cache::{DiffResult, DiffTarget, DIFF_LOAD_DEBOUNCE};
+use keifu::files_pane_state::{FileSelection, FilesPaneItem, section_of};
 use keifu::git::graph::{CellType, GraphLayout, GraphNode};
 use keifu::git::operations::{stage_file, unstage_file};
 use keifu::git::{
     CommitDiffInfo, CommitInfo, FileChangeKind, FileDiffInfo, GitRepository, StageStatus,
     WorkingTreeStatus,
 };
-use keifu::graph_nav::GraphNav;
-use keifu::network::NetworkManager;
-use keifu::text_editor::TextEditor;
 
 // ── Helpers ─────────────────────────────────────────────────────────
-
-fn init_repo() -> (TempDir, GitRepository) {
-    let tempdir = tempfile::tempdir().unwrap();
-    Repository::init(tempdir.path()).unwrap();
-    let repo = GitRepository::open(tempdir.path()).unwrap();
-    (tempdir, repo)
-}
 
 fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> Oid {
     let workdir = repo.workdir().unwrap();
@@ -73,130 +60,29 @@ fn make_commit(oid: Oid) -> CommitInfo {
     }
 }
 
+/// Build an App around a single graph node and diff target.
+///
+/// Starts from `App::test_fixture` (an empty throwaway repo via
+/// `App::from_repo`) and overrides only the fields these tests exercise, so new
+/// App fields fall through from the real defaults instead of needing a hand-
+/// edited struct literal here.
 fn make_base_app(
     node: GraphNode,
     diff_target: DiffTarget,
     working_tree_status: Option<WorkingTreeStatus>,
 ) -> App {
-    let (_tempdir, repo) = init_repo();
-    let commits = node.commit.iter().cloned().collect();
+    let mut app = App::test_fixture();
 
-    App {
-        mode: AppMode::Normal,
-        repo_path: repo.path.clone(),
-        repo,
-        head_name: None,
-        head_detached: false,
-        commits,
-        commit_load_limit: 500,
-        all_commits_loaded: true,
-        branches: Vec::new(),
-        remotes: Vec::new(),
-        graph_layout: GraphLayout {
-            nodes: vec![node],
-            max_lane: 0,
-        },
-        graph_generation: 0,
-        graph_nav: GraphNav::new(),
-        focused_panel: FocusedPanel::Graph,
-        files_pane: FilesPaneState::new(),
-        hidden_branches: HashSet::new(),
-        branch_authors: std::collections::HashMap::new(),
-        branch_authors_key: Vec::new(),
-        commit_editor: TextEditor::new(),
-        editing_commit_message: false,
-        amending_commit: false,
-        commit_detail_scroll: 0,
-        commit_detail_max_scroll: 0,
-        commit_editor_line_offset: 0,
-        commit_detail_visible_rows: 20,
-        commit_filter: String::new(),
-        commit_filter_active: false,
-        visible_commit_indices: Vec::new(),
-        search_state: SearchState::default(),
-        working_tree_status,
-        op_state: keifu::git::OperationState::Clean,
-        conflict_count: 0,
-        diff_cache: {
-            let mut dc = DiffCache::new();
-            dc.selected_diff_target = Some(diff_target);
-            dc.selected_diff_target_changed_at = Instant::now() - DIFF_LOAD_DEBOUNCE;
-            dc
-        },
-        compare_marked: None,
-        compare_range: None,
-        sig_status_cache: std::collections::HashMap::new(),
-        should_quit: false,
-        pending_refresh: false,
-        diff_viewport_height: 40,
-        diff_viewport_width: 80,
-        diff_word_wrap: false,
-        diff_source: None,
-        message: None,
-        message_time: None,
-        message_sticky: false,
-        refresh_latches: keifu::app::RefreshLatches::default(),
-        toasts: keifu::toast::ToastQueue::new(),
-        pr_toasts_armed: false,
-        network: NetworkManager::new(),
-        credentials: std::collections::HashMap::new(),
-        in_flight_op: None,
-        pending_auth: None,
-        open_prs: std::collections::HashMap::new(),
-        pr_fetch: keifu::pr::open_pr_fetch(),
-        last_pull: None,
-        pre_pull_head: None,
-        undo_ledger: keifu::undo::UndoLedger::default(),
-        check_fetch: keifu::checks::CheckFetch::new(),
-        ci_checks: None,
-        thread_fetch: keifu::pr_thread::PrThreadFetch::new(),
-        pr_thread: None,
-        pr_editor: keifu::text_editor::TextEditor::new(),
-        pr_action_runner: keifu::pr_action::PrActionRunner::new(),
-        issue_fetch: keifu::issue::IssueFetch::new(),
-        issue_action_runner: keifu::issue_action::IssueActionRunner::new(),
-        issue_list: None,
-        issue_detail: None,
-        issue_editor: keifu::text_editor::TextEditor::new(),
-        issue_label_picker: None,
-        issue_label_filter: None,
-        pending_external_edit: None,
-        avatar_fetch: keifu::avatar_fetch::AvatarFetch::new(),
-        avatar_enqueued_generation: None,
-        watcher: None,
-        pending_watcher: None,
-        watcher_disconnected: false,
-        repo_dirty: false,
-        last_undoable_op: None,
-        side_panel_layout: false,
-        hide_remote_branches: false,
-        merged: keifu::app::MergedState {
-            branches: std::collections::HashSet::new(),
-            classify: keifu::merged_branch_fetch::MergedClassifier::new(),
-            hide: false,
-            pr_branches: std::collections::HashSet::new(),
-            pr_branch_fetch: keifu::merged_branch_fetch::merged_branch_fetch(),
-            base_update: keifu::signature_guarded::SignatureGuarded::default(),
-        },
-        metadata_columns: keifu::config::MetadataColumns::default(),
-        graph_width_cap: None,
-        debug_keys: false,
-        perf: keifu::perf::PerfStats::default(),
-        mouse_layout: Default::default(),
-        last_click: None,
-        files_view_offset: 0,
-        menu_anchor: None,
-        popup_rect: None,
-        graph_chip_hits: Vec::new(),
-        status_hints: Vec::new(),
-        graph_split_ratio: 65,
-        dragging_divider: false,
-        trace_enabled: true,
-        config: Config::default(),
-        terminal_bg: None,
-        pixel_graph: None,
-        pixel_specs_cache: None,
-    }
+    app.commits = node.commit.iter().cloned().collect();
+    app.graph_layout = GraphLayout {
+        nodes: vec![node],
+        max_lane: 0,
+    };
+    app.working_tree_status = working_tree_status;
+    app.diff_cache.selected_diff_target = Some(diff_target);
+    app.diff_cache.selected_diff_target_changed_at = Instant::now() - DIFF_LOAD_DEBOUNCE;
+
+    app
 }
 
 fn make_diff_app(selected_oid: Oid, in_flight_oid: Option<Oid>) -> App {

@@ -214,6 +214,29 @@ impl App {
         })
     }
 
+    /// Build an `App` on a throwaway, empty temp git repository, for tests.
+    ///
+    /// Starts from [`App::from_repo`] so every field takes its real default and
+    /// new fields fall through automatically — no struct-literal churn. Tests
+    /// then override only what they exercise (`graph_layout`, `commits`,
+    /// `working_tree_status`, `diff_cache`, …).
+    ///
+    /// The backing temp directory is removed as soon as this returns; the open
+    /// in-memory repository handle survives, which is all the diff-cache and
+    /// files-pane unit tests need. Callers that must touch the working tree on
+    /// disk should build their own repo and use [`App::from_repo`] instead.
+    ///
+    /// Gated behind the `test-support` feature (enabled for our own test
+    /// targets) so it is never compiled into release builds.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_fixture() -> Self {
+        let tempdir = tempfile::tempdir().expect("create temp repo dir");
+        git2::Repository::init(tempdir.path()).expect("init temp repo");
+        let repo = GitRepository::open(tempdir.path()).expect("open temp repo");
+        Self::from_repo(repo).expect("build fixture App")
+    }
+
     /// Detect the terminal's background color once, as (r, g, b).
     /// Returns `None` if the terminal doesn't support the query.
     fn detect_terminal_bg() -> Option<(u8, u8, u8)> {

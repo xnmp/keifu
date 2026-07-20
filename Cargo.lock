@@ -903,6 +903,7 @@ dependencies = [
  "fuzzy-matcher",
  "git2",
  "image",
+ "keifu",
  "md5",
  "notify",
  "ratatui",
