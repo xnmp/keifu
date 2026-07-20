@@ -643,11 +643,14 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
         let (run_color, run_dim) = run_style(&cells[l]);
 
         // Commit dots immediately flanking the run anchor it horizontally.
+        let mut has_dot = false;
         if l > 0 && matches!(cells[l - 1].shape, CellShape::Commit { .. }) {
             hubs.push(Endpoint { x: cx(l - 1), y: cy, tan: Tangent::Horizontal, color: run_color, dim: run_dim });
+            has_dot = true;
         }
         if r + 1 < n && matches!(cells[r + 1].shape, CellShape::Commit { .. }) {
             hubs.push(Endpoint { x: cx(r + 1), y: cy, tan: Tangent::Horizontal, color: run_color, dim: run_dim });
+            has_dot = true;
         }
 
         for (c, cell) in cells.iter().enumerate().take(r + 1).skip(l) {
@@ -663,7 +666,21 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
                     spokes.push(Endpoint { x: cx(c), y: 0.0, tan: Tangent::Vertical, color, dim });
                 }
                 CellShape::TeeRight | CellShape::TeeLeft => {
-                    hubs.push(Endpoint { x: cx(c), y: cy, tan: Tangent::Horizontal, color, dim });
+                    // A Tee's trunk continues DOWN to a not-yet-shown parent (the
+                    // `was_existing && !already_shown` case in
+                    // `build_row_cells_with_colors`). When a commit dot flanks the
+                    // run this Tee is that commit's parent-connector: its arm must
+                    // sweep DOWN into the descending trunk (a spoke at the bottom
+                    // edge), mirroring how `Merge*` sweeps up to a parent above.
+                    // Left flat at mid-height it made a commit whose parent stays
+                    // on the trunk render as a dead-horizontal line (the reported
+                    // bug). With no flanking dot the Tee is a fork connector's
+                    // trunk hub, which stays at mid-height so its up-arms fan out.
+                    if has_dot {
+                        spokes.push(Endpoint { x: cx(c), y: ch, tan: Tangent::Vertical, color, dim });
+                    } else {
+                        hubs.push(Endpoint { x: cx(c), y: cy, tan: Tangent::Horizontal, color, dim });
+                    }
                 }
                 _ => {} // Horizontal / HorizontalPipe: run body.
             }
@@ -1762,6 +1779,73 @@ mod tests {
         let colors: std::collections::HashSet<[u8; 3]> = curves.iter().map(|c| c.color).collect();
         assert!(colors.contains(&[2, 2, 2]), "┴ arm keeps its lane color");
         assert!(colors.contains(&[3, 3, 3]), "╯ arm keeps its lane color");
+    }
+
+    /// Regression: a commit whose parent stays on the trunk emits a `Tee` on the
+    /// trunk lane while the commit sits out on its own — `[TeeRight H commit]`.
+    /// The Tee's arm must sweep DOWN into the descending trunk (a spoke at the
+    /// BOTTOM edge), not run flat at mid-height. The flat dot↔Tee run was the
+    /// "trunk merges render as a dead-horizontal line" bug.
+    #[test]
+    fn commit_to_continuing_trunk_tee_turns_down_not_flat() {
+        // Commit on lane 1, its parent continues down the trunk on lane 0 (┤/├).
+        let cells = vec![
+            sh(CellShape::TeeRight),
+            sh(CellShape::Horizontal),
+            commit(false, true, CommitStyle::Normal, [9, 9, 9]),
+        ];
+        let curves = transition_curves(&cells, CW as f32, CH as f32);
+        assert_eq!(curves.len(), 1, "one dot→trunk curve");
+        let ends = [curves[0].p0, curves[0].p3];
+        // The dot end is at mid-height on lane 1.
+        let dot = ends
+            .iter()
+            .find(|p| approx(p.1, CH as f32 / 2.0))
+            .expect("dot endpoint at mid-height");
+        assert!(approx(dot.0, cell_cx(2)), "dot sits on lane-1 center");
+        // The trunk (Tee) end turns DOWN to the bottom edge on lane 0 — NOT flat
+        // at mid-height, which is what made the connector look horizontal.
+        let trunk = ends
+            .iter()
+            .find(|p| approx(p.0, cell_cx(0)))
+            .expect("trunk endpoint on lane 0");
+        assert!(
+            approx(trunk.1, CH as f32),
+            "trunk-side endpoint turns down to the bottom edge, got y={} (flat would be {})",
+            trunk.1,
+            CH as f32 / 2.0
+        );
+    }
+
+    /// A fork connector's `Tee` (no commit dot flanking the run) must still be a
+    /// mid-height hub, so its up-arms fan out from the trunk. Guards the
+    /// `has_dot` distinction added for the flat-trunk fix above.
+    #[test]
+    fn fork_connector_tee_without_a_flanking_dot_stays_a_midheight_hub() {
+        // [├ H ╯] connector row: no commit dot anywhere in the run.
+        let cells = vec![
+            sh(CellShape::TeeRight),
+            sh(CellShape::Horizontal),
+            sh(CellShape::MergeLeft),
+        ];
+        let curves = transition_curves(&cells, CW as f32, CH as f32);
+        assert_eq!(curves.len(), 1, "one trunk→merging-lane arm");
+        // The trunk (Tee) end stays at mid-height; the merge end turns up.
+        let ends = [curves[0].p0, curves[0].p3];
+        let trunk = ends
+            .iter()
+            .find(|p| approx(p.0, cell_cx(0)))
+            .expect("trunk endpoint on lane 0");
+        assert!(
+            approx(trunk.1, CH as f32 / 2.0),
+            "fork-connector trunk hub stays at mid-height, got y={}",
+            trunk.1
+        );
+        let merge = ends
+            .iter()
+            .find(|p| approx(p.0, cell_cx(2)))
+            .expect("merge endpoint on lane 1");
+        assert!(approx(merge.1, 0.0), "merge arm turns up to the top edge");
     }
 
     /// A crossing (`HorizontalPipe`) is treated as run body: the transition curve

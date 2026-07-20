@@ -396,3 +396,19 @@ from their primary (own) edge only; HorizontalPipe keeps two-channel handling;
 dots still light via either edge. Regression test modeled cell-for-cell on the
 real junction. Note: the Unicode renderer still lights via either edge (a
 single glyph can't split colors) — acceptable there.
+
+### [DONE] 2026-07-20 Trunk-merge connectors no longer render dead-flat
+A commit whose parent stays on the trunk (the `was_existing && !already_shown`
+case → a `TeeRight`/`TeeLeft` on the trunk lane) rendered as a completely
+horizontal line: `transition_curves` classified every Tee as a mid-height hub,
+so the run was dot(mid)→Tee(mid) with zero vertical rise. Reported as "merges
+of the trunk into other branches are completely horizontal." Fix: a Tee flanked
+by a commit dot is that commit's parent-connector into a descending trunk, so
+its arm now sweeps DOWN to the bottom edge (a spoke), mirroring how `Merge*`
+sweeps up to a parent above; a Tee with no flanking dot stays a mid-height hub
+(fork-connector trunk, up-arms still fan). Pixel mode only; endpoints still land
+on lane centers (tiling + protocol cache unaffected). keifu's own history had 0
+such rows so it was invisible here — reproduced against a repo with trunk-heavy
+merges. Regression tests: dot↔Tee turns down; fork-connector Tee stays a hub.
+Blast radius: stroke geometry in `transition_curves` only (sole caller
+`draw_cells`); no cell/layout/cache/Unicode-path changes.
