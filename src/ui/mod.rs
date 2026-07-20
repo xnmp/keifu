@@ -295,6 +295,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // protocols (needs &mut app) before the immutable borrow taken by the graph
     // widget. Specs are capped to the width the overlay will draw and cached
     // until the layout, filter, or width changes.
+    // Branch-trace dimming for the visible window, layered onto the cached base
+    // specs. `Some` only while tracing is active with a non-empty lineage; the
+    // owned Vec lives until the overlay pass so both `sync_frame` and
+    // `overlay_pixel_graph` see the same dimmed rows.
+    let mut pixel_frame_dim: Option<Vec<graph_pixels::RowSpec>> = None;
     let pixel_mode = if app.pixel_graph.is_some() {
         let panel_available = graph_area
             .width
@@ -304,43 +309,51 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // so it's part of the cache key alongside the panel width.
         let needed = (app.graph_layout.max_lane + 1) * 2;
         let graph_width = graph_view::effective_graph_width(needed, app.graph_width_cap);
-        // Branch tracing bakes a per-cell dim mask into the specs, so the cache
-        // must vary by the traced selection. `None` when tracing is inactive, so
-        // moving the selection with tracing off doesn't rebuild the specs.
-        let trace_key = app.trace_selection_key();
+        // The base specs are trace- and scroll-independent, so the key omits the
+        // traced selection and offset: moving the selection reuses this cache and
+        // only re-dims the on-screen window below.
         let reuse = app
             .pixel_specs_cache
             .as_ref()
-            .is_some_and(|(gen, filter, pa, gw, tk, _)| {
+            .is_some_and(|(gen, filter, pa, gw, _)| {
                 *gen == app.graph_generation
                     && filter == &app.commit_filter
                     && *pa as usize == panel_available
                     && *gw as usize == graph_width
-                    && *tk == trace_key
             });
         if !reuse {
-            let specs = graph_view::build_pixel_row_specs(app, &theme, graph_width, panel_available);
+            let specs =
+                graph_view::build_pixel_base_specs(app, &theme, graph_width, panel_available);
             app.pixel_specs_cache = Some((
                 app.graph_generation,
                 app.commit_filter.clone(),
                 panel_available as u16,
                 graph_width as u16,
-                trace_key,
                 specs,
             ));
         }
-        // Disjoint field borrows: `specs` from pixel_specs_cache, `pg` from
-        // pixel_graph. Only the on-screen window (± 2 viewport-heights) is
-        // rasterized/transmitted; the whole spec list stays built and cached.
-        let specs = &app.pixel_specs_cache.as_ref().unwrap().5;
         let offset = app.graph_nav.graph_list_state.offset();
         let viewport = graph_area.height.saturating_sub(2) as usize;
-        let (win_start, win_end) = graph_pixels::protocol_window(offset, viewport, specs.len());
-        let windowed = &specs[win_start..win_end];
-        let active = app.pixel_graph.as_mut().is_some_and(|pg| {
-            pg.sync_frame(windowed);
-            pg.is_active()
+        let base_len = app.pixel_specs_cache.as_ref().unwrap().4.len();
+        // Only the on-screen window (± 2 viewport-heights) is rasterized; the
+        // dim overlay is built for exactly this window so it aligns with what
+        // `sync_frame` transmits and `overlay_pixel_graph` draws.
+        let (win_start, win_end) = graph_pixels::protocol_window(offset, viewport, base_len);
+        pixel_frame_dim = app.active_trace_lineage().map(|lineage| {
+            let base = &app.pixel_specs_cache.as_ref().unwrap().4;
+            graph_view::dim_pixel_specs_window(app, &theme, base, &lineage, win_start, win_end)
         });
+        let active = {
+            // Disjoint field borrows: `specs` from pixel_specs_cache (or the
+            // owned dim overlay), `pg` from pixel_graph.
+            let base = &app.pixel_specs_cache.as_ref().unwrap().4;
+            let specs: &[graph_pixels::RowSpec] = pixel_frame_dim.as_deref().unwrap_or(base);
+            let windowed = &specs[win_start..win_end];
+            app.pixel_graph.as_mut().is_some_and(|pg| {
+                pg.sync_frame(windowed);
+                pg.is_active()
+            })
+        };
         if !active {
             // Protocol creation kept failing — drop pixel rendering and fall
             // back to Unicode glyphs for the rest of the session.
@@ -374,7 +387,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         &mut app.graph_nav.graph_list_state,
     );
     if pixel_mode {
-        if let Some((_, _, _, _, _, specs)) = &app.pixel_specs_cache {
+        // Draw the dimmed window overlay when tracing, else the cached base
+        // specs. The on-screen rows the overlay reads are inside the window, so
+        // the dim overlay always has real specs there.
+        let base = app.pixel_specs_cache.as_ref().map(|c| c.4.as_slice());
+        if let Some(specs) = pixel_frame_dim.as_deref().or(base) {
             overlay_pixel_graph(frame, app, graph_area, specs);
         }
         if app.metadata_columns.avatars {

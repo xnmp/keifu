@@ -1047,23 +1047,24 @@ pub struct App {
     // when falling back to Unicode glyphs.
     pub pixel_graph: Option<crate::ui::graph_pixels::PixelGraphState>,
 
-    // Cached pixel-graph row specs, valid while (graph_generation, commit_filter,
-    // panel_available, graph_width, trace_selection_key) are unchanged. Theme is
-    // stable at runtime, so it's not part of the key; the graph_width component
-    // captures the resize cap; the trace key is the traced selection's OID (or
-    // None when tracing is off). Rebuilt lazily by the render pre-pass.
+    // Cached UNDIMMED pixel-graph base row specs, valid while (graph_generation,
+    // commit_filter, panel_available, graph_width) are unchanged. Theme is stable
+    // at runtime, so it's not part of the key; the graph_width component captures
+    // the resize cap. Branch-trace dimming is layered on lazily per frame over
+    // just the on-screen window (see `dim_pixel_specs_window`), so the traced
+    // selection is deliberately NOT part of this key — moving the selection with
+    // tracing on reuses this cache instead of rebuilding every row's geometry.
+    // Rebuilt lazily by the render pre-pass.
     pub pixel_specs_cache: Option<PixelSpecsCache>,
 }
 
-/// Cached pixel row specs plus the key they were built for:
-/// `(graph_generation, commit_filter, panel_available, graph_width,
-/// trace_selection_key, specs)`.
+/// Cached undimmed pixel base row specs plus the key they were built for:
+/// `(graph_generation, commit_filter, panel_available, graph_width, specs)`.
 pub type PixelSpecsCache = (
     u64,
     String,
     u16,
     u16,
-    Option<Oid>,
     Vec<crate::ui::graph_pixels::RowSpec>,
 );
 
@@ -1315,20 +1316,6 @@ impl App {
         let sel = self.graph_nav.graph_list_state.selected()?;
         let lineage = crate::git::graph::lineage_oids(&self.graph_layout, sel);
         (!lineage.is_empty()).then_some(lineage)
-    }
-
-    /// The selected commit's OID when tracing is active, else `None` — the
-    /// pixel-spec cache key component that makes the dim mask cache-correct
-    /// without rebuilding specs as the selection moves with tracing off.
-    pub(crate) fn trace_selection_key(&self) -> Option<Oid> {
-        if !self.trace_active() {
-            return None;
-        }
-        self.graph_nav
-            .graph_list_state
-            .selected()
-            .and_then(|i| self.graph_layout.nodes.get(i))
-            .and_then(|n| n.commit.as_ref().map(|c| c.oid))
     }
 
     /// Toggle branch tracing (persisted). A no-op visually on linear graphs,
