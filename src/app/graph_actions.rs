@@ -372,10 +372,13 @@ impl App {
                 if let Err(e) = open_url(&pr.url) {
                     self.show_error(format!("Could not open PR: {e}"));
                 } else {
-                    self.set_message(format!("Opening PR #{} in browser", pr.number));
+                    self.toast(
+                        crate::toast::ToastKind::Success,
+                        format!("Opening PR #{} in browser", pr.number),
+                    );
                 }
             }
-            None => self.set_message("No open PR for this commit"),
+            None => self.toast(crate::toast::ToastKind::Info, "No open PR for this commit"),
         }
     }
 

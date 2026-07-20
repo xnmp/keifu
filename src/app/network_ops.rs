@@ -55,6 +55,9 @@ impl App {
         let Some(result) = self.network.poll_push() else {
             return false;
         };
+        // The "Pushing…" progress message has served its purpose; clear it so it
+        // can't be resurrected by a later network op.
+        self.clear_progress_message();
         let flight = self.in_flight_op.take();
         match result {
             Ok(()) => {
@@ -79,6 +82,9 @@ impl App {
         let Some(result) = self.network.poll_pull() else {
             return false;
         };
+        // The "Pulling…" progress message has served its purpose; clear it so it
+        // can't be resurrected by a later network op.
+        self.clear_progress_message();
         let flight = self.in_flight_op.take();
         match result {
             Ok(outcome) => {

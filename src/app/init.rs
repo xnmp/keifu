@@ -130,6 +130,7 @@ impl App {
             diff_source: None,
             message: initial_message,
             message_time: initial_message_time,
+            message_sticky: false,
             toasts: crate::toast::ToastQueue::new(),
             pr_toasts_armed: false,
             network: NetworkManager::new(),

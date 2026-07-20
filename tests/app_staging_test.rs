@@ -134,6 +134,7 @@ fn make_base_app(
         diff_source: None,
         message: None,
         message_time: None,
+        message_sticky: false,
         toasts: keifu::toast::ToastQueue::new(),
         pr_toasts_armed: false,
         network: NetworkManager::new(),
