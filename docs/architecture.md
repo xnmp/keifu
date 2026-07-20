@@ -154,37 +154,55 @@ Graph.
 `color_to_rgb` maps named/Indexed colors to real RGB (standard xterm values,
 xterm-256 palette formula) so rasterization has concrete colors.
 
-**S-curve lane transitions (2026-07-19).** Lane-to-lane shifts render as long,
-gentle VSCode-style S-curves rather than a straight horizontal run + a tight
-rounded corner. `draw_cells` runs in two phases:
-1. `transition_curves` — a pure, row-local scan of `spec.cells` — reconstructs
-   each maximal horizontal-family run into cubic beziers. A run's endpoints are
-   its corners/Tees plus any flanking commit dot, classified as *hubs*
-   (horizontal tangent, at row mid-height: a dot, or a `Tee{Right,Left}` arm) or
-   *spokes* (vertical tangent, at a row edge: `Merge*` up, `Branch*` down,
-   `TeeUp` risers). One cubic is drawn from the primary hub to each spoke
-   (branch/merge = the 2-endpoint case → one curve; a fork connector `├─┴─╯`
-   fans several), each eased along its end tangents by `CURVE_EASE`. Each spoke
-   curve carries the spoke's own flat color/dim for its entire sweep, so a
-   multi-color fork connector colors each arm correctly. Hub handles lean
-   toward their spokes (`HUB_TILT`, plus `FAN_EXTRA` scaled by how much shorter
-   an arm is than its side's longest), so curves sharing a hub — same-run fan
-   arms, or a bright traced curve in `cells` over a dim lead-in in the folded
-   `underlay` (two separate runs) — leave the dot at different angles instead
-   of coinciding along the trunk. Without that separation, the bright layer
-   composites over the faded dim layer wherever strokes overlap, and a traced
-   arm buried a dim sibling's lead-in entirely (the "pink lead-in to a green
-   branch" bug).
+**S-curve lane transitions (2026-07-19, reworked 2026-07-20).** Lane-to-lane
+shifts render as VSCode-style cubic Bézier S-curves rather than a straight
+horizontal run + a tight rounded corner. `draw_cells` (`src/ui/graph_pixels.rs`)
+runs in two phases:
+1. `transition_curves` (~line 606) — a pure, row-local scan of `spec.cells` —
+   reconstructs each maximal horizontal-family run into cubics via
+   `cubic_between` (~line 580). A run's endpoints are its corners/Tees plus any
+   flanking commit dot, classified as *hubs* (row mid-height: a flanking dot,
+   or a `TeeRight`/`TeeLeft` that stays on the trunk with no flanking dot — a
+   fork connector's trunk, whose up-arms fan from it) or *spokes* (a row edge:
+   `Merge*`/`TeeUp` turning up to the top edge, `Branch*` turning down to the
+   bottom edge, and a `Tee{Right,Left}` that *is* flanked by a dot — that Tee is
+   the commit's parent-connector into a still-descending trunk, so it sweeps
+   down to the bottom edge like a `Branch*` rather than staying flat). One
+   cubic is drawn from the run's primary hub to each spoke (a branch/merge is
+   the 2-endpoint case → one curve; a fork connector `├─┴─╯` fans several);
+   with no hub the spokes are chained pairwise; a lone hub/spoke with nothing
+   to connect to bridges straight to the run's far edge. Each spoke curve
+   carries the spoke's own flat color/dim for its entire sweep, so a
+   multi-color fork connector colors each arm correctly.
+
+   `cubic_between(a, b)` (~line 580) places **both** control points at the
+   endpoints' shared y-midpoint — `(a.x, ymid)` and `(b.x, ymid)` — rather than
+   at a hand-tuned hub-tilt/fan offset. That makes every curve leave and enter
+   *every* endpoint travelling vertically, so its tangent matches the straight
+   vertical lane pipe immediately above/below the transition: the join is
+   C1-continuous with no kink or flat spot. Curves sharing a hub separate by
+   *direction* (up-arms vs. down-arms) rather than by a tilt hack, and when
+   both endpoints share a y (a flat dot↔dot stub run) the two control points
+   collapse onto the endpoint line and the cubic degenerates to a straight
+   horizontal segment. This replaced an earlier "Tangent hub/spoke" model
+   (horizontal-tangent hubs eased by `CURVE_EASE`, with `HUB_TILT` and
+   `FAN_EXTRA` hand-tuning how much a hub handle leaned toward its spokes to
+   keep co-hub curves from coinciding) — the vertical-tangent construction
+   gets the same visual separation for free from the endpoint geometry, with
+   no tuning constants. The old algorithm survives only as a verbatim,
+   `#[cfg(test)]`-gated copy (`legacy_cubic`/`LEGACY_CURVE_EASE`/
+   `LEGACY_HUB_TILT`/`LEGACY_FAN_EXTRA`, near the bottom of the `tests` module)
+   that `rasterize_row_with` can drive for the PNG before/after comparison
+   harness (`raster_debug`); it is not reachable from production code.
 2. The straight verticals (lane pipes, `HorizontalPipe`'s crossed pipe, `Tee`
    trunks, commit connectors) and the dots/stars draw *on top* of the curves, so
    a crossed pipe stays visible over the sweep and dims independently.
 
 Curve endpoints are exact lane centers on row edges (spokes) or dot centers
 (hubs), so rows still tile seamlessly (no new gap class) and each curve meets
-the dot it belongs to (subsumes the earlier horizontal-overshoot fix). Because
-`transition_curves` is pure over the cells, drawing stays a deterministic
-function of the `RowSpec`, so the protocol cache stays correct. Unicode mode is
-unchanged (box glyphs can't curve).
+the dot it belongs to. Because `transition_curves` is pure over the cells,
+drawing stays a deterministic function of the `RowSpec`, so the protocol cache
+stays correct. Unicode mode is unchanged (box glyphs can't curve).
 
 **Uncommitted connector survives the commit filter (2026-07-19).** The synthetic
 uncommitted-changes node always passes the commit filter, and its connector is
@@ -193,3 +211,226 @@ was hidden, orphaning the connector into a dangling grey stub beneath the top
 marker. `node_passes_commit_filter` now also keeps the HEAD row whenever an
 uncommitted node exists (`has_uncommitted_node`, O(1) — the uncommitted node is
 always at index 0), so the connector always terminates at the star.
+
+## Toasts vs. Status Bar (2026-07-20)
+
+**Decision:** One-shot notifications ("staged 3 files", "push failed") go
+through a toast queue; the status bar is reserved for *sticky* state that
+describes what's currently true, not what just happened.
+
+**Toast queue** (`src/toast.rs`) is a pure state machine — `ToastQueue::push`/
+`evict(now)` take time as a parameter, so expiry is unit-testable without a
+clock. `ToastKind::{Info, Success, Error}` drive color and TTL: Info/Success
+live 4s, Error lingers 8s. `push` evicts expired toasts, then caps the queue
+at `MAX_VISIBLE = 3` by dropping the oldest. ~95 former one-shot
+`set_message()` call sites were converted to toasts (2026-07-20 sweep).
+
+**Status bar** stays reserved for state a user should be able to glance at any
+time: sticky network progress (`set_progress_message()` marks a message
+sticky; it persists for the whole in-flight op and is explicitly cleared on
+completion — a plain, non-sticky message instead self-expires after 5s and is
+never resurrected by later background activity, fixing an earlier "stale
+message re-flashes when a silent auto-fetch runs" bug), merge-conflict
+guidance, latched periodic errors, and the chips described below.
+
+**Episode latching.** A background poll that fails on every tick (e.g. the
+working tree is mid-churn) must not spam a fresh error every tick — but a
+*new* failure episode should still report once. Four `bool` latch flags
+implement this pattern uniformly: set on the first failure since the last
+success, left alone on subsequent failures, cleared on success (which re-arms
+reporting for the next episode):
+- `DiffCache::uncommitted_diff_error_reported` (`src/diff_cache.rs`) — set on
+  an uncommitted-diff load failure, cleared on success or on
+  `clear_uncommitted()`.
+- `App.wt_status_error_latched` (`src/app/mod.rs`, set/cleared in
+  `src/app/refresh.rs`) — working-tree-status failures during periodic
+  refresh.
+- `App.auto_refresh_error_latched` — auto-refresh timer failures
+  (`src/app/network_ops.rs`).
+- `App.watch_refresh_error_latched` — filesystem-watcher-driven refresh
+  failures (`src/app/network_ops.rs`).
+
+All four follow `if !latched { latched = true; report(error) }` on failure and
+`latched = false` on success — the shape to copy for any new periodic
+background check.
+
+## Settings Registry (2026-07-20)
+
+**Decision:** `Ctrl+,` settings menu is backed by a pure descriptor layer
+(`src/settings.rs`) with **no dependency on `App`**, plus a projection to/from
+`App` state.
+
+**Why:** Keeping the registry pure makes menu logic (cycling values, clamping
+ints, display formatting) unit-testable without a TUI or an `App`, and gives
+the widget and the action handler a single shared source of truth for what
+settings exist and how they behave.
+
+**How it works:**
+- `SettingsModel` — a flat, plain-data snapshot of every editable setting.
+- `SettingDescriptor` — one menu row: a `SettingKind` (`Bool` / `Enum{options}`
+  / `Int{min,max,step,zero_label}`), typed get/set accessors, display logic,
+  grouped under a `SettingGroup` (Graph/Files/Refresh/Interface, in menu
+  order), and its persistence destination.
+- `App::settings_model()` gathers scattered `App` fields (trace state, metadata
+  columns, `config.ui`, etc.) into a `SettingsModel`; `App::apply_settings_model()`
+  writes an edited model back, including clamping (e.g. split ratio to 20-80)
+  and sentinel handling (e.g. `0` → `None` for an uncapped width).
+- **Persistence is split by destination.** State-only settings (e.g. UI
+  toggles that aren't meant to be hand-edited) go through `UiState::save()` to
+  `state.toml`, plain serde round-trip. Config-file settings go through
+  `Config::save()` (`src/config.rs`) using **`toml_edit`**, which rewrites only
+  the touched keys in the existing document (`doc["refresh"]["auto_refresh"] =
+  value(...)`) rather than re-serializing the whole file — so comments and keys
+  the menu doesn't know about survive a save.
+- `graph_renderer` is **restart-only**: its descriptor carries a `note:
+  Some("restart")` shown in the menu, because `PixelGraphState` (terminal
+  graphics-protocol detection) is constructed once in `main.rs` before the
+  event loop starts; changing the config value takes effect only on the next
+  launch.
+
+## Merged-Branch Classification (2026-07-20)
+
+**Decision:** Whether a branch is merged is a pure domain computation
+(`src/git/merged.rs`), fed by async GitHub polling infrastructure
+(`src/merged_branches.rs`) that never blocks a frame.
+
+**Domain logic** (`src/git/merged.rs`):
+- `is_ancestor_merged()` — the cheap case: `graph_descendant_of(base_tip,
+  branch_tip)` catches merge commits and fast-forwards.
+- `is_squash_merged()` — a bounded scan (`SQUASH_SCAN_LIMIT = 400` commits)
+  from the branch's fork point (`merge_base(branch_tip, base_tip)`) forward:
+  compute the branch's cumulative patch-id across fork→tip
+  (`combined_patch_id`), then walk `base_tip` backward hiding the fork point,
+  comparing each single-parent base commit's own patch-id
+  (`tree_diff_patch_id`) against it. A match means the branch's changes landed
+  on the base as a squash commit. Patch-ids are content-addressed
+  (`diff.patchid()`), so this survives rebase/re-authoring, not just identical
+  commits.
+- `base_branch()` — preference cascade: local `main` → local `master` →
+  `origin/main` → `origin/master` → checked-out HEAD.
+- `branch_changes_landed()` — a GitHub-signal cross-check: given `gh`'s
+  merged-PR list says a branch merged, this diffs the branch's tree against
+  the base's tree and requires every delta to be `Delta::Deleted` — any
+  Added/Modified/Renamed content means the branch (or a same-named
+  replacement) still carries novel work, so the GitHub signal alone can't be
+  trusted (guards against branch-name reuse).
+
+**Async infrastructure** (`src/merged_branches.rs`):
+- `MergedBranchFetch` polls `gh pr list --state merged` in the background
+  (10s timeout, 300s poll interval), never on the render thread.
+- `MergedClassifier` reruns the pure classifier in a background worker, gated
+  by an input signature (`ClassifyInput::signature()`, an order-independent
+  XOR-hash over base name/tip, every branch's `(name, tip, is_remote,
+  is_head)`, and the gh-merged name set) — `maybe_start()` is a no-op when the
+  signature hasn't changed, so a worker only spawns when something that could
+  change the classification actually changed.
+
+**Shift+H** (`Action::ToggleMergedBranches`, mnemonic "Hide merged" — joins
+`Shift+B` filter and `Shift+O` remotes-hidden) flips `App.hide_merged_branches`
+and refreshes. `visible_branches` composes three independent filters: not
+individually hidden AND not remote-only-hidden AND not (merged AND
+hide-merged-branches-on) — merged branches are removed from the graph
+entirely when hidden, not just their labels.
+
+## Lane-0 HEAD Invariant (2026-07-20)
+
+**Decision:** `build_graph` (`src/git/graph.rs`) structurally reserves lane 0
+for HEAD's first-parent line, when HEAD is known.
+
+**Why:** So the checked-out branch's line is always the leftmost, stable lane
+— matching VSCode Git Graph and giving the user a fixed visual anchor instead
+of "whichever tip was walked first happens to land on the left."
+
+**How it works:** `head_first_parent_line()` walks down from HEAD along first
+parents and up through descendants whose first parent continues the line,
+producing the set of commit OIDs that make up "HEAD's line." If non-empty,
+`build_graph` seeds lane 0 as an empty reserved slot before assigning any
+commit a lane; `eligible_empty_lane()` then refuses lane 0 to any commit not
+in that set, so only HEAD's line can ever land there. `head_commit_oid` (not
+the branch-derived HEAD) drives this, so a **detached HEAD** is anchored the
+same way. When HEAD is unknown or not yet loaded, the reservation is skipped
+entirely and the legacy layout applies: whichever tip is processed first wins
+lane 0.
+
+**Lane 0 owns the reserved blue:** when the reservation is active,
+`color_assigner.reserve_color(MAIN_BRANCH_COLOR)` takes `MAIN_BRANCH_COLOR`
+(LightBlue) out of the general assignment pool, and the first commit that
+actually lands on lane 0 claims it via `assign_main_color`, latched by a
+`main_color_assigned` flag so no later commit can reclaim it. In the no-HEAD
+fallback, the same color still goes to whichever commit first lands on lane 0.
+
+## PrContext (2026-07-20)
+
+**Decision:** Open-PR data is indexed once per frame into `PrContext`
+(`src/pr.rs`), keyed by head commit OID, rather than looked up per-commit
+against the raw PR list.
+
+**How it works:** `PrContext::by_head_oid: HashMap<Oid, &PrInfo>` maps each
+open PR's head commit to its info; `pr_for_head_commit()` looks up by OID, so
+a badge renders on exactly the PR's head row — other commits on the same
+branch (further back in history) never pick one up. `ReviewState::{None,
+Approved, ChangesRequested}` maps from GitHub's `reviewDecision` field
+(`ReviewState::from_decision`) to the glyph shown next to the badge.
+**PR-merge-commit detection** (`is_pr_merge()`) checks, in order: (1) the
+commit's second parent OID is a key in the same `head_oids` index — an open
+PR whose head just got merged; (2) a message-format fallback,
+`message_is_github_merge()`, matching GitHub's `"Merge pull request #<N>
+from …"` merge-commit message (distinguishing it from a local `"Merge
+branch …"`) — covers PRs that are already closed by the time of render, so
+have no open-PR index entry.
+
+## Windowed Rendering (2026-07-20)
+
+**Decision:** Both the text (Unicode) graph and the pixel-graph path avoid
+rebuilding every row on every keypress; only the visible window is rebuilt,
+and pixel caching goes further by never invalidating on trace state.
+
+**Text layer:** `visible_row_window()` (`src/ui/graph_view.rs`) computes which
+row indices actually need styled `ListItem`s built — the viewport plus an
+8-row margin, always including the selected row. Everything outside the
+window gets a cheap blank placeholder so the list's length (and therefore
+scrollbar/selection math) is unaffected. This dropped per-keypress item
+building from ~15.3ms to ~4ms at 5.6k nodes.
+
+**Pixel layer:** `PixelGraphState::protocols: HashMap<RowSpec, Protocol>`
+caches the rendered image per row spec. `RowSpec` no longer includes trace
+selection in its key — trace dim is instead applied per-frame, after cloning
+a row's cached UNDIMMED base spec, only to rows inside the visible window
+(`apply_trace_dim`, called from the windowed dim pass; out-of-window rows get
+an empty placeholder spec and skip dimming entirely). This turned a full
+`O(n)` RowSpec rebuild (~15ms at 5.2k nodes, since tracing used to be baked
+into the cache key) into an `O(window)` dim pass (~1.24ms).
+
+## Status-Bar Chips (2026-07-20)
+
+**Decision:** A cluster of small pure `&App`-state renders in
+`src/ui/status_bar.rs` surface persistent, glanceable state as compact chips
+rather than transient messages:
+- **remotes hidden** — `app.hide_remote_branches`.
+- **merged hidden** — mirrors `app.hide_merged_branches` (see Merged-Branch
+  Classification above).
+- **compare pending/range** — `app.compare_marked` (one commit picked, still
+  choosing the second) vs. `app.compare_range` (both picked).
+- **watch off** — `app.watcher_disconnected` (the filesystem watcher died and
+  auto-refresh fell back to timer-only).
+- **op + conflict count** — `app.op_state.is_in_progress()` and/or
+  `app.conflict_count > 0`.
+
+Each chip is a direct, stateless function of an `App` field — no separate chip
+state to keep in sync.
+
+## Repo-Handle Reopen (2026-07-20)
+
+**Decision:** `GitRepository::reopen()` (`src/git/repository.rs`) re-opens the
+underlying `git2::Repository` at the start of `refresh_inner`
+(`src/app/refresh.rs`), best-effort (`let _ = self.repo.reopen();` — a reopen
+failure doesn't abort the refresh).
+
+**Why:** A long-lived `git2::Repository` handle caches refs and config
+internally. External processes — another terminal running `git push`/`git
+fetch`, an upstream-tracking change, a manual `.git/config` edit — mutate
+`.git/refs`/`.git/config` on disk, but the handle won't see those changes
+until it's reopened. This is the refs/config analogue of the existing `git2`
+ignore-cache pattern (`repo.clear_ignore_rules()` before status queries, see
+above): flush a libgit2-internal cache immediately before the queries that
+depend on it, so external changes are observed without restarting keifu.

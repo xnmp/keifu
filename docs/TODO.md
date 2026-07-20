@@ -412,3 +412,66 @@ such rows so it was invisible here — reproduced against a repo with trunk-heav
 merges. Regression tests: dot↔Tee turns down; fork-connector Tee stays a hub.
 Blast radius: stroke geometry in `transition_curves` only (sole caller
 `draw_cells`); no cell/layout/cache/Unicode-path changes.
+
+---
+
+## 2026-07-20 issue sweep
+
+~20 branches merged into `chong-dev`, closing issues #40-#64. One line per issue below; see `docs/architecture.md` for the subsystems that grew out of this batch (toasts/episode latching, settings registry, merged-branch classification, lane-0 HEAD, PrContext, windowed rendering, status-bar chips, repo-handle reopen, bezier curves).
+
+### [DONE] #40 Restore refresh
+Stale full-diff rows are pruned on restore so restored files vanish immediately instead of lingering in the cache.
+
+### [DONE] #41 / #60 Merged-branch dim/hide, including squash
+Merged branches dim by default and `Shift+H` hides them; merge detection covers squash-merges (bounded patch-id scan since fork point) in addition to ancestor merges, cross-checked against `gh`'s merged-PR list.
+
+### [DONE] #42 / #43 PR badge on head + review-state glyphs
+Open PRs get one badge on their head commit (not every commit in range), plus review-state glyphs.
+
+### [DONE] #44 / #49 Toast sweep + episode latching
+Transient notifications moved off the status bar into a toast queue; periodic background errors (e.g. refresh failures) now latch once per episode instead of re-reporting every poll.
+
+### [DONE] #45 Lane-0 HEAD invariant
+The checked-out HEAD's line always occupies lane 0.
+
+### [DONE] #46 Remote-tracking merge/rebase
+Merge/rebase of remote-tracking branches works correctly (regression coverage for a stale-ref bug).
+
+### [DONE] #47 / #48 Fetch --prune + reopen-on-refresh
+Fetch prunes stale remote-tracking refs; refresh reopens the repo handle so external pushes/fetches are observed.
+
+### [DONE] #50 / #53 Badge order/color
+Branch badge order is stable across refreshes; badge color matches its lane color.
+
+### [DONE] #51 Windowed rendering (two phases)
+Text-layer item building windowed to the viewport+margin (15.3ms -> ~4ms/keypress at 5.6k nodes); pixel specs cache an undimmed base keyed without trace state and dim only the visible protocol window (~15ms -> 1.24ms/keypress at 5.2k nodes).
+
+### [DONE] #52 Grey PR merges
+PR merge commits (second parent matches the PR's head OID, with a message-format fallback) render in grey.
+
+### [DONE] #54 Help Shift labels
+Help popup lists all Shift-modified bindings with consistent labels.
+
+### [DONE] #55 / #59 Mute base-update merges + collapse merge messages
+Merges that only bring a branch up to date with its base are muted; merge commit messages collapse to a glyph.
+
+### [DONE] #56 Settings menu
+`Ctrl+,` opens a settings menu with live apply and persisted values, backed by the new settings registry.
+
+### [DONE] #57 Remotes-hidden cap at local tip
+Hiding remote-only branches no longer leaks remote-only commits past the local tip.
+
+### [DONE] #58 Same-lane Ctrl+Up/Down
+`Ctrl+Up`/`Ctrl+Down` jump along the same graph lane.
+
+### [DONE] #61 Right-click retarget
+Right-click retargets the commit options menu to the clicked commit instead of the previous selection.
+
+### [DONE] #62 Chips
+Status-bar chips surface persistent state: compare mode pending/range, watcher disconnected.
+
+### [DONE] #63 Bezier curves
+Lane transitions render as VSCode-style vertical-tangent bezier connectors, replacing the tangent hub/spoke model.
+
+### [DONE] #64 Keyboard enhancement + ',' fallback
+Kitty keyboard protocol enabled for reachable Ctrl+, chords, with a plain ',' fallback when the protocol isn't available.
