@@ -232,14 +232,17 @@ impl DiffCache {
     /// Reclassify the cached full uncommitted diff's staging status using the
     /// quick diff as the source of truth. This avoids a redundant async reload
     /// after stage/unstage operations where line counts don't change.
-    /// Seals the cache key so `poll()` won't trigger a reload.
+    ///
+    /// The fast path can only *relabel* existing rows — never add or remove
+    /// them — so it is valid only when both diffs describe the same set of
+    /// (path, row-count) entries. When they do, the labels are patched in place
+    /// and the cache key is sealed so `poll()` skips the reload. When they
+    /// differ (a file was restored away, a new file appeared, or a file became
+    /// / stopped being partially staged) the cached full diff is structurally
+    /// stale: its data is dropped and the key left UNSEALED, so `cached_diff()`
+    /// returns `None` (the fresh quick diff shows immediately) and `poll()`
+    /// reloads the real line stats.
     pub fn reclassify_uncommitted_staging(&mut self, current_status: Option<&crate::git::WorkingTreeStatus>) {
-        let Some(full) = self.uncommitted_diff_cache.as_mut() else {
-            // Full cache not yet loaded — seal the key so poll() won't
-            // trigger a reload (the quick diff is already correct).
-            self.uncommitted_cache_key = current_status.cloned();
-            return;
-        };
         let Some(quick) = self.quick_diff_cache.as_ref() else {
             return;
         };
@@ -259,21 +262,37 @@ impl DiffCache {
                 .push(f.stage_status);
         }
 
-        // This fast path can only relabel existing rows, not split or merge
-        // them. If a path's row count changed (a file became — or stopped
-        // being — partially staged), bail without sealing the cache key so
-        // poll() falls back to a real reload.
+        let Some(full) = self.uncommitted_diff_cache.as_ref() else {
+            // Full cache not yet loaded — seal the key so poll() won't
+            // trigger a reload (the quick diff is already correct).
+            self.uncommitted_cache_key = current_status.cloned();
+            return;
+        };
+
+        // Row count per path in the full diff.
         let mut full_counts: std::collections::HashMap<&std::path::Path, usize> =
             std::collections::HashMap::new();
         for f in &full.files {
             *full_counts.entry(f.path.as_path()).or_default() += 1;
         }
-        if full_counts
-            .iter()
-            .any(|(p, &n)| quick_statuses.get(p).is_some_and(|s| s.len() != n))
-        {
+
+        // Valid iff the two diffs describe the same (path, row-count) multiset:
+        // equal number of distinct paths, and every full path present in quick
+        // with a matching row count. This rejects both a changed row count and a
+        // path present in only one diff (the classic case after `r` restore).
+        let sets_match = full_counts.len() == quick_statuses.len()
+            && full_counts
+                .iter()
+                .all(|(p, &n)| quick_statuses.get(p).is_some_and(|s| s.len() == n));
+        if !sets_match {
+            // Structurally stale — drop the data, leave the key unsealed.
+            self.uncommitted_diff_cache = None;
             return;
         }
+
+        // Sets match: relabel in place. Reborrow mutably now that the immutable
+        // reads (full_counts) are done.
+        let full = self.uncommitted_diff_cache.as_mut().unwrap();
 
         // Update stage_status on each file in the full diff. A path with two
         // rows is a partially-staged pair whose labels are already one of
@@ -719,8 +738,9 @@ mod tests {
     #[test]
     fn reclassify_bails_to_reload_when_a_file_becomes_partially_staged() {
         // full has one a.txt row but the quick diff now has two: the fast
-        // path can't split a row, so it must leave the rows untouched and the
-        // key unsealed so poll() falls back to a real reload.
+        // path can't split a row, so the cached full diff is structurally
+        // stale. It drops the data and leaves the key unsealed, so
+        // cached_diff() falls back to the fresh quick diff and poll() reloads.
         let mut cache = DiffCache::new();
         cache.uncommitted_diff_cache = Some(uncommitted_diff(
             vec![diff_file("a.txt", Some(StageStatus::Staged))],
@@ -738,8 +758,78 @@ mod tests {
             cache.uncommitted_cache_key.is_none(),
             "key must stay unsealed so poll() reloads"
         );
-        let full = cache.uncommitted_diff_cache.as_ref().unwrap();
-        assert_eq!(full.staged_files.len(), 1);
+        assert!(
+            cache.uncommitted_diff_cache.is_none(),
+            "structurally-stale full diff is dropped so the quick diff shows"
+        );
+    }
+
+    #[test]
+    fn reclassify_drops_stale_full_diff_when_a_file_is_restored_away() {
+        // Regression for the `r` restore bug: tracked.txt was modified (present
+        // in the full diff) then restored, so it's gone from the fresh quick
+        // diff. The fast path can't remove a row — it must drop the stale full
+        // data and leave the key unsealed, so cached_diff() returns None and
+        // the correct quick diff (file gone) renders immediately.
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(uncommitted_diff(
+            vec![],
+            vec![
+                diff_file("tracked.txt", Some(StageStatus::Unstaged)),
+                diff_file("untracked.txt", Some(StageStatus::Untracked)),
+            ],
+        ));
+        // Quick diff after restore: tracked.txt is gone.
+        let quick = uncommitted_diff(
+            vec![],
+            vec![diff_file("untracked.txt", Some(StageStatus::Untracked))],
+        );
+        set_quick(&mut cache, DiffTarget::Uncommitted, quick);
+
+        cache.reclassify_uncommitted_staging(Some(&precise_status()));
+
+        assert!(
+            cache.uncommitted_diff_cache.is_none(),
+            "restored file must not linger in a stale full diff"
+        );
+        assert!(
+            cache.uncommitted_cache_key.is_none(),
+            "key must stay unsealed so poll() reloads the real line stats"
+        );
+        // cached_diff() (full) is now empty, so cached_diff_or_quick() falls
+        // back to the quick diff, which no longer lists the restored file.
+        let shown = cache
+            .cached_diff_or_quick(Some(DiffTarget::Uncommitted))
+            .expect("quick diff is available");
+        assert!(
+            shown.files.iter().all(|f| f.path.to_str() != Some("tracked.txt")),
+            "restored file gone from the rendered list"
+        );
+    }
+
+    #[test]
+    fn reclassify_drops_stale_full_diff_when_a_new_file_appears() {
+        // Symmetric case: a file present only in the quick diff (e.g. a newly
+        // staged/created file) means the fast path can't add a row, so the
+        // stale full diff is dropped and the key left unsealed.
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(uncommitted_diff(
+            vec![],
+            vec![diff_file("a.txt", Some(StageStatus::Unstaged))],
+        ));
+        let quick = uncommitted_diff(
+            vec![],
+            vec![
+                diff_file("a.txt", Some(StageStatus::Unstaged)),
+                diff_file("new.txt", Some(StageStatus::Untracked)),
+            ],
+        );
+        set_quick(&mut cache, DiffTarget::Uncommitted, quick);
+
+        cache.reclassify_uncommitted_staging(Some(&precise_status()));
+
+        assert!(cache.uncommitted_diff_cache.is_none());
+        assert!(cache.uncommitted_cache_key.is_none());
     }
 
     #[test]
