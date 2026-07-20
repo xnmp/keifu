@@ -869,6 +869,20 @@ pub struct App {
     // Status message with auto-clear
     pub message: Option<String>,
     pub message_time: Option<std::time::Instant>,
+    /// Whether the current message is a network-progress message ("Pushing…")
+    /// that should stay visible for the whole in-flight op, versus a plain
+    /// transient status message that strictly obeys the 5s timeout. Progress
+    /// messages are cleared on op completion so they can never be resurrected
+    /// by a later, unrelated network op.
+    pub message_sticky: bool,
+
+    // Once-per-episode latches for periodically-retried refresh errors. Each is
+    // set when the failure is first reported and re-armed (cleared) on the next
+    // success, so a persistent failure doesn't re-flash the status bar every
+    // refresh / poll tick.
+    pub wt_status_error_latched: bool,
+    pub auto_refresh_error_latched: bool,
+    pub watch_refresh_error_latched: bool,
 
     // Transient toast notifications for background-op outcomes.
     pub toasts: crate::toast::ToastQueue,
@@ -1168,7 +1182,7 @@ impl App {
         }
         if matches!(action, Action::ToggleDebugKeys) {
             self.debug_keys = !self.debug_keys;
-            self.set_message(if self.debug_keys {
+            self.toast(crate::toast::ToastKind::Info, if self.debug_keys {
                 "Debug keys ON"
             } else {
                 "Debug keys OFF"
@@ -1297,7 +1311,7 @@ impl App {
         self.trace_enabled = !self.trace_enabled;
         self.save_ui_state();
         let state = if self.trace_enabled { "on" } else { "off" };
-        self.set_message(format!("Branch tracing {state}"));
+        self.toast(crate::toast::ToastKind::Info, format!("Branch tracing {state}"));
     }
 
     /// Toggle whether remote-only branches are shown in the graph (persisted).
@@ -1312,7 +1326,7 @@ impl App {
         } else {
             "shown"
         };
-        self.set_message(format!("Remote branches {state}"));
+        self.toast(crate::toast::ToastKind::Info, format!("Remote branches {state}"));
         Ok(())
     }
 
@@ -1323,7 +1337,7 @@ impl App {
         self.diff_word_wrap = !self.diff_word_wrap;
         self.save_ui_state();
         let state = if self.diff_word_wrap { "on" } else { "off" };
-        self.set_message(format!("Line wrap {state}"));
+        self.toast(crate::toast::ToastKind::Info, format!("Line wrap {state}"));
     }
 
     /// Re-lay-out the file-diff viewer's rendered lines when the wrap toggle or

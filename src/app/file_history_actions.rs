@@ -12,7 +12,7 @@ impl App {
     pub(crate) fn open_file_history(&mut self) {
         self.sync_file_list_cache();
         let Some(path) = self.selected_file().map(|f| f.path.clone()) else {
-            self.set_message("No file selected");
+            self.toast(crate::toast::ToastKind::Info, "No file selected");
             return;
         };
         let path_str = path.to_string_lossy().to_string();
@@ -20,7 +20,7 @@ impl App {
         let oids = match file_history(&self.repo_path, &path_str, FILE_HISTORY_LIMIT) {
             Ok(oids) => oids,
             Err(e) => {
-                self.set_message(format!("File history failed: {e}"));
+                self.toast(crate::toast::ToastKind::Error, format!("File history failed: {e}"));
                 return;
             }
         };
@@ -31,7 +31,7 @@ impl App {
             .collect();
 
         if entries.is_empty() {
-            self.set_message(format!("No history for {}", path.display()));
+            self.toast(crate::toast::ToastKind::Info, format!("No history for {}", path.display()));
             return;
         }
 
@@ -119,7 +119,7 @@ impl App {
             stage_status: None,
         };
         if let Err(e) = self.enter_file_diff(DiffTarget::Commit(oid), 0, vec![file], path) {
-            self.set_message(format!("Cannot open diff: {e}"));
+            self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
             self.mode = AppMode::Normal;
         }
         Ok(())

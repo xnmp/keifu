@@ -60,6 +60,12 @@ pub struct DiffCache {
     pub diff_receiver: Option<Receiver<DiffResult>>,
     pub uncommitted_diff_cache: Option<CommitDiffInfo>,
     pub uncommitted_diff_failed: bool,
+    /// Latches the uncommitted-diff failure message so it is emitted once per
+    /// failure episode, not on every retry. When the working tree keeps
+    /// changing between dispatch and completion the cache key never seals, so
+    /// poll() re-dispatches (and re-fails) every tick; without this latch the
+    /// error would re-flash continuously. Cleared on the next successful load.
+    pub uncommitted_diff_error_reported: bool,
     pub uncommitted_diff_loading: bool,
     pub uncommitted_diff_receiver: Option<Receiver<UncommittedDiffResult>>,
     pub uncommitted_cache_key: Option<WorkingTreeStatus>,
@@ -90,6 +96,7 @@ impl DiffCache {
             diff_receiver: None,
             uncommitted_diff_cache: None,
             uncommitted_diff_failed: false,
+            uncommitted_diff_error_reported: false,
             uncommitted_diff_loading: false,
             uncommitted_diff_receiver: None,
             uncommitted_cache_key: None,
@@ -121,6 +128,10 @@ impl DiffCache {
     pub fn clear_uncommitted(&mut self) {
         self.uncommitted_diff_cache = None;
         self.uncommitted_diff_failed = false;
+        // A full clear starts a fresh episode, so re-arm the error-report latch.
+        // (Deliberately NOT reset in invalidate_uncommitted — that runs on every
+        // auto-refresh/file-op tick and would let the failure re-flash.)
+        self.uncommitted_diff_error_reported = false;
         self.uncommitted_diff_loading = false;
         self.uncommitted_diff_receiver = None;
         self.uncommitted_cache_key = None;
@@ -464,12 +475,20 @@ impl DiffCache {
                         Ok(diff) => {
                             self.uncommitted_diff_cache = Some(diff);
                             self.uncommitted_diff_failed = false;
+                            // Success re-arms the failure latch for the next episode.
+                            self.uncommitted_diff_error_reported = false;
                             events.uncommitted_diff_loaded = true;
                         }
                         Err(e) => {
                             self.uncommitted_diff_cache = None;
                             self.uncommitted_diff_failed = true;
-                            events.message = Some(format!("Failed to load diff: {e}"));
+                            // Report once per failure episode; a churning working
+                            // tree makes poll() retry every tick, and re-arming the
+                            // message each time would re-flash it continuously.
+                            if !self.uncommitted_diff_error_reported {
+                                self.uncommitted_diff_error_reported = true;
+                                events.message = Some(format!("Failed to load diff: {e}"));
+                            }
                         }
                     }
                     let effective_status = status.or_else(|| working_tree_status.cloned());
@@ -486,7 +505,10 @@ impl DiffCache {
                     self.uncommitted_diff_failed = true;
                     self.uncommitted_cache_key = working_tree_status.cloned();
                     events.diff_loaded = true;
-                    events.message = Some("Diff computation failed unexpectedly".to_string());
+                    if !self.uncommitted_diff_error_reported {
+                        self.uncommitted_diff_error_reported = true;
+                        events.message = Some("Diff computation failed unexpectedly".to_string());
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
@@ -1630,5 +1652,68 @@ mod tests {
         assert!(cache.cached_diff(Some(DiffTarget::Range(oid1(), oid2()))).is_none());
         assert!(cache.range_diff_key.is_none());
         assert!(cache.range_diff_loading.is_none());
+    }
+
+    // ── Uncommitted diff error-report latch (once-per-episode) ──────────
+
+    /// Feed one completed uncommitted-diff result through poll. `target: None`
+    /// makes poll return after draining receivers, so no real load is spawned.
+    fn poll_uncommitted_result(
+        cache: &mut DiffCache,
+        result: Result<CommitDiffInfo, String>,
+    ) -> Option<String> {
+        let (tx, rx) = mpsc::channel::<UncommittedDiffResult>();
+        tx.send((result, None)).unwrap();
+        cache.uncommitted_diff_loading = true;
+        cache.uncommitted_diff_receiver = Some(rx);
+        cache.poll(None, "", None).message
+    }
+
+    #[test]
+    fn uncommitted_diff_failure_reports_once_per_episode() {
+        let mut cache = DiffCache::new();
+
+        // First failure of an episode surfaces a message…
+        let first = poll_uncommitted_result(&mut cache, Err("boom".into()));
+        assert!(first.is_some(), "first failure should report");
+        assert!(cache.uncommitted_diff_error_reported);
+
+        // …a retry that fails again (working tree churned, key never sealed) is
+        // latched and stays silent — this is the anti-re-flash guarantee.
+        let second = poll_uncommitted_result(&mut cache, Err("boom again".into()));
+        assert!(second.is_none(), "repeat failure must not re-flash");
+    }
+
+    #[test]
+    fn uncommitted_diff_success_rearms_the_latch() {
+        let mut cache = DiffCache::new();
+
+        assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
+        // A success clears the latch and emits no message.
+        assert!(poll_uncommitted_result(&mut cache, Ok(empty_diff())).is_none());
+        assert!(!cache.uncommitted_diff_error_reported, "success re-arms");
+        // A subsequent, distinct failure episode reports again.
+        assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
+    }
+
+    #[test]
+    fn clear_uncommitted_rearms_the_latch() {
+        let mut cache = DiffCache::new();
+        assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
+        cache.clear_uncommitted();
+        assert!(!cache.uncommitted_diff_error_reported, "full clear starts a new episode");
+        assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
+    }
+
+    #[test]
+    fn invalidate_uncommitted_keeps_the_latch() {
+        // The per-tick churn path must NOT re-arm, or the failure re-flashes.
+        let mut cache = DiffCache::new();
+        assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
+        cache.invalidate_uncommitted();
+        assert!(
+            cache.uncommitted_diff_error_reported,
+            "invalidate must preserve the latch so the error stays silent"
+        );
     }
 }

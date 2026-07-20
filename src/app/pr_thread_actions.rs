@@ -15,7 +15,7 @@ impl App {
             .cloned()
         });
         let Some(pr) = pr else {
-            self.set_message("No open PR for this commit");
+            self.toast(crate::toast::ToastKind::Info, "No open PR for this commit");
             return;
         };
         let state = if let Some(thread) = self.thread_fetch.cached(pr.number) {
@@ -76,7 +76,7 @@ impl App {
         if let Err(e) = open_url(&url) {
             self.show_error(format!("Could not open: {e}"));
         } else {
-            self.set_message("Opening PR in browser");
+            self.toast(crate::toast::ToastKind::Success, "Opening PR in browser");
         }
     }
 

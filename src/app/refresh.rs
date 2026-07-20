@@ -198,10 +198,18 @@ impl App {
             .and_then(|pos| self.graph_nav.branch_positions.get(pos))
             .map(|(_, name)| name.clone());
 
-        // Get working tree status once and reuse
+        // Get working tree status once and reuse. Report a failure once per
+        // episode (latched) so a persistently-failing status query doesn't
+        // re-flash the status bar on every periodic refresh; re-arm on success.
         let (working_tree_status, status_message) = Self::working_tree_status_snapshot(&self.repo);
-        if let Some(message) = status_message {
-            self.set_message(message);
+        match status_message {
+            Some(message) => {
+                if !self.wt_status_error_latched {
+                    self.wt_status_error_latched = true;
+                    self.set_message(message);
+                }
+            }
+            None => self.wt_status_error_latched = false,
         }
         let uncommitted_count = working_tree_status
             .as_ref()

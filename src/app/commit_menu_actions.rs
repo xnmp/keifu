@@ -217,10 +217,10 @@ impl App {
         self.mode = AppMode::Normal;
         match self.default_push_remote() {
             Some(remote) => match push_tag(&self.repo_path, &remote, tag) {
-                Ok(()) => self.set_message(format!("Pushed tag '{}' to {}", tag, remote)),
-                Err(e) => self.set_message(format!("Push failed: {}", e)),
+                Ok(()) => self.toast(crate::toast::ToastKind::Success, format!("Pushed tag '{}' to {}", tag, remote)),
+                Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Push failed: {}", e)),
             },
-            None => self.set_message("No remote configured"),
+            None => self.toast(crate::toast::ToastKind::Info, "No remote configured"),
         }
     }
 
@@ -556,8 +556,8 @@ impl App {
                     let hash = oid.to_string();
                     match copy_to_clipboard(&hash) {
                         Ok(outcome) => self
-                            .set_message(format!("Copied {}{}", &hash[..7], outcome.suffix())),
-                        Err(e) => self.set_message(format!("Clipboard error: {}", e)),
+                            .toast(crate::toast::ToastKind::Success, format!("Copied {}{}", &hash[..7], outcome.suffix())),
+                        Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
                     }
                 }
             }
@@ -568,11 +568,11 @@ impl App {
                     .map(|c| c.full_message.clone())
                 {
                     match copy_to_clipboard(&msg) {
-                        Ok(outcome) => self.set_message(format!(
+                        Ok(outcome) => self.toast(crate::toast::ToastKind::Success, format!(
                             "Copied commit message{}",
                             outcome.suffix()
                         )),
-                        Err(e) => self.set_message(format!("Clipboard error: {}", e)),
+                        Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
                     }
                 }
             }

@@ -55,6 +55,9 @@ impl App {
         let Some(result) = self.network.poll_push() else {
             return false;
         };
+        // The "Pushing…" progress message has served its purpose; clear it so it
+        // can't be resurrected by a later network op.
+        self.clear_progress_message();
         let flight = self.in_flight_op.take();
         match result {
             Ok(()) => {
@@ -79,6 +82,9 @@ impl App {
         let Some(result) = self.network.poll_pull() else {
             return false;
         };
+        // The "Pulling…" progress message has served its purpose; clear it so it
+        // can't be resurrected by a later network op.
+        self.clear_progress_message();
         let flight = self.in_flight_op.take();
         match result {
             Ok(outcome) => {
@@ -164,8 +170,16 @@ impl App {
                 false
             }
         } else if events.should_auto_refresh {
-            if let Err(e) = self.refresh(false) {
-                self.set_message(format!("Auto-refresh failed: {e}"));
+            // Latch the failure so a persistently-failing auto-refresh reports
+            // once per episode instead of every interval; re-arm on success.
+            match self.refresh(false) {
+                Ok(()) => self.auto_refresh_error_latched = false,
+                Err(e) => {
+                    if !self.auto_refresh_error_latched {
+                        self.auto_refresh_error_latched = true;
+                        self.set_message(format!("Auto-refresh failed: {e}"));
+                    }
+                }
             }
             self.network.mark_refreshed();
             true
@@ -212,14 +226,26 @@ impl App {
         };
         match watcher.poll() {
             crate::watcher::PollResult::Refresh => {
-                if let Err(e) = self.refresh(false) {
-                    self.set_message(format!("Watch refresh failed: {e}"));
+                // Latch: a burst of failing watcher-driven refreshes (e.g. during
+                // a build) reports once per episode, not on every poll; re-arm on
+                // success.
+                match self.refresh(false) {
+                    Ok(()) => self.watch_refresh_error_latched = false,
+                    Err(e) => {
+                        if !self.watch_refresh_error_latched {
+                            self.watch_refresh_error_latched = true;
+                            self.set_message(format!("Watch refresh failed: {e}"));
+                        }
+                    }
                 }
                 self.network.mark_refreshed();
                 true
             }
             crate::watcher::PollResult::Disconnected => {
-                self.set_message("Filesystem watcher disconnected".to_string());
+                self.toast(
+                    crate::toast::ToastKind::Error,
+                    "Filesystem watcher disconnected",
+                );
                 self.watcher = None;
                 true
             }
@@ -301,7 +327,7 @@ impl App {
     /// pull.
     pub(crate) fn rerun_pull_with_mode(&mut self, mode: PullMode) {
         if self.network.is_busy() {
-            self.set_message("busy: pull in progress");
+            self.toast(crate::toast::ToastKind::Info, "busy: pull in progress");
             return;
         }
         let Some((remote, branch)) = self.last_pull.clone() else {

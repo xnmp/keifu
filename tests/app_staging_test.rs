@@ -134,6 +134,10 @@ fn make_base_app(
         diff_source: None,
         message: None,
         message_time: None,
+        message_sticky: false,
+        wt_status_error_latched: false,
+        auto_refresh_error_latched: false,
+        watch_refresh_error_latched: false,
         toasts: keifu::toast::ToastQueue::new(),
         pr_toasts_armed: false,
         network: NetworkManager::new(),
@@ -446,11 +450,14 @@ fn selected_file_repo_path_returns_repo_relative_path() {
         Some("src/new.txt")
     );
 
-    // ... and the CopyPath action runs the handler and reports a status
-    // message (clipboard shell-out may fail headless, so we assert a message
-    // was produced, not the clipboard contents).
+    // ... and the CopyPath action runs the handler and reports the outcome as
+    // a toast (clipboard shell-out may fail headless, so we assert a toast was
+    // produced — success or clipboard error — not the clipboard contents).
     app.handle_action(Action::CopyPath).unwrap();
-    assert!(app.message.is_some(), "CopyPath should set a status message");
+    assert!(
+        !app.toasts.visible().is_empty(),
+        "CopyPath should produce a toast"
+    );
     assert!(matches!(app.mode, AppMode::Normal));
 }
 

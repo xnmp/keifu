@@ -66,7 +66,7 @@ impl App {
     pub(crate) fn block_if_op_in_progress(&mut self, attempted: &str) -> bool {
         match op_guard_message(self.op_state, self.conflict_count, attempted) {
             Some(msg) => {
-                self.set_message(msg);
+                self.toast(crate::toast::ToastKind::Info, msg);
                 true
             }
             None => false,
@@ -78,7 +78,7 @@ impl App {
     pub(crate) fn block_commit_if_unmerged(&mut self) -> bool {
         match commit_guard_message(self.op_state, self.conflict_count) {
             Some(msg) => {
-                self.set_message(msg);
+                self.toast(crate::toast::ToastKind::Info, msg);
                 true
             }
             None => false,
@@ -121,7 +121,7 @@ impl App {
         match outcome {
             OpOutcome::Completed => {
                 self.refresh(true)?;
-                self.set_message(format!("Stash {verb}"));
+                self.toast(crate::toast::ToastKind::Success, format!("Stash {verb}"));
             }
             OpOutcome::Conflicts { count } => {
                 self.refresh(true)?;
@@ -138,7 +138,7 @@ impl App {
     /// clean again on completion).
     pub(crate) fn handle_op_outcome(&mut self, outcome: OpOutcome, op: OperationState) {
         match outcome {
-            OpOutcome::Completed => self.set_message(op_completed_message(op)),
+            OpOutcome::Completed => self.toast(crate::toast::ToastKind::Success, op_completed_message(op)),
             OpOutcome::Conflicts { count } => {
                 self.focus_conflict_files();
                 self.set_message(Self::conflict_guidance(count));
@@ -175,7 +175,7 @@ impl App {
             return Ok(());
         };
         if file.stage_status != Some(StageStatus::Conflicted) {
-            self.set_message("Not a conflicted file (use o/t on a Merge Changes entry)");
+            self.toast(crate::toast::ToastKind::Info, "Not a conflicted file (use o/t on a Merge Changes entry)");
             return Ok(());
         }
         let path = file.path.to_string_lossy().to_string();
@@ -184,7 +184,7 @@ impl App {
         } else {
             accept_theirs(&self.repo_path, &path)?;
         }
-        self.set_message(format!(
+        self.toast(crate::toast::ToastKind::Success, format!(
             "Accepted {} for '{}'",
             if ours { "ours" } else { "theirs" },
             path
@@ -197,13 +197,13 @@ impl App {
     pub(crate) fn continue_in_progress_operation(&mut self) -> Result<()> {
         let op = self.op_state;
         if !op.is_in_progress() {
-            self.set_message("No operation in progress");
+            self.toast(crate::toast::ToastKind::Info, "No operation in progress");
             return Ok(());
         }
         match continue_operation(&self.repo_path, op) {
             Ok(OpOutcome::Completed) => {
                 self.refresh(true)?;
-                self.set_message(op_completed_message(op));
+                self.toast(crate::toast::ToastKind::Success, op_completed_message(op));
             }
             Ok(OpOutcome::Conflicts { count }) => {
                 self.refresh(true)?;
@@ -222,7 +222,7 @@ impl App {
     pub(crate) fn prompt_abort_operation(&mut self) {
         let op = self.op_state;
         if !op.is_in_progress() {
-            self.set_message("No operation in progress");
+            self.toast(crate::toast::ToastKind::Info, "No operation in progress");
             return;
         }
         self.mode = AppMode::Confirm {
@@ -369,12 +369,13 @@ mod tests {
         app.checkout_branch_by_name("feature")
             .expect("guarded checkout returns Ok");
 
-        // HEAD did not move, and the user was told why.
+        // HEAD did not move, and the user was told why (via a toast).
         assert_eq!(app.repo.head_oid(), head_before, "HEAD must not move");
-        let msg = app.get_message().expect("guard message set");
+        let toast = app.toasts.visible().last().expect("guard toast shown");
         assert!(
-            msg.contains("Cannot checkout during a merge"),
-            "guard message shown: {msg}"
+            toast.text.contains("Cannot checkout during a merge"),
+            "guard toast shown: {}",
+            toast.text
         );
     }
 }

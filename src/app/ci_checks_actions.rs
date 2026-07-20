@@ -20,7 +20,7 @@ impl App {
             return;
         };
         if pr.ci == CiStatus::None {
-            self.set_message("This PR has no CI checks");
+            self.toast(crate::toast::ToastKind::Info, "This PR has no CI checks");
             return;
         }
         self.ci_checks = Some(CiChecksView {
@@ -148,7 +148,7 @@ impl App {
                     });
                 }
             }
-            _ => self.set_message("No failure log for this check (press o to open)"),
+            _ => self.toast(crate::toast::ToastKind::Info, "No failure log for this check (press o to open)"),
         }
     }
 
@@ -178,7 +178,7 @@ impl App {
         if let Err(e) = open_url(&url) {
             self.show_error(format!("Could not open: {e}"));
         } else {
-            self.set_message("Opening in browser");
+            self.toast(crate::toast::ToastKind::Success, "Opening in browser");
         }
     }
 

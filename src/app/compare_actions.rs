@@ -40,7 +40,7 @@ impl App {
     /// a fresh mark.
     pub(crate) fn mark_or_compare_selected(&mut self) {
         let Some(oid) = self.selected_commit_oid() else {
-            self.set_message("Select a commit to compare");
+            self.toast(crate::toast::ToastKind::Info, "Select a commit to compare");
             return;
         };
 
@@ -48,7 +48,7 @@ impl App {
         if self.compare_range.is_some() {
             self.compare_range = None;
             self.compare_marked = Some(oid);
-            self.set_message(format!(
+            self.toast(crate::toast::ToastKind::Info, format!(
                 "Marked {} for compare (previous comparison cleared)",
                 Self::short(oid)
             ));
@@ -58,14 +58,14 @@ impl App {
         match self.compare_marked {
             None => {
                 self.compare_marked = Some(oid);
-                self.set_message(format!(
+                self.toast(crate::toast::ToastKind::Info, format!(
                     "Marked {} — select another commit and press m to compare",
                     Self::short(oid)
                 ));
             }
             Some(marked) if marked == oid => {
                 self.compare_marked = None;
-                self.set_message("Unmarked comparison commit");
+                self.toast(crate::toast::ToastKind::Info, "Unmarked comparison commit");
             }
             Some(marked) => {
                 let (old, new) = self.order_older_to_newer(marked, oid);
@@ -74,7 +74,7 @@ impl App {
                 // Focus stays on the graph so a single Esc clears the
                 // comparison; the files pane and detail pane already reflect it.
                 self.commit_detail_scroll = 0;
-                self.set_message(format!(
+                self.toast(crate::toast::ToastKind::Success, format!(
                     "Comparing {} → {} (older → newer). Space opens a file; Esc clears.",
                     Self::short(old),
                     Self::short(new)
@@ -89,7 +89,7 @@ impl App {
         if self.compare_range.is_some() || self.compare_marked.is_some() {
             self.compare_range = None;
             self.compare_marked = None;
-            self.set_message("Cleared comparison");
+            self.toast(crate::toast::ToastKind::Info, "Cleared comparison");
             true
         } else {
             false

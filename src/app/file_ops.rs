@@ -11,7 +11,7 @@ impl App {
         // `.git/index.lock`, and a collision leaves a stuck lock. Read-only
         // navigation stays ungated.
         if action_touches_index(&action) && self.network.is_busy() {
-            self.set_message("busy: pull in progress");
+            self.toast(crate::toast::ToastKind::Info, "busy: pull in progress");
             return Ok(());
         }
 
@@ -45,7 +45,7 @@ impl App {
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
-                        self.set_message(format!("Cannot open diff: {e}"));
+                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
                     }
                 }
             }
@@ -64,7 +64,7 @@ impl App {
                             match self.extract_blob_to_temp(commit.oid, &path) {
                                 Ok(tmp) => tmp,
                                 Err(e) => {
-                                    self.set_message(format!("Cannot extract file: {e}"));
+                                    self.toast(crate::toast::ToastKind::Error, format!("Cannot extract file: {e}"));
                                     return Ok(());
                                 }
                             }
@@ -179,7 +179,7 @@ impl App {
     /// (wrap-around), or report that there are none.
     fn jump_to_conflict(&mut self, forward: bool) {
         if !self.files_pane.select_conflict(forward) {
-            self.set_message("No conflicted files");
+            self.toast(crate::toast::ToastKind::Info, "No conflicted files");
         }
     }
 
@@ -229,7 +229,7 @@ impl App {
             return Ok(());
         }
         stage_all(&self.repo_path)?;
-        self.set_message("Staged all changes");
+        self.toast(crate::toast::ToastKind::Success, "Staged all changes");
         self.refresh_after_file_op()?;
         Ok(())
     }
@@ -239,7 +239,7 @@ impl App {
             return Ok(());
         }
         unstage_all(&self.repo_path)?;
-        self.set_message("Unstaged all changes");
+        self.toast(crate::toast::ToastKind::Success, "Unstaged all changes");
         self.refresh_after_file_op()?;
         Ok(())
     }
@@ -265,11 +265,11 @@ impl App {
                 self.last_undoable_op = Some(UndoableOperation::Gitignore {
                     pattern: pattern.clone(),
                 });
-                self.set_message(format!("Added '{}' to .gitignore", pattern));
+                self.toast(crate::toast::ToastKind::Success, format!("Added '{}' to .gitignore", pattern));
                 self.refresh_after_file_op()?;
             }
             false => {
-                self.set_message(format!("'{}' already in .gitignore", pattern));
+                self.toast(crate::toast::ToastKind::Info, format!("'{}' already in .gitignore", pattern));
             }
         }
 
@@ -298,7 +298,7 @@ impl App {
         self.last_undoable_op = Some(UndoableOperation::Archive {
             relative_path: target.clone(),
         });
-        self.set_message(format!("Archived '{}'", target));
+        self.toast(crate::toast::ToastKind::Success, format!("Archived '{}'", target));
         self.refresh_after_file_op()?;
 
         Ok(())
@@ -310,7 +310,7 @@ impl App {
         };
         let target = file.path.to_string_lossy().to_string();
         unarchive_path(&self.repo_path, &target)?;
-        self.set_message(format!("Unarchived '{}'", target));
+        self.toast(crate::toast::ToastKind::Success, format!("Unarchived '{}'", target));
         self.refresh_after_file_op()?;
         Ok(())
     }
@@ -377,7 +377,7 @@ impl App {
 
     fn undo_last_file_op(&mut self) -> Result<()> {
         let Some(op) = self.last_undoable_op.take() else {
-            self.set_message("Nothing to undo");
+            self.toast(crate::toast::ToastKind::Info, "Nothing to undo");
             return Ok(());
         };
 
@@ -390,16 +390,16 @@ impl App {
                 } else {
                     unstage_file(&self.repo_path, &path)?;
                 }
-                self.set_message(format!("Undid stage/unstage '{}'", path));
+                self.toast(crate::toast::ToastKind::Success, format!("Undid stage/unstage '{}'", path));
             }
             UndoableOperation::Gitignore { pattern } => {
                 match remove_from_gitignore(&self.repo_path, &pattern)? {
-                    true => self.set_message(format!(
+                    true => self.toast(crate::toast::ToastKind::Success, format!(
                         "Removed '{}' from .gitignore",
                         pattern
                     )),
                     false => {
-                        self.set_message(format!(
+                        self.toast(crate::toast::ToastKind::Info, format!(
                             "'{}' not found in .gitignore",
                             pattern
                         ));
@@ -409,7 +409,7 @@ impl App {
             }
             UndoableOperation::Archive { relative_path } => {
                 unarchive_path(&self.repo_path, &relative_path)?;
-                self.set_message(format!("Restored '{}' from archive", relative_path));
+                self.toast(crate::toast::ToastKind::Success, format!("Restored '{}' from archive", relative_path));
             }
         }
 
@@ -431,9 +431,9 @@ impl App {
         };
         match copy_to_clipboard(&path) {
             Ok(outcome) => {
-                self.set_message(format!("Copied path '{}'{}", path, outcome.suffix()))
+                self.toast(crate::toast::ToastKind::Success, format!("Copied path '{}'{}", path, outcome.suffix()))
             }
-            Err(e) => self.set_message(format!("Clipboard error: {}", e)),
+            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
         }
     }
 
