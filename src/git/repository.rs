@@ -496,4 +496,61 @@ mod tests {
             "reopened handle must see origin/feature created by the push"
         );
     }
+
+    #[test]
+    fn hide_remote_branches_caps_walk_at_local_tip_when_behind() {
+        // Issue #57: a local branch that is behind its remote-tracking upstream
+        // must not leak the remote-only commits into the graph once
+        // hide_remote_branches is on. This exercises the exact filtering the
+        // app performs (git::remote_only_branch_names -> drop from the
+        // walk-tip list -> get_commits) against a real repo.
+        use crate::git::{remote_only_branch_names, BranchInfo};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .arg(&local)
+            .status()
+            .unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "c1"]);
+        git(&local, &["push", "-q", "-u", "origin", "main"]);
+
+        // A second commit lands on the remote (e.g. pushed from elsewhere)
+        // that the local branch hasn't pulled yet.
+        std::fs::write(local.join("a.txt"), "b").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "c2-remote-only"]);
+        git(&local, &["push", "-q", "origin", "main"]);
+        // Roll local main back so it's one commit behind origin/main, without
+        // touching the remote-tracking ref that was just pushed.
+        git(&local, &["reset", "-q", "--hard", "HEAD~1"]);
+
+        let repo = GitRepository::open(&local).unwrap();
+        let branches = repo.get_branches().unwrap();
+        let local_main = branches
+            .iter()
+            .find(|b| b.name == "main" && !b.is_remote)
+            .expect("local main branch");
+        assert_eq!(local_main.behind, 1, "local main must be exactly one commit behind origin/main");
+
+        // Simulate the app's hide-remote-branches filtering (app/refresh.rs,
+        // app/init.rs): remote-only branches are dropped before the walk.
+        let remote_only = remote_only_branch_names(&branches);
+        let visible: Vec<BranchInfo> =
+            branches.into_iter().filter(|b| !remote_only.contains(&b.name)).collect();
+
+        let commits = repo.get_commits(50, &visible, &[]).unwrap();
+        assert!(
+            !commits.iter().any(|c| c.message.contains("c2-remote-only")),
+            "remote-only commit leaked into the graph with hide_remote_branches on"
+        );
+    }
 }
