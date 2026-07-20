@@ -152,6 +152,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Rebuild display items so they match the latest diff data.
     // Selection is path-based so this doesn't reset it.
     app.sync_file_list_cache();
+    // Branch-trace frame cache: O(graph) lineage/lit/color builds happen only
+    // when the selection or graph changed; every renderer below reads the cache.
+    app.ensure_trace_cache();
 
     let theme = app.theme();
     let area = frame.area();
@@ -335,25 +338,31 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let offset = app.graph_nav.graph_list_state.offset();
         let viewport = graph_area.height.saturating_sub(2) as usize;
         let base_len = app.pixel_specs_cache.as_ref().unwrap().4.len();
-        // Only the on-screen window (± 2 viewport-heights) is rasterized; the
-        // dim overlay is built for exactly this window so it aligns with what
-        // `sync_frame` transmits and `overlay_pixel_graph` draws.
-        let (win_start, win_end) = graph_pixels::protocol_window(offset, viewport, base_len);
+        // Only a window around the viewport is rasterized; the dim overlay is
+        // built for exactly this window so it aligns with what `sync_frame`
+        // transmits and `overlay_pixel_graph` draws. With selection-dependent
+        // trace dimming active the window shrinks to the viewport + a small
+        // margin (`trace_window`): the ±2-viewport pre-warm only pays off when
+        // specs are stable across scrolling, which tracing defeats.
+        let trace_active = app.active_trace().is_some();
+        let (win_start, win_end) = if trace_active {
+            graph_pixels::trace_window(offset, viewport, base_len)
+        } else {
+            graph_pixels::protocol_window(offset, viewport, base_len)
+        };
         // Two per-frame dim sources feed the overlay: branch-trace lineage and
         // base-update force-dim (#55). Build it when EITHER is active — the
         // latter must dim the back-merge connector even with tracing off, which
         // the old trace-only guard skipped (the pixel connector stayed bright
         // while the message muted).
-        let trace_lineage = app.active_trace_lineage();
         let want_base_mute = app.metadata_columns.mute_base_merges
             && !app.merged.base_update.value().is_empty();
-        pixel_frame_dim = if trace_lineage.is_some() || want_base_mute {
+        pixel_frame_dim = if trace_active || want_base_mute {
             let base = &app.pixel_specs_cache.as_ref().unwrap().4;
             Some(graph_view::dim_pixel_specs_window(
                 app,
-                &theme,
                 base,
-                trace_lineage.as_ref(),
+                app.active_trace(),
                 win_start,
                 win_end,
             ))

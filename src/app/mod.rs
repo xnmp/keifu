@@ -1138,6 +1138,37 @@ pub struct App {
     // tracing on reuses this cache instead of rebuilding every row's geometry.
     // Rebuilt lazily by the render pre-pass.
     pub pixel_specs_cache: Option<PixelSpecsCache>,
+
+    // Branch-trace frame cache: lineage, lit edges, and resolved lane colors
+    // for the traced selection. Valid while (graph_generation, selected index)
+    // are unchanged; rebuilding these is O(total loaded commits), so doing it
+    // per draw (the old behavior) made every keypress scale with history size
+    // while tracing was on. Refreshed by `ensure_trace_cache` at the top of
+    // each draw; cleared by the theme setter (lane colors bake the theme in).
+    pub trace_cache: Option<TraceCache>,
+}
+
+/// Frame-cached branch-trace state (see `App::trace_cache`). `lineage` empty
+/// means "tracing is on but the selection has no lineage" — consumers treat
+/// that as trace-off for rendering, and the cache still prevents a per-draw
+/// recompute.
+pub struct TraceCache {
+    generation: u64,
+    selected: usize,
+    /// Selected commit's lineage (ancestors ∪ descendants), the full-strength set.
+    pub lineage: std::collections::HashSet<Oid>,
+    /// Lit cell edges derived from `lineage` (see `trace_lit_edges`).
+    pub lit: std::collections::HashMap<crate::git::graph::CellEdge, Oid>,
+    /// Lineage commit → its lane color resolved through the active theme, for
+    /// recoloring lit strokes without a per-frame full-graph scan.
+    pub lane_rgb: std::collections::HashMap<Oid, [u8; 3]>,
+}
+
+impl TraceCache {
+    /// The cache as an active trace: `Some` only when the lineage is non-empty.
+    pub fn active(&self) -> Option<&TraceCache> {
+        (!self.lineage.is_empty()).then_some(self)
+    }
 }
 
 /// Cached undimmed pixel base row specs plus the key they were built for:
@@ -1396,15 +1427,60 @@ impl App {
         self.trace_enabled && crate::git::graph::graph_has_enough_lanes(&self.graph_layout)
     }
 
-    /// The lineage OID set to render at full strength (dimming the rest), or
-    /// `None` when tracing is inactive or nothing selectable is selected.
-    pub(crate) fn active_trace_lineage(&self) -> Option<std::collections::HashSet<Oid>> {
+    /// Bring `trace_cache` up to date for this frame: `Some` iff tracing is
+    /// active with a selection, keyed by `(graph_generation, selected index)`.
+    /// A hit is free; a miss does the O(graph) lineage / lit-edge / lane-color
+    /// builds exactly once per selection move instead of once per draw. Called
+    /// at the top of `ui::draw`, before any renderer reads the cache.
+    pub(crate) fn ensure_trace_cache(&mut self) {
         if !self.trace_active() {
-            return None;
+            self.trace_cache = None;
+            return;
         }
-        let sel = self.graph_nav.graph_list_state.selected()?;
+        let Some(sel) = self.graph_nav.graph_list_state.selected() else {
+            self.trace_cache = None;
+            return;
+        };
+        if self
+            .trace_cache
+            .as_ref()
+            .is_some_and(|c| c.generation == self.graph_generation && c.selected == sel)
+        {
+            return;
+        }
         let lineage = crate::git::graph::lineage_oids(&self.graph_layout, sel);
-        (!lineage.is_empty()).then_some(lineage)
+        let lit = crate::git::graph::trace_lit_edges(&self.graph_layout, &lineage);
+        let theme = self.theme();
+        let lane_rgb = self
+            .graph_layout
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                n.commit
+                    .as_ref()
+                    .filter(|c| lineage.contains(&c.oid))
+                    .map(|c| {
+                        let rgb = crate::ui::graph_pixels::color_to_rgb(
+                            theme.lane_color(n.color_index),
+                        );
+                        (c.oid, rgb)
+                    })
+            })
+            .collect();
+        self.trace_cache = Some(TraceCache {
+            generation: self.graph_generation,
+            selected: sel,
+            lineage,
+            lit,
+            lane_rgb,
+        });
+    }
+
+    /// The active trace for rendering: the frame cache when tracing is on and
+    /// the selection has a non-empty lineage. Read-only view over
+    /// `ensure_trace_cache`'s result.
+    pub(crate) fn active_trace(&self) -> Option<&TraceCache> {
+        self.trace_cache.as_ref().and_then(TraceCache::active)
     }
 
     /// Toggle branch tracing (persisted). A no-op visually on linear graphs,

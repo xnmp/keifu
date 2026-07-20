@@ -492,6 +492,11 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             set: |a, v| {
                 if let SettingValue::Enum(i) = v {
                     a.config.ui.theme = ThemeChoice::from_index(i).as_str().to_string();
+                    // Both caches bake theme colors in; drop them so the new
+                    // palette shows without waiting for a graph rebuild or a
+                    // selection move.
+                    a.pixel_specs_cache = None;
+                    a.trace_cache = None;
                 }
             },
         },
