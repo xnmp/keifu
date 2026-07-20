@@ -127,8 +127,21 @@ fn main() {
         let below = folded
             .get(i + 1)
             .map(|(ni, _, _)| layout.nodes[*ni].cells.clone());
-        let mut spec =
-            build_row_spec(above.as_deref(), node, below.as_deref(), underlay, &theme);
+        let neighbor = |j: usize| keifu::ui::graph_pixels::NeighborRow {
+            underlay: &folded[j].1,
+            cells: &layout.nodes[folded[j].0].cells,
+        };
+        let above_row = i.checked_sub(1).map(neighbor);
+        let below_row = (i + 1 < folded.len()).then(|| neighbor(i + 1));
+        let mut spec = build_row_spec(
+            above.as_deref(),
+            node,
+            below.as_deref(),
+            underlay,
+            above_row,
+            below_row,
+            &theme,
+        );
         if std::env::var("NODIM").is_ok() {
             let img = rasterize_row(&spec, cw, ch);
             max_w = max_w.max(img.width());
