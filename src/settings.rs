@@ -1,19 +1,26 @@
-//! Settings registry — the pure domain layer behind the Ctrl+, settings menu.
+//! Settings registry — the single source of truth behind the Ctrl+, menu.
 //!
-//! This module has **no dependency on `App`**. It defines:
+//! Each user-facing setting is described exactly once, by one
+//! [`SettingDescriptor`] in [`descriptors`]. A descriptor bundles everything the
+//! rest of the app needs to know about that setting:
 //!
-//! - [`SettingsModel`]: a flat, plain-data snapshot of every user-facing setting
-//!   the menu can edit. `App` projects its scattered state into this and applies
-//!   edits back (see `App::settings_model` / `App::apply_settings_model`).
-//! - [`descriptors`]: the ordered, grouped list of settings shown in the menu,
-//!   each with a typed [`SettingKind`] plus pure get/set accessors.
-//! - Pure operations ([`cycle_value`], [`clamp_int`], display formatting) that
-//!   the widget and the action handler share, so both agree on behavior.
+//! - display metadata ([`label`](SettingDescriptor::label), group, [`SettingKind`], note),
+//! - `get`/`set` accessors that read and write the live value directly on [`App`], and
+//! - a [`SettingStore`] that says where the value persists — and, for state.toml
+//!   settings, carries the read/write lens into [`UiState`].
 //!
-//! Keeping this layer pure makes the menu's logic unit-testable without spinning
-//! up a TUI or an `App`.
+//! Because the App accessors and the persistence lens live in the *same* entry,
+//! there is no hand-written projection to keep in sync: `App::settings_snapshot`
+//! and `App::save_ui_state` are simple loops over this list. Adding a setting
+//! touches one descriptor entry (plus the `App` field and, if state-persisted,
+//! the `UiState` field it points at).
+//!
+//! Pure value operations ([`cycle_value`], [`clamp_int`], [`format_value`]) are
+//! shared by the widget and the action handler so both agree on behavior, and
+//! stay unit-testable without an `App`.
 
-use crate::config::GraphRenderer;
+use crate::app::App;
+use crate::config::{GraphRenderer, UiState};
 
 /// Which area of the app a setting belongs to. Also the menu's section order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,36 +120,18 @@ fn renderer_from_index(i: usize) -> GraphRenderer {
     }
 }
 
-/// Flat snapshot of every editable setting. Plain data — no behavior beyond the
-/// descriptor accessors. `graph_width_cap == 0` means "uncapped" (`None`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct SettingsModel {
-    // Graph
-    pub trace_enabled: bool,
-    pub hide_remote_branches: bool,
-    pub hide_merged_branches: bool,
-    pub mute_merges: bool,
-    pub mute_base_merges: bool,
-    pub collapse_merges: bool,
-    pub avatars: bool,
-    pub col_author: bool,
-    pub col_hash: bool,
-    pub col_date: bool,
-    pub graph_renderer: GraphRenderer,
-    pub graph_split_ratio: u16,
-    /// 0 = uncapped.
-    pub graph_width_cap: u16,
-    // Files
-    pub diff_word_wrap: bool,
-    pub files_group_by_folder: bool,
-    // Refresh
-    pub auto_refresh: bool,
-    pub refresh_interval: u64,
-    pub auto_fetch: bool,
-    pub fetch_interval: u64,
-    // Interface
-    pub side_panel_layout: bool,
-    pub theme: ThemeChoice,
+/// The `graph_width_cap` encoding, defined once so every store and both
+/// directions agree: the live/on-disk value is `Option<usize>` (`None` =
+/// uncapped), while the menu edits it as an integer where `0` means uncapped.
+fn cap_to_value(cap: Option<usize>) -> SettingValue {
+    SettingValue::Int(cap.unwrap_or(0) as u64)
+}
+
+fn value_to_cap(v: SettingValue) -> Option<usize> {
+    match v {
+        SettingValue::Int(n) if n != 0 => Some(n as usize),
+        _ => None,
+    }
 }
 
 /// The typed shape of a setting — drives display and the generic cycle/edit ops.
@@ -173,7 +162,26 @@ pub enum SettingValue {
     Int(u64),
 }
 
-/// One row in the settings menu: metadata plus pure accessors over the model.
+/// Where a setting is persisted. For state.toml settings this also carries the
+/// read/write lens into [`UiState`], so the persistence mapping lives in the
+/// same descriptor as the live-state accessors (no separate `save_ui_state`
+/// projection to drift out of sync).
+#[derive(Clone, Copy)]
+pub enum SettingStore {
+    /// state.toml (UI state). Carries the lens between the setting value and its
+    /// field in [`UiState`].
+    State {
+        read: fn(&UiState) -> SettingValue,
+        write: fn(&mut UiState, SettingValue),
+    },
+    /// config.toml — persisted wholesale via `Config::save` (the `set` accessor
+    /// writes `app.config.*` directly, so there is no per-field lens to carry;
+    /// comments and unknown keys are preserved on write).
+    Config,
+}
+
+/// One row in the settings menu: display metadata, live-state accessors over
+/// [`App`], and the persistence store.
 pub struct SettingDescriptor {
     pub label: &'static str,
     pub group: SettingGroup,
@@ -182,44 +190,37 @@ pub struct SettingDescriptor {
     pub note: Option<&'static str>,
     /// Persistence destination, shown truthfully in the menu footer/help.
     pub store: SettingStore,
-    get: fn(&SettingsModel) -> SettingValue,
-    set: fn(&mut SettingsModel, SettingValue),
-}
-
-/// Where a setting is persisted — surfaced so the UI can tell the truth about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingStore {
-    /// state.toml (UI state).
-    State,
-    /// config.toml (user config; comments/unknown keys preserved on write).
-    Config,
+    get: fn(&App) -> SettingValue,
+    set: fn(&mut App, SettingValue),
 }
 
 impl SettingDescriptor {
-    pub fn get(&self, m: &SettingsModel) -> SettingValue {
-        (self.get)(m)
+    /// Read this setting's current value off the live app state.
+    pub fn get(&self, app: &App) -> SettingValue {
+        (self.get)(app)
     }
 
-    pub fn set(&self, m: &mut SettingsModel, v: SettingValue) {
-        (self.set)(m, v)
+    /// Write a new value back onto the live app state.
+    pub fn set(&self, app: &mut App, v: SettingValue) {
+        (self.set)(app, v)
     }
+}
 
-    /// Human-readable current value (right-aligned column in the menu).
-    pub fn display_value(&self, m: &SettingsModel) -> String {
-        match (self.kind, self.get(m)) {
-            (SettingKind::Bool, SettingValue::Bool(b)) => {
-                if b { "On".into() } else { "Off".into() }
-            }
-            (SettingKind::Enum { options }, SettingValue::Enum(i)) => {
-                options.get(i).copied().unwrap_or("?").to_string()
-            }
-            (SettingKind::Int { zero_label, .. }, SettingValue::Int(n)) => match zero_label {
-                Some(label) if n == 0 => label.to_string(),
-                _ => n.to_string(),
-            },
-            // Kind/value mismatch is a programming error; render defensively.
-            _ => "?".to_string(),
+/// Human-readable current value (right-aligned column in the menu).
+pub fn format_value(kind: SettingKind, v: SettingValue) -> String {
+    match (kind, v) {
+        (SettingKind::Bool, SettingValue::Bool(b)) => {
+            if b { "On".into() } else { "Off".into() }
         }
+        (SettingKind::Enum { options }, SettingValue::Enum(i)) => {
+            options.get(i).copied().unwrap_or("?").to_string()
+        }
+        (SettingKind::Int { zero_label, .. }, SettingValue::Int(n)) => match zero_label {
+            Some(label) if n == 0 => label.to_string(),
+            _ => n.to_string(),
+        },
+        // Kind/value mismatch is a programming error; render defensively.
+        _ => "?".to_string(),
     }
 }
 
@@ -249,103 +250,137 @@ pub fn clamp_int(kind: &SettingKind, n: u64) -> u64 {
     }
 }
 
-/// The full, ordered settings registry. Rows are grouped by [`SettingGroup`];
-/// the menu renders a section header when the group changes. The list order is
-/// the navigation order (headers are not selectable).
+fn set_bool(v: SettingValue, target: &mut bool) {
+    if let SettingValue::Bool(b) = v {
+        *target = b;
+    }
+}
+
+/// A bool setting whose live value lives at `$app_field` on `App` and whose
+/// persisted value lives at `$ui_field` on `UiState`.
+macro_rules! state_bool {
+    ($label:expr, $group:expr, $note:expr, $app:ident $(. $app_rest:ident)*, $ui:ident $(. $ui_rest:ident)*) => {
+        SettingDescriptor {
+            label: $label,
+            group: $group,
+            kind: SettingKind::Bool,
+            note: $note,
+            store: SettingStore::State {
+                read: |u| SettingValue::Bool(u.$ui $(. $ui_rest)*),
+                write: |u, v| set_bool(v, &mut u.$ui $(. $ui_rest)*),
+            },
+            get: |a| SettingValue::Bool(a.$app $(. $app_rest)*),
+            set: |a, v| set_bool(v, &mut a.$app $(. $app_rest)*),
+        }
+    };
+}
+
+/// A bool setting persisted in config.toml, whose live value lives at
+/// `app.config.$path` (so it is saved wholesale via `Config::save`).
+macro_rules! config_bool {
+    ($label:expr, $group:expr, $note:expr, $($path:ident).+) => {
+        SettingDescriptor {
+            label: $label,
+            group: $group,
+            kind: SettingKind::Bool,
+            note: $note,
+            store: SettingStore::Config,
+            get: |a| SettingValue::Bool(a.config.$($path).+),
+            set: |a, v| set_bool(v, &mut a.config.$($path).+),
+        }
+    };
+}
+
+/// A config.toml integer setting whose live value lives at `app.config.$path`.
+macro_rules! config_int {
+    ($label:expr, $group:expr, $kind:expr, $($path:ident).+) => {
+        SettingDescriptor {
+            label: $label,
+            group: $group,
+            kind: $kind,
+            note: None,
+            store: SettingStore::Config,
+            get: |a| SettingValue::Int(a.config.$($path).+),
+            set: |a, v| {
+                if let SettingValue::Int(n) = v {
+                    a.config.$($path).+ = n;
+                }
+            },
+        }
+    };
+}
+
+/// The full, ordered settings registry — the single source of truth. Rows are
+/// grouped by [`SettingGroup`]; the menu renders a section header when the group
+/// changes. The list order is the navigation order (headers are not selectable).
 pub fn descriptors() -> Vec<SettingDescriptor> {
     use SettingGroup::*;
     vec![
         // ── Graph ──────────────────────────────────────────────────
-        SettingDescriptor {
-            label: "Branch tracing",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.trace_enabled),
-            set: |m, v| set_bool(v, &mut m.trace_enabled),
-        },
-        SettingDescriptor {
-            label: "Hide remote branches",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.hide_remote_branches),
-            set: |m, v| set_bool(v, &mut m.hide_remote_branches),
-        },
-        SettingDescriptor {
-            label: "Hide merged branches",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.hide_merged_branches),
-            set: |m, v| set_bool(v, &mut m.hide_merged_branches),
-        },
-        SettingDescriptor {
-            label: "Mute merge commits",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.mute_merges),
-            set: |m, v| set_bool(v, &mut m.mute_merges),
-        },
-        SettingDescriptor {
-            label: "Mute base-update merges",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.mute_base_merges),
-            set: |m, v| set_bool(v, &mut m.mute_base_merges),
-        },
-        SettingDescriptor {
-            label: "Collapse merge messages",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.collapse_merges),
-            set: |m, v| set_bool(v, &mut m.collapse_merges),
-        },
-        SettingDescriptor {
-            label: "Author avatars",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: Some("pixel mode"),
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.avatars),
-            set: |m, v| set_bool(v, &mut m.avatars),
-        },
-        SettingDescriptor {
-            label: "Show author column",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.col_author),
-            set: |m, v| set_bool(v, &mut m.col_author),
-        },
-        SettingDescriptor {
-            label: "Show hash column",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.col_hash),
-            set: |m, v| set_bool(v, &mut m.col_hash),
-        },
-        SettingDescriptor {
-            label: "Show date column",
-            group: Graph,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.col_date),
-            set: |m, v| set_bool(v, &mut m.col_date),
-        },
+        state_bool!("Branch tracing", Graph, None, trace_enabled, trace_enabled),
+        state_bool!(
+            "Hide remote branches",
+            Graph,
+            None,
+            hide_remote_branches,
+            hide_remote_branches
+        ),
+        state_bool!(
+            "Hide merged branches",
+            Graph,
+            None,
+            merged.hide,
+            hide_merged_branches
+        ),
+        state_bool!(
+            "Mute merge commits",
+            Graph,
+            None,
+            metadata_columns.mute_merges,
+            metadata_columns.mute_merges
+        ),
+        state_bool!(
+            "Mute base-update merges",
+            Graph,
+            None,
+            metadata_columns.mute_base_merges,
+            metadata_columns.mute_base_merges
+        ),
+        state_bool!(
+            "Collapse merge messages",
+            Graph,
+            None,
+            metadata_columns.collapse_merges,
+            metadata_columns.collapse_merges
+        ),
+        state_bool!(
+            "Author avatars",
+            Graph,
+            Some("pixel mode"),
+            metadata_columns.avatars,
+            metadata_columns.avatars
+        ),
+        state_bool!(
+            "Show author column",
+            Graph,
+            None,
+            metadata_columns.author,
+            metadata_columns.author
+        ),
+        state_bool!(
+            "Show hash column",
+            Graph,
+            None,
+            metadata_columns.hash,
+            metadata_columns.hash
+        ),
+        state_bool!(
+            "Show date column",
+            Graph,
+            None,
+            metadata_columns.date,
+            metadata_columns.date
+        ),
         SettingDescriptor {
             label: "Graph renderer",
             group: Graph,
@@ -354,10 +389,10 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             },
             note: Some("restart"),
             store: SettingStore::Config,
-            get: |m| SettingValue::Enum(renderer_index(m.graph_renderer)),
-            set: |m, v| {
+            get: |a| SettingValue::Enum(renderer_index(a.config.ui.graph_renderer)),
+            set: |a, v| {
                 if let SettingValue::Enum(i) = v {
-                    m.graph_renderer = renderer_from_index(i);
+                    a.config.ui.graph_renderer = renderer_from_index(i);
                 }
             },
         },
@@ -371,11 +406,18 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
                 zero_label: None,
             },
             note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Int(m.graph_split_ratio as u64),
-            set: |m, v| {
+            store: SettingStore::State {
+                read: |u| SettingValue::Int(u.graph_split_ratio as u64),
+                write: |u, v| {
+                    if let SettingValue::Int(n) = v {
+                        u.graph_split_ratio = n as u16;
+                    }
+                },
+            },
+            get: |a| SettingValue::Int(a.graph_split_ratio as u64),
+            set: |a, v| {
                 if let SettingValue::Int(n) = v {
-                    m.graph_split_ratio = n as u16;
+                    a.graph_split_ratio = n as u16;
                 }
             },
         },
@@ -389,98 +431,55 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
                 zero_label: Some("uncapped"),
             },
             note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Int(m.graph_width_cap as u64),
-            set: |m, v| {
-                if let SettingValue::Int(n) = v {
-                    m.graph_width_cap = n as u16;
-                }
+            store: SettingStore::State {
+                read: |u| cap_to_value(u.graph_width_cap),
+                write: |u, v| u.graph_width_cap = value_to_cap(v),
             },
+            get: |a| cap_to_value(a.graph_width_cap),
+            set: |a, v| a.graph_width_cap = value_to_cap(v),
         },
         // ── Files ──────────────────────────────────────────────────
-        SettingDescriptor {
-            label: "Diff line wrap",
-            group: Files,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.diff_word_wrap),
-            set: |m, v| set_bool(v, &mut m.diff_word_wrap),
-        },
-        SettingDescriptor {
-            label: "Group files by folder",
-            group: Files,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.files_group_by_folder),
-            set: |m, v| set_bool(v, &mut m.files_group_by_folder),
-        },
+        state_bool!("Diff line wrap", Files, None, diff_word_wrap, diff_word_wrap),
+        state_bool!(
+            "Group files by folder",
+            Files,
+            None,
+            files_pane.files_group_by_folder,
+            files_group_by_folder
+        ),
         // ── Refresh ────────────────────────────────────────────────
-        SettingDescriptor {
-            label: "Auto-refresh",
-            group: Refresh,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::Config,
-            get: |m| SettingValue::Bool(m.auto_refresh),
-            set: |m, v| set_bool(v, &mut m.auto_refresh),
-        },
-        SettingDescriptor {
-            label: "Refresh interval (s)",
-            group: Refresh,
-            kind: SettingKind::Int {
+        config_bool!("Auto-refresh", Refresh, None, refresh.auto_refresh),
+        config_int!(
+            "Refresh interval (s)",
+            Refresh,
+            SettingKind::Int {
                 min: 1,
                 max: 3600,
                 step: 5,
                 zero_label: None,
             },
-            note: None,
-            store: SettingStore::Config,
-            get: |m| SettingValue::Int(m.refresh_interval),
-            set: |m, v| {
-                if let SettingValue::Int(n) = v {
-                    m.refresh_interval = n;
-                }
-            },
-        },
-        SettingDescriptor {
-            label: "Auto-fetch",
-            group: Refresh,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::Config,
-            get: |m| SettingValue::Bool(m.auto_fetch),
-            set: |m, v| set_bool(v, &mut m.auto_fetch),
-        },
-        SettingDescriptor {
-            label: "Fetch interval (s)",
-            group: Refresh,
-            kind: SettingKind::Int {
+            refresh.refresh_interval
+        ),
+        config_bool!("Auto-fetch", Refresh, None, refresh.auto_fetch),
+        config_int!(
+            "Fetch interval (s)",
+            Refresh,
+            SettingKind::Int {
                 min: 10,
                 max: 3600,
                 step: 10,
                 zero_label: None,
             },
-            note: None,
-            store: SettingStore::Config,
-            get: |m| SettingValue::Int(m.fetch_interval),
-            set: |m, v| {
-                if let SettingValue::Int(n) = v {
-                    m.fetch_interval = n;
-                }
-            },
-        },
+            refresh.fetch_interval
+        ),
         // ── Interface ──────────────────────────────────────────────
-        SettingDescriptor {
-            label: "Side-panel layout",
-            group: Interface,
-            kind: SettingKind::Bool,
-            note: None,
-            store: SettingStore::State,
-            get: |m| SettingValue::Bool(m.side_panel_layout),
-            set: |m, v| set_bool(v, &mut m.side_panel_layout),
-        },
+        state_bool!(
+            "Side-panel layout",
+            Interface,
+            None,
+            side_panel_layout,
+            side_panel_layout
+        ),
         SettingDescriptor {
             label: "Theme",
             group: Interface,
@@ -489,51 +488,20 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             },
             note: None,
             store: SettingStore::Config,
-            get: |m| SettingValue::Enum(m.theme.index()),
-            set: |m, v| {
+            get: |a| SettingValue::Enum(ThemeChoice::from_str(&a.config.ui.theme).index()),
+            set: |a, v| {
                 if let SettingValue::Enum(i) = v {
-                    m.theme = ThemeChoice::from_index(i);
+                    a.config.ui.theme = ThemeChoice::from_index(i).as_str().to_string();
                 }
             },
         },
     ]
 }
 
-fn set_bool(v: SettingValue, target: &mut bool) {
-    if let SettingValue::Bool(b) = v {
-        *target = b;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sample() -> SettingsModel {
-        SettingsModel {
-            trace_enabled: true,
-            hide_remote_branches: false,
-            hide_merged_branches: false,
-            mute_merges: true,
-            mute_base_merges: false,
-            collapse_merges: false,
-            avatars: false,
-            col_author: true,
-            col_hash: true,
-            col_date: true,
-            graph_renderer: GraphRenderer::Auto,
-            graph_split_ratio: 65,
-            graph_width_cap: 0,
-            diff_word_wrap: false,
-            files_group_by_folder: false,
-            auto_refresh: true,
-            refresh_interval: 10,
-            auto_fetch: true,
-            fetch_interval: 60,
-            side_panel_layout: false,
-            theme: ThemeChoice::Auto,
-        }
-    }
+    use crate::config::{MetadataColumns, UiState};
 
     #[test]
     fn descriptors_cover_every_group_and_have_unique_labels() {
@@ -569,15 +537,49 @@ mod tests {
     }
 
     #[test]
-    fn every_descriptor_round_trips_get_then_set() {
-        // set(get(m)) must be a no-op for all settings — accessors are consistent.
-        let m = sample();
+    fn state_settings_persistence_round_trips_every_ui_state_field() {
+        // The single-source guarantee: writing each state setting's read value
+        // back into a fresh UiState reproduces the original — proving the read/
+        // write lenses agree and together cover every UiState field. This is what
+        // used to break when settings_model()/apply_settings_model() drifted.
+        let custom = UiState {
+            side_panel_layout: true,
+            graph_width_cap: Some(12),
+            graph_split_ratio: 40,
+            trace_enabled: false,
+            hide_remote_branches: true,
+            diff_word_wrap: true,
+            hide_merged_branches: true,
+            files_group_by_folder: true,
+            metadata_columns: MetadataColumns {
+                author: false,
+                hash: false,
+                date: false,
+                mute_merges: true,
+                mute_base_merges: true,
+                collapse_merges: true,
+                avatars: true,
+            },
+        };
+        let mut rebuilt = UiState::default();
         for d in descriptors() {
-            let mut copy = m.clone();
-            let v = d.get(&copy);
-            d.set(&mut copy, v);
-            assert_eq!(copy, m, "descriptor '{}' get/set not consistent", d.label);
+            if let SettingStore::State { read, write } = d.store {
+                write(&mut rebuilt, read(&custom));
+            }
         }
+        assert_eq!(
+            rebuilt, custom,
+            "state persistence lenses must cover and round-trip every UiState field"
+        );
+    }
+
+    #[test]
+    fn graph_width_cap_encoding_round_trips_both_ways() {
+        // Uncapped <-> 0 in a single place (cap_to_value / value_to_cap).
+        assert_eq!(cap_to_value(None), SettingValue::Int(0));
+        assert_eq!(cap_to_value(Some(8)), SettingValue::Int(8));
+        assert_eq!(value_to_cap(SettingValue::Int(0)), None);
+        assert_eq!(value_to_cap(SettingValue::Int(8)), Some(8));
     }
 
     #[test]
@@ -633,27 +635,38 @@ mod tests {
     }
 
     #[test]
-    fn display_value_formats_each_kind() {
-        let mut m = sample();
-        let ds = descriptors();
-        let find = |label: &str| ds.iter().find(|d| d.label == label).unwrap();
+    fn format_value_renders_each_kind() {
+        assert_eq!(
+            format_value(SettingKind::Bool, SettingValue::Bool(true)),
+            "On"
+        );
+        assert_eq!(
+            format_value(SettingKind::Bool, SettingValue::Bool(false)),
+            "Off"
+        );
 
-        m.trace_enabled = true;
-        assert_eq!(find("Branch tracing").display_value(&m), "On");
-        m.trace_enabled = false;
-        assert_eq!(find("Branch tracing").display_value(&m), "Off");
+        let theme = SettingKind::Enum {
+            options: ThemeChoice::OPTIONS,
+        };
+        assert_eq!(format_value(theme, SettingValue::Enum(1)), "dark");
 
-        m.theme = ThemeChoice::Dark;
-        assert_eq!(find("Theme").display_value(&m), "dark");
-
-        m.refresh_interval = 42;
-        assert_eq!(find("Refresh interval (s)").display_value(&m), "42");
+        let interval = SettingKind::Int {
+            min: 1,
+            max: 3600,
+            step: 5,
+            zero_label: None,
+        };
+        assert_eq!(format_value(interval, SettingValue::Int(42)), "42");
 
         // Zero-label special case.
-        m.graph_width_cap = 0;
-        assert_eq!(find("Graph width cap").display_value(&m), "uncapped");
-        m.graph_width_cap = 8;
-        assert_eq!(find("Graph width cap").display_value(&m), "8");
+        let cap = SettingKind::Int {
+            min: 0,
+            max: 40,
+            step: 2,
+            zero_label: Some("uncapped"),
+        };
+        assert_eq!(format_value(cap, SettingValue::Int(0)), "uncapped");
+        assert_eq!(format_value(cap, SettingValue::Int(8)), "8");
     }
 
     #[test]
@@ -678,16 +691,5 @@ mod tests {
         ] {
             assert_eq!(renderer_from_index(renderer_index(r)), r);
         }
-    }
-
-    #[test]
-    fn cycling_the_renderer_via_descriptor_advances_the_enum() {
-        // End-to-end pure flow: read, cycle, write, read back.
-        let mut m = sample();
-        let ds = descriptors();
-        let d = ds.iter().find(|d| d.label == "Graph renderer").unwrap();
-        let next = cycle_value(&d.kind, d.get(&m));
-        d.set(&mut m, next);
-        assert_eq!(m.graph_renderer, GraphRenderer::Unicode);
     }
 }

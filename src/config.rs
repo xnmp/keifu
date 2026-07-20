@@ -272,7 +272,7 @@ pub const DEFAULT_GRAPH_SPLIT_RATIO: u16 = 65;
 ///
 /// Field order matters for TOML: scalar values must be emitted before the
 /// `[metadata_columns]` table, so keep `metadata_columns` last.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiState {
     pub side_panel_layout: bool,

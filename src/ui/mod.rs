@@ -591,7 +591,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         AppMode::Settings { selected, editing } => {
             use self::settings_menu::SettingsMenuWidget;
-            let model = app.settings_model();
+            let values = app.settings_snapshot();
             // Rows + 4 group headers + footer + borders; cap to the frame.
             let want = (crate::settings::descriptors().len()
                 + crate::settings::SettingGroup::ALL.len()
@@ -599,7 +599,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let height = want.min(area.height.saturating_sub(2)).max(6);
             let popup_area = centered_rect_fixed(52, height, area);
             frame.render_widget(
-                SettingsMenuWidget::new(&model, *selected, editing.as_deref(), &theme),
+                SettingsMenuWidget::new(&values, *selected, editing.as_deref(), &theme),
                 popup_area,
             );
             rendered_popup = Some(popup_area);

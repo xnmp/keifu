@@ -1,7 +1,8 @@
 //! Settings menu popup widget (Ctrl+,).
 //!
-//! Stateless: it renders the pure [`SettingsModel`] plus the current cursor and
-//! (optional) numeric edit buffer. All settings logic lives in `crate::settings`;
+//! Stateless: it renders a snapshot of each setting's value (ordered to match
+//! `settings::descriptors()`) plus the current cursor and the (optional) numeric
+//! edit buffer. All settings logic lives in `crate::settings`;
 //! this widget only draws. Rows are grouped under dim section headers; the
 //! selected row is highlighted, and the right column shows each setting's value
 //! (or the live edit buffer when a numeric value is being typed).
@@ -16,7 +17,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::theme::Theme;
-use crate::settings::{descriptors, SettingGroup, SettingsModel};
+use crate::settings::{descriptors, format_value, SettingGroup, SettingValue};
 
 /// One rendered line: a non-selectable section header, or a setting row keyed by
 /// its descriptor index.
@@ -26,7 +27,8 @@ enum Row {
 }
 
 pub struct SettingsMenuWidget<'a> {
-    model: &'a SettingsModel,
+    /// Current value of each setting, indexed to match `descriptors()`.
+    values: &'a [SettingValue],
     /// Index into `settings::descriptors()` of the highlighted setting.
     selected: usize,
     /// When the user is typing a numeric value, the in-progress buffer.
@@ -36,13 +38,13 @@ pub struct SettingsMenuWidget<'a> {
 
 impl<'a> SettingsMenuWidget<'a> {
     pub fn new(
-        model: &'a SettingsModel,
+        values: &'a [SettingValue],
         selected: usize,
         editing: Option<&'a str>,
         theme: &'a Theme,
     ) -> Self {
         Self {
-            model,
+            values,
             selected,
             editing,
             theme,
@@ -122,7 +124,7 @@ impl<'a> Widget for SettingsMenuWidget<'a> {
                     // row is being typed into, else the formatted value.
                     let value = match (is_selected, self.editing) {
                         (true, Some(buf_str)) => format!("{buf_str}▏"),
-                        _ => d.display_value(self.model),
+                        _ => format_value(d.kind, self.values[*idx]),
                     };
                     let note = d.note.map(|n| format!(" ({n})")).unwrap_or_default();
 

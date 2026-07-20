@@ -1557,20 +1557,19 @@ impl App {
         }
     }
 
-    /// Persist the writable UI state (panel layout + metadata columns).
+    /// Persist the state.toml settings. Built generically from the settings
+    /// registry: every descriptor whose store is `State` writes its live value
+    /// into the `UiState` field its lens points at, so this stays in lockstep
+    /// with the menu with no hand-copied field list.
     pub(crate) fn save_ui_state(&self) {
-        UiState {
-            side_panel_layout: self.side_panel_layout,
-            graph_width_cap: self.graph_width_cap,
-            graph_split_ratio: self.graph_split_ratio,
-            trace_enabled: self.trace_enabled,
-            hide_remote_branches: self.hide_remote_branches,
-            diff_word_wrap: self.diff_word_wrap,
-            hide_merged_branches: self.merged.hide,
-            files_group_by_folder: self.files_pane.files_group_by_folder,
-            metadata_columns: self.metadata_columns,
+        use crate::settings::{descriptors, SettingStore};
+        let mut ui = UiState::default();
+        for d in descriptors() {
+            if let SettingStore::State { write, .. } = d.store {
+                write(&mut ui, d.get(self));
+            }
         }
-        .save();
+        ui.save();
     }
 
     /// Metadata-columns toggle menu: navigate, toggle (persisting), close.
@@ -1601,61 +1600,15 @@ impl App {
         }
     }
 
-    /// Project the app's scattered settings into the pure [`SettingsModel`] the
-    /// settings menu edits. `graph_width_cap == 0` encodes `None` (uncapped).
-    pub(crate) fn settings_model(&self) -> crate::settings::SettingsModel {
-        use crate::settings::{SettingsModel, ThemeChoice};
-        SettingsModel {
-            trace_enabled: self.trace_enabled,
-            hide_remote_branches: self.hide_remote_branches,
-            hide_merged_branches: self.merged.hide,
-            mute_merges: self.metadata_columns.mute_merges,
-            mute_base_merges: self.metadata_columns.mute_base_merges,
-            collapse_merges: self.metadata_columns.collapse_merges,
-            avatars: self.metadata_columns.avatars,
-            col_author: self.metadata_columns.author,
-            col_hash: self.metadata_columns.hash,
-            col_date: self.metadata_columns.date,
-            graph_renderer: self.config.ui.graph_renderer,
-            graph_split_ratio: self.graph_split_ratio,
-            graph_width_cap: self.graph_width_cap.unwrap_or(0) as u16,
-            diff_word_wrap: self.diff_word_wrap,
-            files_group_by_folder: self.files_pane.files_group_by_folder,
-            auto_refresh: self.config.refresh.auto_refresh,
-            refresh_interval: self.config.refresh.refresh_interval,
-            auto_fetch: self.config.refresh.auto_fetch,
-            fetch_interval: self.config.refresh.fetch_interval,
-            side_panel_layout: self.side_panel_layout,
-            theme: ThemeChoice::from_str(&self.config.ui.theme),
-        }
-    }
-
-    /// Apply an edited [`SettingsModel`] back onto the app's live fields. Most
-    /// settings take effect on the next render/loop tick simply by being read;
-    /// the caller handles rebuilds that a bare field write can't (see
-    /// `handle_settings_action`). Interval minimums mirror the config loader.
-    pub(crate) fn apply_settings_model(&mut self, m: &crate::settings::SettingsModel) {
-        self.trace_enabled = m.trace_enabled;
-        self.hide_remote_branches = m.hide_remote_branches;
-        self.merged.hide = m.hide_merged_branches;
-        self.metadata_columns.mute_merges = m.mute_merges;
-        self.metadata_columns.mute_base_merges = m.mute_base_merges;
-        self.metadata_columns.collapse_merges = m.collapse_merges;
-        self.metadata_columns.avatars = m.avatars;
-        self.metadata_columns.author = m.col_author;
-        self.metadata_columns.hash = m.col_hash;
-        self.metadata_columns.date = m.col_date;
-        self.config.ui.graph_renderer = m.graph_renderer;
-        self.graph_split_ratio = m.graph_split_ratio.clamp(20, 80);
-        self.graph_width_cap = (m.graph_width_cap != 0).then_some(m.graph_width_cap as usize);
-        self.diff_word_wrap = m.diff_word_wrap;
-        self.files_pane.files_group_by_folder = m.files_group_by_folder;
-        self.config.refresh.auto_refresh = m.auto_refresh;
-        self.config.refresh.refresh_interval = m.refresh_interval.max(1);
-        self.config.refresh.auto_fetch = m.auto_fetch;
-        self.config.refresh.fetch_interval = m.fetch_interval.max(10);
-        self.side_panel_layout = m.side_panel_layout;
-        self.config.ui.theme = m.theme.as_str().to_string();
+    /// Snapshot every setting's current value, ordered to match
+    /// `settings::descriptors()`, for the settings menu to render. The menu
+    /// edits the live app state directly (see `commit_setting`), so this is a
+    /// read-only projection with no inverse to keep in sync.
+    pub(crate) fn settings_snapshot(&self) -> Vec<crate::settings::SettingValue> {
+        crate::settings::descriptors()
+            .iter()
+            .map(|d| d.get(self))
+            .collect()
     }
 
     /// Persist both stores the settings menu writes to: UI-state settings to
@@ -1673,14 +1626,18 @@ impl App {
         };
     }
 
-    /// Apply an edited settings model, persist it, and rebuild the graph if the
-    /// change was one a bare field write can't realize on its own — the branch
-    /// visibility toggles (`hide_remote_branches` / `hide_merged_branches`), which
-    /// change which commits are in the graph.
-    fn commit_settings(&mut self, model: &crate::settings::SettingsModel) -> Result<()> {
+    /// Write one setting's new value to the live app state, persist it, and
+    /// rebuild the graph if the change was one a bare field write can't realize
+    /// on its own — the branch visibility toggles (`hide_remote_branches` /
+    /// `hide_merged_branches`), which change which commits are in the graph.
+    fn commit_setting(
+        &mut self,
+        descriptor: &crate::settings::SettingDescriptor,
+        value: crate::settings::SettingValue,
+    ) -> Result<()> {
         let old_hide_remote = self.hide_remote_branches;
         let old_hide_merged = self.merged.hide;
-        self.apply_settings_model(model);
+        descriptor.set(self, value);
         self.persist_settings();
         if self.hide_remote_branches != old_hide_remote
             || self.merged.hide != old_hide_merged
@@ -1717,23 +1674,22 @@ impl App {
             }
             Action::MenuSelect => {
                 let d = &ds[selected];
-                let mut model = self.settings_model();
                 match (&editing, d.kind) {
                     // Commit a typed numeric value.
                     (Some(buf), SettingKind::Int { .. }) => {
-                        if let Ok(parsed) = buf.parse::<u64>() {
-                            d.set(&mut model, SettingValue::Int(clamp_int(&d.kind, parsed)));
-                        }
+                        let parsed = buf.parse::<u64>().ok();
                         if let AppMode::Settings { editing, .. } = &mut self.mode {
                             *editing = None;
                         }
-                        self.commit_settings(&model)?;
+                        if let Some(parsed) = parsed {
+                            let value = SettingValue::Int(clamp_int(&d.kind, parsed));
+                            self.commit_setting(d, value)?;
+                        }
                     }
                     // Otherwise cycle/toggle the current value.
                     _ => {
-                        let next = cycle_value(&d.kind, d.get(&model));
-                        d.set(&mut model, next);
-                        self.commit_settings(&model)?;
+                        let next = cycle_value(&d.kind, d.get(self));
+                        self.commit_setting(d, next)?;
                     }
                 }
             }
