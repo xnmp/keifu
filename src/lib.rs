@@ -32,6 +32,7 @@ pub mod graph;
 pub mod keybindings;
 pub mod mouse;
 pub mod search;
+pub mod signature_guarded;
 pub mod text_editor;
 #[cfg(test)]
 pub mod test_support;

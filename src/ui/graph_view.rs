@@ -391,7 +391,7 @@ pub fn build_pixel_base_specs(
 /// `force_dim || trace` rule:
 /// - **base-update force-dim (#55)** — a back-merge row's whole connector is
 ///   dimmed so the noisy line recedes. `lineage`-independent; driven by
-///   `app.metadata_columns.mute_base_merges` + `app.base_update_merges`.
+///   `app.metadata_columns.mute_base_merges` + `app.base_update_merges.value()`.
 /// - **branch-trace dim** — when `lineage` is `Some`, cells not on the selected
 ///   commit's traced lineage fade. `None` when tracing is inactive.
 ///
@@ -452,7 +452,7 @@ pub fn dim_pixel_specs_window(
             is_base_update_row(
                 r.node,
                 app.metadata_columns.mute_base_merges,
-                &app.base_update_merges,
+                app.base_update_merges.value(),
             )
         })
         .collect();
@@ -632,7 +632,7 @@ impl<'a> GraphViewWidget<'a> {
         let merged_branches = &app.merged_branches;
         // OIDs of base-update ("back-merge") commits (#55); a per-row O(1)
         // membership test, so the check stays inside the windowed render path.
-        let base_update_merges = &app.base_update_merges;
+        let base_update_merges = app.base_update_merges.value();
         let metadata_columns = app.metadata_columns;
         // Selected commit's lit-edge set for tracing (Unicode dim); None =
         // off. In pixel mode the dim lives in the row specs, not the text
