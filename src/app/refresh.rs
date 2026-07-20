@@ -252,6 +252,10 @@ impl App {
         // Re-run classification against the just-loaded branches (no-op when the
         // inputs are unchanged, per the classifier's signature guard).
         self.kick_merged_classification();
+        // The base branch tip may have advanced, changing which PR-branch merges
+        // count as base-updates (issue #55); recompute (signature-guarded no-op
+        // when unchanged).
+        self.recompute_base_update_merges();
         self.commits = self
             .repo
             .get_commits(self.commit_load_limit, &visible_branches, &stashes)?;

@@ -580,6 +580,9 @@ impl<'a> GraphViewWidget<'a> {
         // O(1) without any per-render scan, keeping the work windowed.
         let pr_ctx = PrContext::new(open_prs);
         let merged_branches = &app.merged_branches;
+        // OIDs of base-update ("back-merge") commits (#55); a per-row O(1)
+        // membership test, so the check stays inside the windowed render path.
+        let base_update_merges = &app.base_update_merges;
         let metadata_columns = app.metadata_columns;
         // Selected commit's lit-edge set for tracing (Unicode dim); None =
         // off. In pixel mode the dim lives in the row specs, not the text
@@ -650,6 +653,7 @@ impl<'a> GraphViewWidget<'a> {
                 open_prs,
                 &pr_ctx,
                 merged_branches,
+                base_update_merges,
                 metadata_columns,
                 trace.as_ref(),
             );
@@ -713,6 +717,11 @@ const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
 /// Badge appended to a branch already merged into the trunk (merge or squash).
 /// Rendered muted/dimmed; the branch chips themselves are dimmed to match.
 const MERGED_BADGE: &str = "\u{f419} merged"; // nf-oct-git_merge
+
+/// The bare merge glyph a collapsed merge commit shows in place of its message
+/// (#59): the same nf-oct-git_merge icon used by [`MERGED_BADGE`], so a
+/// collapsed merge reads as "this is a merge" at a glance.
+const MERGE_ICON: &str = "\u{f419}"; // nf-oct-git_merge
 
 /// Style for merged-branch decorations: muted and dimmed, so a landed branch
 /// recedes without disappearing (the hide-merged toggle removes it entirely).
@@ -1172,10 +1181,23 @@ fn render_graph_line<'a>(
     open_prs: &HashMap<String, PrInfo>,
     pr_ctx: &PrContext,
     merged_branches: &HashSet<String>,
+    base_update_merges: &HashSet<git2::Oid>,
     metadata_columns: MetadataColumns,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
+
+    // A base-update ("back-merge") commit (#55): when the option is on, its
+    // message renders strongly muted and its own graph glyphs (the noisy
+    // back-merge connector) are force-dimmed. Decided once here so both the
+    // cell renderer and the message tail agree. HEAD is never muted.
+    let is_base_update = metadata_columns.mute_base_merges
+        && !node.is_head
+        && node.is_merge()
+        && node
+            .commit
+            .as_ref()
+            .is_some_and(|c| base_update_merges.contains(&c.oid));
 
     // Graph start marker (to distinguish from borders). GRAPH_LEADING_COLUMNS
     // is the shared contract with the pixel overlay's x-offset.
@@ -1198,9 +1220,17 @@ fn render_graph_line<'a>(
         }
     } else {
         // Graph glyphs render bold; with tracing, non-lineage cells are dimmed.
-        // Merge muting stays in the message text (see render_graph_line_tail).
-        left_width =
-            render_cells_unicode(&mut spans, node, theme, left_width, graph_width, trace);
+        // A base-update back-merge (#55) force-dims its whole connector so the
+        // noisy line recedes; ordinary merge muting stays in the message text.
+        left_width = render_cells_unicode(
+            &mut spans,
+            node,
+            theme,
+            left_width,
+            graph_width,
+            trace,
+            is_base_update,
+        );
     }
 
     // Padding to align to the (capped) graph width. Reclaimed width flows to the
@@ -1234,6 +1264,7 @@ fn render_graph_line<'a>(
         open_prs,
         pr_ctx,
         merged_branches,
+        is_base_update,
         metadata_columns,
     )
 }
@@ -1248,18 +1279,21 @@ fn render_cells_unicode(
     mut left_width: usize,
     cap: usize,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
+    force_dim: bool,
 ) -> usize {
     // `budget` graph columns are available for glyphs; when truncating, one more
     // column holds the `…`.
     let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
 
-    // Whether the cell at `idx` should be dimmed: tracing active and this cell
-    // is not lit by the selected commit's trace.
+    // Whether the cell at `idx` should be dimmed: `force_dim` (a base-update
+    // back-merge row, #55) dims the entire connector; otherwise a cell dims when
+    // tracing is active and it is not lit by the selected commit's trace.
     let is_dim = |idx: usize| -> bool {
-        trace.is_some_and(|lit| {
-            let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
-            !crate::git::graph::cell_is_traced(oids, lit)
-        })
+        force_dim
+            || trace.is_some_and(|lit| {
+                let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
+                !crate::git::graph::cell_is_traced(oids, lit)
+            })
     };
 
     // Render cells.
@@ -1377,6 +1411,7 @@ fn render_graph_line_tail<'a>(
     open_prs: &HashMap<String, PrInfo>,
     pr_ctx: &PrContext,
     merged_branches: &HashSet<String>,
+    is_base_update: bool,
     metadata_columns: MetadataColumns,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
@@ -1432,9 +1467,21 @@ fn render_graph_line_tail<'a>(
     // Muted merge: dim only the message text (VSCode-style) — the graph dot and
     // lines stay full-strength. HEAD is never muted so its message stays legible.
     let muted_merge = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
-    let msg_style = if is_pr_merge {
+    // Collapse merges (#59): a stronger form of muting that replaces the merge
+    // commit's message with a bare merge glyph. Same detection seam as
+    // `mute_merges` (any merge, never HEAD), so the two options unify rather than
+    // duplicate. When on it implies muting even if `mute_merges` is off.
+    let collapse_merge = metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
+    // Precedence: a base-update back-merge (#55) is the noisiest, so it wins with
+    // the strongest mute (muted color + DIM). Then a PR-landing merge (#52), then
+    // ordinary merge muting/collapse, then selection bold.
+    let msg_style = if is_base_update {
+        Style::default()
+            .fg(theme.text_muted)
+            .add_modifier(Modifier::DIM)
+    } else if is_pr_merge {
         Style::default().fg(theme.text_muted)
-    } else if muted_merge {
+    } else if muted_merge || collapse_merge {
         Style::default().add_modifier(Modifier::DIM)
     } else if is_selected {
         Style::default().add_modifier(Modifier::BOLD)
@@ -1586,7 +1633,13 @@ fn render_graph_line_tail<'a>(
         .saturating_sub(tag_width)
         .saturating_sub(stash_width)
         .saturating_sub(right_width);
-    let message = truncate_to_width(&commit.message, available_for_message);
+    // Collapse (#59) replaces the whole message with a single merge glyph;
+    // otherwise the message is truncated to its width budget as usual.
+    let message = if collapse_merge {
+        MERGE_ICON.to_string()
+    } else {
+        truncate_to_width(&commit.message, available_for_message)
+    };
     let message_width = display_width(&message);
     spans.push(Span::styled(message, msg_style));
     left_width += message_width;
@@ -2316,6 +2369,8 @@ mod tests {
             hash,
             date,
             mute_merges: true,
+            mute_base_merges: false,
+            collapse_merges: false,
             avatars: false,
         }
     }
@@ -2643,7 +2698,7 @@ mod tests {
     fn render_cells(node: &GraphNode, cap: usize) -> String {
         let theme = Theme::dark();
         let mut spans: Vec<Span> = Vec::new();
-        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, None);
+        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, None, false);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         // left_width is columns emitted (started at 0); it must equal the text's
         // display width.
@@ -2748,14 +2803,28 @@ mod tests {
         open_prs: &HashMap<String, PrInfo>,
         mute_merges: bool,
     ) -> Line<'static> {
-        let theme = Theme::dark();
         let cols = MetadataColumns {
             author: false,
             hash: false,
             date: false,
             mute_merges,
+            mute_base_merges: false,
+            collapse_merges: false,
             avatars: false,
         };
+        render_row_with(node, open_prs, cols, &HashSet::new())
+    }
+
+    /// Render one full graph row with explicit metadata columns and a set of
+    /// base-update ("back-merge") commit OIDs (#55). The real per-row render
+    /// path, so tests observe exactly what the user sees.
+    fn render_row_with(
+        node: &GraphNode,
+        open_prs: &HashMap<String, PrInfo>,
+        cols: MetadataColumns,
+        base_update_merges: &HashSet<git2::Oid>,
+    ) -> Line<'static> {
+        let theme = Theme::dark();
         let pr_ctx = PrContext::new(open_prs);
         let (line, _chips) = render_graph_line(
             node,
@@ -2771,6 +2840,7 @@ mod tests {
             open_prs,
             &pr_ctx,
             &HashSet::new(),
+            base_update_merges,
             cols,
             None,
         );
@@ -2821,6 +2891,118 @@ mod tests {
         // Even with muting on, the HEAD commit's message stays legible.
         let style = message_style(&node, "head-merge", true);
         assert!(!style.add_modifier.contains(Modifier::DIM));
+    }
+
+    // ── base-update ("back-merge") muting (#55) ──────────────────────
+
+    /// MetadataColumns with only the given merge-muting toggles set.
+    fn merge_cols(mute_merges: bool, mute_base_merges: bool, collapse_merges: bool) -> MetadataColumns {
+        MetadataColumns {
+            author: false,
+            hash: false,
+            date: false,
+            mute_merges,
+            mute_base_merges,
+            collapse_merges,
+            avatars: false,
+        }
+    }
+
+    /// The style of the span whose content is exactly `content`, or None.
+    fn find_style(line: &Line, content: &str) -> Option<Style> {
+        line.spans
+            .iter()
+            .find(|s| s.content.as_ref() == content)
+            .map(|s| s.style)
+    }
+
+    #[test]
+    fn base_update_merge_message_is_strongly_muted_when_option_on() {
+        let theme = Theme::dark();
+        let node = merge_node_full(30, "Merge main into feature", [1, 2]);
+        let mut set = HashSet::new();
+        set.insert(oid(30));
+        // Option ON + this commit is in the set → strong mute (muted fg + DIM).
+        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set);
+        let style = find_style(&line, "Merge main into feature").expect("message span");
+        assert_eq!(style.fg, Some(theme.text_muted), "strong-muted fg");
+        assert!(style.add_modifier.contains(Modifier::DIM), "strong-muted DIM");
+    }
+
+    #[test]
+    fn base_update_merge_is_not_muted_when_option_off_or_not_in_set() {
+        let node = merge_node_full(30, "Merge main into feature", [1, 2]);
+        let mut set = HashSet::new();
+        set.insert(oid(30));
+        // Option OFF → not muted even though the commit is in the set.
+        let off = render_row_with(&node, &HashMap::new(), merge_cols(false, false, false), &set);
+        let s_off = find_style(&off, "Merge main into feature").expect("span");
+        assert_eq!(s_off.fg, None);
+        assert!(!s_off.add_modifier.contains(Modifier::DIM));
+        // Option ON but commit NOT in the set → not muted.
+        let on_empty =
+            render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &HashSet::new());
+        let s_empty = find_style(&on_empty, "Merge main into feature").expect("span");
+        assert_eq!(s_empty.fg, None);
+        assert!(!s_empty.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn base_update_muting_dims_the_graph_connector_cells() {
+        // The back-merge's own graph glyphs are force-dimmed so the noisy line
+        // recedes (a merge-arc cell, not just the commit dot).
+        let mut node = merge_node_full(30, "Merge main into feature", [1, 2]);
+        node.cells = vec![CellType::Commit(0), CellType::MergeRight(1)];
+        let mut set = HashSet::new();
+        set.insert(oid(30));
+        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set);
+        // The merge-arc glyph ╰ is present and carries DIM.
+        let arc = find_style(&line, "╰").expect("merge-arc glyph present");
+        assert!(arc.add_modifier.contains(Modifier::DIM), "connector cell dimmed: {arc:?}");
+    }
+
+    // ── collapse merge messages to a glyph (#59) ─────────────────────
+
+    #[test]
+    fn collapse_merge_replaces_message_with_the_merge_glyph() {
+        let node = merge_node_full(31, "Merge branch 'topic'", [1, 2]);
+        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains(MERGE_ICON), "merge glyph shown: {text:?}");
+        assert!(!text.contains("Merge branch 'topic'"), "no message text: {text:?}");
+        // The glyph span is dimmed (collapse implies muting).
+        let style = find_style(&line, MERGE_ICON).expect("glyph span");
+        assert!(style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn collapse_leaves_non_merge_commits_alone() {
+        // A non-merge commit keeps its message even with collapse on.
+        let mut node = merge_node("real message");
+        node.commit.as_mut().unwrap().parent_oids = vec![git2::Oid::zero()]; // 1 parent
+        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("real message"), "non-merge keeps message: {text:?}");
+    }
+
+    #[test]
+    fn collapse_keeps_metadata_columns() {
+        // Collapsing the message must not drop the hash/author/date columns.
+        let node = merge_node_full(31, "Merge branch 'topic'", [1, 2]);
+        let cols = MetadataColumns {
+            author: true,
+            hash: true,
+            date: true,
+            mute_merges: false,
+            mute_base_merges: false,
+            collapse_merges: true,
+            avatars: false,
+        };
+        let line = render_row_with(&node, &HashMap::new(), cols, &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains(MERGE_ICON), "glyph shown");
+        // The short hash (`abc1234`) still renders in its column.
+        assert!(text.contains("abc1234"), "hash column preserved: {text:?}");
     }
 
     // ── connector folding (pixel mode) ───────────────────────────────
@@ -2943,7 +3125,7 @@ mod tests {
             [((a, a), a)].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit));
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit), false);
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
@@ -2963,7 +3145,7 @@ mod tests {
         let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
         node.cell_oids = vec![(Some((oid(1), oid(1))), None), (Some((oid(2), oid(2))), None)];
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None);
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false);
         assert!(spans
             .iter()
             .all(|s| !s.style.add_modifier.contains(Modifier::DIM)));
@@ -3158,7 +3340,7 @@ mod tests {
 
         let mut spans: Vec<Span> = Vec::new();
         // cap = 3 leaves room for 2 glyphs plus the `…` marker.
-        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lit));
+        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lit), false);
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         assert!(!commit.style.add_modifier.contains(Modifier::DIM));

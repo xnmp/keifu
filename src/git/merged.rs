@@ -211,6 +211,68 @@ pub fn merged_local_branches(
     classify_merged_branches(repo, branches, base_tip, base_name, &HashSet::new())
 }
 
+/// Upper bound on PR-branch commits scanned per PR when hunting base-update
+/// merges, so an enormous branch can't stall a refresh. A PR branch is short in
+/// practice; this window is generous.
+const BASE_UPDATE_SCAN_LIMIT: usize = 400;
+
+/// Classify **base-update ("back-merge") commits**: merge commits that sit on an
+/// open PR's branch — reachable from the PR head but *not yet on the base* — and
+/// whose **second parent** is on the base branch. That is exactly the shape of
+/// "the updated base branch was merged INTO the PR branch to refresh it": the
+/// first parent stays on the PR branch, the second reaches into the base. Such a
+/// merge is graph noise (issue #55), so the renderer mutes it when the option is
+/// on.
+///
+/// The opposite direction — a **PR landing** — is deliberately *not* matched: a
+/// landing merge sits ON the base (its first parent is the base, its second is
+/// the PR head), so it is contained in `base_tip` and the "not yet on the base"
+/// filter (`revwalk.hide(base_tip)`) drops it before the second-parent test ever
+/// runs. Direction is thus decided structurally, not by message text.
+///
+/// Pure over a `git2::Repository`; `pr_heads` are the open PRs' head-commit OIDs
+/// (from `PrInfo::head_oid`). Cheap: for each PR it walks only that branch's own
+/// commits (the revwalk hides `base_tip`), bounded by [`BASE_UPDATE_SCAN_LIMIT`],
+/// with one ancestry query per merge encountered.
+pub fn classify_base_update_merges(
+    repo: &Repository,
+    pr_heads: &[Oid],
+    base_tip: Oid,
+) -> HashSet<Oid> {
+    let mut out = HashSet::new();
+    for &head in pr_heads {
+        // Commits reachable from the PR head but NOT already on the base: the
+        // PR branch's own commits. A landing merge is on the base, so hiding
+        // `base_tip` removes it here — only still-ahead back-merges survive.
+        let Ok(mut walk) = repo.revwalk() else {
+            continue;
+        };
+        if walk.push(head).is_err() {
+            continue;
+        }
+        let _ = walk.hide(base_tip);
+        for oid in walk.filter_map(Result::ok).take(BASE_UPDATE_SCAN_LIMIT) {
+            let Ok(commit) = repo.find_commit(oid) else {
+                continue;
+            };
+            // Only a real merge (2+ parents) can be a back-merge.
+            if commit.parent_count() < 2 {
+                continue;
+            }
+            let Ok(second) = commit.parent_id(1) else {
+                continue;
+            };
+            // Second parent already on the base ⇒ the base was merged in.
+            if second == base_tip
+                || repo.graph_descendant_of(base_tip, second).unwrap_or(false)
+            {
+                out.insert(oid);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,5 +518,113 @@ mod tests {
         assert!(branch_changes_landed(&repo, f, b), "net-empty branch has nothing to land");
         let branches = vec![local("main", b, true), local("feature", f, false)];
         assert!(classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"])).contains("feature"));
+    }
+
+    // ── base-update ("back-merge") classification (#55) ──────────────
+
+    #[test]
+    fn back_merge_of_updated_base_into_pr_branch_is_detected() {
+        // main:    a <- c            (base advances to c)
+        // feature: a <- f            (PR branch)
+        // back-merge: merge c INTO feature => m, on the feature branch.
+        //   m's parents: [f (feature, first), c (base, second)].
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let c = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base2")]);
+        let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("feat.txt", "x")]);
+        // Merge the updated base (c) into the PR branch; first parent = feature.
+        let m = commit(
+            &repo,
+            "refs/heads/feature",
+            3000,
+            &[f, c],
+            &[("base.txt", "base2"), ("feat.txt", "x")],
+        );
+        let set = classify_base_update_merges(&repo, &[m], c);
+        assert!(set.contains(&m), "the back-merge commit is classified");
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn pr_landing_merge_is_not_classified_as_back_merge() {
+        // The opposite direction: feature lands ON main.
+        // main:    a <- b
+        // feature: a <- t
+        // landing: merge t INTO main => m, ON main. Parents [b (main), t (feat)].
+        // The PR head is `t`; `m` sits on the base, so it must NOT be muted.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "m")]);
+        let t = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("feat.txt", "x")]);
+        let m = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b, t],
+            &[("base.txt", "base"), ("main.txt", "m"), ("feat.txt", "x")],
+        );
+        // Base tip is the landing merge itself.
+        let set = classify_base_update_merges(&repo, &[t], m);
+        assert!(set.is_empty(), "a PR-landing merge is never a back-merge");
+    }
+
+    #[test]
+    fn merge_of_a_sibling_feature_not_on_base_is_not_classified() {
+        // A merge on the PR branch that pulls in ANOTHER unmerged feature (not
+        // the base) must not be muted — its second parent is not on the base.
+        // main:    a <- c
+        // feat:    a <- f
+        // sibling: a <- s   (never merged to main)
+        // merge s INTO feat => m. Parents [f, s]; s is not on base.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let c = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base2")]);
+        let f = commit(&repo, "refs/heads/feat", 1500, &[a], &[("base.txt", "base"), ("f.txt", "f")]);
+        let s = commit(&repo, "refs/heads/sibling", 1600, &[a], &[("base.txt", "base"), ("s.txt", "s")]);
+        let m = commit(
+            &repo,
+            "refs/heads/feat",
+            3000,
+            &[f, s],
+            &[("base.txt", "base"), ("f.txt", "f"), ("s.txt", "s")],
+        );
+        let set = classify_base_update_merges(&repo, &[m], c);
+        assert!(set.is_empty(), "merging a non-base sibling is not a base-update");
+    }
+
+    #[test]
+    fn no_pr_heads_or_no_merges_yields_empty_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        // No PR heads at all.
+        assert!(classify_base_update_merges(&repo, &[], a).is_empty());
+        // A PR head whose branch has no merge commit.
+        assert!(classify_base_update_merges(&repo, &[f], a).is_empty());
+    }
+
+    #[test]
+    fn back_merge_detected_when_head_is_above_the_merge() {
+        // The PR head need not BE the back-merge; the merge can sit mid-branch.
+        // feature: a <- f <- m <- g   where m merges base c into feature.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let c = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base2")]);
+        let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("feat.txt", "x")]);
+        let m = commit(
+            &repo,
+            "refs/heads/feature",
+            3000,
+            &[f, c],
+            &[("base.txt", "base2"), ("feat.txt", "x")],
+        );
+        let g = commit(&repo, "refs/heads/feature", 3500, &[m], &[("base.txt", "base2"), ("feat.txt", "y")]);
+        let set = classify_base_update_merges(&repo, &[g], c);
+        assert!(set.contains(&m), "a mid-branch back-merge is still found");
     }
 }
