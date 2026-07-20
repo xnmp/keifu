@@ -247,6 +247,7 @@ impl App {
                     "Filesystem watcher disconnected",
                 );
                 self.watcher = None;
+                self.watcher_disconnected = true;
                 true
             }
             crate::watcher::PollResult::Idle => false,

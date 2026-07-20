@@ -25,6 +25,30 @@ fn pr_hint_label(pr_number: Option<u64>) -> Option<String> {
     pr_number.map(|n| format!("open PR #{n}"))
 }
 
+/// Status-bar chip for the "mark for compare" state (`m`, see
+/// `compare_actions.rs`): the mark/range persists indefinitely, but its only
+/// other surfacing is a 5-second message, so this keeps it visible until
+/// cleared (`Esc`) or resolved. `range` takes priority — once a comparison is
+/// open the earlier single mark is gone. Pure so it's unit-testable without
+/// an App. Callers pass already-shortened commit ids.
+fn compare_chip_label(marked: Option<&str>, range: Option<(&str, &str)>) -> Option<String> {
+    if let Some((old, new)) = range {
+        Some(format!("compare {old}…{new}"))
+    } else {
+        marked.map(|short| format!("compare {short}…"))
+    }
+}
+
+/// Status-bar chip for a filesystem watcher that disconnected mid-session
+/// (see `network_ops.rs::poll_fs_watcher`): auto-refresh-on-file-change is
+/// permanently off for the rest of the session, with only a one-shot message
+/// to say so otherwise. `None` when the watcher never started or auto-
+/// refresh is disabled by config — those aren't a regression worth flagging.
+/// Pure so it's unit-testable without an App.
+fn watch_chip_label(watcher_disconnected: bool) -> Option<&'static str> {
+    watcher_disconnected.then_some("watch off")
+}
+
 /// A clickable key hint's column range (offset from the line start) and the
 /// action a click dispatches.
 struct HintSpan {
@@ -147,6 +171,25 @@ impl StatusBar {
         let trace_enabled = app.trace_enabled;
         let diff_word_wrap = app.diff_word_wrap;
 
+        // Compare-mode and watcher-disconnect chips (see the fns' docs):
+        // persistent indicators for state that outlives its one-shot message.
+        let compare_marked_short = app
+            .compare_marked
+            .map(|oid| app.commit_short_and_subject(oid).0);
+        let compare_range_short = app.compare_range.map(|(old, new)| {
+            (
+                app.commit_short_and_subject(old).0,
+                app.commit_short_and_subject(new).0,
+            )
+        });
+        let compare_chip = compare_chip_label(
+            compare_marked_short.as_deref(),
+            compare_range_short
+                .as_ref()
+                .map(|(old, new)| (old.as_str(), new.as_str())),
+        );
+        let watch_chip = watch_chip_label(app.watcher_disconnected);
+
         // Search status message (only while the search input is open).
         let search_info = match mode {
             AppMode::Input {
@@ -225,6 +268,24 @@ impl StatusBar {
         // Remote-only branches hidden by the show/hide-remotes toggle (Shift+O).
         if app.hide_remote_branches {
             hb.span(Span::styled(" remotes hidden ", mode_style));
+            hb.raw(" ");
+        }
+
+        // Pending/active commit comparison ("mark for compare", `m`).
+        if let Some(label) = &compare_chip {
+            hb.span(Span::styled(format!(" {label} "), mode_style));
+            hb.raw(" ");
+        }
+
+        // Filesystem watcher disconnected mid-session: auto-refresh-on-file-
+        // change is off for the rest of the session. Warning-styled (reuses
+        // the error palette) to distinguish it from the neutral toggle chips.
+        if watch_chip.is_some() {
+            let warning_style = Style::default()
+                .fg(theme.status_error_fg)
+                .bg(theme.status_error_bg)
+                .add_modifier(Modifier::BOLD);
+            hb.span(Span::styled(" watch off ", warning_style));
             hb.raw(" ");
         }
 
@@ -578,6 +639,36 @@ mod tests {
     fn pr_hint_shown_only_when_a_pr_exists() {
         assert_eq!(pr_hint_label(Some(12)).as_deref(), Some("open PR #12"));
         assert_eq!(pr_hint_label(None), None);
+    }
+
+    #[test]
+    fn compare_chip_hidden_when_nothing_marked_or_compared() {
+        assert_eq!(compare_chip_label(None, None), None);
+    }
+
+    #[test]
+    fn compare_chip_shows_pending_mark() {
+        assert_eq!(
+            compare_chip_label(Some("abc1234"), None).as_deref(),
+            Some("compare abc1234…")
+        );
+    }
+
+    #[test]
+    fn compare_chip_shows_active_range_and_prefers_it_over_a_stale_mark() {
+        // A lingering `marked` value shouldn't resurface once a range is
+        // open — mark_or_compare_selected always clears it, but the chip
+        // should be robust to stale state either way.
+        assert_eq!(
+            compare_chip_label(Some("ignored"), Some(("abc1234", "def5678"))).as_deref(),
+            Some("compare abc1234…def5678")
+        );
+    }
+
+    #[test]
+    fn watch_chip_hidden_unless_watcher_disconnected() {
+        assert_eq!(watch_chip_label(false), None);
+        assert_eq!(watch_chip_label(true), Some("watch off"));
     }
 
     #[test]

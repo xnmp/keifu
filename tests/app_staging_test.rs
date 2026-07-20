@@ -167,6 +167,7 @@ fn make_base_app(
         avatar_enqueued_generation: None,
         watcher: None,
         pending_watcher: None,
+        watcher_disconnected: false,
         last_undoable_op: None,
         side_panel_layout: false,
         hide_remote_branches: false,
