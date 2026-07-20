@@ -351,11 +351,12 @@ pub fn build_pixel_base_specs(
     use crate::ui::graph_pixels::build_row_spec;
     // Fold connector rows into their following commit row (pixel-only): one spec
     // per rendered row, in the same order and index space as the list items.
-    // These base specs carry NO branch-trace dimming — that is a per-cell colour
-    // overlay independent of the (expensive) curve geometry, so it is applied
-    // lazily to just the on-screen window by `dim_pixel_specs_window`. Keeping
-    // the base geometry trace- and scroll-independent lets it stay cached while
-    // the selection moves, instead of rebuilding every row on every keypress.
+    // These base specs carry NO per-frame dimming — neither branch-trace dimming
+    // nor base-update force-dim (#55). Both are per-cell overlays independent of
+    // the (expensive) curve geometry, so they are applied lazily to just the
+    // on-screen window by `dim_pixel_specs_window`. Keeping the base geometry
+    // trace-, mute-toggle- and scroll-independent lets it stay cached while the
+    // selection moves, instead of rebuilding every row on every keypress.
     let rows = visible_rows(app, true);
     (0..rows.len())
         .map(|i| {
@@ -380,11 +381,22 @@ pub fn build_pixel_base_specs(
         .collect()
 }
 
-/// Apply branch-trace dimming to the pixel specs in `[win_start, win_end)` only,
-/// returning a full-length spec list (rows outside the window are cheap empty
-/// placeholders). Dimming recolours/dims per cell but never changes a cell's
-/// geometry, so it can be layered onto the cached, undimmed `base` specs without
-/// rebuilding any curves.
+/// Apply the two per-frame dim sources to the pixel specs in `[win_start,
+/// win_end)` only, returning a full-length spec list (rows outside the window
+/// are cheap empty placeholders). Dimming recolours/dims per cell but never
+/// changes a cell's geometry, so it can be layered onto the cached, undimmed
+/// `base` specs without rebuilding any curves.
+///
+/// Two independent sources feed the dim, mirroring the unicode renderer's
+/// `force_dim || trace` rule:
+/// - **base-update force-dim (#55)** — a back-merge row's whole connector is
+///   dimmed so the noisy line recedes. `lineage`-independent; driven by
+///   `app.metadata_columns.mute_base_merges` + `app.base_update_merges`.
+/// - **branch-trace dim** — when `lineage` is `Some`, cells not on the selected
+///   commit's traced lineage fade. `None` when tracing is inactive.
+///
+/// Base-update force-dim wins over trace for a row (it dims everything), exactly
+/// as the unicode path OR-s the two together.
 ///
 /// The window must equal `graph_pixels::protocol_window(offset, viewport, len)`:
 /// only those rows are rasterized (`sync_frame`) and only the on-screen subset
@@ -395,11 +407,15 @@ pub fn dim_pixel_specs_window(
     app: &App,
     theme: &Theme,
     base: &[crate::ui::graph_pixels::RowSpec],
-    lineage: &std::collections::HashSet<git2::Oid>,
+    lineage: Option<&std::collections::HashSet<git2::Oid>>,
     win_start: usize,
     win_end: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
-    let lit = crate::git::graph::trace_lit_edges(&app.graph_layout, lineage);
+    // Trace dimming only applies when a lineage is active; otherwise `lit` is
+    // empty and no cell is dimmed by tracing (base-update force-dim still runs).
+    let lit = lineage
+        .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, l))
+        .unwrap_or_default();
     // Commit → its lane color, for recoloring lit strokes by the commit the
     // lit-edge relation picked (see apply_trace_dim).
     let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = app
@@ -425,7 +441,22 @@ pub fn dim_pixel_specs_window(
             underlay: &r.underlay_oids,
         })
         .collect();
-    dim_specs_window_core(base, &row_oids, &lit, &lane_rgb, win_start, win_end)
+    // Per-row base-update flag, computed via the same `is_base_update_row`
+    // predicate the unicode renderer uses — so the pixel connector and the
+    // unicode connector dim on exactly the same rows. This lives in the
+    // per-frame windowed pass (never in the cached base specs), keeping the
+    // geometry cache free of this scroll/frame-varying data.
+    let force_dim: Vec<bool> = rows
+        .iter()
+        .map(|r| {
+            is_base_update_row(
+                r.node,
+                app.metadata_columns.mute_base_merges,
+                &app.base_update_merges,
+            )
+        })
+        .collect();
+    dim_specs_window_core(base, &row_oids, &force_dim, &lit, &lane_rgb, win_start, win_end)
 }
 
 /// Per-row edge identities for dimming: parallel to a row's pixel `cells` and
@@ -446,6 +477,7 @@ struct RowOids<'a> {
 fn dim_specs_window_core(
     base: &[crate::ui::graph_pixels::RowSpec],
     row_oids: &[RowOids],
+    force_dim: &[bool],
     lit: &std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>,
     lane_rgb: &std::collections::HashMap<git2::Oid, [u8; 3]>,
     win_start: usize,
@@ -460,7 +492,14 @@ fn dim_specs_window_core(
                 };
             }
             let mut spec = base[i].clone();
-            if let Some(o) = row_oids.get(i) {
+            if force_dim.get(i).copied().unwrap_or(false) {
+                // Base-update back-merge (#55): force-dim the entire connector,
+                // mirroring the unicode `force_dim` branch. This wins over trace
+                // dimming (the unicode path OR-s them), so every cell fades
+                // regardless of lineage and no recolor is applied.
+                force_dim_all_cells(&mut spec.cells);
+                force_dim_all_cells(&mut spec.underlay);
+            } else if let Some(o) = row_oids.get(i) {
                 // `spec.cells`/`spec.underlay` are (truncated) 1:1 with the
                 // node's cells/underlay, so their OIDs align by index; dimming
                 // only reads the cells that survived truncation.
@@ -470,6 +509,17 @@ fn dim_specs_window_core(
             spec
         })
         .collect()
+}
+
+/// Force every pixel cell in a row to its dimmed (low-alpha) variant, both
+/// strokes. Used for base-update back-merge rows (#55) whose whole connector
+/// recedes; colours are preserved (dim only lowers alpha), matching the unicode
+/// renderer's DIM modifier.
+fn force_dim_all_cells(cells: &mut [crate::ui::graph_pixels::PixelCell]) {
+    for pc in cells.iter_mut() {
+        pc.dim = true;
+        pc.dim_secondary = true;
+    }
 }
 
 /// Set `dim` on every pixel cell whose OWN edge is not in `lineage`. A
@@ -1166,6 +1216,26 @@ fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(String, Style)>
         .collect()
 }
 
+/// Whether a row is a base-update ("back-merge") merge that should render
+/// strongly muted (#55): its message greys+dims and its own graph connector is
+/// force-dimmed so the noisy back-merge line recedes. This is the single source
+/// of truth shared by BOTH renderers — the unicode path (`render_cells_unicode`
+/// force_dim) and the pixel path (`dim_pixel_specs_window` per-row force-dim) —
+/// so they agree on which rows mute. HEAD is never muted.
+fn is_base_update_row(
+    node: &GraphNode,
+    mute_base_merges: bool,
+    base_update_merges: &HashSet<git2::Oid>,
+) -> bool {
+    mute_base_merges
+        && !node.is_head
+        && node.is_merge()
+        && node
+            .commit
+            .as_ref()
+            .is_some_and(|c| base_update_merges.contains(&c.oid))
+}
+
 #[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
 fn render_graph_line<'a>(
     node: &GraphNode,
@@ -1189,15 +1259,11 @@ fn render_graph_line<'a>(
 
     // A base-update ("back-merge") commit (#55): when the option is on, its
     // message renders strongly muted and its own graph glyphs (the noisy
-    // back-merge connector) are force-dimmed. Decided once here so both the
-    // cell renderer and the message tail agree. HEAD is never muted.
-    let is_base_update = metadata_columns.mute_base_merges
-        && !node.is_head
-        && node.is_merge()
-        && node
-            .commit
-            .as_ref()
-            .is_some_and(|c| base_update_merges.contains(&c.oid));
+    // back-merge connector) are force-dimmed. Decided once here (via the shared
+    // `is_base_update_row` predicate) so both the unicode cell renderer and the
+    // pixel dim pass agree with the message tail. HEAD is never muted.
+    let is_base_update =
+        is_base_update_row(node, metadata_columns.mute_base_merges, base_update_merges);
 
     // Graph start marker (to distinguish from borders). GRAPH_LEADING_COLUMNS
     // is the shared contract with the pixel overlay's x-offset.
@@ -1472,6 +1538,16 @@ fn render_graph_line_tail<'a>(
     // `mute_merges` (any merge, never HEAD), so the two options unify rather than
     // duplicate. When on it implies muting even if `mute_merges` is off.
     let collapse_merge = metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
+    // Three separate style domains, decided independently and never merged here:
+    //   1. message-text precedence (this chain) — which mute wins for the message;
+    //   2. connector-cell dim (force_dim ∪ trace) — see `render_cells_unicode`
+    //      and `dim_pixel_specs_window`, applied to the graph glyphs, not text;
+    //   3. chip styling (branch/tag/merged badges) — see `optimize_branch_display`
+    //      and `merged_style`.
+    // The widget-level selection highlight (`Theme::selection_style`) then patches
+    // BOLD over the whole selected line and subtracts DIM, so BOLD wins when a row
+    // is selected without any domain going muddy (DIM+BOLD).
+    //
     // Precedence: a base-update back-merge (#55) is the noisiest, so it wins with
     // the strongest mute (muted color + DIM). Then a PR-landing merge (#52), then
     // ordinary merge muting/collapse, then selection bold.
@@ -2961,6 +3037,91 @@ mod tests {
         assert!(arc.add_modifier.contains(Modifier::DIM), "connector cell dimmed: {arc:?}");
     }
 
+    #[test]
+    fn is_base_update_row_predicate_is_the_shared_contract() {
+        // The single predicate both renderers key off. Only ON + merge + in-set +
+        // not-HEAD qualifies; anything else must not mute.
+        let mut set = HashSet::new();
+        set.insert(oid(30));
+        let merge = merge_node_full(30, "Merge main into feature", [1, 2]);
+        assert!(is_base_update_row(&merge, true, &set), "qualifying back-merge");
+        assert!(!is_base_update_row(&merge, false, &set), "toggle off never mutes");
+        assert!(
+            !is_base_update_row(&merge, true, &HashSet::new()),
+            "not in set never mutes"
+        );
+        // HEAD is never muted even when it qualifies otherwise.
+        let mut head = merge_node_full(30, "Merge main into feature", [1, 2]);
+        head.is_head = true;
+        assert!(!is_base_update_row(&head, true, &set), "HEAD is never muted");
+        // A non-merge commit in the set is not a back-merge.
+        let mut single = merge_node_full(30, "regular", [1, 2]);
+        single.commit.as_mut().unwrap().parent_oids = vec![oid(1)];
+        assert!(!is_base_update_row(&single, true, &set), "non-merge never mutes");
+    }
+
+    /// Render a one-row List through the real StatefulWidget highlight path and
+    /// return the resulting buffer. `selected` drives the widget-level highlight
+    /// patch (`Theme::selection_style`), exactly as the app does.
+    fn render_list_row(line: Line<'static>, theme: &Theme, selected: bool) -> Buffer {
+        let area = Rect::new(0, 0, 200, 1);
+        let mut buf = Buffer::empty(area);
+        let list = List::new(vec![ListItem::new(line)]).highlight_style(theme.selection_style());
+        let mut state = ListState::default();
+        if selected {
+            state.select(Some(0));
+        }
+        StatefulWidget::render(list, area, &mut buf, &mut state);
+        buf
+    }
+
+    /// The modifier of the first alphabetic cell in row 0 — the start of the
+    /// message text (graph glyphs carry no letters).
+    fn first_letter_modifier(buf: &Buffer) -> Modifier {
+        for x in 0..buf.area.width {
+            let cell = &buf[(x, 0)];
+            if cell.symbol().chars().next().is_some_and(|c| c.is_alphabetic()) {
+                return cell.modifier;
+            }
+        }
+        panic!("no message letter cell found in buffer row");
+    }
+
+    #[test]
+    fn selected_muted_row_is_bold_not_dim_through_the_list_layer() {
+        // Render-level regression through the actual List/StatefulWidget highlight
+        // patch (not render_row_with alone): a base-update-muted row's message is
+        // DIM when unselected, but selecting it must yield BOLD *without* DIM —
+        // the widget-level `sub_modifier(DIM)` makes BOLD win when selected, so
+        // DIM+BOLD never renders muddy.
+        let theme = Theme::dark();
+        let mut node = merge_node_full(30, "Merge main into feature", [1, 2]);
+        node.cells = vec![CellType::Commit(0)];
+        let mut set = HashSet::new();
+        set.insert(oid(30));
+        // The muted row Line as the real renderer produces it (message is DIM).
+        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set);
+
+        // Unselected: the message keeps its mute DIM (baseline the fix must not
+        // regress).
+        let unselected = first_letter_modifier(&render_list_row(line.clone(), &theme, false));
+        assert!(
+            unselected.contains(Modifier::DIM),
+            "unselected muted message stays DIM: {unselected:?}"
+        );
+
+        // Selected: BOLD is present and DIM is gone.
+        let selected = first_letter_modifier(&render_list_row(line, &theme, true));
+        assert!(
+            selected.contains(Modifier::BOLD),
+            "selected row is BOLD: {selected:?}"
+        );
+        assert!(
+            !selected.contains(Modifier::DIM),
+            "selected row drops DIM (no muddy DIM+BOLD): {selected:?}"
+        );
+    }
+
     // ── collapse merge messages to a glyph (#59) ─────────────────────
 
     #[test]
@@ -3270,11 +3431,17 @@ mod tests {
             .collect()
     }
 
+    /// No base-update force-dim on any row (the trace-only fixtures).
+    fn no_force(n: usize) -> Vec<bool> {
+        vec![false; n]
+    }
+
     #[test]
     fn window_dim_builds_only_inside_the_window() {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(10);
         let ro = row_oids_of(&oids);
-        let out = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 3, 7);
+        let ff = no_force(base.len());
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 3, 7);
 
         assert_eq!(out.len(), base.len(), "result keeps full length");
         for (i, spec) in out.iter().enumerate() {
@@ -3298,8 +3465,9 @@ mod tests {
         // byte-identical to dimming every row.
         let (base, oids, lit, lane_rgb) = window_dim_fixture(12);
         let ro = row_oids_of(&oids);
-        let full = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 0, base.len());
-        let windowed = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 4, 9);
+        let ff = no_force(base.len());
+        let full = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 0, base.len());
+        let windowed = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 4, 9);
         for i in 4..9 {
             assert_eq!(windowed[i], full[i], "row {i} matches the full-range dim");
         }
@@ -3309,9 +3477,34 @@ mod tests {
     fn empty_window_builds_nothing() {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(5);
         let ro = row_oids_of(&oids);
-        let out = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 2, 2);
+        let ff = no_force(base.len());
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 2, 2);
         assert_eq!(out.len(), 5);
         assert!(out.iter().all(|s| s.cells.is_empty()));
+    }
+
+    #[test]
+    fn base_update_force_dim_dims_the_whole_pixel_connector() {
+        // Pixel-mode mirror of `base_update_muting_dims_the_graph_connector_cells`
+        // (the unicode test): a base-update back-merge row's entire connector is
+        // force-dimmed in the windowed per-frame pass — every cell, regardless of
+        // trace lineage, so the noisy line recedes exactly as in unicode mode.
+        let (base, oids, lit, lane_rgb) = window_dim_fixture(4);
+        let ro = row_oids_of(&oids);
+        // Row 2 is a base-update merge; the rest are ordinary rows.
+        let mut ff = no_force(base.len());
+        ff[2] = true;
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 0, base.len());
+
+        // Row 2's connector is fully dimmed by force-dim...
+        assert!(
+            out[2].cells.iter().all(|c| c.dim && c.dim_secondary),
+            "base-update row connector force-dimmed: {:?}",
+            out[2].cells
+        );
+        // ...even though row 2 is an EVEN row that trace dimming would leave lit —
+        // force-dim wins over trace, mirroring the unicode `force_dim || trace`.
+        assert!(!out[0].cells[0].dim, "non-forced even row 0 stays lit by trace");
     }
 
     #[test]

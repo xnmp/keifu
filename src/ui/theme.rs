@@ -365,10 +365,24 @@ impl Theme {
 
     // -- convenience style constructors --
 
+    /// Style the List patches over every cell of the highlighted row. It adds
+    /// the selection background and BOLD, and — crucially — *subtracts* DIM.
+    ///
+    /// Rows that the message precedence chain or the connector-dim domain render
+    /// dimmed (base-update mute, PR-merge grey, merge-collapse, branch-trace
+    /// fade) would otherwise land DIM+BOLD once this patch OR-s BOLD on top,
+    /// which renders muddy. `remove_modifier(DIM)` (the `sub_modifier` field)
+    /// makes the rule explicit:
+    /// **BOLD wins when a row is selected** — the highlighted row is fully lit
+    /// and bold, with muting still carried by colour (e.g. `text_muted`), never
+    /// by a half-there dim. This is the widget-level analogue of the REVERSED
+    /// trick branch chips use to survive the same highlight patch, and it also
+    /// covers `merged_style` chip spans for free (they, too, are DIM).
     pub fn selection_style(&self) -> Style {
         Style::default()
             .bg(self.selection_bg)
             .add_modifier(self.selection_modifier)
+            .remove_modifier(Modifier::DIM)
     }
 
     pub fn list_selection_style(&self) -> Style {
