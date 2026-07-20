@@ -176,6 +176,8 @@ fn make_base_app(
         merged_branches: std::collections::HashSet::new(),
         merged_classify: keifu::merged_branches::MergedClassifier::new(),
         hide_merged_branches: false,
+        base_update_merges: std::collections::HashSet::new(),
+        base_update_sig: None,
         metadata_columns: keifu::config::MetadataColumns::default(),
         graph_width_cap: None,
         debug_keys: false,

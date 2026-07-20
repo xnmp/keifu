@@ -175,8 +175,16 @@ pub struct MetadataColumns {
     pub author: bool,
     pub hash: bool,
     pub date: bool,
-    /// Dim the dot and message of merge commits (VSCode Git Graph style).
+    /// Dim the message of merge commits (VSCode Git Graph style).
     pub mute_merges: bool,
+    /// Strongly mute base-update ("back-merge") commits and their connector: a
+    /// merge on an open PR's branch that pulled the updated base branch in
+    /// (issue #55). De-emphasizes the noisy back-merge line. Default off.
+    pub mute_base_merges: bool,
+    /// Collapse merge-commit messages to a bare merge glyph — no message text
+    /// (issue #59). A stronger form of `mute_merges`; keeps hash/author/date.
+    /// Default off.
+    pub collapse_merges: bool,
     /// Show round author avatars (pixel mode only).
     pub avatars: bool,
 }
@@ -188,6 +196,8 @@ impl Default for MetadataColumns {
             hash: true,
             date: true,
             mute_merges: true,
+            mute_base_merges: false,
+            collapse_merges: false,
             avatars: false,
         }
     }
@@ -508,6 +518,8 @@ mod tests {
                 hash: false,
                 date: false,
                 mute_merges: false,
+                mute_base_merges: true,
+                collapse_merges: true,
                 avatars: false,
             },
         };
@@ -522,6 +534,8 @@ mod tests {
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
         assert!(!restored.metadata_columns.mute_merges);
+        assert!(restored.metadata_columns.mute_base_merges);
+        assert!(restored.metadata_columns.collapse_merges);
         assert!(!restored.metadata_columns.avatars);
     }
 

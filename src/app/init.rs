@@ -187,6 +187,8 @@ impl App {
             merged_branches,
             merged_classify: crate::merged_branches::MergedClassifier::new(),
             hide_merged_branches: ui_state.hide_merged_branches,
+            base_update_merges: std::collections::HashSet::new(),
+            base_update_sig: None,
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,

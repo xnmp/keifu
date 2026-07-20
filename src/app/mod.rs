@@ -1011,6 +1011,16 @@ pub struct App {
     /// When true, merged branches are removed from the graph entirely rather than
     /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_merged_branches: bool,
+    /// OIDs of base-update ("back-merge") commits: merges on an open PR's branch
+    /// that pulled the updated base branch in (issue #55). Derived from
+    /// `open_prs` + the base branch via `classify_base_update_merges`; drives the
+    /// strong-mute rendering when `metadata_columns.mute_base_merges` is on. Not
+    /// persisted — recomputed from repo + PR state.
+    pub base_update_merges: std::collections::HashSet<git2::Oid>,
+    /// Cheap signature of the last inputs `base_update_merges` was computed from
+    /// (base tip + the open-PR head set), so a frequent refresh skips redundant
+    /// ancestry work when nothing relevant changed.
+    pub base_update_sig: Option<u64>,
 
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
@@ -1399,6 +1409,47 @@ impl App {
         self.merged_classify.maybe_start(input);
     }
 
+    /// Recompute the set of base-update ("back-merge") commits (issue #55) from
+    /// the current open PRs and base branch, storing it in `base_update_merges`.
+    /// Cheap (bounded per-PR walks on the UI thread's repo handle) and guarded by
+    /// an input signature so a frequent refresh does no work when neither the
+    /// base tip nor the open-PR head set has changed. Safe to call every refresh
+    /// and whenever `open_prs` updates; the render path only *reads* the set.
+    pub(crate) fn recompute_base_update_merges(&mut self) {
+        let Some(base) = crate::git::merged::base_branch(&self.branches) else {
+            self.base_update_merges.clear();
+            self.base_update_sig = None;
+            return;
+        };
+        // Sorted PR head OIDs so the signature is order-independent.
+        let mut pr_heads: Vec<git2::Oid> =
+            self.open_prs.values().filter_map(|p| p.head_oid()).collect();
+        pr_heads.sort();
+        // Signature: base tip + the head set. Unchanged ⇒ result is identical.
+        let sig = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            base.tip_oid.hash(&mut h);
+            for oid in &pr_heads {
+                oid.hash(&mut h);
+            }
+            h.finish()
+        };
+        if self.base_update_sig == Some(sig) {
+            return;
+        }
+        self.base_update_sig = Some(sig);
+        self.base_update_merges = if pr_heads.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            crate::git::merged::classify_base_update_merges(
+                self.repo.repo(),
+                &pr_heads,
+                base.tip_oid,
+            )
+        };
+    }
+
     /// Toggle soft line-wrapping in the file-diff viewer (persisted). The next
     /// render re-lays-out the diff via `ensure_diff_layout`, so the toggle only
     /// flips the flag and reports the new state.
@@ -1511,6 +1562,8 @@ impl App {
             hide_remote_branches: self.hide_remote_branches,
             hide_merged_branches: self.hide_merged_branches,
             mute_merges: self.metadata_columns.mute_merges,
+            mute_base_merges: self.metadata_columns.mute_base_merges,
+            collapse_merges: self.metadata_columns.collapse_merges,
             avatars: self.metadata_columns.avatars,
             col_author: self.metadata_columns.author,
             col_hash: self.metadata_columns.hash,
@@ -1537,6 +1590,8 @@ impl App {
         self.hide_remote_branches = m.hide_remote_branches;
         self.hide_merged_branches = m.hide_merged_branches;
         self.metadata_columns.mute_merges = m.mute_merges;
+        self.metadata_columns.mute_base_merges = m.mute_base_merges;
+        self.metadata_columns.collapse_merges = m.collapse_merges;
         self.metadata_columns.avatars = m.avatars;
         self.metadata_columns.author = m.col_author;
         self.metadata_columns.hash = m.col_hash;
