@@ -11,7 +11,16 @@ use git2::{
     Patch, Repository, Status, StatusOptions, Tree,
 };
 
-/// Maximum number of files to display
+/// Maximum number of files to display.
+///
+/// Perf note: once a working tree has more changed files than this, the quick
+/// and full uncommitted diffs are each independently truncated to this cap,
+/// so their file sets can diverge after a stage/unstage. That mismatch makes
+/// `DiffCache::reclassify_uncommitted_staging`'s in-place fast path bail (by
+/// design — it can't fabricate or drop rows it can't see) and fall back to a
+/// full async reload on every file op instead of the cheap in-place
+/// relabeling. Correctness is preserved either way; only the >50-changed-file
+/// case pays the slower path.
 const MAX_FILES_TO_DISPLAY: usize = 50;
 
 /// Maximum file size (bytes) to read for line counting; larger files are treated as binary
