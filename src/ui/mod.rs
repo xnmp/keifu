@@ -19,6 +19,7 @@ pub mod metadata_menu;
 pub mod pr_compose;
 pub mod pr_thread;
 pub mod search_dropdown;
+pub mod settings_menu;
 pub mod status_bar;
 pub mod theme;
 
@@ -547,6 +548,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::PullDivergence { selected } => {
             let popup_area = centered_rect_fixed(48, 8, area);
             frame.render_widget(PullDivergenceDialog::new(*selected, &theme), popup_area);
+            rendered_popup = Some(popup_area);
+        }
+        AppMode::Settings { selected, editing } => {
+            use self::settings_menu::SettingsMenuWidget;
+            let model = app.settings_model();
+            // Rows + 4 group headers + footer + borders; cap to the frame.
+            let want = (crate::settings::descriptors().len()
+                + crate::settings::SettingGroup::ALL.len()
+                + 3) as u16;
+            let height = want.min(area.height.saturating_sub(2)).max(6);
+            let popup_area = centered_rect_fixed(52, height, area);
+            frame.render_widget(
+                SettingsMenuWidget::new(&model, *selected, editing.as_deref(), &theme),
+                popup_area,
+            );
             rendered_popup = Some(popup_area);
         }
         AppMode::CiChecks => {

@@ -330,6 +330,7 @@ impl App {
                 | AppMode::PrThread
                 | AppMode::CommitMenu { .. }
                 | AppMode::MetadataMenu { .. }
+                | AppMode::Settings { .. }
                 | AppMode::PullDivergence { .. }
                 | AppMode::PrMergePicker { .. }
                 | AppMode::PrReviewPicker { .. }

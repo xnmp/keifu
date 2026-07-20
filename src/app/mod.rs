@@ -319,6 +319,13 @@ pub enum AppMode {
     MetadataMenu {
         selected: usize,
     },
+    /// Settings menu (Ctrl+,): the full inventory of user-facing settings,
+    /// grouped and editable. `selected` indexes `settings::descriptors()`;
+    /// `editing` holds the in-progress numeric buffer when typing a value.
+    Settings {
+        selected: usize,
+        editing: Option<String>,
+    },
     /// A `--ff-only` pull failed on divergent branches: choose merge or rebase.
     /// The remote/branch to rerun with are held in `App.last_pull`.
     PullDivergence {
@@ -1186,6 +1193,11 @@ impl App {
             self.open_command_palette();
             return Ok(());
         }
+        // The settings menu opens from any panel in Normal mode.
+        if matches!(action, Action::OpenSettings) {
+            self.open_settings();
+            return Ok(());
+        }
         // Mouse actions hit-test the recorded layout regardless of mode.
         if matches!(
             action,
@@ -1207,6 +1219,7 @@ impl App {
             AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
+            AppMode::Settings { .. } => self.handle_settings_action(action)?,
             AppMode::PullDivergence { .. } => self.handle_pull_divergence_action(action),
             AppMode::CiChecks => self.handle_ci_checks_action(action),
             AppMode::PrThread => self.handle_pr_thread_action(action),
@@ -1416,6 +1429,170 @@ impl App {
             Action::Cancel => self.mode = AppMode::Normal,
             _ => {}
         }
+    }
+
+    /// Project the app's scattered settings into the pure [`SettingsModel`] the
+    /// settings menu edits. `graph_width_cap == 0` encodes `None` (uncapped).
+    pub(crate) fn settings_model(&self) -> crate::settings::SettingsModel {
+        use crate::settings::{SettingsModel, ThemeChoice};
+        SettingsModel {
+            trace_enabled: self.trace_enabled,
+            hide_remote_branches: self.hide_remote_branches,
+            mute_merges: self.metadata_columns.mute_merges,
+            avatars: self.metadata_columns.avatars,
+            col_author: self.metadata_columns.author,
+            col_hash: self.metadata_columns.hash,
+            col_date: self.metadata_columns.date,
+            graph_renderer: self.config.ui.graph_renderer,
+            graph_split_ratio: self.graph_split_ratio,
+            graph_width_cap: self.graph_width_cap.unwrap_or(0) as u16,
+            diff_word_wrap: self.diff_word_wrap,
+            auto_refresh: self.config.refresh.auto_refresh,
+            refresh_interval: self.config.refresh.refresh_interval,
+            auto_fetch: self.config.refresh.auto_fetch,
+            fetch_interval: self.config.refresh.fetch_interval,
+            side_panel_layout: self.side_panel_layout,
+            theme: ThemeChoice::from_str(&self.config.ui.theme),
+        }
+    }
+
+    /// Apply an edited [`SettingsModel`] back onto the app's live fields. Most
+    /// settings take effect on the next render/loop tick simply by being read;
+    /// the caller handles rebuilds that a bare field write can't (see
+    /// `handle_settings_action`). Interval minimums mirror the config loader.
+    pub(crate) fn apply_settings_model(&mut self, m: &crate::settings::SettingsModel) {
+        self.trace_enabled = m.trace_enabled;
+        self.hide_remote_branches = m.hide_remote_branches;
+        self.metadata_columns.mute_merges = m.mute_merges;
+        self.metadata_columns.avatars = m.avatars;
+        self.metadata_columns.author = m.col_author;
+        self.metadata_columns.hash = m.col_hash;
+        self.metadata_columns.date = m.col_date;
+        self.config.ui.graph_renderer = m.graph_renderer;
+        self.graph_split_ratio = m.graph_split_ratio.clamp(20, 80);
+        self.graph_width_cap = (m.graph_width_cap != 0).then_some(m.graph_width_cap as usize);
+        self.diff_word_wrap = m.diff_word_wrap;
+        self.config.refresh.auto_refresh = m.auto_refresh;
+        self.config.refresh.refresh_interval = m.refresh_interval.max(1);
+        self.config.refresh.auto_fetch = m.auto_fetch;
+        self.config.refresh.fetch_interval = m.fetch_interval.max(10);
+        self.side_panel_layout = m.side_panel_layout;
+        self.config.ui.theme = m.theme.as_str().to_string();
+    }
+
+    /// Persist both stores the settings menu writes to: UI-state settings to
+    /// state.toml, config settings to config.toml (comments/unknown keys kept).
+    pub(crate) fn persist_settings(&self) {
+        self.save_ui_state();
+        self.config.save();
+    }
+
+    /// Open the settings menu (Ctrl+,).
+    pub(crate) fn open_settings(&mut self) {
+        self.mode = AppMode::Settings {
+            selected: 0,
+            editing: None,
+        };
+    }
+
+    /// Apply an edited settings model, persist it, and rebuild the graph if the
+    /// change was one a bare field write can't realize on its own (currently
+    /// only `hide_remote_branches`, which changes which commits are in the graph).
+    fn commit_settings(&mut self, model: &crate::settings::SettingsModel) -> Result<()> {
+        let old_hide = self.hide_remote_branches;
+        self.apply_settings_model(model);
+        self.persist_settings();
+        if self.hide_remote_branches != old_hide {
+            self.refresh(true)?;
+        }
+        Ok(())
+    }
+
+    /// Settings menu: navigate, toggle/cycle, type numeric values, close. Edits
+    /// apply live and persist immediately.
+    fn handle_settings_action(&mut self, action: Action) -> Result<()> {
+        use crate::settings::{clamp_int, cycle_value, descriptors, SettingKind, SettingValue};
+
+        let ds = descriptors();
+        let n = ds.len();
+        let (selected, editing) = match &self.mode {
+            AppMode::Settings { selected, editing } => (*selected, editing.clone()),
+            _ => return Ok(()),
+        };
+
+        match action {
+            Action::MoveUp => {
+                if let AppMode::Settings { selected, editing } = &mut self.mode {
+                    *selected = (*selected + n - 1) % n;
+                    *editing = None;
+                }
+            }
+            Action::MoveDown => {
+                if let AppMode::Settings { selected, editing } = &mut self.mode {
+                    *selected = (*selected + 1) % n;
+                    *editing = None;
+                }
+            }
+            Action::MenuSelect => {
+                let d = &ds[selected];
+                let mut model = self.settings_model();
+                match (&editing, d.kind) {
+                    // Commit a typed numeric value.
+                    (Some(buf), SettingKind::Int { .. }) => {
+                        if let Ok(parsed) = buf.parse::<u64>() {
+                            d.set(&mut model, SettingValue::Int(clamp_int(&d.kind, parsed)));
+                        }
+                        if let AppMode::Settings { editing, .. } = &mut self.mode {
+                            *editing = None;
+                        }
+                        self.commit_settings(&model)?;
+                    }
+                    // Otherwise cycle/toggle the current value.
+                    _ => {
+                        let next = cycle_value(&d.kind, d.get(&model));
+                        d.set(&mut model, next);
+                        self.commit_settings(&model)?;
+                    }
+                }
+            }
+            // Digit typing builds a numeric edit buffer for Int settings.
+            Action::InputChar(c) if c.is_ascii_digit() => {
+                if matches!(ds[selected].kind, SettingKind::Int { .. }) {
+                    if let AppMode::Settings { editing, .. } = &mut self.mode {
+                        let buf = editing.get_or_insert_with(String::new);
+                        // Cap length so absurd input can't overflow u64.
+                        if buf.len() < 7 {
+                            buf.push(c);
+                        }
+                    }
+                }
+            }
+            Action::InputBackspace => {
+                if let AppMode::Settings {
+                    editing: Some(buf), ..
+                } = &mut self.mode
+                {
+                    buf.pop();
+                    if buf.is_empty() {
+                        if let AppMode::Settings { editing, .. } = &mut self.mode {
+                            *editing = None;
+                        }
+                    }
+                }
+            }
+            Action::Cancel => {
+                // Esc cancels an in-progress edit first, else closes the menu.
+                if editing.is_some() {
+                    if let AppMode::Settings { editing, .. } = &mut self.mode {
+                        *editing = None;
+                    }
+                } else {
+                    self.mode = AppMode::Normal;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Pull-divergence prompt: pick merge (0) or rebase (1), or cancel. The

@@ -99,6 +99,9 @@ pub enum Action {
     // Open the metadata-columns toggle menu (graph)
     OpenMetadataMenu,
 
+    // Open the settings menu (Ctrl+,) from any panel
+    OpenSettings,
+
     // Jump to the merge base / fork point of the selection vs main (or HEAD) (graph)
     JumpToMergeBase,
 

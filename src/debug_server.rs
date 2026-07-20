@@ -217,6 +217,7 @@ fn mode_name(mode: &AppMode) -> &'static str {
         AppMode::Error { .. } => "error",
         AppMode::CommitMenu { .. } => "commit_menu",
         AppMode::MetadataMenu { .. } => "metadata_menu",
+        AppMode::Settings { .. } => "settings",
         AppMode::PullDivergence { .. } => "pull_divergence",
         AppMode::CiChecks => "ci_checks",
         AppMode::PrThread => "pr_thread",
@@ -268,6 +269,12 @@ fn state_json(app: &App) -> Value {
         "is_fetching": app.is_fetching(),
         "is_pushing": app.is_pushing(),
         "is_pulling": app.is_pulling(),
+        // Settings-menu-managed flags, exposed so tests can assert persistence
+        // across restarts.
+        "hide_remote_branches": app.hide_remote_branches,
+        "trace_enabled": app.trace_enabled,
+        "diff_word_wrap": app.diff_word_wrap,
+        "graph_renderer": app.config.ui.graph_renderer.as_str(),
     })
 }
 

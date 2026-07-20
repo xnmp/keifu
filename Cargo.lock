@@ -914,6 +914,7 @@ dependencies = [
  "tempfile",
  "terminal-light",
  "toml",
+ "toml_edit",
  "tracing",
  "tracing-subscriber",
  "trash",
