@@ -947,6 +947,13 @@ pub struct App {
     // Watcher still being built on a background thread; installed into
     // `watcher` by poll_fs_watcher once ready.
     pub pending_watcher: Option<crate::watcher::PendingFsWatcher>,
+    // Set when a previously-running watcher disconnects mid-session (see
+    // `poll_fs_watcher`'s `PollResult::Disconnected` arm). Distinguishes that
+    // failure from `watcher` simply never having started (construction
+    // failed, or disabled by config) — only the former is worth a status-bar
+    // warning chip, since the latter isn't a regression the user needs to
+    // act on.
+    pub watcher_disconnected: bool,
 
     // Undo
     pub last_undoable_op: Option<UndoableOperation>,
