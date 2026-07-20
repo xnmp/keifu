@@ -210,15 +210,19 @@ pub enum MetadataColumn {
     Hash,
     Date,
     MuteMerges,
+    MuteBaseMerges,
+    CollapseMerges,
     Avatars,
 }
 
 impl MetadataColumn {
-    pub const ALL: [MetadataColumn; 5] = [
+    pub const ALL: [MetadataColumn; 7] = [
         Self::Author,
         Self::Hash,
         Self::Date,
         Self::MuteMerges,
+        Self::MuteBaseMerges,
+        Self::CollapseMerges,
         Self::Avatars,
     ];
 
@@ -228,6 +232,8 @@ impl MetadataColumn {
             Self::Hash => "Hash",
             Self::Date => "Date",
             Self::MuteMerges => "Mute merges",
+            Self::MuteBaseMerges => "Mute base-update merges",
+            Self::CollapseMerges => "Collapse merge messages",
             Self::Avatars => "Avatars",
         }
     }
@@ -240,6 +246,8 @@ impl MetadataColumns {
             MetadataColumn::Hash => self.hash,
             MetadataColumn::Date => self.date,
             MetadataColumn::MuteMerges => self.mute_merges,
+            MetadataColumn::MuteBaseMerges => self.mute_base_merges,
+            MetadataColumn::CollapseMerges => self.collapse_merges,
             MetadataColumn::Avatars => self.avatars,
         }
     }
@@ -250,6 +258,8 @@ impl MetadataColumns {
             MetadataColumn::Hash => self.hash = !self.hash,
             MetadataColumn::Date => self.date = !self.date,
             MetadataColumn::MuteMerges => self.mute_merges = !self.mute_merges,
+            MetadataColumn::MuteBaseMerges => self.mute_base_merges = !self.mute_base_merges,
+            MetadataColumn::CollapseMerges => self.collapse_merges = !self.collapse_merges,
             MetadataColumn::Avatars => self.avatars = !self.avatars,
         }
     }
@@ -285,6 +295,9 @@ pub struct UiState {
     /// or squash) from the graph. Off by default: merged branches are shown but
     /// dimmed, and this toggle removes them entirely.
     pub hide_merged_branches: bool,
+    /// Group the files pane by folder (`f` toggles). Off by default: files list
+    /// flat with full repo-relative paths, the historical behavior.
+    pub files_group_by_folder: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -298,6 +311,7 @@ impl Default for UiState {
             hide_remote_branches: false,
             diff_word_wrap: false,
             hide_merged_branches: false,
+            files_group_by_folder: false,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -495,6 +509,7 @@ mod tests {
         assert!(!state.side_panel_layout);
         // Missing from an older state file → the sensible default, not 0.
         assert_eq!(state.graph_split_ratio, DEFAULT_GRAPH_SPLIT_RATIO);
+        assert!(!state.files_group_by_folder);
         assert!(state.metadata_columns.author);
         assert!(state.metadata_columns.hash);
         assert!(state.metadata_columns.date);
@@ -513,6 +528,7 @@ mod tests {
             hide_remote_branches: true,
             diff_word_wrap: false,
             hide_merged_branches: false,
+            files_group_by_folder: true,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -530,6 +546,7 @@ mod tests {
         assert_eq!(restored.graph_split_ratio, 40);
         assert!(!restored.trace_enabled);
         assert!(restored.hide_remote_branches);
+        assert!(restored.files_group_by_folder);
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);

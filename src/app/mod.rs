@@ -903,6 +903,7 @@ pub struct App {
     pub wt_status_error_latched: bool,
     pub auto_refresh_error_latched: bool,
     pub watch_refresh_error_latched: bool,
+    pub auto_fetch_error_latched: bool,
 
     // Transient toast notifications for background-op outcomes.
     pub toasts: crate::toast::ToastQueue,
@@ -1534,6 +1535,7 @@ impl App {
             hide_remote_branches: self.hide_remote_branches,
             diff_word_wrap: self.diff_word_wrap,
             hide_merged_branches: self.hide_merged_branches,
+            files_group_by_folder: self.files_pane.files_group_by_folder,
             metadata_columns: self.metadata_columns,
         }
         .save();
@@ -1586,6 +1588,7 @@ impl App {
             graph_split_ratio: self.graph_split_ratio,
             graph_width_cap: self.graph_width_cap.unwrap_or(0) as u16,
             diff_word_wrap: self.diff_word_wrap,
+            files_group_by_folder: self.files_pane.files_group_by_folder,
             auto_refresh: self.config.refresh.auto_refresh,
             refresh_interval: self.config.refresh.refresh_interval,
             auto_fetch: self.config.refresh.auto_fetch,
@@ -1614,6 +1617,7 @@ impl App {
         self.graph_split_ratio = m.graph_split_ratio.clamp(20, 80);
         self.graph_width_cap = (m.graph_width_cap != 0).then_some(m.graph_width_cap as usize);
         self.diff_word_wrap = m.diff_word_wrap;
+        self.files_pane.files_group_by_folder = m.files_group_by_folder;
         self.config.refresh.auto_refresh = m.auto_refresh;
         self.config.refresh.refresh_interval = m.refresh_interval.max(1);
         self.config.refresh.auto_fetch = m.auto_fetch;

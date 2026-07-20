@@ -575,8 +575,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         AppMode::MetadataMenu { selected } => {
             use self::metadata_menu::MetadataMenuWidget;
-            // 5 rows + top/bottom border.
-            let popup_area = centered_rect_fixed(24, 7, area);
+            // 7 rows + top/bottom border. Wide enough for the longest label
+            // ("Mute base-update merges") plus its "> [x] " prefix.
+            let popup_area = centered_rect_fixed(32, 9, area);
             frame.render_widget(
                 MetadataMenuWidget::new(app.metadata_columns, *selected, &theme),
                 popup_area,

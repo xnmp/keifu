@@ -128,6 +128,7 @@ impl App {
             }
             Action::ToggleFolderView => {
                 self.files_pane.files_group_by_folder = !self.files_pane.files_group_by_folder;
+                self.save_ui_state();
             }
             Action::StartFilesFilter => {
                 self.files_pane.files_filter_active = true;

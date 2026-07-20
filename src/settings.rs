@@ -134,6 +134,7 @@ pub struct SettingsModel {
     pub graph_width_cap: u16,
     // Files
     pub diff_word_wrap: bool,
+    pub files_group_by_folder: bool,
     // Refresh
     pub auto_refresh: bool,
     pub refresh_interval: u64,
@@ -319,7 +320,7 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             set: |m, v| set_bool(v, &mut m.avatars),
         },
         SettingDescriptor {
-            label: "Column: author",
+            label: "Show author column",
             group: Graph,
             kind: SettingKind::Bool,
             note: None,
@@ -328,7 +329,7 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             set: |m, v| set_bool(v, &mut m.col_author),
         },
         SettingDescriptor {
-            label: "Column: hash",
+            label: "Show hash column",
             group: Graph,
             kind: SettingKind::Bool,
             note: None,
@@ -337,7 +338,7 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             set: |m, v| set_bool(v, &mut m.col_hash),
         },
         SettingDescriptor {
-            label: "Column: date",
+            label: "Show date column",
             group: Graph,
             kind: SettingKind::Bool,
             note: None,
@@ -405,6 +406,15 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             store: SettingStore::State,
             get: |m| SettingValue::Bool(m.diff_word_wrap),
             set: |m, v| set_bool(v, &mut m.diff_word_wrap),
+        },
+        SettingDescriptor {
+            label: "Group files by folder",
+            group: Files,
+            kind: SettingKind::Bool,
+            note: None,
+            store: SettingStore::State,
+            get: |m| SettingValue::Bool(m.files_group_by_folder),
+            set: |m, v| set_bool(v, &mut m.files_group_by_folder),
         },
         // ── Refresh ────────────────────────────────────────────────
         SettingDescriptor {
@@ -515,6 +525,7 @@ mod tests {
             graph_split_ratio: 65,
             graph_width_cap: 0,
             diff_word_wrap: false,
+            files_group_by_folder: false,
             auto_refresh: true,
             refresh_interval: 10,
             auto_fetch: true,

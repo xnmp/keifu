@@ -115,7 +115,11 @@ impl App {
             } else {
                 FocusedPanel::Graph
             },
-            files_pane: FilesPaneState::new(),
+            files_pane: {
+                let mut files_pane = FilesPaneState::new();
+                files_pane.files_group_by_folder = ui_state.files_group_by_folder;
+                files_pane
+            },
             hidden_branches: std::collections::HashSet::new(),
             branch_authors: std::collections::HashMap::new(),
             branch_authors_key: Vec::new(),
@@ -149,6 +153,7 @@ impl App {
             wt_status_error_latched: false,
             auto_refresh_error_latched: false,
             watch_refresh_error_latched: false,
+            auto_fetch_error_latched: false,
             toasts: crate::toast::ToastQueue::new(),
             pr_toasts_armed: false,
             network: NetworkManager::new(),
