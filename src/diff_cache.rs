@@ -1043,6 +1043,106 @@ mod tests {
         assert!(!events.uncommitted_diff_loaded);
     }
 
+    // ── Uninitialized submodule (issue #72) ─────────────────────────
+
+    /// Build a repo containing an uncommitted, *uninitialized* submodule: a
+    /// gitlink (mode 160000) staged in the index plus a matching `.gitmodules`
+    /// entry, with no checkout on disk. Returns the owning `TempDir` (keeps the
+    /// repo alive) and the repo path. No network or second repo needed — the
+    /// gitlink points at the repo's own HEAD, since reclassify never resolves
+    /// the submodule target.
+    fn repo_with_uninitialized_submodule() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        let git = crate::test_support::git;
+        git(&main, &["init", "-q", "-b", "main"]);
+        std::fs::write(main.join("a.txt"), "a").unwrap();
+        git(&main, &["add", "."]);
+        git(&main, &["commit", "-qm", "c1"]);
+
+        let sha = {
+            let r = GitRepository::open(&main).unwrap();
+            let sha = r.repo().head().unwrap().target().unwrap();
+            sha
+        };
+        std::fs::write(
+            main.join(".gitmodules"),
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = ./nonexistent\n",
+        )
+        .unwrap();
+        // Stage a bare gitlink at `sub` without checking anything out — an
+        // uninitialized submodule.
+        git(
+            &main,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{sha},sub"),
+            ],
+        );
+        (tmp, main)
+    }
+
+    /// Regression coverage for the reclassify retain-by-path prune (issue #72).
+    ///
+    /// The concern: the full working-tree scan surfaces an uncommitted
+    /// submodule, while the quick diff's `ignore_submodules(true)` was feared
+    /// to suppress it — leaving the gitlink present in the full diff but absent
+    /// from the quick diff, so the retain-by-path prune would wrongly drop it.
+    ///
+    /// In practice the premise doesn't hold: the quick diff *also* carries the
+    /// gitlink (as a staged add plus a workdir-deleted row, since the submodule
+    /// isn't checked out). Because the path is present in the quick diff, the
+    /// retain never strips it. This test pins that invariant against a real
+    /// gitlink fixture — the two precondition assertions are the real guard: if
+    /// a future change ever makes the quick diff stop emitting the submodule
+    /// while the full scan keeps it, the prune edge becomes reachable and the
+    /// post-reclassify assertion below would start failing.
+    #[test]
+    fn reclassify_preserves_uninitialized_submodule_row() {
+        let (_tmp, main) = repo_with_uninitialized_submodule();
+        let repo = GitRepository::open(&main).unwrap();
+
+        let full = CommitDiffInfo::from_working_tree(repo.repo()).unwrap();
+        let quick = CommitDiffInfo::quick_file_list_for_working_tree(repo.repo()).unwrap();
+
+        // Precondition 1: the full scan surfaces the uninitialized submodule.
+        assert!(
+            full.files.iter().any(|f| f.path == Path::new("sub")),
+            "full working-tree diff should surface the uninitialized submodule gitlink"
+        );
+        // Precondition 2: the quick diff carries it too — this is the invariant
+        // that keeps the retain-by-path prune from ever dropping the gitlink.
+        assert!(
+            quick.files.iter().any(|f| f.path == Path::new("sub")),
+            "quick diff must also carry the submodule, or the reclassify prune edge becomes reachable"
+        );
+
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(full);
+        cache.quick_diff_target = Some(DiffTarget::Uncommitted);
+        cache.quick_diff_cache = Some(quick);
+
+        cache.reclassify_uncommitted_staging(Some(&precise_status()));
+
+        // The submodule row must survive the retain-by-path prune...
+        let cached = cache.uncommitted_diff_cache.as_ref().unwrap();
+        assert!(
+            cached.files.iter().any(|f| f.path == Path::new("sub")),
+            "reclassify must not prune the uninitialized submodule row"
+        );
+        // ...and stay visible through the accessor the files pane actually reads.
+        let visible = cache
+            .cached_diff_or_quick(Some(DiffTarget::Uncommitted))
+            .unwrap();
+        assert!(
+            visible.files.iter().any(|f| f.path == Path::new("sub")),
+            "submodule must stay visible in the files pane after reclassify"
+        );
+    }
+
     // ── Cache reuse decisions ───────────────────────────────────────
 
     #[test]
