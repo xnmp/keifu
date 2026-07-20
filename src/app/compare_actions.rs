@@ -12,10 +12,6 @@ impl App {
             .map(|commit| commit.oid)
     }
 
-    fn short(oid: Oid) -> String {
-        oid.to_string()[..7].to_string()
-    }
-
     /// Committer time in seconds since epoch (0 if the commit can't be read).
     fn commit_time(&self, oid: Oid) -> i64 {
         self.repo
@@ -50,7 +46,7 @@ impl App {
             self.compare_marked = Some(oid);
             self.toast(crate::toast::ToastKind::Info, format!(
                 "Marked {} for compare (previous comparison cleared)",
-                Self::short(oid)
+                short_hash(oid)
             ));
             return;
         }
@@ -60,7 +56,7 @@ impl App {
                 self.compare_marked = Some(oid);
                 self.toast(crate::toast::ToastKind::Info, format!(
                     "Marked {} — select another commit and press m to compare",
-                    Self::short(oid)
+                    short_hash(oid)
                 ));
             }
             Some(marked) if marked == oid => {
@@ -76,8 +72,8 @@ impl App {
                 self.commit_detail_scroll = 0;
                 self.toast(crate::toast::ToastKind::Success, format!(
                     "Comparing {} → {} (older → newer). Space opens a file; Esc clears.",
-                    Self::short(old),
-                    Self::short(new)
+                    short_hash(old),
+                    short_hash(new)
                 ));
             }
         }
@@ -107,7 +103,7 @@ impl App {
                 let info = crate::git::CommitInfo::from_git2_commit(&commit);
                 (info.short_id, info.message)
             }
-            Err(_) => (Self::short(oid), String::new()),
+            Err(_) => (short_hash(oid), String::new()),
         }
     }
 

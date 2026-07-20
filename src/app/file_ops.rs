@@ -11,7 +11,7 @@ impl App {
         // `.git/index.lock`, and a collision leaves a stuck lock. Read-only
         // navigation stays ungated.
         if action_touches_index(&action) && self.network.is_busy() {
-            self.toast(crate::toast::ToastKind::Info, "busy: pull in progress");
+            self.toast(crate::toast::ToastKind::Info, BUSY_PULL_IN_PROGRESS);
             return Ok(());
         }
 

@@ -258,7 +258,7 @@ impl App {
         if target.is_untracked {
             let path_str = target.path.to_string_lossy().to_string();
             stage_file(&self.repo_path, &path_str)?;
-            self.toast(crate::toast::ToastKind::Success, format!("Staged {}", target.path.display()));
+            self.toast(crate::toast::ToastKind::Success, format!("Staged '{}'", target.path.display()));
             return self.reload_file_diff_for_path(&target.path, target.scroll_offset);
         }
         let Some(hunk) =
@@ -582,7 +582,7 @@ impl App {
         if self.pending_refresh {
             self.pending_refresh = false;
             if let Err(e) = self.refresh(true) {
-                self.toast(crate::toast::ToastKind::Error, format!("Refresh failed: {e}"));
+                self.report_refresh_error(e);
             }
         }
     }

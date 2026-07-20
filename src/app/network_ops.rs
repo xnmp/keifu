@@ -31,7 +31,7 @@ impl App {
                                 }
                             }
                         }
-                        Err(e) => self.show_error(format!("Refresh failed: {e}")),
+                        Err(e) => self.report_refresh_error(e),
                     }
                 }
             }
@@ -63,7 +63,7 @@ impl App {
             Ok(()) => {
                 self.toast(ToastKind::Success, "Pushed");
                 if let Err(e) = self.refresh(true) {
-                    self.show_error(format!("Refresh failed: {e}"));
+                    self.report_refresh_error(e);
                 }
             }
             Err(e) => {
@@ -90,7 +90,7 @@ impl App {
             Ok(outcome) => {
                 self.network.reset_timers();
                 if let Err(e) = self.refresh(true) {
-                    self.show_error(format!("Refresh failed: {e}"));
+                    self.report_refresh_error(e);
                     return true;
                 }
                 match outcome {
@@ -116,13 +116,7 @@ impl App {
                     }
                     OpOutcome::Conflicts { count } => {
                         self.focus_conflict_files();
-                        // Keep the workflow guidance in the status bar; toast the
-                        // (easily-missed) conflict outcome prominently.
                         self.set_message(Self::conflict_guidance(count));
-                        self.toast(
-                            ToastKind::Error,
-                            format!("Pulled with {count} conflict{}", if count == 1 { "" } else { "s" }),
-                        );
                     }
                 }
             }
@@ -315,7 +309,7 @@ impl App {
         self.merged_branch_fetch.force();
 
         if let Err(e) = self.refresh(true) {
-            self.show_error(format!("Refresh failed: {e}"));
+            self.report_refresh_error(e);
         }
         self.reset_timers();
 
@@ -367,7 +361,7 @@ impl App {
     /// pull.
     pub(crate) fn rerun_pull_with_mode(&mut self, mode: PullMode) {
         if self.network.is_busy() {
-            self.toast(crate::toast::ToastKind::Info, "busy: pull in progress");
+            self.toast(crate::toast::ToastKind::Info, BUSY_PULL_IN_PROGRESS);
             return;
         }
         let Some((remote, branch)) = self.last_pull.clone() else {

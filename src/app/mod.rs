@@ -29,7 +29,7 @@ use crate::{
             stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
             unstage_all, unstage_file, OpOutcome, PullMode, ResetMode,
         },
-        extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch,
+        extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch, short_hash,
         BranchInfo, CommitDiffInfo, CommitInfo, Credentials, FileChangeKind, FileDiffContent,
         FileDiffInfo, GitRepository, OperationState, StageStatus, WorkingTreeStatus,
     },
@@ -788,6 +788,10 @@ pub const COMMIT_CHUNK: usize = 500;
 /// rows of the last loaded commit.
 pub const AUTOLOAD_THRESHOLD: usize = 50;
 
+/// Guard message shown when an index-mutating action or pull re-run is
+/// blocked by a pull already in flight (both touch `.git/index.lock`).
+pub const BUSY_PULL_IN_PROGRESS: &str = "busy: pull in progress";
+
 /// Application state
 pub struct App {
     pub mode: AppMode,
@@ -930,7 +934,7 @@ pub struct App {
     // signal for catching squash-merged branches whose local ref survives (the
     // remote copy having been deleted on merge). Empty when gh is unavailable.
     pub merged_pr_branches: std::collections::HashSet<String>,
-    pub merged_branch_fetch: crate::merged_branches::MergedBranchFetch,
+    pub merged_branch_fetch: crate::merged_branch_fetch::MergedBranchFetch,
 
     // The last pull's (remote, branch) so a divergence prompt can rerun it with
     // an explicit merge/rebase strategy.
@@ -1010,7 +1014,7 @@ pub struct App {
     pub merged_branches: std::collections::HashSet<String>,
     /// Background classifier that computes `merged_branches` off the UI thread, so
     /// a refresh never does per-branch git diffing inline.
-    pub merged_classify: crate::merged_branches::MergedClassifier,
+    pub merged_classify: crate::merged_branch_fetch::MergedClassifier,
     /// When true, merged branches are removed from the graph entirely rather than
     /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_merged_branches: bool,
@@ -1308,6 +1312,13 @@ impl App {
         self.mode = AppMode::Error { message };
     }
 
+    /// Report a failed post-op refresh with a consistent message and severity.
+    /// Used after ops (fetch/push/pull/prune/PR actions/…) whose own outcome
+    /// already succeeded but whose follow-up `refresh()` failed.
+    pub fn report_refresh_error(&mut self, e: impl std::fmt::Display) {
+        self.show_error(format!("Refresh failed: {e}"));
+    }
+
     /// Enqueue this graph's author emails for avatar download (once per graph
     /// load) and drain any finished downloads. Returns whether a new avatar
     /// arrived, so the caller can trigger a redraw. Cheap no-op when avatars are
@@ -1402,7 +1413,7 @@ impl App {
             self.merged_branches.clear();
             return;
         };
-        let input = crate::merged_branches::ClassifyInput {
+        let input = crate::merged_branch_fetch::ClassifyInput {
             repo_path: self.repo_path.clone(),
             branches: self.branches.clone(),
             base_name: base.name.clone(),

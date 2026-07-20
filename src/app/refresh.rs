@@ -21,7 +21,7 @@ impl App {
             self.commit_load_limit.saturating_add(COMMIT_CHUNK)
         };
         if let Err(e) = self.refresh(false) {
-            self.show_error(format!("{e}"));
+            self.report_refresh_error(e);
             return;
         }
         let added = self.commits.len().saturating_sub(before);

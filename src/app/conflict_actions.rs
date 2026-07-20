@@ -241,7 +241,7 @@ mod tests {
     use super::{commit_guard_message, op_guard_message};
     use crate::app::App;
     use crate::git::{GitRepository, OperationState};
-    use std::process::Command;
+    use crate::test_support::git;
 
     // ── Pure predicate: op_guard_message ────────────────────────────────
 
@@ -319,22 +319,8 @@ mod tests {
     }
 
     // ── Integration: real mid-merge repo ────────────────────────────────
-
-    fn git(dir: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .expect("run git");
-        // `merge` on conflict exits non-zero — that's expected for that call.
-        let _ = status;
-    }
+    // `git` (below) deliberately doesn't assert exit codes: the `merge` call
+    // in `conflicted_merge_repo` is expected to exit non-zero on conflict.
 
     /// Build a repo where merging `feature` into `main` conflicts, leaving the
     /// repo mid-merge with an unmerged path.

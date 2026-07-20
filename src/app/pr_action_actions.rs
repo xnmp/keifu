@@ -294,7 +294,7 @@ impl App {
                 self.pr_fetch.force();
                 if action.refreshes_graph() {
                     if let Err(e) = self.refresh(true) {
-                        self.show_error(format!("Refresh failed: {e}"));
+                        self.report_refresh_error(e);
                     }
                 }
             }

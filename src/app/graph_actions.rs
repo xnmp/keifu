@@ -580,21 +580,7 @@ impl App {
 mod tests {
     use crate::app::App;
     use crate::git::GitRepository;
-    use std::process::Command;
-
-    fn git(dir: &std::path::Path, args: &[&str]) {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .expect("run git");
-    }
+    use crate::test_support::git;
 
     /// A repo whose HEAD commit message won't match a "feature"-style filter,
     /// with an uncommitted change in the working tree so the graph carries the
