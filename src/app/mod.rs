@@ -893,6 +893,9 @@ pub struct App {
     // Open GitHub PRs by head branch name, refreshed in the background via the
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
+    // Head branch names of PRs that were merged, from the same background fetch.
+    // Drives the dimming of already-merged branch chips in the graph.
+    pub merged_pr_branches: std::collections::HashSet<String>,
     pub pr_fetch: crate::pr::PrFetch,
 
     // The last pull's (remote, branch) so a divergence prompt can rerun it with
@@ -958,6 +961,12 @@ pub struct App {
     /// branch) are hidden from the graph — their labels and their exclusive
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_remote_branches: bool,
+
+    /// When true (default), branch chips whose PR was merged are shown but
+    /// dimmed; when false they're hidden entirely (label only — unlike
+    /// `hide_remote_branches`, the commits stay). Toggled by a key, persisted in
+    /// `UiState`. Backed by `merged_pr_branches`.
+    pub show_merged_pr_branches: bool,
 
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
@@ -1316,6 +1325,21 @@ impl App {
         Ok(())
     }
 
+    /// Toggle whether branches merged via a PR are shown (dimmed) or hidden
+    /// (persisted). Only affects branch-chip rendering — the commits stay either
+    /// way — so it flips the flag and reports the new state; the next frame
+    /// re-renders the labels.
+    pub(crate) fn toggle_merged_pr_branches(&mut self) {
+        self.show_merged_pr_branches = !self.show_merged_pr_branches;
+        self.save_ui_state();
+        let state = if self.show_merged_pr_branches {
+            "shown (dimmed)"
+        } else {
+            "hidden"
+        };
+        self.set_message(format!("Merged-PR branches {state}"));
+    }
+
     /// Toggle soft line-wrapping in the file-diff viewer (persisted). The next
     /// render re-lays-out the diff via `ensure_diff_layout`, so the toggle only
     /// flips the flag and reports the new state.
@@ -1384,6 +1408,7 @@ impl App {
             graph_split_ratio: self.graph_split_ratio,
             trace_enabled: self.trace_enabled,
             hide_remote_branches: self.hide_remote_branches,
+            show_merged_pr_branches: self.show_merged_pr_branches,
             diff_word_wrap: self.diff_word_wrap,
             metadata_columns: self.metadata_columns,
         }

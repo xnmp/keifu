@@ -180,17 +180,18 @@ impl App {
     /// no-op 5-minute refreshes. Never blocks the UI thread.
     pub fn update_open_prs(&mut self) -> bool {
         self.pr_fetch.maybe_start(&self.repo_path);
-        let Some(prs) = self.pr_fetch.poll() else {
+        let Some(data) = self.pr_fetch.poll() else {
             return false;
         };
         if self.pr_toasts_armed {
-            if let Some(summary) = crate::pr::pr_refresh_summary(&self.open_prs, &prs) {
+            if let Some(summary) = crate::pr::pr_refresh_summary(&self.open_prs, &data.open) {
                 self.toast(ToastKind::Info, summary);
             }
         }
         // Arm after the first successful fill so the startup population is quiet.
         self.pr_toasts_armed = true;
-        self.open_prs = prs;
+        self.open_prs = data.open;
+        self.merged_pr_branches = data.merged_branches;
         true
     }
 

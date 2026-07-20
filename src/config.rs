@@ -213,6 +213,9 @@ pub struct UiState {
     /// Hide remote-only branches (remote refs with no matching local branch)
     /// from the graph. Off by default (remotes shown).
     pub hide_remote_branches: bool,
+    /// Show branch chips whose PR was merged (dimmed). On by default; when off
+    /// those chips are hidden. Backed by the background PR fetch's merged set.
+    pub show_merged_pr_branches: bool,
     /// Soft line-wrapping in the file-diff viewer. Off by default (long lines
     /// truncate and scroll horizontally, the historical behavior).
     pub diff_word_wrap: bool,
@@ -227,6 +230,7 @@ impl Default for UiState {
             graph_split_ratio: DEFAULT_GRAPH_SPLIT_RATIO,
             trace_enabled: true,
             hide_remote_branches: false,
+            show_merged_pr_branches: true,
             diff_word_wrap: false,
             metadata_columns: MetadataColumns::default(),
         }
@@ -441,6 +445,7 @@ mod tests {
             graph_split_ratio: 40,
             trace_enabled: false,
             hide_remote_branches: true,
+            show_merged_pr_branches: false,
             diff_word_wrap: false,
             metadata_columns: MetadataColumns {
                 author: true,
@@ -457,6 +462,7 @@ mod tests {
         assert_eq!(restored.graph_split_ratio, 40);
         assert!(!restored.trace_enabled);
         assert!(restored.hide_remote_branches);
+        assert!(!restored.show_merged_pr_branches);
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
