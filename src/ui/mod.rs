@@ -339,10 +339,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // dim overlay is built for exactly this window so it aligns with what
         // `sync_frame` transmits and `overlay_pixel_graph` draws.
         let (win_start, win_end) = graph_pixels::protocol_window(offset, viewport, base_len);
-        pixel_frame_dim = app.active_trace_lineage().map(|lineage| {
+        // Two per-frame dim sources feed the overlay: branch-trace lineage and
+        // base-update force-dim (#55). Build it when EITHER is active — the
+        // latter must dim the back-merge connector even with tracing off, which
+        // the old trace-only guard skipped (the pixel connector stayed bright
+        // while the message muted).
+        let trace_lineage = app.active_trace_lineage();
+        let want_base_mute = app.metadata_columns.mute_base_merges
+            && !app.base_update_merges.is_empty();
+        pixel_frame_dim = if trace_lineage.is_some() || want_base_mute {
             let base = &app.pixel_specs_cache.as_ref().unwrap().4;
-            graph_view::dim_pixel_specs_window(app, &theme, base, &lineage, win_start, win_end)
-        });
+            Some(graph_view::dim_pixel_specs_window(
+                app,
+                &theme,
+                base,
+                trace_lineage.as_ref(),
+                win_start,
+                win_end,
+            ))
+        } else {
+            None
+        };
         let active = {
             // Disjoint field borrows: `specs` from pixel_specs_cache (or the
             // owned dim overlay), `pg` from pixel_graph.
