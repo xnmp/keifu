@@ -184,6 +184,7 @@ impl App {
             terminal_bg,
             pixel_graph: None,
             pixel_specs_cache: None,
+            trace_lineage_cache: None,
         })
     }
 

@@ -1012,13 +1012,24 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
         return set;
     };
 
-    // oid -> row index, for commit-carrying rows only.
-    let oid_row: HashMap<Oid, usize> = layout
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, n)| n.commit.as_ref().map(|c| (c.oid, i)))
-        .collect();
+    // Single O(N) pass builds both indices the walks need:
+    //  - oid_row: oid -> row index (commit-carrying rows only).
+    //  - lane_child: (first_parent_oid, lane) -> child oid. Keys the UP-walk's
+    //    "child that continues this lane" lookup so each hop is O(1) instead of
+    //    scanning every node — turning the UP walk from O(N × lineage) into
+    //    O(lineage). First-parent inheritance keeps the lane number, so
+    //    (first_parent, lane) uniquely identifies the branch-line continuation.
+    let mut oid_row: HashMap<Oid, usize> = HashMap::with_capacity(layout.nodes.len());
+    let mut lane_child: HashMap<(Oid, usize), Oid> = HashMap::new();
+    for (i, n) in layout.nodes.iter().enumerate() {
+        let Some(c) = n.commit.as_ref() else { continue };
+        oid_row.insert(c.oid, i);
+        if let Some(fp) = c.parent_oids.first() {
+            // First writer wins: the topmost (newest) child on the lane is the
+            // real continuation, matching the previous forward `find_map` scan.
+            lane_child.entry((*fp, n.lane)).or_insert(c.oid);
+        }
+    }
 
     set.insert(sel);
 
@@ -1039,28 +1050,16 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
         }
     }
 
-    // UP: follow the child that continues this lane — the one whose first parent
-    // is `cur` and which sits on the same lane (first-parent inheritance keeps
-    // the lane number, so this uniquely picks the branch-line continuation and
-    // never leaks onto a reused lane's unrelated occupant).
+    // UP: follow the child that continues this lane (O(1) per hop via lane_child).
     let mut cur = sel;
     loop {
         let Some(&cur_row) = oid_row.get(&cur) else {
             break;
         };
         let cur_lane = layout.nodes[cur_row].lane;
-        let child = layout.nodes.iter().find_map(|n| {
-            let c = n.commit.as_ref()?;
-            let first_parent = c.parent_oids.first()?;
-            (*first_parent == cur && n.lane == cur_lane && !set.contains(&c.oid))
-                .then_some(c.oid)
-        });
-        match child {
-            Some(ch) => {
-                set.insert(ch);
-                cur = ch;
-            }
-            None => break,
+        match lane_child.get(&(cur, cur_lane)) {
+            Some(&ch) if set.insert(ch) => cur = ch,
+            _ => break,
         }
     }
 
@@ -1509,5 +1508,74 @@ mod tests {
             row_lane_color(&unpinned, toid(3)),
             "unloaded trunk tip leaves layout unchanged"
         );
+    }
+
+    // ── lineage_oids performance (issue #6) ──────────────────────────────
+
+    /// Build an N-node single-lane chain layout: node i is on lane 0, its first
+    /// parent is node i+1 (older). Worst case for the UP-walk, which must climb
+    /// the whole chain from the bottom.
+    fn linear_chain_layout(n: usize) -> GraphLayout {
+        let oid_of = |i: usize| {
+            let mut bytes = [0u8; 20];
+            bytes[0] = (i & 0xff) as u8;
+            bytes[1] = ((i >> 8) & 0xff) as u8;
+            bytes[2] = ((i >> 16) & 0xff) as u8;
+            Oid::from_bytes(&bytes).unwrap()
+        };
+        let nodes = (0..n)
+            .map(|i| {
+                let mut c = commit_with_parents(0);
+                c.oid = oid_of(i);
+                if i + 1 < n {
+                    c.parent_oids = vec![oid_of(i + 1)];
+                }
+                GraphNode {
+                    commit: Some(c),
+                    lane: 0,
+                    color_index: 0,
+                    branch_names: Vec::new(),
+                    tag_names: Vec::new(),
+                    is_head: false,
+                    is_uncommitted: false,
+                    is_stash: false,
+                    stash_label: None,
+                    uncommitted_count: None,
+                    cells: Vec::new(),
+                    cell_oids: Vec::new(),
+                }
+            })
+            .collect();
+        GraphLayout { nodes, max_lane: 0 }
+    }
+
+    #[test]
+    fn lineage_oids_covers_full_single_lane_chain() {
+        // Correctness at scale: tracing the newest commit (row 0) of a 2000-node
+        // single-lane chain must include every commit (down-walk over the whole
+        // first-parent chain), and tracing the oldest (last row) must climb the
+        // whole chain via the UP-walk. Both exercise the O(N) index built once.
+        let layout = linear_chain_layout(2000);
+        assert_eq!(lineage_oids(&layout, 0).len(), 2000, "down-walk covers all");
+        assert_eq!(lineage_oids(&layout, 1999).len(), 2000, "up-walk covers all");
+    }
+
+    #[test]
+    #[ignore = "timing benchmark; run with --ignored"]
+    fn lineage_oids_scales_linearly() {
+        // The UP-walk previously scanned every node per hop (O(N^2)); tracing the
+        // bottom of a large chain was the keystroke lag. With the (first_parent,
+        // lane) index it is O(N). This isn't a hard threshold assert (machine-
+        // dependent) — run with `--ignored --nocapture` to see the timing.
+        use std::time::Instant;
+        for n in [1000usize, 2000, 4000, 8000] {
+            let layout = linear_chain_layout(n);
+            let start = Instant::now();
+            // Trace from the oldest commit: worst case for the UP-walk.
+            let set = lineage_oids(&layout, n - 1);
+            let elapsed = start.elapsed();
+            assert_eq!(set.len(), n);
+            println!("lineage_oids n={n}: {elapsed:?}");
+        }
     }
 }

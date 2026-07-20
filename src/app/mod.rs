@@ -1028,6 +1028,15 @@ pub struct App {
     // captures the resize cap; the trace key is the traced selection's OID (or
     // None when tracing is off). Rebuilt lazily by the render pre-pass.
     pub pixel_specs_cache: Option<PixelSpecsCache>,
+
+    // Memoized branch-trace lineage OID set, valid for one
+    // `(graph_generation, selected_full_idx)`. `lineage_oids` is a pure function
+    // of the layout + selection, but it's read multiple times per frame (Unicode
+    // dim + pixel spec build) and re-read on every frame the selection holds
+    // still (toasts, blink, resize). Recomputed only when the key changes, via
+    // `refresh_trace_cache` at the top of each render. `None` = tracing inactive
+    // or empty lineage.
+    pub trace_lineage_cache: Option<(u64, usize, std::collections::HashSet<Oid>)>,
 }
 
 /// Cached pixel row specs plus the key they were built for:
@@ -1277,13 +1286,51 @@ impl App {
 
     /// The lineage OID set to render at full strength (dimming the rest), or
     /// `None` when tracing is inactive or nothing selectable is selected.
+    ///
+    /// Reads the memoized cache (see `trace_lineage_cache`); callers must ensure
+    /// `refresh_trace_cache` ran for the current `(generation, selection)` — the
+    /// render entry point does this once per frame. Returns a clone so callers
+    /// that also need `&self.graph_layout` aren't blocked by the borrow.
     pub(crate) fn active_trace_lineage(&self) -> Option<std::collections::HashSet<Oid>> {
         if !self.trace_active() {
             return None;
         }
         let sel = self.graph_nav.graph_list_state.selected()?;
-        let lineage = crate::git::graph::lineage_oids(&self.graph_layout, sel);
-        (!lineage.is_empty()).then_some(lineage)
+        match &self.trace_lineage_cache {
+            Some((gen, idx, set)) if *gen == self.graph_generation && *idx == sel => {
+                Some(set.clone())
+            }
+            // Cache miss (refresh_trace_cache not yet run, e.g. a non-render
+            // caller): fall back to computing directly rather than returning
+            // stale/empty. Still correct, just not memoized.
+            _ => {
+                let lineage = crate::git::graph::lineage_oids(&self.graph_layout, sel);
+                (!lineage.is_empty()).then_some(lineage)
+            }
+        }
+    }
+
+    /// Recompute the branch-trace lineage cache if the `(graph_generation,
+    /// selection)` key changed. Called once at the top of each render so the
+    /// per-frame `active_trace_lineage` reads (Unicode dim + pixel specs) and the
+    /// many frames that hold the same selection all reuse one computation.
+    pub(crate) fn refresh_trace_cache(&mut self) {
+        if !self.trace_active() {
+            self.trace_lineage_cache = None;
+            return;
+        }
+        let Some(sel) = self.graph_nav.graph_list_state.selected() else {
+            self.trace_lineage_cache = None;
+            return;
+        };
+        let fresh = self
+            .trace_lineage_cache
+            .as_ref()
+            .is_some_and(|(gen, idx, _)| *gen == self.graph_generation && *idx == sel);
+        if !fresh {
+            let lineage = crate::git::graph::lineage_oids(&self.graph_layout, sel);
+            self.trace_lineage_cache = Some((self.graph_generation, sel, lineage));
+        }
     }
 
     /// The selected commit's OID when tracing is active, else `None` — the

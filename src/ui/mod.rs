@@ -152,6 +152,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Selection is path-based so this doesn't reset it.
     app.sync_file_list_cache();
 
+    // Recompute the branch-trace lineage once per frame (only when the
+    // generation/selection key changed), so the graph widget's repeated
+    // `active_trace_lineage` reads are memoized instead of O(N) each.
+    app.refresh_trace_cache();
+
     let theme = app.theme();
     let area = frame.area();
 
