@@ -931,7 +931,7 @@ pub struct App {
     // signal for catching squash-merged branches whose local ref survives (the
     // remote copy having been deleted on merge). Empty when gh is unavailable.
     pub merged_pr_branches: std::collections::HashSet<String>,
-    pub merged_branch_fetch: crate::merged_branches::MergedBranchFetch,
+    pub merged_branch_fetch: crate::merged_branch_fetch::MergedBranchFetch,
 
     // The last pull's (remote, branch) so a divergence prompt can rerun it with
     // an explicit merge/rebase strategy.
@@ -1011,7 +1011,7 @@ pub struct App {
     pub merged_branches: std::collections::HashSet<String>,
     /// Background classifier that computes `merged_branches` off the UI thread, so
     /// a refresh never does per-branch git diffing inline.
-    pub merged_classify: crate::merged_branches::MergedClassifier,
+    pub merged_classify: crate::merged_branch_fetch::MergedClassifier,
     /// When true, merged branches are removed from the graph entirely rather than
     /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_merged_branches: bool,
@@ -1410,7 +1410,7 @@ impl App {
             self.merged_branches.clear();
             return;
         };
-        let input = crate::merged_branches::ClassifyInput {
+        let input = crate::merged_branch_fetch::ClassifyInput {
             repo_path: self.repo_path.clone(),
             branches: self.branches.clone(),
             base_name: base.name.clone(),
