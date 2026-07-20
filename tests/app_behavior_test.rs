@@ -667,6 +667,25 @@ fn set_message_and_get_message() {
     assert_eq!(app.get_message(), Some("hello"));
 }
 
+#[test]
+fn expired_message_is_not_shown() {
+    // Regression: a one-shot status message (e.g. "Opening PR #N in browser")
+    // must stop showing once its 5s window passes, so it can't flash back on a
+    // later auto-fetch. Backdate message_time past the timeout and assert it's
+    // gone. (An App built for tests has no in-flight network op, so is_busy is
+    // false; the fix makes the timeout apply regardless of busy state anyway.)
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.set_message("Opening PR #42 in browser");
+    assert_eq!(app.get_message(), Some("Opening PR #42 in browser"));
+
+    app.message_time = Some(std::time::Instant::now() - std::time::Duration::from_secs(6));
+    assert_eq!(app.get_message(), None, "message expires after the timeout");
+    assert!(app.message_expiry_time().is_none(), "no expiry pending once expired");
+}
+
 // ── Refresh ─────────────────────────────────────────────────────────
 
 #[test]

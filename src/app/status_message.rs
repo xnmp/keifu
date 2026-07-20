@@ -9,19 +9,24 @@ impl App {
         self.message_time = Some(std::time::Instant::now());
     }
 
-    /// Get current message if not expired (5 seconds timeout)
+    /// How long a status message stays on screen after being set.
+    const MESSAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Get current message if not expired (5 seconds timeout).
+    ///
+    /// The timeout always applies — including while a network operation is in
+    /// progress. Progress/result feedback for network ops is surfaced via
+    /// toasts (which carry their own TTL), so a `set_message` string is always
+    /// transient. An earlier version kept the message alive for the whole
+    /// duration of any network op, which meant a stale one-shot message (e.g.
+    /// "Opening PR #N in browser") re-surfaced on every silent auto-fetch —
+    /// making it flash back every ~60s. Respecting the timeout regardless of
+    /// busy state fixes that.
     pub fn get_message(&self) -> Option<&str> {
-        const MESSAGE_TIMEOUT_SECS: u64 = 5;
-
-        // Don't timeout while a network operation is in progress
-        if self.is_network_busy() {
-            return self.message.as_deref();
-        }
-
         let msg = self.message.as_deref()?;
         let time = self.message_time.as_ref()?;
 
-        if time.elapsed().as_secs() < MESSAGE_TIMEOUT_SECS {
+        if time.elapsed() < Self::MESSAGE_TIMEOUT {
             Some(msg)
         } else {
             None
@@ -29,18 +34,13 @@ impl App {
     }
 
     /// Returns the instant when the current message should expire and be cleared
-    /// from the display. Returns `None` if no message, already expired, or network
-    /// busy (busy messages don't expire).
+    /// from the display. Returns `None` if there is no message or it has already
+    /// expired.
     pub fn message_expiry_time(&self) -> Option<std::time::Instant> {
-        const MESSAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-        if self.is_network_busy() {
-            return None;
-        }
         let _msg = self.message.as_ref()?;
         let time = self.message_time.as_ref()?;
-        if time.elapsed() < MESSAGE_TIMEOUT {
-            Some(*time + MESSAGE_TIMEOUT)
+        if time.elapsed() < Self::MESSAGE_TIMEOUT {
+            Some(*time + Self::MESSAGE_TIMEOUT)
         } else {
             None
         }
