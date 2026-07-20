@@ -17,7 +17,7 @@ use crate::{
     config::MetadataColumns,
     git::graph::{CellType, GraphNode},
     mouse::{ChipHit, ChipTarget},
-    pr::{CiStatus, PrInfo, ReviewState},
+    pr::{CiStatus, PrContext, PrInfo, ReviewState},
 };
 
 /// Fixed display width for the compact date field (fits "11mo", "now", "59m").
@@ -508,6 +508,10 @@ impl<'a> GraphViewWidget<'a> {
         let now = Local::now();
         let remotes = &app.remotes;
         let open_prs = &app.open_prs;
+        // Head-OID index over the open PRs, built once per frame (O(#PRs), not
+        // O(#commits)): lets each row answer "is this a PR head / PR merge?" in
+        // O(1) without any per-render scan, keeping the work windowed.
+        let pr_ctx = PrContext::new(open_prs);
         let metadata_columns = app.metadata_columns;
         // Selected commit's lit-edge set for tracing (Unicode dim); None =
         // off. In pixel mode the dim lives in the row specs, not the text
@@ -576,6 +580,7 @@ impl<'a> GraphViewWidget<'a> {
                 pixel_mode,
                 remotes,
                 open_prs,
+                &pr_ctx,
                 metadata_columns,
                 trace.as_ref(),
             );
@@ -648,6 +653,29 @@ pub fn pr_for_branch_labels<'p>(
     branch_names.iter().find_map(|name| {
         let bare = strip_remote(name, remotes).unwrap_or(name.as_str());
         open_prs.get(bare)
+    })
+}
+
+/// The open PR to badge on a graph row, or `None`. Primary, data-driven rule
+/// (#42): the row's commit is a PR's head commit — this pins the badge to
+/// exactly one row per PR, even when a local and a remote ref for the same
+/// branch sit on different commits. Fallback: a head-branch *name* label, but
+/// only for PRs `gh` gave no head OID for. A PR that has a head OID is therefore
+/// only ever badged on that exact commit and can never double-render via a
+/// branch label, which is what old name-only matching did.
+fn pr_for_row<'p>(
+    commit_oid: git2::Oid,
+    branch_names: &[String],
+    remotes: &[String],
+    pr_ctx: &PrContext<'p>,
+    open_prs: &'p HashMap<String, PrInfo>,
+) -> Option<&'p PrInfo> {
+    if let Some(pr) = pr_ctx.pr_for_head_commit(commit_oid) {
+        return Some(pr);
+    }
+    branch_names.iter().find_map(|name| {
+        let bare = strip_remote(name, remotes).unwrap_or(name.as_str());
+        open_prs.get(bare).filter(|pr| pr.head_oid.is_none())
     })
 }
 
@@ -1061,6 +1089,7 @@ fn render_graph_line<'a>(
     pixel_mode: bool,
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
+    pr_ctx: &PrContext,
     metadata_columns: MetadataColumns,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
 ) -> (Line<'a>, Vec<ChipHit>) {
@@ -1121,6 +1150,7 @@ fn render_graph_line<'a>(
         now,
         remotes,
         open_prs,
+        pr_ctx,
         metadata_columns,
     )
 }
@@ -1262,6 +1292,7 @@ fn render_graph_line_tail<'a>(
     now: DateTime<Local>,
     remotes: &[String],
     open_prs: &HashMap<String, PrInfo>,
+    pr_ctx: &PrContext,
     metadata_columns: MetadataColumns,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
@@ -1301,10 +1332,25 @@ fn render_graph_line_tail<'a>(
     let hash_style = Style::default().fg(theme.hash_color);
     let author_style = Style::default().fg(theme.author_color);
     let date_style = Style::default().fg(theme.date_color);
+    // PR-merge commit (#52): a merge that landed a GitHub PR reads as machinery,
+    // not authored work, so its message renders greyed (an explicit muted color,
+    // distinct from the plain DIM used for ordinary muted merges). Detection is
+    // data-driven (second parent is a known PR head) with the GitHub merge
+    // message format as fallback for already-merged PRs; both inputs come off
+    // this row's commit, so the check stays inside the windowed per-row path.
+    // HEAD is never greyed, matching the muted-merge rule below.
+    let is_pr_merge = !node.is_head
+        && pr_ctx.is_pr_merge(
+            node.is_merge(),
+            commit.parent_oids.get(1).copied(),
+            &commit.message,
+        );
     // Muted merge: dim only the message text (VSCode-style) — the graph dot and
     // lines stay full-strength. HEAD is never muted so its message stays legible.
     let muted_merge = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
-    let msg_style = if muted_merge {
+    let msg_style = if is_pr_merge {
+        Style::default().fg(theme.text_muted)
+    } else if muted_merge {
         Style::default().add_modifier(Modifier::DIM)
     } else if is_selected {
         Style::default().add_modifier(Modifier::BOLD)
@@ -1327,9 +1373,9 @@ fn render_graph_line_tail<'a>(
     // Tag labels render after branch labels with a distinct color.
     let tag_display = build_tag_labels(&node.tag_names, theme);
 
-    // Open-PR badge: chip after the branch labels when one of this node's
-    // branches has an open PR. Colored by CI status, with review/comment markers.
-    let pr_badge = pr_for_branch_labels(&node.branch_names, remotes, open_prs)
+    // Open-PR badge (#42): shown exactly once per PR, on the PR's head commit.
+    // Colored by CI status, with review/comment markers (#43).
+    let pr_badge = pr_for_row(commit.oid, &node.branch_names, remotes, pr_ctx, open_prs)
         .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
     // Chip plus a trailing space.
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
@@ -1902,6 +1948,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             outside_activity: false,
+            head_oid: None,
         }
     }
 
@@ -1913,6 +1960,7 @@ mod tests {
             ci,
             review,
             outside_activity: outside,
+            head_oid: None,
         }
     }
 
@@ -2004,6 +2052,150 @@ mod tests {
         assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pass, ReviewState::None, false), &theme), theme.pr_ci_pass);
         assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pending, ReviewState::None, false), &theme), theme.pr_ci_pending);
         assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Fail, ReviewState::None, false), &theme), theme.pr_ci_fail);
+    }
+
+    // ── one badge per PR, on its head commit (#42) ───────────────────
+
+    /// A non-merge commit node at `oid(oid_byte)` carrying `branches`.
+    fn commit_node(oid_byte: u8, message: &str, branches: &[&str]) -> GraphNode {
+        use crate::git::CommitInfo;
+        let commit = CommitInfo {
+            oid: oid(oid_byte),
+            short_id: "abc1234".to_string(),
+            author_name: "a".to_string(),
+            author_email: "a@b".to_string(),
+            timestamp: Local::now(),
+            message: message.to_string(),
+            full_message: message.to_string(),
+            parent_oids: vec![oid(0)], // single parent => not a merge
+        };
+        GraphNode {
+            commit: Some(commit),
+            lane: 0,
+            color_index: 0,
+            branch_names: branches.iter().map(|s| s.to_string()).collect(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells: vec![CellType::Commit(0)],
+            cell_oids: Vec::new(),
+        }
+    }
+
+    /// A `PrInfo` whose head commit is `oid(head_byte)`.
+    fn pr_head(number: u64, head_byte: u8) -> PrInfo {
+        let mut p = pr(number);
+        p.head_oid = Some(oid(head_byte).to_string());
+        p
+    }
+
+    fn open_map(pairs: Vec<(&str, PrInfo)>) -> HashMap<String, PrInfo> {
+        pairs.into_iter().map(|(b, p)| (b.to_string(), p)).collect()
+    }
+
+    #[test]
+    fn pr_badge_renders_only_on_the_head_commit() {
+        // PR #12's head is commit 5.
+        let open = open_map(vec![("feat", pr_head(12, 5))]);
+        // The head commit gets the badge even with NO branch label — it is
+        // resolved by OID, not by name.
+        let head = commit_node(5, "head of the feature", &[]);
+        assert!(
+            row_text(&head, &open).contains("#12"),
+            "head commit shows the badge: {:?}",
+            row_text(&head, &open)
+        );
+        // Another commit of the same branch (carrying the `feat` label, e.g. an
+        // out-of-date remote ref) is NOT the head → no badge. This is the #42
+        // fix: a multi-commit PR no longer paints its badge on every labelled row.
+        let other = commit_node(3, "an earlier commit", &["feat"]);
+        assert!(
+            !row_text(&other, &open).contains("#12"),
+            "non-head commit shows no badge: {:?}",
+            row_text(&other, &open)
+        );
+    }
+
+    #[test]
+    fn pr_badge_falls_back_to_branch_name_without_a_head_oid() {
+        // A PR gh gave no head OID for still badges via its head-branch label.
+        let open = open_map(vec![("feat", pr(7))]); // head_oid None
+        let tip = commit_node(9, "tip", &["feat"]);
+        assert!(row_text(&tip, &open).contains("#7"));
+    }
+
+    #[test]
+    fn pr_badge_full_row_encodes_approved_and_comment_state() {
+        // #43: a full-row render surfaces the approved + outside-comment markers.
+        let mut approved = pr_head(1, 5);
+        approved.review = ReviewState::Approved;
+        approved.outside_activity = true;
+        let open = open_map(vec![("feat", approved)]);
+        let node = commit_node(5, "x", &[]);
+        let text = row_text(&node, &open);
+        assert!(text.contains(PR_APPROVED_ICON), "approved glyph present: {text:?}");
+        assert!(text.contains(PR_COMMENT_ICON), "comment glyph present: {text:?}");
+    }
+
+    // ── PR merge commits render greyed (#52) ─────────────────────────
+
+    /// A merge node at `oid(oid_byte)` with the two given parent OIDs.
+    fn merge_node_full(oid_byte: u8, message: &str, parents: [u8; 2]) -> GraphNode {
+        let mut n = merge_node(message);
+        let c = n.commit.as_mut().unwrap();
+        c.oid = oid(oid_byte);
+        c.parent_oids = vec![oid(parents[0]), oid(parents[1])];
+        n
+    }
+
+    /// The style of the span whose content is exactly `content`.
+    fn span_style(line: &Line, content: &str) -> Style {
+        line.spans
+            .iter()
+            .find(|s| s.content.as_ref() == content)
+            .unwrap_or_else(|| panic!("span {content:?} not found in {line:?}"))
+            .style
+    }
+
+    #[test]
+    fn pr_merge_message_is_greyed_data_driven() {
+        let theme = Theme::dark();
+        // PR #9's head is commit 5; a merge whose 2nd parent is 5 is a PR merge.
+        let open = open_map(vec![("feat", pr_head(9, 5))]);
+        let node = merge_node_full(20, "Merge feat", [1, 5]);
+        // mute_merges OFF, so only the PR-merge rule can grey the message.
+        let line = render_row(&node, &open, false);
+        assert_eq!(
+            span_style(&line, "Merge feat").fg,
+            Some(theme.text_muted),
+            "PR merge message is greyed"
+        );
+        // A plain local merge (2nd parent not a PR head, non-GitHub message) is
+        // left at full strength when muting is off.
+        let plain = merge_node_full(21, "Merge branch 'x'", [1, 2]);
+        let plain_line = render_row(&plain, &open, false);
+        assert_ne!(
+            span_style(&plain_line, "Merge branch 'x'").fg,
+            Some(theme.text_muted),
+            "a plain local merge is not greyed"
+        );
+    }
+
+    #[test]
+    fn pr_merge_message_is_greyed_by_github_format_when_pr_closed() {
+        let theme = Theme::dark();
+        // No open PRs (a merged PR has left `gh pr list`); the message format
+        // alone identifies it as a PR merge.
+        let open = HashMap::new();
+        let node = merge_node_full(20, "Merge pull request #42 from o/b", [1, 2]);
+        let line = render_row(&node, &open, false);
+        assert_eq!(
+            span_style(&line, "Merge pull request #42 from o/b").fg,
+            Some(theme.text_muted),
+        );
     }
 
     // ── metadata column visibility / width budget ────────────────────
@@ -2439,9 +2631,13 @@ mod tests {
         }
     }
 
-    /// The style applied to `node`'s message span when rendered with the given
-    /// mute-merges setting. Panics if the message span isn't found.
-    fn message_style(node: &GraphNode, message: &str, mute_merges: bool) -> Style {
+    /// Render one full graph row against `open_prs` and return its `Line`. The
+    /// real per-row render path, so tests observe exactly what the user sees.
+    fn render_row(
+        node: &GraphNode,
+        open_prs: &HashMap<String, PrInfo>,
+        mute_merges: bool,
+    ) -> Line<'static> {
         let theme = Theme::dark();
         let cols = MetadataColumns {
             author: false,
@@ -2450,6 +2646,7 @@ mod tests {
             mute_merges,
             avatars: false,
         };
+        let pr_ctx = PrContext::new(open_prs);
         let (line, _chips) = render_graph_line(
             node,
             4,
@@ -2461,10 +2658,27 @@ mod tests {
             Local::now(),
             false,
             &[],
-            &HashMap::new(),
+            open_prs,
+            &pr_ctx,
             cols,
             None,
         );
+        line
+    }
+
+    /// The full rendered text of a row (all spans concatenated).
+    fn row_text(node: &GraphNode, open_prs: &HashMap<String, PrInfo>) -> String {
+        render_row(node, open_prs, true)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref().to_string())
+            .collect()
+    }
+
+    /// The style applied to `node`'s message span when rendered with the given
+    /// mute-merges setting. Panics if the message span isn't found.
+    fn message_style(node: &GraphNode, message: &str, mute_merges: bool) -> Style {
+        let line = render_row(node, &HashMap::new(), mute_merges);
         line.spans
             .iter()
             .find(|s| s.content.as_ref() == message)
