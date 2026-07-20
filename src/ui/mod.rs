@@ -361,7 +361,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Render widgets
-    let graph_widget = GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode);
+    // Inner height (minus the block's top/bottom borders) is the drawable row
+    // count; the widget builds only the rows this viewport can show.
+    let graph_viewport = graph_area.height.saturating_sub(2);
+    let graph_widget =
+        GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode, graph_viewport);
     app.graph_chip_hits = graph_widget.chip_hits.clone();
     frame.render_stateful_widget(
         graph_widget,
