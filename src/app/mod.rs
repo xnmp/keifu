@@ -792,6 +792,56 @@ pub const AUTOLOAD_THRESHOLD: usize = 50;
 /// blocked by a pull already in flight (both touch `.git/index.lock`).
 pub const BUSY_PULL_IN_PROGRESS: &str = "busy: pull in progress";
 
+/// Merged-branch classification subsystem: the async GitHub/local signals that
+/// decide whether a branch is already merged (issue #60) plus the base-update
+/// back-merge set (issue #55) and the hide-merged toggle. Grouped off `App` so
+/// this cluster of derived + worker state lives together (issue #66).
+pub struct MergedState {
+    /// Local branches classified as already merged into the trunk (merge commit,
+    /// fast-forward, or squash-merged via a GitHub PR). Delivered by the
+    /// background classifier; drives the dimmed rendering and the hide-merged
+    /// toggle. Not persisted — it's derived from the repo + PR state.
+    pub branches: std::collections::HashSet<String>,
+    /// Background classifier that computes `branches` off the UI thread, so a
+    /// refresh never does per-branch git diffing inline.
+    pub classify: crate::merged_branch_fetch::MergedClassifier,
+    /// When true, merged branches are removed from the graph entirely rather than
+    /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
+    pub hide: bool,
+    /// Squash-merge detection via GitHub: head-branch names of *merged* PRs,
+    /// refreshed in the background via `gh pr list --state merged`. The primary
+    /// signal for catching squash-merged branches whose local ref survives (the
+    /// remote copy having been deleted on merge). Empty when gh is unavailable.
+    pub pr_branches: std::collections::HashSet<String>,
+    pub pr_branch_fetch: crate::merged_branch_fetch::MergedBranchFetch,
+    /// OIDs of base-update ("back-merge") commits: merges on an open PR's branch
+    /// that pulled the updated base branch in (issue #55). Derived from
+    /// `open_prs` + the base branch via `classify_base_update_merges`; drives the
+    /// strong-mute rendering when `metadata_columns.mute_base_merges` is on. Not
+    /// persisted — recomputed from repo + PR state. The `SignatureGuarded`
+    /// wrapper keeps the set and the fingerprint of the inputs it was computed
+    /// from together, so a frequent refresh skips redundant ancestry work when
+    /// neither the base tip nor the open-PR head set has changed.
+    pub base_update:
+        crate::signature_guarded::SignatureGuarded<std::collections::HashSet<git2::Oid>>,
+}
+
+/// Once-per-episode latches for periodically-retried refresh/poll errors. Each
+/// is set when the failure is first reported and re-armed (cleared) on the next
+/// success, so a persistent failure doesn't re-flash the status bar every
+/// refresh / poll tick (issue #66 grouped these four `bool`s off `App`).
+#[derive(Default)]
+pub struct RefreshLatches {
+    /// Working-tree-status failures during periodic refresh.
+    pub wt_status: bool,
+    /// Auto-refresh timer failures.
+    pub auto_refresh: bool,
+    /// Filesystem-watcher-driven refresh failures.
+    pub watch_refresh: bool,
+    /// Background auto-fetch failures.
+    pub auto_fetch: bool,
+}
+
 /// Application state
 pub struct App {
     pub mode: AppMode,
@@ -896,14 +946,9 @@ pub struct App {
     /// by a later, unrelated network op.
     pub message_sticky: bool,
 
-    // Once-per-episode latches for periodically-retried refresh errors. Each is
-    // set when the failure is first reported and re-armed (cleared) on the next
-    // success, so a persistent failure doesn't re-flash the status bar every
-    // refresh / poll tick.
-    pub wt_status_error_latched: bool,
-    pub auto_refresh_error_latched: bool,
-    pub watch_refresh_error_latched: bool,
-    pub auto_fetch_error_latched: bool,
+    // Once-per-episode latches for periodically-retried refresh errors (see
+    // `RefreshLatches`).
+    pub refresh_latches: RefreshLatches,
 
     // Transient toast notifications for background-op outcomes.
     pub toasts: crate::toast::ToastQueue,
@@ -930,12 +975,10 @@ pub struct App {
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
     pub pr_fetch: crate::pr::PrFetch,
 
-    // Squash-merge detection via GitHub: head-branch names of *merged* PRs,
-    // refreshed in the background via `gh pr list --state merged`. The primary
-    // signal for catching squash-merged branches whose local ref survives (the
-    // remote copy having been deleted on merge). Empty when gh is unavailable.
-    pub merged_pr_branches: std::collections::HashSet<String>,
-    pub merged_branch_fetch: crate::merged_branch_fetch::MergedBranchFetch,
+    // Merged-branch classification subsystem (see `MergedState`): the async
+    // GitHub/local merged signals, the hide-merged toggle, and the base-update
+    // back-merge set.
+    pub merged: MergedState,
 
     // The last pull's (remote, branch) so a divergence prompt can rerun it with
     // an explicit merge/rebase strategy.
@@ -1007,28 +1050,6 @@ pub struct App {
     /// branch) are hidden from the graph — their labels and their exclusive
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_remote_branches: bool,
-
-    /// Local branches classified as already merged into the trunk (merge commit,
-    /// fast-forward, or squash-merged via a GitHub PR). Delivered by the
-    /// background classifier; drives the dimmed rendering and the hide-merged
-    /// toggle. Not persisted — it's derived from the repo + PR state.
-    pub merged_branches: std::collections::HashSet<String>,
-    /// Background classifier that computes `merged_branches` off the UI thread, so
-    /// a refresh never does per-branch git diffing inline.
-    pub merged_classify: crate::merged_branch_fetch::MergedClassifier,
-    /// When true, merged branches are removed from the graph entirely rather than
-    /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
-    pub hide_merged_branches: bool,
-    /// OIDs of base-update ("back-merge") commits: merges on an open PR's branch
-    /// that pulled the updated base branch in (issue #55). Derived from
-    /// `open_prs` + the base branch via `classify_base_update_merges`; drives the
-    /// strong-mute rendering when `metadata_columns.mute_base_merges` is on. Not
-    /// persisted — recomputed from repo + PR state. The `SignatureGuarded`
-    /// wrapper keeps the set and the fingerprint of the inputs it was computed
-    /// from together, so a frequent refresh skips redundant ancestry work when
-    /// neither the base tip nor the open-PR head set has changed.
-    pub base_update_merges:
-        crate::signature_guarded::SignatureGuarded<std::collections::HashSet<git2::Oid>>,
 
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
@@ -1391,10 +1412,10 @@ impl App {
     /// Rebuilds the graph so a squash-merged branch's now-dangling commits appear
     /// or disappear, not just its label. When shown, merged branches stay dimmed.
     pub(crate) fn toggle_merged_branches(&mut self) -> Result<()> {
-        self.hide_merged_branches = !self.hide_merged_branches;
+        self.merged.hide = !self.merged.hide;
         self.save_ui_state();
         self.refresh(true)?;
-        let state = if self.hide_merged_branches {
+        let state = if self.merged.hide {
             "hidden"
         } else {
             "dimmed"
@@ -1411,7 +1432,7 @@ impl App {
     pub(crate) fn kick_merged_classification(&mut self) {
         let Some(base) = crate::git::merged::base_branch(&self.branches) else {
             // No base branch to measure against → nothing can be merged.
-            self.merged_branches.clear();
+            self.merged.branches.clear();
             return;
         };
         let input = crate::merged_branch_fetch::ClassifyInput {
@@ -1419,9 +1440,9 @@ impl App {
             branches: self.branches.clone(),
             base_name: base.name.clone(),
             base_tip: base.tip_oid,
-            gh_merged: self.merged_pr_branches.clone(),
+            gh_merged: self.merged.pr_branches.clone(),
         };
-        self.merged_classify.maybe_start(input);
+        self.merged.classify.maybe_start(input);
     }
 
     /// Recompute the set of base-update ("back-merge") commits (issue #55) from
@@ -1432,7 +1453,7 @@ impl App {
     /// and whenever `open_prs` updates; the render path only *reads* the set.
     pub(crate) fn recompute_base_update_merges(&mut self) {
         let Some(base) = crate::git::merged::base_branch(&self.branches) else {
-            self.base_update_merges.reset(std::collections::HashSet::new());
+            self.merged.base_update.reset(std::collections::HashSet::new());
             return;
         };
         // Sorted PR head OIDs so the signature is order-independent.
@@ -1442,7 +1463,7 @@ impl App {
         // Signature: base tip + the (sorted) head set. Unchanged ⇒ result is
         // identical, so the guard skips the ancestry walks below.
         let repo = self.repo.repo();
-        self.base_update_merges
+        self.merged.base_update
             .recompute_if_changed((base.tip_oid, &pr_heads), || {
                 if pr_heads.is_empty() {
                     std::collections::HashSet::new()
@@ -1521,7 +1542,7 @@ impl App {
             trace_enabled: self.trace_enabled,
             hide_remote_branches: self.hide_remote_branches,
             diff_word_wrap: self.diff_word_wrap,
-            hide_merged_branches: self.hide_merged_branches,
+            hide_merged_branches: self.merged.hide,
             files_group_by_folder: self.files_pane.files_group_by_folder,
             metadata_columns: self.metadata_columns,
         }
@@ -1563,7 +1584,7 @@ impl App {
         SettingsModel {
             trace_enabled: self.trace_enabled,
             hide_remote_branches: self.hide_remote_branches,
-            hide_merged_branches: self.hide_merged_branches,
+            hide_merged_branches: self.merged.hide,
             mute_merges: self.metadata_columns.mute_merges,
             mute_base_merges: self.metadata_columns.mute_base_merges,
             collapse_merges: self.metadata_columns.collapse_merges,
@@ -1592,7 +1613,7 @@ impl App {
     pub(crate) fn apply_settings_model(&mut self, m: &crate::settings::SettingsModel) {
         self.trace_enabled = m.trace_enabled;
         self.hide_remote_branches = m.hide_remote_branches;
-        self.hide_merged_branches = m.hide_merged_branches;
+        self.merged.hide = m.hide_merged_branches;
         self.metadata_columns.mute_merges = m.mute_merges;
         self.metadata_columns.mute_base_merges = m.mute_base_merges;
         self.metadata_columns.collapse_merges = m.collapse_merges;
@@ -1634,11 +1655,11 @@ impl App {
     /// change which commits are in the graph.
     fn commit_settings(&mut self, model: &crate::settings::SettingsModel) -> Result<()> {
         let old_hide_remote = self.hide_remote_branches;
-        let old_hide_merged = self.hide_merged_branches;
+        let old_hide_merged = self.merged.hide;
         self.apply_settings_model(model);
         self.persist_settings();
         if self.hide_remote_branches != old_hide_remote
-            || self.hide_merged_branches != old_hide_merged
+            || self.merged.hide != old_hide_merged
         {
             self.refresh(true)?;
         }

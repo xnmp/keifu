@@ -242,13 +242,15 @@ reporting for the next episode):
 - `DiffCache::uncommitted_diff_error_reported` (`src/diff_cache.rs`) — set on
   an uncommitted-diff load failure, cleared on success or on
   `clear_uncommitted()`.
-- `App.wt_status_error_latched` (`src/app/mod.rs`, set/cleared in
-  `src/app/refresh.rs`) — working-tree-status failures during periodic
-  refresh.
-- `App.auto_refresh_error_latched` — auto-refresh timer failures
+- `App.refresh_latches.wt_status` (the `RefreshLatches` bag in
+  `src/app/mod.rs`, set/cleared in `src/app/refresh.rs`) — working-tree-status
+  failures during periodic refresh.
+- `App.refresh_latches.auto_refresh` — auto-refresh timer failures
   (`src/app/network_ops.rs`).
-- `App.watch_refresh_error_latched` — filesystem-watcher-driven refresh
-  failures (`src/app/network_ops.rs`).
+- `App.refresh_latches.watch_refresh` — filesystem-watcher-driven refresh
+  failures (`src/app/network_ops.rs`). A fourth latch,
+  `App.refresh_latches.auto_fetch`, follows the same shape for background
+  auto-fetch failures.
 
 All four follow `if !latched { latched = true; report(error) }` on failure and
 `latched = false` on success — the shape to copy for any new periodic
@@ -326,7 +328,7 @@ settings exist and how they behave.
   change the classification actually changed.
 
 **Shift+H** (`Action::ToggleMergedBranches`, mnemonic "Hide merged" — joins
-`Shift+B` filter and `Shift+O` remotes-hidden) flips `App.hide_merged_branches`
+`Shift+B` filter and `Shift+O` remotes-hidden) flips `App.merged.hide`
 and refreshes. `visible_branches` composes three independent filters: not
 individually hidden AND not remote-only-hidden AND not (merged AND
 hide-merged-branches-on) — merged branches are removed from the graph
@@ -407,7 +409,7 @@ into the cache key) into an `O(window)` dim pass (~1.24ms).
 `src/ui/status_bar.rs` surface persistent, glanceable state as compact chips
 rather than transient messages:
 - **remotes hidden** — `app.hide_remote_branches`.
-- **merged hidden** — mirrors `app.hide_merged_branches` (see Merged-Branch
+- **merged hidden** — mirrors `app.merged.hide` (see Merged-Branch
   Classification above).
 - **compare pending/range** — `app.compare_marked` (one commit picked, still
   choosing the second) vs. `app.compare_range` (both picked).

@@ -204,12 +204,12 @@ impl App {
         let (working_tree_status, status_message) = Self::working_tree_status_snapshot(&self.repo);
         match status_message {
             Some(message) => {
-                if !self.wt_status_error_latched {
-                    self.wt_status_error_latched = true;
+                if !self.refresh_latches.wt_status {
+                    self.refresh_latches.wt_status = true;
                     self.set_message(message);
                 }
             }
-            None => self.wt_status_error_latched = false,
+            None => self.refresh_latches.wt_status = false,
         }
         let uncommitted_count = working_tree_status
             .as_ref()
@@ -225,11 +225,11 @@ impl App {
         let branches = self.repo.get_branches()?;
         self.remotes = self.repo.remotes();
         // Merged-branch classification runs off the UI thread; this refresh uses
-        // the most recently delivered set (`self.merged_branches`) for both the
+        // the most recently delivered set (`self.merged.branches`) for both the
         // dimmed rendering and the hide filter. When branch tips have moved the
         // set may be one generation stale until the worker returns, at which point
         // `update_merged_classification` triggers another refresh.
-        let merged = self.merged_branches.clone();
+        let merged = self.merged.branches.clone();
         // Excluded branches are dropped from the revwalk, so their exclusive
         // commits are removed from the graph — not merely their labels. Three
         // filters compose: the per-branch picker (`hidden_branches`), the
@@ -245,7 +245,7 @@ impl App {
             .iter()
             .filter(|b| !self.hidden_branches.contains(&b.name))
             .filter(|b| !remote_only.contains(&b.name))
-            .filter(|b| !(self.hide_merged_branches && merged.contains(&b.name)))
+            .filter(|b| !(self.merged.hide && merged.contains(&b.name)))
             .cloned()
             .collect();
         self.branches = branches;

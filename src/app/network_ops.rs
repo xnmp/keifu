@@ -16,7 +16,7 @@ impl App {
         self.network.reset_timers();
         match result {
             Ok(()) => {
-                self.auto_fetch_error_latched = false;
+                self.refresh_latches.auto_fetch = false;
                 if matches!(self.mode, AppMode::FileDiff { .. }) {
                     self.pending_refresh = true;
                 } else {
@@ -49,8 +49,8 @@ impl App {
                 if self.try_prompt_credentials(&e, flight) {
                     // Prompt opened.
                 } else if silent {
-                    if !self.auto_fetch_error_latched {
-                        self.auto_fetch_error_latched = true;
+                    if !self.refresh_latches.auto_fetch {
+                        self.refresh_latches.auto_fetch = true;
                         self.set_message(format!("Auto-fetch failed: {e}"));
                     }
                 } else {
@@ -177,10 +177,10 @@ impl App {
             // Latch the failure so a persistently-failing auto-refresh reports
             // once per episode instead of every interval; re-arm on success.
             match self.refresh(false) {
-                Ok(()) => self.auto_refresh_error_latched = false,
+                Ok(()) => self.refresh_latches.auto_refresh = false,
                 Err(e) => {
-                    if !self.auto_refresh_error_latched {
-                        self.auto_refresh_error_latched = true;
+                    if !self.refresh_latches.auto_refresh {
+                        self.refresh_latches.auto_refresh = true;
                         self.set_message(format!("Auto-refresh failed: {e}"));
                     }
                 }
@@ -220,14 +220,14 @@ impl App {
     /// its result is applied by `update_merged_classification`. This is the
     /// primary squash-merge signal (issue #60). Never blocks the UI.
     pub fn update_merged_prs(&mut self) -> bool {
-        self.merged_branch_fetch.maybe_start(&self.repo_path);
-        let Some(set) = self.merged_branch_fetch.poll() else {
+        self.merged.pr_branch_fetch.maybe_start(&self.repo_path);
+        let Some(set) = self.merged.pr_branch_fetch.poll() else {
             return false;
         };
-        if set == self.merged_pr_branches {
+        if set == self.merged.pr_branches {
             return false;
         }
-        self.merged_pr_branches = set;
+        self.merged.pr_branches = set;
         // Re-run the (off-thread) classification with the new GitHub signal.
         self.kick_merged_classification();
         false
@@ -238,13 +238,13 @@ impl App {
     /// and hiding, when the toggle is on — reflect the new classification. Never
     /// blocks the UI thread (the git diffing happened on the worker).
     pub fn update_merged_classification(&mut self) -> bool {
-        let Some(set) = self.merged_classify.poll() else {
+        let Some(set) = self.merged.classify.poll() else {
             return false;
         };
-        if set == self.merged_branches {
+        if set == self.merged.branches {
             return false;
         }
-        self.merged_branches = set;
+        self.merged.branches = set;
         // Best-effort rebuild: a refresh failure just leaves the prior graph.
         let _ = self.refresh(false);
         true
@@ -272,10 +272,10 @@ impl App {
                 // a build) reports once per episode, not on every poll; re-arm on
                 // success.
                 match self.refresh(false) {
-                    Ok(()) => self.watch_refresh_error_latched = false,
+                    Ok(()) => self.refresh_latches.watch_refresh = false,
                     Err(e) => {
-                        if !self.watch_refresh_error_latched {
-                            self.watch_refresh_error_latched = true;
+                        if !self.refresh_latches.watch_refresh {
+                            self.refresh_latches.watch_refresh = true;
                             self.set_message(format!("Watch refresh failed: {e}"));
                         }
                     }
@@ -316,7 +316,7 @@ impl App {
     pub(crate) fn full_update(&mut self) {
         // Skip the PR fetch's 5-min interval on the next poll.
         self.pr_fetch.force();
-        self.merged_branch_fetch.force();
+        self.merged.pr_branch_fetch.force();
 
         if let Err(e) = self.refresh(true) {
             self.report_refresh_error(e);
@@ -421,7 +421,7 @@ mod tests {
         // First failure of the episode: latched and reported.
         app.network.complete_fetch_for_test(Err("offline".to_string()), true);
         assert!(app.update_fetch_status());
-        assert!(app.auto_fetch_error_latched);
+        assert!(app.refresh_latches.auto_fetch);
         assert_eq!(app.message.as_deref(), Some("Auto-fetch failed: offline"));
 
         // Repeated failures within the same episode must not re-report.
@@ -429,20 +429,20 @@ mod tests {
             app.message = None;
             app.network.complete_fetch_for_test(Err("offline".to_string()), true);
             assert!(app.update_fetch_status());
-            assert!(app.auto_fetch_error_latched);
+            assert!(app.refresh_latches.auto_fetch);
             assert_eq!(app.message, None, "latched failure must not re-report");
         }
 
         // A success clears the latch.
         app.network.complete_fetch_for_test(Ok(()), true);
         assert!(app.update_fetch_status());
-        assert!(!app.auto_fetch_error_latched);
+        assert!(!app.refresh_latches.auto_fetch);
 
         // The next failure starts a new episode and reports again.
         app.message = None;
         app.network.complete_fetch_for_test(Err("offline".to_string()), true);
         assert!(app.update_fetch_status());
-        assert!(app.auto_fetch_error_latched);
+        assert!(app.refresh_latches.auto_fetch);
         assert_eq!(app.message.as_deref(), Some("Auto-fetch failed: offline"));
     }
 }

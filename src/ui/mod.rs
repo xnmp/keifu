@@ -346,7 +346,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // while the message muted).
         let trace_lineage = app.active_trace_lineage();
         let want_base_mute = app.metadata_columns.mute_base_merges
-            && !app.base_update_merges.value().is_empty();
+            && !app.merged.base_update.value().is_empty();
         pixel_frame_dim = if trace_lineage.is_some() || want_base_mute {
             let base = &app.pixel_specs_cache.as_ref().unwrap().4;
             Some(graph_view::dim_pixel_specs_window(
