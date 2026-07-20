@@ -12,6 +12,12 @@ pub enum Action {
     JumpToHead,
     NextBranch,
     PrevBranch,
+    /// Follow the selected commit's lane to the next commit drawn on the
+    /// SAME graph line, toward newer history (Ctrl+Up).
+    SameLaneUp,
+    /// Follow the selected commit's lane to the next commit drawn on the
+    /// SAME graph line, toward older history (Ctrl+Down).
+    SameLaneDown,
 
     // Panel navigation
     PanelLeft,

@@ -315,6 +315,17 @@ fn parse_key_token(token: &str) -> std::result::Result<KeyEvent, String> {
     }
 
     if let Some(c) = inner.strip_prefix("c-") {
+        // Ctrl + a named special key, e.g. <c-up>.
+        let named = match c {
+            "up" => Some(KeyCode::Up),
+            "down" => Some(KeyCode::Down),
+            "left" => Some(KeyCode::Left),
+            "right" => Some(KeyCode::Right),
+            _ => None,
+        };
+        if let Some(code) = named {
+            return Ok(KeyEvent::new(code, KeyModifiers::CONTROL));
+        }
         let mut it = c.chars();
         if let (Some(ch), None) = (it.next(), it.next()) {
             return Ok(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL));
@@ -373,6 +384,19 @@ mod tests {
         assert_eq!(events[0].modifiers, KeyModifiers::SHIFT);
         assert_eq!(events[1].code, KeyCode::Char('p'));
         assert_eq!(events[1].modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn parses_ctrl_arrow_keys() {
+        let events = parse_key_sequence("<c-up> <c-down> <c-left> <c-right>").unwrap();
+        assert_eq!(events[0].code, KeyCode::Up);
+        assert_eq!(events[0].modifiers, KeyModifiers::CONTROL);
+        assert_eq!(events[1].code, KeyCode::Down);
+        assert_eq!(events[1].modifiers, KeyModifiers::CONTROL);
+        assert_eq!(events[2].code, KeyCode::Left);
+        assert_eq!(events[2].modifiers, KeyModifiers::CONTROL);
+        assert_eq!(events[3].code, KeyCode::Right);
+        assert_eq!(events[3].modifiers, KeyModifiers::CONTROL);
     }
 
     #[test]

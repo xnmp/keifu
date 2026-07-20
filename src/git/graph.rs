@@ -1041,6 +1041,54 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     set
 }
 
+/// Row index of the next commit on the SAME graph lane as the selection,
+/// following the line toward older history (Ctrl+Down): the selected
+/// commit's first parent, when it is loaded and drawn in the graph.
+///
+/// First-parent edges always inherit the child's lane number (see
+/// `build_graph`'s "First parent uses the same lane" step, including the
+/// fork-point special case), so any row this finds is guaranteed to be on the
+/// same visual line — no lane check is needed here, unlike
+/// [`same_lane_descendant_row`]. Interleaved commits from other branches
+/// (drawn on different lanes between the selection and its parent's row) are
+/// skipped automatically since the target is found by OID, not by adjacent
+/// row index.
+///
+/// Returns `None` for a connector/uncommitted row, a root commit (no
+/// parents), or a first parent outside the loaded window — i.e. the end of
+/// the lane.
+pub fn same_lane_ancestor_row(layout: &GraphLayout, selected_full_idx: usize) -> Option<usize> {
+    let commit = layout.nodes.get(selected_full_idx)?.commit.as_ref()?;
+    let first_parent = *commit.parent_oids.first()?;
+    layout
+        .nodes
+        .iter()
+        .position(|n| n.commit.as_ref().map(|c| c.oid) == Some(first_parent))
+}
+
+/// Row index of the next commit on the SAME graph lane as the selection,
+/// following the line toward newer history (Ctrl+Up): the child whose first
+/// parent is the selected commit AND which sits on the selection's lane.
+///
+/// The lane check disambiguates a fork point with several children — only
+/// one of them continues this exact line via its first parent; the others
+/// are merge commits that spawn onto new lanes (their non-first-parent edge
+/// absorbs this line instead of continuing it).
+///
+/// Returns `None` for a connector/uncommitted row, or when nothing continues
+/// this lane upward — i.e. the tip of the lane.
+pub fn same_lane_descendant_row(layout: &GraphLayout, selected_full_idx: usize) -> Option<usize> {
+    let node = layout.nodes.get(selected_full_idx)?;
+    let commit = node.commit.as_ref()?;
+    let (cur_oid, cur_lane) = (commit.oid, node.lane);
+    layout.nodes.iter().position(|n| {
+        n.lane == cur_lane
+            && n.commit
+                .as_ref()
+                .is_some_and(|c| c.parent_oids.first() == Some(&cur_oid))
+    })
+}
+
 /// The set of edges lit by tracing `lineage`, mapped to the commit whose lane
 /// color the lit stroke should take.
 ///
@@ -1379,5 +1427,106 @@ mod tests {
             })
         });
         assert!(!references_z, "no rendered edge may reference off-graph Z");
+    }
+
+    // ── same-lane navigation (Ctrl+Up / Ctrl+Down) ────────────────────────
+
+    /// Trunk A—B—C—D (D root) interleaved with a feature F1—F2 branched off D
+    /// and merged into B (`B`'s parents are `[C, F1]`), listed in an order
+    /// that interleaves the two lines in the layout: A, B, F1, F2, C,
+    /// (fork-connector), D. Verified rows: 0=A 1=B 2=F1 3=F2 4=fork-connector
+    /// 5=D. Returns the layout and `[A, B, C, D, F1, F2]`.
+    fn lane_nav_fixture() -> (GraphLayout, [Oid; 6]) {
+        let (a, b, c, d, f1, f2) = (oid(1), oid(2), oid(3), oid(4), oid(5), oid(6));
+        let commits = vec![
+            ci(a, vec![b]),
+            ci(b, vec![c, f1]),
+            ci(f1, vec![f2]),
+            ci(f2, vec![d]),
+            ci(c, vec![d]),
+            ci(d, vec![]),
+        ];
+        let layout = build_graph(&commits, &[], &[], &[], None, None);
+        (layout, [a, b, c, d, f1, f2])
+    }
+
+    #[test]
+    fn same_lane_ancestor_follows_first_parent_skipping_other_lanes() {
+        let (layout, [a, b, c, d, _f1, _f2]) = lane_nav_fixture();
+
+        // A -> B: adjacent rows, no skip needed.
+        assert_eq!(
+            same_lane_ancestor_row(&layout, row_of(&layout, a)),
+            Some(row_of(&layout, b))
+        );
+        // B -> C: F1, F2 (and the fork connector) sit between them in the
+        // rendered rows but are on a different lane, so the jump must skip
+        // straight past them to C.
+        let b_row = row_of(&layout, b);
+        let c_row = row_of(&layout, c);
+        assert!(c_row > b_row + 1, "fixture must interleave rows between B and C");
+        assert_eq!(same_lane_ancestor_row(&layout, b_row), Some(c_row));
+        // C -> D: trunk continues to the root.
+        assert_eq!(
+            same_lane_ancestor_row(&layout, c_row),
+            Some(row_of(&layout, d))
+        );
+        // D is a root commit: no further ancestor on the lane.
+        assert_eq!(same_lane_ancestor_row(&layout, row_of(&layout, d)), None);
+    }
+
+    #[test]
+    fn same_lane_descendant_follows_first_parent_children_skipping_other_lanes() {
+        let (layout, [a, b, c, _d, _f1, _f2]) = lane_nav_fixture();
+
+        // C -> B: the inverse of the ancestor jump, skipping the same
+        // interleaved feature rows.
+        let b_row = row_of(&layout, b);
+        let c_row = row_of(&layout, c);
+        assert_eq!(same_lane_descendant_row(&layout, c_row), Some(b_row));
+        // B -> A: adjacent rows.
+        assert_eq!(
+            same_lane_descendant_row(&layout, b_row),
+            Some(row_of(&layout, a))
+        );
+        // A is the tip of the lane: no further descendant.
+        assert_eq!(same_lane_descendant_row(&layout, row_of(&layout, a)), None);
+    }
+
+    #[test]
+    fn same_lane_navigation_ignores_non_first_parent_merges() {
+        // The feature line F1—F2 is absorbed into B as a *non-first* parent,
+        // so walking descendants from F1/F2 must never jump to B — only a
+        // first-parent child continues a lane.
+        let (layout, [_a, _b, _c, d, f1, f2]) = lane_nav_fixture();
+
+        let f1_row = row_of(&layout, f1);
+        let f2_row = row_of(&layout, f2);
+        // The feature line's own first-parent chain still works.
+        assert_eq!(same_lane_ancestor_row(&layout, f1_row), Some(f2_row));
+        // F2's first parent is the fork point D — reachable...
+        assert_eq!(
+            same_lane_ancestor_row(&layout, f2_row),
+            Some(row_of(&layout, d))
+        );
+        // ...but nothing continues *up* from F1 (no commit's first parent is
+        // F1 — B's first parent is C, not F1).
+        assert_eq!(same_lane_descendant_row(&layout, f1_row), None);
+    }
+
+    #[test]
+    fn same_lane_navigation_is_none_for_connector_and_missing_rows() {
+        let (layout, _) = lane_nav_fixture();
+        let connector_row = layout
+            .nodes
+            .iter()
+            .position(|n| n.is_connector())
+            .expect("fixture has a fork connector row");
+
+        assert_eq!(same_lane_ancestor_row(&layout, connector_row), None);
+        assert_eq!(same_lane_descendant_row(&layout, connector_row), None);
+        // Out-of-range index.
+        assert_eq!(same_lane_ancestor_row(&layout, layout.nodes.len()), None);
+        assert_eq!(same_lane_descendant_row(&layout, layout.nodes.len()), None);
     }
 }
