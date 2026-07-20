@@ -1088,18 +1088,22 @@ fn optimize_branch_display(
         let shown = SHOWN_LABELS.min(result.len());
         let extra_count = result.len() - shown;
 
-        // Helper: strip "[...]", a leading icon prefix, and any suffix to
-        // recover the bare branch name.
-        let clean = |label: &str| -> String {
+        // Helper: split a formatted label into its leading icon prefix (cloud
+        // for a remote-only chip, ↔ for a synced local, or empty) and the bare
+        // branch name. The name is recovered for re-abbreviation; the icon is
+        // returned separately so the collapse below can re-attach it — a
+        // multi-branch row must keep its remote/synced markers, not drop them.
+        let split_label = |label: &str| -> (String, String) {
             let s = label.trim_start_matches('[');
-            // Drop a leading remote-only/synced icon (+ its trailing space) so a
-            // stripped remote-only chip resolves to its name, not the glyph.
-            let s = s
-                .strip_prefix(REMOTE_ONLY_ICON)
-                .or_else(|| s.strip_prefix(SYNCED_ICON))
-                .map(str::trim_start)
-                .unwrap_or(s);
-            s.split([']', ' ']).next().unwrap_or(label).to_string()
+            let (icon, rest) = if let Some(r) = s.strip_prefix(REMOTE_ONLY_ICON) {
+                (format!("{} ", REMOTE_ONLY_ICON), r.trim_start())
+            } else if let Some(r) = s.strip_prefix(SYNCED_ICON) {
+                (format!("{} ", SYNCED_ICON), r.trim_start())
+            } else {
+                (String::new(), s)
+            };
+            let bare = rest.split([']', ' ']).next().unwrap_or(label).to_string();
+            (icon, bare)
         };
 
         // Budget the available width across the shown labels
@@ -1112,10 +1116,20 @@ fn optimize_branch_display(
         // as the cursor moves, which is the bug this fixes.
         let mut combined = String::new();
         for (pos, (label, _)) in result.iter().take(shown).enumerate() {
-            let clean_name = clean(label);
+            let (icon, clean_name) = split_label(label);
             // Only the last shown label carries the "+N" suffix
             let extra = if pos == shown - 1 { extra_count } else { 0 };
-            combined.push_str(&abbreviate_branch_label(&clean_name, per_label, extra));
+            // Reserve budget for the icon so the abbreviated name plus its
+            // re-attached marker still fits the per-label allowance.
+            let budget = per_label.saturating_sub(display_width(&icon));
+            let abbrev = abbreviate_branch_label(&clean_name, budget, extra);
+            // Re-attach the icon marker inside the brackets (mirrors make_label).
+            let abbrev = if icon.is_empty() {
+                abbrev
+            } else {
+                abbrev.replacen('[', &format!("[{}", icon), 1)
+            };
+            combined.push_str(&abbrev);
         }
 
         // Style follows the selected branch when it's among these labels
@@ -2076,12 +2090,21 @@ mod tests {
 
     #[test]
     fn two_unrelated_refs_do_not_collapse() {
+        // A local `main` and an unrelated remote `origin/dev` (no local twin):
+        // they must NOT merge into a single ↔ synced label, but the remote-only
+        // ref still carries its cloud marker (issue #74 — the cloud must not be
+        // dropped just because another chip shares the row).
         let out = labels(&["main", "origin/dev"], &["origin"]);
         assert!(
-            !out.iter()
-                .any(|l| l.contains(SYNCED_ICON) || l.contains(REMOTE_ONLY_ICON)),
+            !out.iter().any(|l| l.contains(SYNCED_ICON)),
             "unrelated local+remote must not be treated as synced: {out:?}"
         );
+        let joined = out.join("");
+        assert!(
+            joined.contains(REMOTE_ONLY_ICON),
+            "remote-only ref keeps its cloud: {out:?}"
+        );
+        assert!(joined.contains("main") && joined.contains("dev"), "{out:?}");
     }
 
     #[test]
@@ -2694,6 +2717,88 @@ mod tests {
         let label = &out[0].0;
         assert!(label.contains("lonely"), "stripped name present: {label:?}");
         assert!(!label.contains("origin/"), "{label:?}");
+    }
+
+    // ── issue #74: multi-branch rows keep their cloud/synced markers ──
+    //
+    // Regression: the collapse path (result.len() > 1) rebuilt each chip from
+    // the cleaned bare name and dropped the icon prefix, so a row with two
+    // remote refs — or a synced pair alongside another branch — rendered as
+    // bare local-looking labels (`[mac][main]`). Assert the markers survive.
+
+    #[test]
+    fn two_remote_refs_on_one_commit_both_keep_cloud_icon() {
+        // The #74 repro: origin/mac + origin/main sit together on an older
+        // commit (no local ref there). Single remote → prefix dropped, but each
+        // chip must carry the cloud so it still reads as remote-only.
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["origin/mac".to_string(), "origin/main".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(label.contains("mac") && label.contains("main"), "{label:?}");
+        assert!(!label.contains("origin/"), "prefix dropped: {label:?}");
+        // Two cloud glyphs — one per remote-only chip.
+        assert_eq!(
+            label.matches(REMOTE_ONLY_ICON).count(),
+            2,
+            "cloud on both remote chips: {label:?}"
+        );
+        assert!(!label.contains(SYNCED_ICON), "not synced: {label:?}");
+    }
+
+    #[test]
+    fn synced_pair_in_multi_branch_row_keeps_synced_icon() {
+        // A synced local+remote pair (main / origin/main) alongside an
+        // unrelated local branch: the pair collapses to one ↔ chip and the ↔
+        // marker must survive the multi-branch collapse.
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &[
+                "main".to_string(),
+                "origin/main".to_string(),
+                "dev".to_string(),
+            ],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(label.contains(SYNCED_ICON), "synced marker kept: {label:?}");
+        assert!(label.contains("main") && label.contains("dev"), "{label:?}");
+        assert!(!label.contains("origin/"), "{label:?}");
+    }
+
+    #[test]
+    fn local_only_multi_branch_row_never_gets_a_cloud() {
+        // Two purely local branches with no remote counterparts: neither chip
+        // may acquire a cloud (or synced) marker.
+        let theme = Theme::dark();
+        let out = optimize_branch_display(
+            &["feature".to_string(), "hotfix".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+        let label = &out[0].0;
+        assert!(
+            !label.contains(REMOTE_ONLY_ICON),
+            "no cloud on local chips: {label:?}"
+        );
+        assert!(!label.contains(SYNCED_ICON), "no synced marker: {label:?}");
+        assert!(label.contains("feature") && label.contains("hotfix"), "{label:?}");
     }
 
     // ── badge order is stable regardless of selection (issue #50) ────
