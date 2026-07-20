@@ -131,7 +131,7 @@ impl App {
         match prune_remote(&self.repo_path, remote) {
             Ok(()) => {
                 if let Err(e) = self.refresh(true) {
-                    self.show_error(format!("Refresh failed: {e}"));
+                    self.report_refresh_error(e);
                     return;
                 }
                 self.toast(crate::toast::ToastKind::Success, format!("Pruned {remote}"));

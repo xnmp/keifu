@@ -1305,6 +1305,13 @@ impl App {
         self.mode = AppMode::Error { message };
     }
 
+    /// Report a failed post-op refresh with a consistent message and severity.
+    /// Used after ops (fetch/push/pull/prune/PR actions/…) whose own outcome
+    /// already succeeded but whose follow-up `refresh()` failed.
+    pub fn report_refresh_error(&mut self, e: impl std::fmt::Display) {
+        self.show_error(format!("Refresh failed: {e}"));
+    }
+
     /// Enqueue this graph's author emails for avatar download (once per graph
     /// load) and drain any finished downloads. Returns whether a new avatar
     /// arrived, so the caller can trigger a redraw. Cheap no-op when avatars are

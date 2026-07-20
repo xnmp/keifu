@@ -582,7 +582,7 @@ impl App {
         if self.pending_refresh {
             self.pending_refresh = false;
             if let Err(e) = self.refresh(true) {
-                self.toast(crate::toast::ToastKind::Error, format!("Refresh failed: {e}"));
+                self.report_refresh_error(e);
             }
         }
     }

@@ -31,7 +31,7 @@ impl App {
                                 }
                             }
                         }
-                        Err(e) => self.show_error(format!("Refresh failed: {e}")),
+                        Err(e) => self.report_refresh_error(e),
                     }
                 }
             }
@@ -63,7 +63,7 @@ impl App {
             Ok(()) => {
                 self.toast(ToastKind::Success, "Pushed");
                 if let Err(e) = self.refresh(true) {
-                    self.show_error(format!("Refresh failed: {e}"));
+                    self.report_refresh_error(e);
                 }
             }
             Err(e) => {
@@ -90,7 +90,7 @@ impl App {
             Ok(outcome) => {
                 self.network.reset_timers();
                 if let Err(e) = self.refresh(true) {
-                    self.show_error(format!("Refresh failed: {e}"));
+                    self.report_refresh_error(e);
                     return true;
                 }
                 match outcome {
@@ -309,7 +309,7 @@ impl App {
         self.merged_branch_fetch.force();
 
         if let Err(e) = self.refresh(true) {
-            self.show_error(format!("Refresh failed: {e}"));
+            self.report_refresh_error(e);
         }
         self.reset_timers();
 
