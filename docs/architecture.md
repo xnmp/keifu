@@ -421,12 +421,11 @@ rather than transient messages:
 Each chip is a direct, stateless function of an `App` field — no separate chip
 state to keep in sync.
 
-## Repo-Handle Reopen (2026-07-20)
+## Repo-Handle Reopen (2026-07-20, gated 2026-07-20 #69)
 
 **Decision:** `GitRepository::reopen()` (`src/git/repository.rs`) re-opens the
-underlying `git2::Repository` at the start of `refresh_inner`
-(`src/app/refresh.rs`), best-effort (`let _ = self.repo.reopen();` — a reopen
-failure doesn't abort the refresh).
+underlying `git2::Repository` during `reload_refs` (`src/app/refresh.rs`),
+best-effort — a reopen failure doesn't abort the refresh.
 
 **Why:** A long-lived `git2::Repository` handle caches refs and config
 internally. External processes — another terminal running `git push`/`git
@@ -436,3 +435,48 @@ until it's reopened. This is the refs/config analogue of the existing `git2`
 ignore-cache pattern (`repo.clear_ignore_rules()` before status queries, see
 above): flush a libgit2-internal cache immediately before the queries that
 depend on it, so external changes are observed without restarting keifu.
+
+**Gated (`maybe_reopen_repo`, #69):** the reopen no longer runs on every
+refresh. It fires only when there's a reason refs could have changed on disk:
+a `force` refresh, `App.repo_dirty` (set by `poll_fs_watcher` when the
+fs-watcher reports a `.git` ref/HEAD change — `PollResult::Refresh {
+git_changed }`, classified in `watcher.rs::touches_git_refs`), or no active
+watcher (`self.watcher.is_none()`, the startup/disconnected fallback with no
+push-based signal). So a working-tree-only watcher tick or a quiet
+auto-refresh timer skips the reopen. On a successful reopen `repo_dirty` and
+the `reopen` error latch clear; on failure the old handle is kept, the failure
+is reported once per episode via `RefreshLatches::reopen` (same latch shape as
+`wt_status`), and `repo_dirty` is left set so the next refresh retries instead
+of silently sitting on a stale handle.
+
+## Refresh Phases (2026-07-20, #69)
+
+**Decision:** `refresh_inner` (`src/app/refresh.rs`) is split into four
+sequential phases, each with a documented contract (inputs / what it writes /
+what it must not touch):
+
+1. `reload_refs(force)` — pull fresh git state off disk into `self` (working
+   tree status + latch, op/conflict state, branches, remotes; gated repo
+   reopen; kick the merged classifier + recompute base-update merges). Touches
+   no graph/selection/cache state.
+2. `rebuild_graph()` — recompute `visible_branches` from the already-loaded
+   refs + the three visibility filters (incl. hide-merged), revwalk, build the
+   layout, bump `graph_generation`, refresh HEAD facts + branch positions.
+   Self-contained: re-fetches cheap ref-derived data (stashes/tags/HEAD) itself
+   so it needs no `reload_refs`.
+3. `restore_selection(snapshot)` — re-point the cursor onto the equivalent row
+   (uncommitted node → same branch → same commit OID → nearest valid row),
+   using a `SelectionSnapshot` captured before the rebuild.
+4. `invalidate_caches(force, …)` — reconcile the diff cache (force clears all;
+   auto-refresh keeps it when the same content stays selected), clear stale
+   search state, clamp selection, recompute filtered commits.
+
+`rebuild_and_restore` bundles phases 2–4.
+
+**Why / cheaper classifier delivery:** merged-classification delivery
+(`update_merged_classification`) previously called a full `refresh(false)` just
+to re-apply the merged filter — repaying the reopen + `git status` + branch
+enumeration even though only `self.merged.branches` changed. It now calls
+`rebuild_and_restore(false)` (phases 2–4), skipping `reload_refs`. The revwalk
++ `build_graph` still run (they must, to apply the filter), but the expensive
+disk reloads don't.

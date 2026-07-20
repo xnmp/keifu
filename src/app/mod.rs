@@ -840,6 +840,11 @@ pub struct RefreshLatches {
     pub watch_refresh: bool,
     /// Background auto-fetch failures.
     pub auto_fetch: bool,
+    /// Repo-handle `reopen()` failures during refresh (see the gated reopen in
+    /// `refresh.rs`). Reported once per episode so a persistently-unreadable
+    /// `.git` doesn't re-flash the status bar every refresh; a stale handle is
+    /// kept as a best-effort fallback rather than aborting the refresh.
+    pub reopen: bool,
 }
 
 /// Application state
@@ -1039,6 +1044,14 @@ pub struct App {
     // warning chip, since the latter isn't a regression the user needs to
     // act on.
     pub watcher_disconnected: bool,
+    /// Set when the on-disk `.git` refs/config may have changed under a
+    /// long-lived libgit2 handle (a watcher tick that touched `.git`), so the
+    /// next `refresh` re-opens the repo to observe them. Gates the reopen so a
+    /// working-tree-only watcher tick (or a quiet auto-refresh timer while the
+    /// watcher is alive) doesn't pay to re-open every time. Cleared on a
+    /// successful reopen; `force` refreshes and a missing watcher reopen
+    /// unconditionally, independent of this flag.
+    pub repo_dirty: bool,
 
     // Undo
     pub last_undoable_op: Option<UndoableOperation>,

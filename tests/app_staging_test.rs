@@ -166,6 +166,7 @@ fn make_base_app(
         watcher: None,
         pending_watcher: None,
         watcher_disconnected: false,
+        repo_dirty: false,
         last_undoable_op: None,
         side_panel_layout: false,
         hide_remote_branches: false,

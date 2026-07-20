@@ -17,6 +17,11 @@ pub struct FsWatcher {
     dirty_since: Option<Instant>,
     last_refresh_time: Option<Instant>,
     dirty: bool,
+    /// Whether any event in the current dirty batch touched `.git` refs/HEAD
+    /// (as opposed to only tracked working-tree files). Surfaced on the next
+    /// `Refresh` so the app can gate its libgit2 handle reopen — a working-tree
+    /// edit needs a graph/status refresh but not a repo re-open.
+    git_dirty: bool,
     disconnected: bool,
     repo_path: PathBuf,
     git_dir: PathBuf,
@@ -74,6 +79,7 @@ impl FsWatcher {
             dirty_since: None,
             last_refresh_time: None,
             dirty: false,
+            git_dirty: false,
             disconnected: false,
             repo_path: repo_path.to_path_buf(),
             git_dir,
@@ -88,12 +94,14 @@ impl FsWatcher {
         loop {
             match self.rx.try_recv() {
                 Ok(Ok(event)) => {
-                    if self.is_relevant(&event) {
+                    let touches_git = self.touches_git_refs(&event);
+                    if touches_git || self.is_relevant(&event) {
                         self.last_event_time = Some(Instant::now());
                         if self.dirty_since.is_none() {
                             self.dirty_since = Some(Instant::now());
                         }
                         self.dirty = true;
+                        self.git_dirty |= touches_git;
                     }
                 }
                 Ok(Err(_)) => {}
@@ -120,16 +128,31 @@ impl FsWatcher {
                     }
                 }
                 self.dirty = false;
+                let git_changed = self.git_dirty;
+                self.git_dirty = false;
                 self.last_event_time = None;
                 self.dirty_since = None;
                 self.last_refresh_time = Some(Instant::now());
-                return PollResult::Refresh;
+                return PollResult::Refresh { git_changed };
             }
         }
         PollResult::Idle
     }
 
     fn is_relevant(&self, event: &Event) -> bool {
+        event.paths.iter().any(|path| {
+            if path.strip_prefix(&self.git_dir).is_ok() {
+                self.touches_git_refs(event)
+            } else {
+                self.is_tracked_path(path)
+            }
+        })
+    }
+
+    /// Whether any of the event's paths is a `.git` ref/HEAD file — the changes
+    /// a long-lived libgit2 handle caches and only re-observes after a reopen
+    /// (external `push`/`fetch`/`config`/branch updates).
+    fn touches_git_refs(&self, event: &Event) -> bool {
         event.paths.iter().any(|path| {
             if let Ok(rel) = path.strip_prefix(&self.git_dir) {
                 let s = rel.to_string_lossy();
@@ -139,7 +162,7 @@ impl FsWatcher {
                     || s == "MERGE_HEAD"
                     || s == "REBASE_HEAD"
             } else {
-                self.is_tracked_path(path)
+                false
             }
         })
     }
@@ -157,7 +180,11 @@ impl FsWatcher {
 
 pub enum PollResult {
     Idle,
-    Refresh,
+    /// A debounced batch of relevant changes is ready to drive a refresh.
+    /// `git_changed` is true when the batch touched `.git` refs/HEAD, so the
+    /// app should re-open its libgit2 handle; a working-tree-only batch leaves
+    /// it false and skips the reopen.
+    Refresh { git_changed: bool },
     Disconnected,
 }
 

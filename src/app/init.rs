@@ -181,6 +181,7 @@ impl App {
             watcher,
             pending_watcher,
             watcher_disconnected: false,
+            repo_dirty: false,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             hide_remote_branches: ui_state.hide_remote_branches,

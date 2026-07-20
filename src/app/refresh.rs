@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// The pre-rebuild selection, captured from the old graph so it can be
+/// re-resolved against the freshly-built layout (see `restore_selection`).
+struct SelectionSnapshot {
+    /// The selected node was the synthetic uncommitted-changes node.
+    was_uncommitted_selected: bool,
+    /// OID of the selected commit, if any (used to re-find the same commit).
+    prev_selected_commit_oid: Option<Oid>,
+    /// Name of the selected branch, if any (preferred over the OID on restore).
+    prev_branch_name: Option<String>,
+}
+
 impl App {
     /// Load the next chunk of commits (or the whole history when `all`),
     /// rebuilding the graph through a full refresh — which re-walks with the
@@ -171,32 +182,42 @@ impl App {
         result
     }
 
+    // ── Refresh phases ─────────────────────────────────────────────────────
+    //
+    // `refresh_inner` is split into four sequential phases with explicit
+    // contracts so each can be reasoned about — and the cheap ones reused — in
+    // isolation:
+    //
+    //   1. `reload_refs`      — pull fresh git state off disk into `self`.
+    //   2. `rebuild_graph`    — revwalk + layout from the already-loaded state.
+    //   3. `restore_selection`— re-point the cursor onto the equivalent row.
+    //   4. `invalidate_caches`— reconcile diff/search caches with the new graph.
+    //
+    // A full refresh runs all four; merged-classification delivery reruns only
+    // 2–4 (via `rebuild_and_restore`), skipping the expensive reload_refs
+    // (reopen + `git status` + branch enumeration) since only the merged filter
+    // changed.
+
     fn refresh_inner(&mut self, force: bool) -> Result<()> {
-        // Re-open the libgit2 handle so we observe on-disk state written by other
-        // processes since the last refresh: pushes/fetches creating or updating
-        // remote-tracking refs, upstream config changes, or pruned refs. A
-        // long-lived handle caches this, which otherwise leaves a just-pushed
-        // branch looking unpushed. Best-effort: on failure keep the old handle
-        // and continue rather than aborting the refresh.
-        let _ = self.repo.reopen();
+        self.reload_refs(force)?;
+        self.rebuild_and_restore(force)
+    }
 
-        // Save the current selection state for restoration
-        let was_uncommitted_selected = self
-            .graph_nav.graph_list_state
-            .selected()
-            .and_then(|idx| self.graph_layout.nodes.get(idx))
-            .is_some_and(|node| node.is_uncommitted);
-        let prev_selected_commit_oid = self
-            .graph_nav.graph_list_state
-            .selected()
-            .and_then(|idx| self.graph_layout.nodes.get(idx))
-            .and_then(|node| node.commit.as_ref())
-            .map(|commit| commit.oid);
-
-        let prev_branch_name = self
-            .graph_nav.selected_branch_position
-            .and_then(|pos| self.graph_nav.branch_positions.get(pos))
-            .map(|(_, name)| name.clone());
+    /// Phase 1 — reload git state from disk into `self`.
+    ///
+    /// Inputs: `force` (whether this is a manual/forced refresh). Reads on-disk
+    /// git state via `self.repo`.
+    ///
+    /// Writes: `self.working_tree_status`, `op_state`, `conflict_count`,
+    /// `branches`, `remotes`; may reopen the repo handle; kicks the background
+    /// merged classifier and recomputes the base-update-merge set (both
+    /// signature-guarded no-ops when their inputs are unchanged). Sets/clears
+    /// the `wt_status` and `reopen` error latches.
+    ///
+    /// Must NOT touch: the graph layout, the selection, or the diff/search
+    /// caches — those are the later phases' responsibility.
+    fn reload_refs(&mut self, force: bool) -> Result<()> {
+        self.maybe_reopen_repo(force);
 
         // Get working tree status once and reuse. Report a failure once per
         // episode (latched) so a persistently-failing status query doesn't
@@ -211,9 +232,6 @@ impl App {
             }
             None => self.refresh_latches.wt_status = false,
         }
-        let uncommitted_count = working_tree_status
-            .as_ref()
-            .map(|s| s.accurate_file_count());
         self.working_tree_status = working_tree_status;
 
         // Refresh in-progress operation state (merge/rebase/…) and conflict
@@ -221,34 +239,8 @@ impl App {
         self.op_state = self.repo.operation_state();
         self.conflict_count = self.repo.conflicted_count();
 
-        let stashes = self.repo.get_stashes();
-        let branches = self.repo.get_branches()?;
+        self.branches = self.repo.get_branches()?;
         self.remotes = self.repo.remotes();
-        // Merged-branch classification runs off the UI thread; this refresh uses
-        // the most recently delivered set (`self.merged.branches`) for both the
-        // dimmed rendering and the hide filter. When branch tips have moved the
-        // set may be one generation stale until the worker returns, at which point
-        // `update_merged_classification` triggers another refresh.
-        let merged = self.merged.branches.clone();
-        // Excluded branches are dropped from the revwalk, so their exclusive
-        // commits are removed from the graph — not merely their labels. Three
-        // filters compose: the per-branch picker (`hidden_branches`), the
-        // show/hide-remotes toggle (every remote-only ref), and the hide-merged
-        // toggle (branches already landed on the trunk). A branch is visible iff
-        // no filter excludes it.
-        let remote_only = if self.hide_remote_branches {
-            remote_only_branch_names(&branches)
-        } else {
-            std::collections::HashSet::new()
-        };
-        let visible_branches: Vec<BranchInfo> = branches
-            .iter()
-            .filter(|b| !self.hidden_branches.contains(&b.name))
-            .filter(|b| !remote_only.contains(&b.name))
-            .filter(|b| !(self.merged.hide && merged.contains(&b.name)))
-            .cloned()
-            .collect();
-        self.branches = branches;
         // Re-run classification against the just-loaded branches (no-op when the
         // inputs are unchanged, per the classifier's signature guard).
         self.kick_merged_classification();
@@ -256,6 +248,120 @@ impl App {
         // count as base-updates (issue #55); recompute (signature-guarded no-op
         // when unchanged).
         self.recompute_base_update_merges();
+        Ok(())
+    }
+
+    /// Re-open the libgit2 handle so we observe on-disk state written by other
+    /// processes since the last refresh: pushes/fetches creating or updating
+    /// remote-tracking refs, upstream config changes, or pruned refs. A
+    /// long-lived handle caches this, which otherwise leaves a just-pushed
+    /// branch looking unpushed.
+    ///
+    /// Gated: reopen only on a `force` refresh, when the fs-watcher flagged a
+    /// `.git` change (`repo_dirty`), or when there is no active watcher to
+    /// provide that signal — so a working-tree-only watcher tick or a quiet
+    /// auto-refresh timer doesn't pay to re-open every time. Best-effort: on
+    /// failure keep the old handle and continue rather than aborting the
+    /// refresh, but surface it once per episode via the `reopen` latch and
+    /// leave `repo_dirty` set so the next refresh retries.
+    fn maybe_reopen_repo(&mut self, force: bool) {
+        if !(force || self.repo_dirty || self.watcher.is_none()) {
+            return;
+        }
+        match self.repo.reopen() {
+            Ok(()) => {
+                self.refresh_latches.reopen = false;
+                self.repo_dirty = false;
+            }
+            Err(e) => {
+                if !self.refresh_latches.reopen {
+                    self.refresh_latches.reopen = true;
+                    self.set_message(format!("Repo reopen failed: {e}"));
+                }
+            }
+        }
+    }
+
+    /// Phases 2–4: rebuild the graph from the already-loaded refs, restore the
+    /// selection, and reconcile caches. Shared by `refresh_inner` and the cheap
+    /// merged-classification delivery path so both re-point the cursor and
+    /// invalidate diff caches identically.
+    pub(crate) fn rebuild_and_restore(&mut self, force: bool) -> Result<()> {
+        // Snapshot the pre-rebuild selection while the OLD graph is still live.
+        let snapshot = self.capture_selection_snapshot();
+        self.rebuild_graph()?;
+        let has_uncommitted_node = self
+            .graph_layout
+            .nodes
+            .first()
+            .is_some_and(|node| node.is_uncommitted);
+        self.restore_selection(&snapshot, has_uncommitted_node);
+        self.invalidate_caches(force, snapshot.was_uncommitted_selected, has_uncommitted_node);
+        Ok(())
+    }
+
+    /// Snapshot the current selection so it can be re-resolved against a fresh
+    /// graph. Reads only the CURRENT graph/nav state; must be captured before
+    /// `rebuild_graph` replaces the layout.
+    fn capture_selection_snapshot(&self) -> SelectionSnapshot {
+        let selected_node = self
+            .graph_nav
+            .graph_list_state
+            .selected()
+            .and_then(|idx| self.graph_layout.nodes.get(idx));
+        SelectionSnapshot {
+            was_uncommitted_selected: selected_node.is_some_and(|node| node.is_uncommitted),
+            prev_selected_commit_oid: selected_node
+                .and_then(|node| node.commit.as_ref())
+                .map(|commit| commit.oid),
+            prev_branch_name: self
+                .graph_nav
+                .selected_branch_position
+                .and_then(|pos| self.graph_nav.branch_positions.get(pos))
+                .map(|(_, name)| name.clone()),
+        }
+    }
+
+    /// Phase 2 — rebuild the commit graph from the already-loaded refs.
+    ///
+    /// Inputs: the loaded `self.branches`, `self.merged` (delivered
+    /// classification + hide toggle), the branch-visibility toggles, and
+    /// `self.working_tree_status`; plus on-disk commits/tags/HEAD. Re-fetches
+    /// cheap ref-derived data (stashes, tags, HEAD OID) itself so it is
+    /// self-contained and callable without `reload_refs`.
+    ///
+    /// Writes: `self.commits`, `all_commits_loaded`, `graph_layout`,
+    /// `graph_generation` (bumped — invalidates the pixel-graph spec cache),
+    /// `head_name`, `head_detached`, and the graph-nav branch positions.
+    ///
+    /// Must NOT touch: the selection index or the diff/search caches. May fail
+    /// if the revwalk fails.
+    fn rebuild_graph(&mut self) -> Result<()> {
+        let stashes = self.repo.get_stashes();
+        let uncommitted_count = self
+            .working_tree_status
+            .as_ref()
+            .map(|s| s.accurate_file_count());
+        // Excluded branches are dropped from the revwalk, so their exclusive
+        // commits are removed from the graph — not merely their labels. Three
+        // filters compose: the per-branch picker (`hidden_branches`), the
+        // show/hide-remotes toggle (every remote-only ref), and the hide-merged
+        // toggle (branches already landed on the trunk, per the most recently
+        // delivered `self.merged.branches`). A branch is visible iff no filter
+        // excludes it.
+        let remote_only = if self.hide_remote_branches {
+            remote_only_branch_names(&self.branches)
+        } else {
+            std::collections::HashSet::new()
+        };
+        let visible_branches: Vec<BranchInfo> = self
+            .branches
+            .iter()
+            .filter(|b| !self.hidden_branches.contains(&b.name))
+            .filter(|b| !remote_only.contains(&b.name))
+            .filter(|b| !(self.merged.hide && self.merged.branches.contains(&b.name)))
+            .cloned()
+            .collect();
         self.commits = self
             .repo
             .get_commits(self.commit_load_limit, &visible_branches, &stashes)?;
@@ -279,30 +385,39 @@ impl App {
         // Rebuild branch positions
         self.graph_nav
             .rebuild_branch_positions(&self.graph_layout, &self.repo.remotes());
+        Ok(())
+    }
 
-        // Restore selection state
-        // Check if uncommitted node still exists in the new graph
-        let has_uncommitted_node = self
-            .graph_layout
-            .nodes
-            .first()
-            .is_some_and(|node| node.is_uncommitted);
-
-        if was_uncommitted_selected && has_uncommitted_node {
+    /// Phase 3 — re-point the cursor onto the equivalent row in the fresh graph.
+    ///
+    /// Inputs: the pre-rebuild `snapshot` and whether the new graph still has an
+    /// uncommitted node. Resolution order: the uncommitted node if it was
+    /// selected and still exists; else the same branch by name; else the same
+    /// commit by OID; else the nearest still-valid row. Finally, if a node is
+    /// selected with no branch position, adopt the node's first branch.
+    ///
+    /// Writes: only `graph_nav.graph_list_state` selection and
+    /// `selected_branch_position`. Must NOT touch data or caches.
+    fn restore_selection(&mut self, snapshot: &SelectionSnapshot, has_uncommitted_node: bool) {
+        if snapshot.was_uncommitted_selected && has_uncommitted_node {
             // Restore uncommitted node selection
             self.graph_nav.graph_list_state.select(Some(0));
             self.graph_nav.selected_branch_position = None;
         } else {
             // Restore branch selection if the branch still exists
-            self.graph_nav.selected_branch_position = prev_branch_name
-                .and_then(|name| self.graph_nav.branch_positions.iter().position(|(_, n)| n == &name));
+            self.graph_nav.selected_branch_position = snapshot
+                .prev_branch_name
+                .as_ref()
+                .and_then(|name| {
+                    self.graph_nav.branch_positions.iter().position(|(_, n)| n == name)
+                });
 
             // Sync node selection with branch selection
             if let Some(pos) = self.graph_nav.selected_branch_position {
                 if let Some((node_idx, _)) = self.graph_nav.branch_positions.get(pos) {
                     self.graph_nav.graph_list_state.select(Some(*node_idx));
                 }
-            } else if let Some(oid) = prev_selected_commit_oid {
+            } else if let Some(oid) = snapshot.prev_selected_commit_oid {
                 let node_idx =
                     self.graph_layout.nodes.iter().position(|node| {
                         node.commit.as_ref().is_some_and(|commit| commit.oid == oid)
@@ -332,7 +447,24 @@ impl App {
                 }
             }
         }
+    }
 
+    /// Phase 4 — reconcile the diff/search caches with the new graph and clamp
+    /// the selection into range.
+    ///
+    /// Inputs: `force` (manual refresh clears the whole diff cache; auto-refresh
+    /// keeps it when the same content stays selected), plus the pre-rebuild
+    /// `was_uncommitted_selected` and the new `has_uncommitted_node`.
+    ///
+    /// Writes: `diff_cache`, `search_state` (cleared unless a search is active),
+    /// the selection clamp, and `visible_commit_indices` (when a commit filter
+    /// is active). Must NOT touch the loaded refs or the graph layout.
+    fn invalidate_caches(
+        &mut self,
+        force: bool,
+        was_uncommitted_selected: bool,
+        has_uncommitted_node: bool,
+    ) {
         // Handle diff cache based on force flag
         if force {
             self.diff_cache.clear_all();
@@ -370,8 +502,6 @@ impl App {
         if !self.commit_filter.is_empty() {
             self.recompute_visible_commits();
         }
-
-        Ok(())
     }
 
     /// Update diff info for the selected node (commit or uncommitted changes, async)
@@ -414,5 +544,104 @@ impl App {
     /// Whether diff is loading or pending (debouncing) for the selected node
     pub fn is_diff_loading(&self) -> bool {
         self.diff_cache.is_diff_loading(self.current_diff_target())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::GitRepository;
+    use git2::{Repository, Signature};
+    use std::path::Path;
+
+    fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> git2::Oid {
+        let workdir = repo.workdir().unwrap();
+        std::fs::write(workdir.join(path), contents).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(path)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = Signature::now("Test", "test@example.com").unwrap();
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents = parent.iter().collect::<Vec<_>>();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .unwrap()
+    }
+
+    /// Collect the commit OIDs currently present as graph nodes.
+    fn node_oids(app: &App) -> Vec<git2::Oid> {
+        app.graph_layout
+            .nodes
+            .iter()
+            .filter_map(|n| n.commit.as_ref().map(|c| c.oid))
+            .collect()
+    }
+
+    /// Delivering a merged-branch classification takes the cheap
+    /// `rebuild_and_restore` path (no `reload_refs`) yet still applies the
+    /// hide-merged filter to the revwalk: a merged branch's exclusive commits
+    /// disappear from the graph, while the base commit — and the selection —
+    /// survive. This is the observable contract behind issue #69's cheaper
+    /// classifier delivery.
+    #[test]
+    fn cheap_rebuild_applies_merged_hide_filter_and_keeps_selection() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let git = Repository::init(tempdir.path()).unwrap();
+
+        // Base commit on the default branch (HEAD).
+        let oid_base = commit_file(&git, "a.txt", "a", "base");
+        let default_branch = git.head().unwrap().shorthand().unwrap().to_string();
+
+        // A `feature` branch with a commit that is exclusive to it.
+        let base_commit = git.find_commit(oid_base).unwrap();
+        git.branch("feature", &base_commit, false).unwrap();
+        git.set_head("refs/heads/feature").unwrap();
+        let oid_feat = commit_file(&git, "f.txt", "f", "feature work");
+        // Leave HEAD on the default branch so the feature tip is only reachable
+        // via `feature` (HEAD is always walked, regardless of the filter).
+        git.set_head(&format!("refs/heads/{default_branch}")).unwrap();
+
+        let repo = GitRepository::open(tempdir.path()).unwrap();
+        let mut app = App::from_repo(repo).unwrap();
+
+        // Both commits are visible before any branch is hidden.
+        assert!(node_oids(&app).contains(&oid_base));
+        assert!(
+            node_oids(&app).contains(&oid_feat),
+            "feature's exclusive commit should be visible initially"
+        );
+
+        // Select the base commit so we can assert the selection is preserved.
+        let base_idx = app
+            .graph_layout
+            .nodes
+            .iter()
+            .position(|n| n.commit.as_ref().is_some_and(|c| c.oid == oid_base))
+            .unwrap();
+        app.graph_nav.graph_list_state.select(Some(base_idx));
+
+        // Simulate a classifier delivery marking `feature` merged, with hiding on.
+        app.merged.hide = true;
+        app.merged.branches = std::collections::HashSet::from(["feature".to_string()]);
+
+        // The cheap delivery path: rebuild + restore only, no reload_refs.
+        app.rebuild_and_restore(false).unwrap();
+
+        let after = node_oids(&app);
+        assert!(after.contains(&oid_base), "base commit must remain visible");
+        assert!(
+            !after.contains(&oid_feat),
+            "hiding merged `feature` must drop its exclusive commit from the graph"
+        );
+
+        // Selection stays on the base commit (resolved by OID against the new graph).
+        let selected_oid = app
+            .graph_nav
+            .graph_list_state
+            .selected()
+            .and_then(|i| app.graph_layout.nodes.get(i))
+            .and_then(|n| n.commit.as_ref())
+            .map(|c| c.oid);
+        assert_eq!(selected_oid, Some(oid_base), "selection should follow the base commit");
     }
 }

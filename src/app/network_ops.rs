@@ -245,8 +245,12 @@ impl App {
             return false;
         }
         self.merged.branches = set;
-        // Best-effort rebuild: a refresh failure just leaves the prior graph.
-        let _ = self.refresh(false);
+        // Only the merged filter/dimming changed — the refs on disk are
+        // unchanged — so run just the graph rebuild + selection restore +
+        // cache reconcile, skipping the expensive `reload_refs` (repo reopen +
+        // `git status` + branch enumeration) a full refresh would redo.
+        // Best-effort: a rebuild failure just leaves the prior graph.
+        let _ = self.rebuild_and_restore(false);
         true
     }
 
@@ -267,7 +271,14 @@ impl App {
             return false;
         };
         match watcher.poll() {
-            crate::watcher::PollResult::Refresh => {
+            crate::watcher::PollResult::Refresh { git_changed } => {
+                // A `.git` ref/HEAD change under a long-lived libgit2 handle is
+                // only observed after a reopen, so mark the repo dirty; a
+                // working-tree-only tick refreshes the graph/status but leaves
+                // the handle (and this flag) alone, skipping the reopen cost.
+                if git_changed {
+                    self.repo_dirty = true;
+                }
                 // Latch: a burst of failing watcher-driven refreshes (e.g. during
                 // a build) reports once per episode, not on every poll; re-arm on
                 // success.
