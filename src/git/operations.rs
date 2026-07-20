@@ -378,8 +378,13 @@ pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<OpOutcome> 
 
 /// Fetch from a named remote using the git CLI. `creds` supplies HTTPS
 /// credentials on a retry after an auth-failure prompt (`None` normally).
+///
+/// Uses `--prune` so remote-tracking refs (`<remote>/<branch>`) for branches
+/// deleted upstream are removed locally, matching `git fetch --prune`. Without
+/// it, stale `origin/<branch>` refs linger in the graph indefinitely after the
+/// branch is gone from the remote.
 pub fn fetch_remote(repo_path: &str, remote: &str, creds: Option<&Credentials>) -> Result<()> {
-    run_git_creds(repo_path, &["fetch", remote], creds)?;
+    run_git_creds(repo_path, &["fetch", "--prune", remote], creds)?;
     Ok(())
 }
 
@@ -388,9 +393,10 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
     fetch_remote(repo_path, "origin", None)
 }
 
-/// Fetch from every configured remote (`git fetch --all`).
+/// Fetch from every configured remote (`git fetch --all --prune`). Prunes stale
+/// remote-tracking refs for the same reason as [`fetch_remote`].
 pub fn fetch_all(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
-    run_git_creds(repo_path, &["fetch", "--all"], creds)?;
+    run_git_creds(repo_path, &["fetch", "--all", "--prune"], creds)?;
     Ok(())
 }
 
@@ -1148,6 +1154,63 @@ mod tests {
     fn signature_label_unknown_code_is_labelled_unknown() {
         assert_eq!(signature_status_label('Z'), "unknown");
         assert_eq!(signature_status_label(' '), "unknown");
+    }
+
+    use super::fetch_remote;
+    use git2::{BranchType, Repository};
+    use std::path::Path;
+    use std::process::Command;
+
+    /// Run a git command in `dir`, asserting success.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("git invocation failed");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn fetch_remote_prunes_deleted_remote_tracking_refs() {
+        // A branch deleted upstream by *another* clone leaves this clone's
+        // origin/<branch> ref dangling; fetch must prune it (git fetch --prune).
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["branch", "feature"]);
+        git(&local, &["push", "-q", "origin", "master", "feature"]);
+
+        let repo = Repository::open(&local).unwrap();
+        assert!(
+            repo.find_branch("origin/feature", BranchType::Remote).is_ok(),
+            "origin/feature present after push"
+        );
+
+        // A different clone deletes the branch on the remote. Deleting from our
+        // own clone would auto-remove the tracking ref and not exercise prune.
+        let other = tmp.path().join("other");
+        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        git(&other, &["push", "-q", "origin", "--delete", "feature"]);
+
+        // Still stale locally until we fetch.
+        assert!(repo.find_branch("origin/feature", BranchType::Remote).is_ok());
+
+        fetch_remote(local.to_str().unwrap(), "origin", None).unwrap();
+
+        assert!(
+            repo.find_branch("origin/feature", BranchType::Remote).is_err(),
+            "origin/feature must be pruned after upstream deletion + fetch"
+        );
     }
 }
 

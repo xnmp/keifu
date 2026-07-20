@@ -125,6 +125,24 @@ impl GitRepository {
         })
     }
 
+    /// Re-open the underlying libgit2 repository handle in place.
+    ///
+    /// A `git2::Repository` is a point-in-time view that caches refs, config and
+    /// object-db state. When another process mutates the repo — `git push` or
+    /// `git fetch` creating/updating `refs/remotes/<remote>/*`, or setting a
+    /// branch's upstream in config — a long-lived handle can keep reporting the
+    /// pre-change state, so a refresh may still classify a just-pushed branch as
+    /// unpushed (its `origin/<branch>` counterpart not yet visible). This is the
+    /// refs/config analogue of the `clear_ignore_rules()` flush already done
+    /// before status queries. Re-opening drops those caches so subsequent
+    /// queries observe current on-disk state; cheap enough to run every refresh.
+    pub fn reopen(&mut self) -> Result<()> {
+        let repo = Repository::open(&self.path)
+            .with_context(|| format!("Failed to re-open git repository at {}", self.path))?;
+        self.repo = repo;
+        Ok(())
+    }
+
     /// Get commit history (newest first).
     ///
     /// Walks from the tips of the supplied `branches` — the caller decides
@@ -425,5 +443,57 @@ impl WorkingTreeStatus {
 
     pub fn is_precise_cache_key(&self) -> bool {
         !self.has_collapsed_untracked_dirs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitRepository;
+    use std::path::Path;
+    use std::process::Command;
+
+    /// Run a git command in `dir`, asserting success.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("git invocation failed");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn reopen_observes_remote_ref_created_after_open() {
+        // The staleness fix: a remote-tracking ref created (by a push) after the
+        // handle was opened must be visible once the handle is reopened, so a
+        // refresh classifies the branch as pushed rather than unpushed.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["checkout", "-qb", "feature"]);
+
+        // Long-lived handle opened BEFORE the push.
+        let mut repo = GitRepository::open(&local).unwrap();
+        assert!(
+            !repo.get_branches().unwrap().iter().any(|b| b.name == "origin/feature"),
+            "origin/feature must not exist before the push"
+        );
+
+        git(&local, &["push", "-q", "origin", "feature"]);
+
+        repo.reopen().unwrap();
+        assert!(
+            repo.get_branches().unwrap().iter().any(|b| b.name == "origin/feature"),
+            "reopened handle must see origin/feature created by the push"
+        );
     }
 }
