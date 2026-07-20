@@ -258,7 +258,7 @@ impl App {
         if target.is_untracked {
             let path_str = target.path.to_string_lossy().to_string();
             stage_file(&self.repo_path, &path_str)?;
-            self.toast(crate::toast::ToastKind::Success, format!("Staged {}", target.path.display()));
+            self.toast(crate::toast::ToastKind::Success, format!("Staged '{}'", target.path.display()));
             return self.reload_file_diff_for_path(&target.path, target.scroll_offset);
         }
         let Some(hunk) =
