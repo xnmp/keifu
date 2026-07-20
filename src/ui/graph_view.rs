@@ -391,6 +391,15 @@ pub fn build_pixel_base_specs(
     // trace-, mute-toggle- and scroll-independent lets it stay cached while the
     // selection moves, instead of rebuilding every row on every keypress.
     let rows = visible_rows(app, true);
+    // The physically-adjacent rows' drawn content (folded underlay + own
+    // cells), used to bring their boundary-crossing transition curves into
+    // this row as `incoming` tails.
+    let neighbor = |j: usize| -> crate::ui::graph_pixels::NeighborRow<'_> {
+        crate::ui::graph_pixels::NeighborRow {
+            underlay: &rows[j].underlay,
+            cells: &rows[j].node.cells,
+        }
+    };
     (0..rows.len())
         .map(|i| {
             let node = rows[i].node;
@@ -401,6 +410,8 @@ pub fn build_pixel_base_specs(
                 node,
                 below.as_deref(),
                 &rows[i].underlay,
+                i.checked_sub(1).map(neighbor),
+                (i + 1 < rows.len()).then(|| neighbor(i + 1)),
                 theme,
             );
             let budget = pixel_row_cells(node.cells.len(), graph_width, panel_available);
@@ -478,19 +489,24 @@ pub fn dim_pixel_specs_window(
     // `visible_rows`' O(total-commits) full fold every redraw (#73). Rows are
     // dense in folded-index space, so `win_rows[k]` is folded row `win_start + k`
     // — the same index space `base`/the overlay use.
+    // Fetch one extra row on each side of the window: a window-edge row's
+    // incoming curve tails restyle from the *neighbour's* dimmed cells, so the
+    // boundary neighbours' oids/force-dim must be available too.
+    let ext_start = win_start.saturating_sub(1);
+    let ext_end = win_end.saturating_add(1);
     let win_rows = if app.commit_filter.is_empty() {
         fold_rows_windowed(
             app.graph_layout.nodes.iter().enumerate(),
-            win_start,
-            win_end,
+            ext_start,
+            ext_end,
         )
     } else {
         fold_rows_windowed(
             app.visible_commit_indices
                 .iter()
                 .map(|&i| (i, &app.graph_layout.nodes[i])),
-            win_start,
-            win_end,
+            ext_start,
+            ext_end,
         )
     };
     // Absolute-indexed sparse inputs the core expects: only windowed positions
@@ -502,7 +518,7 @@ pub fn dim_pixel_specs_window(
     // rows. Frame/scroll-varying, so it lives here, never in the cached base.
     let mut force_dim: Vec<bool> = vec![false; base.len()];
     for (k, r) in win_rows.iter().enumerate() {
-        let abs = win_start + k;
+        let abs = ext_start + k;
         if abs >= base.len() {
             break;
         }
@@ -560,7 +576,7 @@ fn dim_specs_window_core(
     let mut out: Vec<crate::ui::graph_pixels::RowSpec> =
         vec![crate::ui::graph_pixels::RowSpec::default(); base.len()];
     let end = win_end.min(base.len());
-    for i in win_start..end {
+    let dim_row = |i: usize| -> crate::ui::graph_pixels::RowSpec {
         let mut spec = base[i].clone();
         if force_dim.get(i).copied().unwrap_or(false) {
             // Base-update back-merge (#55): force-dim the entire connector,
@@ -576,7 +592,55 @@ fn dim_specs_window_core(
             apply_trace_dim(&mut spec.cells, o.cells, lit, lane_rgb);
             apply_trace_dim(&mut spec.underlay, o.underlay, lit, lane_rgb);
         }
-        out[i] = spec;
+        spec
+    };
+    for (i, slot) in out.iter_mut().enumerate().take(end).skip(win_start) {
+        *slot = dim_row(i);
+    }
+    // Restyle each incoming neighbour-curve tail from the dimmed neighbour's
+    // landing-lane cell, so the two clipped halves of a boundary-crossing
+    // cubic keep identical color/dim across the seam (the neighbour draws its
+    // half in exactly that cell's post-dim style). Boundary neighbours sit one
+    // row outside the window: dim them locally and discard, preserving the
+    // out-of-window placeholder contract.
+    let above_edge = win_start
+        .checked_sub(1)
+        .filter(|&i| i < base.len() && win_start < end)
+        .map(dim_row);
+    let below_edge = (win_start < end && end < base.len()).then(|| dim_row(end));
+    let updates: Vec<(usize, Vec<crate::ui::graph_pixels::CellCurve>)> = (win_start..end)
+        .filter(|&i| !out[i].incoming.is_empty())
+        .map(|i| {
+            let fixed = out[i]
+                .incoming
+                .iter()
+                .map(|c| {
+                    let neighbor = if c.from_above {
+                        match i.checked_sub(1) {
+                            Some(n) if n >= win_start => Some(&out[n]),
+                            _ => above_edge.as_ref(),
+                        }
+                    } else if i + 1 < end {
+                        Some(&out[i + 1])
+                    } else {
+                        below_edge.as_ref()
+                    };
+                    let mut c = *c;
+                    if let Some(cell) = neighbor.and_then(|n| {
+                        let slice = if c.from_underlay { &n.underlay } else { &n.cells };
+                        slice.get(c.col as usize)
+                    }) {
+                        c.color = cell.color;
+                        c.dim = cell.dim;
+                    }
+                    c
+                })
+                .collect();
+            (i, fixed)
+        })
+        .collect();
+    for (i, fixed) in updates {
+        out[i].incoming = fixed;
     }
     out
 }
@@ -3583,6 +3647,8 @@ mod tests {
             secondary: rgb,
             dim: false,
             dim_secondary: false,
+            curved_above: false,
+            curved_below: false,
         };
         let mut cells = vec![
             solid(CellShape::TeeRight, [92, 92, 255]),
@@ -3639,11 +3705,14 @@ mod tests {
             secondary: blue,
             dim: false,
             dim_secondary: false,
+            curved_above: false,
+            curved_below: false,
         };
         let base: Vec<_> = (0..n)
             .map(|_| crate::ui::graph_pixels::RowSpec {
                 cells: vec![cell()],
                 underlay: Vec::new(),
+                incoming: Vec::new(),
             })
             .collect();
         let oids: Vec<Vec<crate::git::graph::CellOids>> = (0..n)
@@ -3737,6 +3806,74 @@ mod tests {
         // ...even though row 2 is an EVEN row that trace dimming would leave lit —
         // force-dim wins over trace, mirroring the unicode `force_dim || trace`.
         assert!(!out[0].cells[0].dim, "non-forced even row 0 stays lit by trace");
+    }
+
+    #[test]
+    fn incoming_tail_restyles_from_the_dimmed_neighbour_spoke() {
+        // A branch curve crosses the row 0 → row 1 boundary: row 1 carries its
+        // tail (`RowSpec::incoming`). The tail must restyle exactly like the
+        // neighbour's own half — dim when the spoke cell dims, recolored when
+        // the spoke cell is lit — or the cubic changes style mid-stroke at the
+        // row seam.
+        use crate::ui::graph_pixels::{build_row_spec, NeighborRow};
+        let theme = crate::ui::theme::Theme::dark();
+        let cells_a = vec![
+            CellType::Commit(0),
+            CellType::Horizontal(1),
+            CellType::BranchLeft(1),
+        ];
+        let cells_b = vec![CellType::Empty, CellType::Empty, CellType::Commit(1)];
+        let node_a = commit_row(cells_a.clone());
+        let node_b = commit_row(cells_b.clone());
+        let base = vec![
+            build_row_spec(
+                None,
+                &node_a,
+                Some(&cells_b),
+                &[],
+                None,
+                Some(NeighborRow { underlay: &[], cells: &cells_b }),
+                &theme,
+            ),
+            build_row_spec(
+                Some(&cells_a),
+                &node_b,
+                None,
+                &[],
+                Some(NeighborRow { underlay: &[], cells: &cells_a }),
+                None,
+                &theme,
+            ),
+        ];
+        assert_eq!(base[1].incoming.len(), 1, "row 1 carries the branch tail");
+        assert!(!base[1].incoming[0].dim, "base tail starts undimmed");
+
+        let branch_edge = (oid(1), oid(2));
+        let trunk_edge = (oid(1), oid(3));
+        let oids_rows = vec![
+            vec![
+                (Some(trunk_edge), None),
+                (Some(branch_edge), None),
+                (Some(branch_edge), None), // the spoke cell (col 2)
+            ],
+            vec![(None, None), (None, None), (Some(branch_edge), None)],
+        ];
+        let ro = row_oids_of(&oids_rows);
+        let ff = no_force(base.len());
+
+        // Tracing lights only the trunk: the spoke cell dims → so must the tail.
+        let lit_trunk = [(trunk_edge, oid(3))].into_iter().collect();
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit_trunk, &HashMap::new(), 0, 2);
+        assert!(out[0].cells[2].dim, "spoke cell dims off-lineage");
+        assert!(out[1].incoming[0].dim, "tail dims with its source spoke");
+
+        // Tracing lights the branch: the spoke recolors → the tail follows.
+        let red = [255u8, 0, 0];
+        let lit_branch = [(branch_edge, oid(2))].into_iter().collect();
+        let lane_rgb = [(oid(2), red)].into_iter().collect();
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit_branch, &lane_rgb, 0, 2);
+        assert!(!out[1].incoming[0].dim, "lit tail stays bright");
+        assert_eq!(out[1].incoming[0].color, red, "tail takes the spoke's traced color");
     }
 
     #[test]

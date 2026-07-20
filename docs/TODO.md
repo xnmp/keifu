@@ -475,3 +475,6 @@ Lane transitions render as VSCode-style vertical-tangent bezier connectors, repl
 
 ### [DONE] #64 Keyboard enhancement + ',' fallback
 Kitty keyboard protocol enabled for reachable Ctrl+, chords, with a plain ',' fallback when the protocol isn't available.
+
+### [DONE] #75 Full-height S-curves
+Lane-transition beziers span row-center to row-center (VSCode geometry): curves leave commit dots immediately with no straight stub in the adjacent row and no curvature kink at the row edge. Each row draws its clipped half of the shared cubic; RowSpec carries the neighbor rows' boundary-crossing curves.
