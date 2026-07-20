@@ -50,11 +50,13 @@ Event loop in `main.rs`: render frame → poll input → `map_key_to_action()` �
 ### Key Design Decisions (see `docs/architecture.md` for full context)
 
 - **Panel focus is orthogonal to mode.** `FocusedPanel` (Graph/Files/CommitDetail) is a field on `App`, not a mode variant. Modes (`Normal`, `Help`, `Input`, `Confirm`, `FileDiff`, etc.) overlay on top. The keybinding router checks both.
-- **Two-tier diff caching.** Quick cache (synchronous, file names from `diff.deltas()`) shows instantly. Full cache (async, line stats) loads with 120ms debounce. `cached_diff_or_quick()` returns the best available.
+- **Two-tier diff caching.** Quick cache (synchronous, file names from `diff.deltas()`) shows instantly. Full cache (async, line stats) loads with 120ms debounce. `cached_diff_or_quick()` returns the best available. Gotcha: uncommitted diff-load errors latch (`uncommitted_diff_error_reported`) and won't re-report until an episode boundary (success, or `clear_uncommitted()`) — don't expect every failed poll to surface a fresh message.
 - **`refresh_after_file_op()`** — After file operations (stage/gitignore/archive/trash), uses `invalidate_uncommitted_diff_cache()` (keeps stale data visible) + immediate quick-diff recomputation to avoid UI flash.
 - **TextEditor lives on `App.commit_editor`**, not in a mode variant, so commit messages survive panel focus changes.
 - **Clipboard uses shell commands** (`xclip`/`xsel`/`wl-copy`/`pbcopy`) to avoid openssl-sys build issues, falling back to an OSC 52 escape sequence (`tui::copy_to_clipboard_osc52`) when no shell tool is found.
 - **git2 ignore cache** — `repo.clear_ignore_rules()` is called before status queries so `.gitignore` edits take effect without restarting.
+- **Settings persistence via a pure registry.** `src/settings.rs` has no `App` dependency (descriptors + get/set accessors); `App::settings_model()`/`apply_settings_model()` project to/from `App` state. State-only settings save through `UiState::save()` to `state.toml`; config-file settings save through `toml_edit`, rewriting only touched keys so comments and unknown keys survive.
+- **Toasts for one-shot events, status bar for persistent state.** `ToastQueue` (`src/toast.rs`) handles transient outcomes (Info/Success/Error, TTL-based, capped at 3 visible). The status bar stays reserved for sticky state: in-flight network progress, conflict guidance, and latched periodic errors — a background check that fails repeatedly reports once per failure episode (set on first failure, cleared on success), not on every poll.
 
 ### AppMode variants
 
