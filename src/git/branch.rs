@@ -19,17 +19,6 @@ pub struct BranchInfo {
 }
 
 impl BranchInfo {
-    /// The branch name with any remote prefix stripped: `origin/main` -> `main`,
-    /// `feature/x` (local) -> `feature/x`. Only the first path segment of a
-    /// remote ref is the remote name, so the rest is the branch's own name.
-    fn short_name(&self) -> &str {
-        if self.is_remote {
-            self.name.split_once('/').map_or(&self.name, |(_, rest)| rest)
-        } else {
-            &self.name
-        }
-    }
-
     pub fn list_all(repo: &Repository) -> Result<Vec<Self>> {
         let mut branches = Vec::new();
 
@@ -114,31 +103,32 @@ fn sort_for_display(branches: &mut [BranchInfo]) {
     });
 }
 
-/// Names of the remote branches in `branches` that have no matching local
-/// branch — the "remote-only" refs that the show/hide-remotes toggle targets.
+/// Names of the remote branches in `branches` whose commits are *not* already
+/// fully represented by a local branch — the refs the show/hide-remotes
+/// toggle must actually remove from the graph (both their walk-tip
+/// contribution and their label).
 ///
-/// A remote branch is considered *tracked* (and therefore kept visible, even
-/// when remotes are hidden) when some local branch:
-///   - declares it as its upstream, or
-///   - shares its short name (`origin/main` ↔ local `main`), or
-///   - points at the same commit.
+/// A remote branch is "already represented" — and so excluded from this set,
+/// kept eligible as a walk tip — only when some local branch points at the
+/// exact same commit (`local.tip_oid == remote.tip_oid`). Pushing that tip
+/// into the revwalk is then a no-op: it's the same OID the local branch tip
+/// already contributes, so no remote-exclusive commit can leak in.
 ///
-/// In any of those cases a local branch already represents the same work, so
-/// hiding remotes must not drop it from the graph. Everything else — refs that
-/// live only on the remote — is returned here.
+/// Matching by upstream config or by short name (`origin/main` vs local
+/// `main`) is deliberately *not* sufficient here: a local branch can track a
+/// remote while sitting on a different commit (ahead/behind/diverged), and in
+/// that case the remote tip reaches commits the local tip doesn't. Treating
+/// such a ref as "tracked" and keeping its tip in the walk let those
+/// remote-only commits leak into the graph even with remotes hidden (#57).
+/// The only sound test for "this remote contributes nothing new" is exact tip
+/// equality.
 pub fn remote_only_branch_names(branches: &[BranchInfo]) -> HashSet<String> {
     let locals: Vec<&BranchInfo> = branches.iter().filter(|b| !b.is_remote).collect();
 
     branches
         .iter()
         .filter(|b| b.is_remote)
-        .filter(|remote| {
-            !locals.iter().any(|local| {
-                local.upstream.as_deref() == Some(remote.name.as_str())
-                    || local.short_name() == remote.short_name()
-                    || local.tip_oid == remote.tip_oid
-            })
-        })
+        .filter(|remote| !locals.iter().any(|local| local.tip_oid == remote.tip_oid))
         .map(|b| b.name.clone())
         .collect()
 }
@@ -240,25 +230,31 @@ mod tests {
     }
 
     #[test]
-    fn remote_tracked_by_upstream_config_is_not_remote_only() {
-        // Local `main` tracks `origin/main` but sits on a different commit
-        // (ahead/behind). Same-name would also match, so also assert on a
-        // differently-named upstream to isolate the upstream check.
+    fn upstream_tracked_remote_ahead_of_local_is_remote_only() {
+        // Regression test for #57: local `feature` tracks
+        // `origin/renamed-on-remote` via upstream config but sits behind it
+        // (a different commit). Matching upstream config alone must NOT be
+        // enough to keep this remote's tip in the walk — its exclusive
+        // commit(s) would leak into the graph even with remotes hidden.
         let branches = vec![
             local("feature", oid(1), Some("origin/renamed-on-remote")),
             remote("origin/renamed-on-remote", oid(2)),
         ];
-        assert!(remote_only_branch_names(&branches).is_empty());
+        let names = remote_only_branch_names(&branches);
+        assert!(names.contains("origin/renamed-on-remote"));
     }
 
     #[test]
-    fn remote_sharing_short_name_with_local_is_not_remote_only() {
-        // No upstream configured and tips differ, but the names line up.
+    fn remote_sharing_short_name_but_different_tip_is_remote_only() {
+        // Regression test for #57: no upstream configured, but the short
+        // names line up (`main` / `origin/main`) while the tips differ (local
+        // is behind). Name-matching alone must not exempt this remote either.
         let branches = vec![
             local("main", oid(1), None),
             remote("origin/main", oid(2)),
         ];
-        assert!(remote_only_branch_names(&branches).is_empty());
+        let names = remote_only_branch_names(&branches);
+        assert!(names.contains("origin/main"));
     }
 
     #[test]
@@ -276,7 +272,7 @@ mod tests {
     fn classifies_a_mixed_set() {
         let branches = vec![
             local("main", oid(1), Some("origin/main")),
-            remote("origin/main", oid(1)),        // tracked (upstream + name + tip)
+            remote("origin/main", oid(1)),        // tracked: same tip as local main
             remote("origin/dependabot", oid(2)),  // remote-only
             remote("origin/colleague", oid(3)),   // remote-only
             local("wip", oid(4), None),           // local-only, untouched
