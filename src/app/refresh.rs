@@ -177,6 +177,9 @@ impl App {
     /// perf path; the actual work lives in `refresh_inner`.
     pub fn refresh(&mut self, force: bool) -> Result<()> {
         let started = std::time::Instant::now();
+        // The working tree may have changed under us (that's what a refresh
+        // is for) — re-walk `.archive/` on the next file-list sync.
+        self.files_pane.invalidate_archived_cache();
         let result = self.refresh_inner(force);
         self.perf.record("refresh", started.elapsed());
         result

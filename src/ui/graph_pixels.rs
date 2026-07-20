@@ -1073,7 +1073,23 @@ fn prune_over_cap<V>(map: &mut HashMap<RowSpec, V>, current: &[RowSpec], cap: us
 /// padded by two viewport-heights on each side, clamped to `[0, total]`. Only
 /// this slice is encoded; specs outside it aren't touched until scrolled near.
 pub fn protocol_window(offset: usize, viewport: usize, total: usize) -> (usize, usize) {
-    let pad = viewport.saturating_mul(2);
+    window_with_pad(offset, viewport, total, viewport.saturating_mul(2))
+}
+
+/// Scroll margin of [`trace_window`], in rows.
+const TRACE_WINDOW_PAD: usize = 4;
+
+/// The sync window while selection-dependent (branch-trace) dimming is active:
+/// the visible rows plus a small scroll margin. `protocol_window`'s ±2-viewport
+/// pre-warm is counterproductive here — every selection move restyles rows and
+/// invalidates their cached protocols, so eagerly rasterizing/encoding four
+/// extra viewports of off-screen rows per keypress multiplied the invalidation
+/// cost instead of amortizing it.
+pub fn trace_window(offset: usize, viewport: usize, total: usize) -> (usize, usize) {
+    window_with_pad(offset, viewport, total, TRACE_WINDOW_PAD)
+}
+
+fn window_with_pad(offset: usize, viewport: usize, total: usize, pad: usize) -> (usize, usize) {
     let start = offset.saturating_sub(pad).min(total);
     let end = offset
         .saturating_add(viewport)
@@ -1804,6 +1820,25 @@ mod tests {
         assert_eq!(protocol_window(0, 10, 5), (0, 5));
         // Empty list.
         assert_eq!(protocol_window(0, 10, 0), (0, 0));
+    }
+
+    /// While trace dimming is active the sync window shrinks to the viewport
+    /// plus a small margin — every selection move restyles rows, so the big
+    /// pre-warm pad would re-rasterize off-screen rows per keypress.
+    #[test]
+    fn trace_window_is_viewport_plus_small_margin() {
+        // Middle: visible [50,60) padded by the fixed small margin.
+        assert_eq!(trace_window(50, 10, 100), (46, 64));
+        // Clamps like protocol_window.
+        assert_eq!(trace_window(0, 10, 100), (0, 14));
+        assert_eq!(trace_window(95, 10, 100), (91, 100));
+        assert_eq!(trace_window(0, 10, 0), (0, 0));
+        // Strictly inside the pre-warm window, and the viewport itself is
+        // always covered.
+        let (ts, te) = trace_window(50, 10, 100);
+        let (ps, pe) = protocol_window(50, 10, 100);
+        assert!(ps <= ts && te <= pe);
+        assert!(ts <= 50 && 60 <= te);
     }
 
     #[test]

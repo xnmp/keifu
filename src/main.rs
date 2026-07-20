@@ -60,6 +60,61 @@ fn run_external_edit(
     Ok(())
 }
 
+/// Cap on extra buffered events processed before a draw, so a pathological
+/// input flood cannot starve rendering entirely.
+const MAX_COALESCED_EVENTS: usize = 64;
+
+/// Route one input event through the same key/mouse/paste mapping the loop has
+/// always used. Returns whether the caller may keep draining buffered events:
+/// `false` after quit is requested (draw/exit promptly) or after an external
+/// editor ran (it consumed the terminal, so buffered input is stale).
+fn handle_input_event(
+    terminal: &mut tui::Tui,
+    app: &mut App,
+    event: crossterm::event::Event,
+) -> Result<bool> {
+    if let Some(key) = get_key_event(&event) {
+        if app.debug_keys {
+            app.set_message(format!(
+                "KEY: code={:?} mod={:?}",
+                key.code, key.modifiers
+            ));
+        }
+        if let Some(action) = map_key_to_action(
+            key,
+            &app.mode,
+            app.focused_panel,
+            app.editing_commit_message,
+            app.files_pane.files_filter_active,
+            app.commit_filter_active,
+        ) {
+            if let Err(e) = app.handle_action(action) {
+                app.show_error(format!("{}", e));
+            }
+            // External-editor pop-out: the compose handler set a pending
+            // request; main.rs owns the terminal, so it runs here (real
+            // input path only — never for debug-injected keys).
+            if let Some(target) = app.pending_external_edit.take() {
+                run_external_edit(terminal, app, target)?;
+                return Ok(false);
+            }
+        }
+    } else if let Some(mouse) = get_mouse_event(&event) {
+        if let Some(action) = map_mouse_to_action(mouse) {
+            if let Err(e) = app.handle_action(action) {
+                app.show_error(format!("{}", e));
+            }
+        }
+    } else if let Some(text) = get_paste_event(&event) {
+        // Bracketed paste: routed by mode (credential prompt, other
+        // inputs, or a compose editor) inside the App.
+        if let Err(e) = app.handle_paste(text) {
+            app.show_error(format!("{}", e));
+        }
+    }
+    Ok(!app.should_quit)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -127,44 +182,21 @@ fn main() -> Result<()> {
             needs_render = true;
         }
 
-        // Process input
+        // Process input. After the first event, drain whatever else is already
+        // buffered (capped) before drawing, so a held key or fast scroll wheel
+        // becomes one frame per batch instead of one full frame per event —
+        // without this the input queue outruns the draw rate and the graph
+        // keeps scrolling after the finger stops.
         if let Some(event) = event {
-            if let Some(key) = get_key_event(&event) {
-                if app.debug_keys {
-                    app.set_message(format!(
-                        "KEY: code={:?} mod={:?}",
-                        key.code, key.modifiers
-                    ));
-                }
-                if let Some(action) = map_key_to_action(
-                    key,
-                    &app.mode,
-                    app.focused_panel,
-                    app.editing_commit_message,
-                    app.files_pane.files_filter_active,
-                    app.commit_filter_active,
-                ) {
-                    if let Err(e) = app.handle_action(action) {
-                        app.show_error(format!("{}", e));
+            let mut keep_draining = handle_input_event(&mut terminal, &mut app, event)?;
+            let mut drained = 0;
+            while keep_draining && drained < MAX_COALESCED_EVENTS {
+                match poll_event_with_timeout(Duration::ZERO)? {
+                    Some(ev) => {
+                        keep_draining = handle_input_event(&mut terminal, &mut app, ev)?;
+                        drained += 1;
                     }
-                    // External-editor pop-out: the compose handler set a pending
-                    // request; main.rs owns the terminal, so it runs here (real
-                    // input path only — never for debug-injected keys).
-                    if let Some(target) = app.pending_external_edit.take() {
-                        run_external_edit(&mut terminal, &mut app, target)?;
-                    }
-                }
-            } else if let Some(mouse) = get_mouse_event(&event) {
-                if let Some(action) = map_mouse_to_action(mouse) {
-                    if let Err(e) = app.handle_action(action) {
-                        app.show_error(format!("{}", e));
-                    }
-                }
-            } else if let Some(text) = get_paste_event(&event) {
-                // Bracketed paste: routed by mode (credential prompt, other
-                // inputs, or a compose editor) inside the App.
-                if let Err(e) = app.handle_paste(text) {
-                    app.show_error(format!("{}", e));
+                    None => break,
                 }
             }
             needs_render = true;

@@ -442,47 +442,28 @@ pub fn build_pixel_base_specs(
 /// Base-update force-dim wins over trace for a row (it dims everything), exactly
 /// as the unicode path OR-s the two together.
 ///
-/// The window must equal `graph_pixels::protocol_window(offset, viewport, len)`:
-/// only those rows are rasterized (`sync_frame`) and only the on-screen subset
-/// `[offset, offset + inner_h)` — always inside the window — is drawn
+/// The window must equal the one the caller feeds `sync_frame`
+/// (`graph_pixels::trace_window` while tracing, else `protocol_window`): only
+/// those rows are rasterized, and only the on-screen subset
+/// `[offset, offset + inner_h)` — always inside either window — is drawn
 /// (`overlay_pixel_graph`), so the placeholders are never rasterized or shown.
 /// Result is byte-identical to dimming every row and slicing the same window.
 pub fn dim_pixel_specs_window(
     app: &App,
-    theme: &Theme,
     base: &[crate::ui::graph_pixels::RowSpec],
-    lineage: Option<&std::collections::HashSet<git2::Oid>>,
+    trace: Option<&crate::app::TraceCache>,
     win_start: usize,
     win_end: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
-    // Trace dimming only applies when a lineage is active; otherwise `lit` is
-    // empty and no cell is dimmed by tracing (base-update force-dim still runs).
-    let lit = lineage
-        .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, l))
-        .unwrap_or_default();
-    // Commit → its lane color, for recoloring lit strokes by the commit the
-    // lit-edge relation picked (see apply_trace_dim). Only lineage commits are
-    // ever looked up (via `lit`), so restrict the map to them: on a big graph a
-    // full-node map is a needless per-redraw allocation (#73). Empty when
-    // tracing is off (base-update-only dim never recolors).
-    let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = match lineage {
-        Some(lineage) => app
-            .graph_layout
-            .nodes
-            .iter()
-            .filter_map(|n| {
-                n.commit
-                    .as_ref()
-                    .filter(|c| lineage.contains(&c.oid))
-                    .map(|c| {
-                        let rgb = crate::ui::graph_pixels::color_to_rgb(
-                            theme.lane_color(n.color_index),
-                        );
-                        (c.oid, rgb)
-                    })
-            })
-            .collect(),
-        None => std::collections::HashMap::new(),
+    // Lit edges and lane colors come from the frame cache (built once per
+    // selection move, see `App::ensure_trace_cache`) instead of being
+    // recomputed O(graph) on every redraw. With tracing off both are empty:
+    // no cell is dimmed by tracing (base-update force-dim still runs).
+    let empty_lit = std::collections::HashMap::new();
+    let empty_rgb = std::collections::HashMap::new();
+    let (lit, lane_rgb) = match trace {
+        Some(t) => (&t.lit, &t.lane_rgb),
+        None => (&empty_lit, &empty_rgb),
     };
     // Fold only the rows the window can draw: `fold_rows_windowed` allocates a
     // RenderRow (and per-connector underlay) for windowed rows alone, instead of
@@ -532,7 +513,7 @@ pub fn dim_pixel_specs_window(
             app.merged.base_update.value(),
         );
     }
-    dim_specs_window_core(base, &row_oids, &force_dim, &lit, &lane_rgb, win_start, win_end)
+    dim_specs_window_core(base, &row_oids, &force_dim, lit, lane_rgb, win_start, win_end)
 }
 
 /// Per-row edge identities for dimming: parallel to a row's pixel `cells` and
@@ -774,8 +755,9 @@ impl<'a> GraphViewWidget<'a> {
         let trace = if pixel_mode {
             None
         } else {
-            app.active_trace_lineage()
-                .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, &l))
+            // Lit edges from the frame cache (`ensure_trace_cache` ran at the
+            // top of the draw) — no per-draw O(graph) rebuild.
+            app.active_trace().map(|t| &t.lit)
         };
 
         // Frame-constant render inputs, gathered once and shared by every row (see
@@ -793,7 +775,7 @@ impl<'a> GraphViewWidget<'a> {
             graph_width,
             total_width: inner_width,
             selected_branch_name,
-            trace: trace.as_ref(),
+            trace,
         };
 
         // In pixel mode, connector rows are folded into their commit row so the

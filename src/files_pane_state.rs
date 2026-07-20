@@ -145,6 +145,13 @@ pub struct FilesPaneState {
     pub files_group_by_folder: bool,
     pub files_filter: String,
     pub files_filter_active: bool,
+    /// Cached `.archive/` listing. `None` = stale: the next
+    /// `sync_file_list_cache` re-walks the directory. The walk is real
+    /// filesystem I/O and sync runs on every draw, so it must not touch the
+    /// disk per frame — it re-runs only when a refresh cycle invalidates it
+    /// (`invalidate_archived_cache`), which covers keifu's own archive ops and
+    /// external edits at the watcher/auto-refresh cadence.
+    archived_cache: Option<Vec<FileDiffInfo>>,
 }
 
 impl FilesPaneState {
@@ -159,7 +166,18 @@ impl FilesPaneState {
         is_uncommitted: bool,
         repo_path: &str,
     ) {
+        // Refill the archived-files cache while we have `&mut self`, so the
+        // (per-draw) item build below never walks the filesystem itself.
+        if is_uncommitted && self.archived_cache.is_none() {
+            self.archived_cache = Some(Self::list_archived_files(repo_path));
+        }
         self.display_items_cache = self.build_files_pane_items(diff, is_uncommitted, repo_path);
+    }
+
+    /// Mark the `.archive/` listing stale; the next sync re-walks the
+    /// directory. Called from refresh cycles (which follow every archive op).
+    pub fn invalidate_archived_cache(&mut self) {
+        self.archived_cache = None;
     }
 
     /// Files in display order — the flat list the diff viewer's file
@@ -331,12 +349,18 @@ impl FilesPaneState {
             filtered.into_iter().map(FilesPaneItem::File).collect()
         };
 
-        // Append archived files section (only for uncommitted changes view)
+        // Append archived files section (only for uncommitted changes view).
+        // Served from the cache when warm; a stale cache (only possible for
+        // direct `&self` callers between invalidation and the next sync)
+        // falls back to a one-off walk so the result is never wrong.
         if is_uncommitted {
-            let archived = Self::list_archived_files(repo_path);
+            let archived: std::borrow::Cow<'_, [FileDiffInfo]> = match &self.archived_cache {
+                Some(a) => std::borrow::Cow::Borrowed(a.as_slice()),
+                None => std::borrow::Cow::Owned(Self::list_archived_files(repo_path)),
+            };
             if !archived.is_empty() {
                 items.push(FilesPaneItem::SectionHeader("Archived Files".to_string()));
-                items.extend(archived.into_iter().map(FilesPaneItem::File));
+                items.extend(archived.iter().cloned().map(FilesPaneItem::File));
             }
         }
         items
@@ -567,6 +591,44 @@ mod tests {
 
     fn conflicted(path: &str) -> FileDiffInfo {
         file(path, FileChangeKind::Modified, Some(StageStatus::Conflicted))
+    }
+
+    /// The `.archive/` walk is cached across syncs (it used to run on every
+    /// draw) and re-runs only after `invalidate_archived_cache` — the contract
+    /// the per-frame draw path relies on.
+    #[test]
+    fn archived_listing_is_cached_until_invalidated() {
+        let dir = std::env::temp_dir().join(format!(
+            "keifu-arch-cache-test-{}",
+            std::process::id()
+        ));
+        let archive = dir.join(".archive");
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::write(archive.join("a.txt"), "x").unwrap();
+        let repo_path = dir.to_string_lossy().to_string();
+
+        let file_count = |s: &FilesPaneState| {
+            s.display_items()
+                .iter()
+                .filter(|i| matches!(i, FilesPaneItem::File(_)))
+                .count()
+        };
+        let mut state = FilesPaneState::new();
+        let diff = make_uncommitted_diff(vec![], vec![unstaged("src/a.rs")]);
+        state.sync_file_list_cache(Some(&diff), true, &repo_path);
+        assert_eq!(file_count(&state), 2, "one diff file + one archived file");
+
+        // A file appearing on disk is NOT picked up by a warm cache…
+        std::fs::write(archive.join("b.txt"), "y").unwrap();
+        state.sync_file_list_cache(Some(&diff), true, &repo_path);
+        assert_eq!(file_count(&state), 2, "warm cache serves the old walk");
+
+        // …until a refresh invalidates it.
+        state.invalidate_archived_cache();
+        state.sync_file_list_cache(Some(&diff), true, &repo_path);
+        assert_eq!(file_count(&state), 3, "invalidation re-walks the directory");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn header(text: &str) -> FilesPaneItem {
