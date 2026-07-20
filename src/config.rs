@@ -271,6 +271,10 @@ pub struct UiState {
     /// Soft line-wrapping in the file-diff viewer. Off by default (long lines
     /// truncate and scroll horizontally, the historical behavior).
     pub diff_word_wrap: bool,
+    /// Hide branches already merged into the trunk (by merge commit, fast-forward,
+    /// or squash) from the graph. Off by default: merged branches are shown but
+    /// dimmed, and this toggle removes them entirely.
+    pub hide_merged_branches: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -283,6 +287,7 @@ impl Default for UiState {
             trace_enabled: true,
             hide_remote_branches: false,
             diff_word_wrap: false,
+            hide_merged_branches: false,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -497,6 +502,7 @@ mod tests {
             trace_enabled: false,
             hide_remote_branches: true,
             diff_word_wrap: false,
+            hide_merged_branches: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -548,6 +554,22 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
         assert!(restored.hide_remote_branches);
+    }
+
+    #[test]
+    fn hide_merged_branches_defaults_off_and_round_trips() {
+        // Merged branches are shown (dimmed) by default, including for an older
+        // state.toml that predates the key.
+        assert!(!UiState::default().hide_merged_branches);
+        let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(!older.hide_merged_branches, "missing key defaults to shown");
+
+        let hidden = UiState {
+            hide_merged_branches: true,
+            ..UiState::default()
+        };
+        let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
+        assert!(restored.hide_merged_branches);
     }
 
     #[test]

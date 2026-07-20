@@ -120,6 +120,7 @@ pub struct SettingsModel {
     // Graph
     pub trace_enabled: bool,
     pub hide_remote_branches: bool,
+    pub hide_merged_branches: bool,
     pub mute_merges: bool,
     pub avatars: bool,
     pub col_author: bool,
@@ -269,6 +270,15 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             store: SettingStore::State,
             get: |m| SettingValue::Bool(m.hide_remote_branches),
             set: |m, v| set_bool(v, &mut m.hide_remote_branches),
+        },
+        SettingDescriptor {
+            label: "Hide merged branches",
+            group: Graph,
+            kind: SettingKind::Bool,
+            note: None,
+            store: SettingStore::State,
+            get: |m| SettingValue::Bool(m.hide_merged_branches),
+            set: |m, v| set_bool(v, &mut m.hide_merged_branches),
         },
         SettingDescriptor {
             label: "Mute merge commits",
@@ -473,6 +483,7 @@ mod tests {
         SettingsModel {
             trace_enabled: true,
             hide_remote_branches: false,
+            hide_merged_branches: false,
             mute_merges: true,
             avatars: false,
             col_author: true,

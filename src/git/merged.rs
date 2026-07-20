@@ -1,0 +1,460 @@
+//! Merged-branch classification: "has this branch already landed on the trunk?"
+//!
+//! Two shapes of "merged" have to be recognised:
+//!
+//!  - **merge-commit / fast-forward merges** — every commit of the branch is an
+//!    ancestor of the base, so the branch tip is reachable from the base tip.
+//!    Cheap: a single ancestry query.
+//!
+//!  - **squash merges** — the PR was squashed into one commit on the base and
+//!    the branch's own ref survived (the remote copy was deleted, the local one
+//!    lingers). *No commit is shared*, so ancestry sees nothing; instead the
+//!    branch's cumulative diff since the fork point carries the same **patch-id**
+//!    as the squashed commit on the base. This is the `git cherry` / patch-id
+//!    idea applied to the whole branch rather than commit-by-commit, which is
+//!    what catches a squash. See issue #60.
+//!
+//! Pure functions over a `git2::Repository`; no UI, no caching (the caller
+//! memoises). The GitHub-PR signal (a branch whose head matches a *merged* PR)
+//! is layered on top by the caller — this module is the local-git fallback that
+//! also works for non-GitHub repos.
+
+use std::collections::HashSet;
+
+use git2::{Oid, Repository, Tree};
+
+use super::BranchInfo;
+
+/// Upper bound on base-branch commits scanned when hunting for a squash-merge
+/// equivalent, so a very long trunk history can't stall a refresh. A squashed
+/// commit lands at the tip when it merges and only moves further back as the
+/// trunk advances; this window comfortably covers active branches.
+const SQUASH_SCAN_LIMIT: usize = 400;
+
+/// Whether the work on `branch_tip` is already present in `base_tip` — i.e. the
+/// branch has been merged, by a merge commit, a fast-forward, or a squash.
+pub fn is_merged_into(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> bool {
+    if branch_tip == base_tip {
+        return true;
+    }
+    is_ancestor_merged(repo, branch_tip, base_tip) || is_squash_merged(repo, branch_tip, base_tip)
+}
+
+/// Cheap ancestry test: `branch_tip` is contained in `base_tip`'s history, as
+/// produced by a merge commit or a fast-forward merge.
+pub fn is_ancestor_merged(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> bool {
+    repo.graph_descendant_of(base_tip, branch_tip)
+        .unwrap_or(false)
+}
+
+/// Patch-id test for squash merges: the branch's whole diff since the fork point
+/// matches the diff of some single-parent commit on the base branch — the
+/// squashed commit that introduced the branch's changes wholesale.
+///
+/// Returns `false` for unrelated histories and for branches whose changes never
+/// landed. Bounded by [`SQUASH_SCAN_LIMIT`].
+pub fn is_squash_merged(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> bool {
+    let Ok(fork) = repo.merge_base(branch_tip, base_tip) else {
+        return false; // unrelated histories → nothing was merged
+    };
+    if fork == branch_tip {
+        // Branch fully contained in the base — an ancestry merge, already true
+        // via `is_ancestor_merged`; report it here too for a standalone call.
+        return true;
+    }
+    let Some(branch_patch) = combined_patch_id(repo, fork, branch_tip) else {
+        return false;
+    };
+
+    // Walk the base from its tip back toward (but not past) the fork point,
+    // comparing each single-parent commit's patch-id with the branch's.
+    let Ok(mut walk) = repo.revwalk() else {
+        return false;
+    };
+    if walk.push(base_tip).is_err() {
+        return false;
+    }
+    // Hiding the fork stops the walk from descending into shared history.
+    let _ = walk.hide(fork);
+
+    for oid in walk.filter_map(Result::ok).take(SQUASH_SCAN_LIMIT) {
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        // Only an ordinary (single-parent) commit can carry the branch's diff as
+        // a squash; merge commits have their own combined diff and are skipped.
+        if commit.parent_count() != 1 {
+            continue;
+        }
+        let Ok(parent) = commit.parent(0) else {
+            continue;
+        };
+        let pid = tree_diff_patch_id(repo, parent.tree().ok().as_ref(), commit.tree().ok().as_ref());
+        if pid == Some(branch_patch) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Patch-id of the branch's cumulative diff from the fork point to its tip.
+fn combined_patch_id(repo: &Repository, fork: Oid, branch_tip: Oid) -> Option<Oid> {
+    let fork_tree = repo.find_commit(fork).ok()?.tree().ok()?;
+    let tip_tree = repo.find_commit(branch_tip).ok()?.tree().ok()?;
+    tree_diff_patch_id(repo, Some(&fork_tree), Some(&tip_tree))
+}
+
+/// Patch-id of the diff between two trees (`None` on any git error). The patch-id
+/// is content-addressed and context-independent, so two diffs that introduce the
+/// same changes hash equal regardless of the commits they sit on.
+fn tree_diff_patch_id(repo: &Repository, old: Option<&Tree>, new: Option<&Tree>) -> Option<Oid> {
+    let diff = repo.diff_tree_to_tree(old, new, None).ok()?;
+    diff.patchid(None).ok()
+}
+
+/// The trunk branch to measure "merged into" against: a local `main`/`master`
+/// first, then their `origin/` remotes, then the checked-out HEAD as a last
+/// resort. `None` only when there are no branches at all.
+pub fn base_branch(branches: &[BranchInfo]) -> Option<&BranchInfo> {
+    for name in ["main", "master"] {
+        if let Some(b) = branches.iter().find(|b| !b.is_remote && b.name == name) {
+            return Some(b);
+        }
+    }
+    for name in ["origin/main", "origin/master"] {
+        if let Some(b) = branches.iter().find(|b| b.is_remote && b.name == name) {
+            return Some(b);
+        }
+    }
+    branches.iter().find(|b| b.is_head)
+}
+
+/// Whether every change on `branch_tip` is already present in `base_tip` — the
+/// branch is not "ahead in content", even if it's ahead by commits. True when the
+/// base→branch tree diff contains only deletions (files the base has that the
+/// branch lacks, because the base moved on) or is empty. Any Added / Modified /
+/// Renamed / Typechange delta means the branch carries work the base lacks, so it
+/// is NOT merged.
+///
+/// This is the local cross-check that guards the GitHub merged-PR signal against
+/// **branch-name reuse**: a brand-new `dev`/`wip` branch that happens to share a
+/// name with an old merged PR carries novel content, so this returns false and
+/// the branch is not misclassified as merged.
+pub fn branch_changes_landed(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> bool {
+    let (Ok(base_tree), Ok(branch_tree)) = (
+        repo.find_commit(base_tip).and_then(|c| c.tree()),
+        repo.find_commit(branch_tip).and_then(|c| c.tree()),
+    ) else {
+        return false;
+    };
+    let Ok(diff) = repo.diff_tree_to_tree(Some(&base_tree), Some(&branch_tree), None) else {
+        return false;
+    };
+    diff.deltas().all(|d| d.status() == git2::Delta::Deleted)
+}
+
+/// Whether a single branch counts as merged into the trunk. Local branches only
+/// (a surviving squash-merged ref is local); never the trunk itself or the
+/// checked-out HEAD — hiding or dimming the branch you are on is more confusing
+/// than useful.
+///
+/// Merged when **any** of:
+///  - ancestry: the branch tip is contained in the base (merge / fast-forward);
+///  - squash: the branch's cumulative diff matches a squashed commit on the base;
+///  - GitHub says a PR with this head branch merged **and** the branch carries no
+///    content the base lacks ([`branch_changes_landed`]). The content cross-check
+///    is what makes the (name-based) GitHub signal safe against name reuse.
+fn branch_is_merged(
+    repo: &Repository,
+    b: &BranchInfo,
+    base_tip: Oid,
+    base_name: &str,
+    gh_merged: &HashSet<String>,
+) -> bool {
+    if b.is_remote || b.is_head || b.name == base_name || b.tip_oid == base_tip {
+        return false;
+    }
+    is_ancestor_merged(repo, b.tip_oid, base_tip)
+        || is_squash_merged(repo, b.tip_oid, base_tip)
+        || (gh_merged.contains(&b.name) && branch_changes_landed(repo, b.tip_oid, base_tip))
+}
+
+/// Names of the **local** branches merged into the base branch, combining local
+/// git detection (ancestry + squash patch-id) with the GitHub merged-PR signal
+/// (cross-checked locally via [`branch_changes_landed`]). See [`branch_is_merged`].
+///
+/// Intended to run **off the UI thread** (one ancestry query plus a bounded
+/// patch-id scan per candidate branch); the result is delivered back and applied
+/// by the caller.
+pub fn classify_merged_branches(
+    repo: &Repository,
+    branches: &[BranchInfo],
+    base_tip: Oid,
+    base_name: &str,
+    gh_merged: &HashSet<String>,
+) -> HashSet<String> {
+    branches
+        .iter()
+        .filter(|b| branch_is_merged(repo, b, base_tip, base_name, gh_merged))
+        .map(|b| b.name.clone())
+        .collect()
+}
+
+/// Local-only classification (no GitHub signal) — ancestry + squash detection.
+/// Kept for the non-GitHub path and for direct testing.
+pub fn merged_local_branches(
+    repo: &Repository,
+    branches: &[BranchInfo],
+    base_tip: Oid,
+    base_name: &str,
+) -> HashSet<String> {
+    classify_merged_branches(repo, branches, base_tip, base_name, &HashSet::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::{Signature, Time};
+
+    /// Commit a tree containing exactly `files` (path, content) onto `refname`
+    /// with the given parents. Building the whole tree each time (rather than
+    /// mutating an index) keeps the object graph explicit, so tree-to-tree diffs
+    /// — and therefore patch-ids — are exactly what the test intends.
+    fn commit(
+        repo: &Repository,
+        refname: &str,
+        secs: i64,
+        parents: &[Oid],
+        files: &[(&str, &str)],
+    ) -> Oid {
+        let mut tb = repo.treebuilder(None).unwrap();
+        for (path, content) in files {
+            let blob = repo.blob(content.as_bytes()).unwrap();
+            tb.insert(path, blob, 0o100644).unwrap();
+        }
+        let tree = repo.find_tree(tb.write().unwrap()).unwrap();
+        let sig = Signature::new("Dev", "dev@example.com", &Time::new(secs, 0)).unwrap();
+        let parent_commits: Vec<_> = parents.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+        let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
+        repo.commit(Some(refname), &sig, &sig, "msg", &tree, &parent_refs)
+            .unwrap()
+    }
+
+    fn local(name: &str, tip: Oid, head: bool) -> BranchInfo {
+        BranchInfo {
+            name: name.into(),
+            is_head: head,
+            is_remote: false,
+            upstream: None,
+            tip_oid: tip,
+            ahead: 0,
+            behind: 0,
+        }
+    }
+
+    #[test]
+    fn ancestor_branch_is_merged() {
+        // main: a <- b <- c ; topic points at b, fully contained in main.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("b.txt", "b")]);
+        let c = commit(&repo, "refs/heads/main", 3000, &[b], &[("base.txt", "base"), ("b.txt", "b"), ("c.txt", "c")]);
+        assert!(is_ancestor_merged(&repo, b, c));
+        assert!(is_merged_into(&repo, b, c));
+    }
+
+    #[test]
+    fn merge_commit_merge_is_detected() {
+        // main: a <- b ; topic: a <- t ; merge topic into main -> m (2 parents).
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let t = commit(&repo, "refs/heads/topic", 2500, &[a], &[("base.txt", "base"), ("feat.txt", "feat")]);
+        // Merge commit carrying both files; parents are main tip and topic tip.
+        let m = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b, t],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "feat")],
+        );
+        assert!(is_merged_into(&repo, t, m), "topic reachable from the merge commit");
+    }
+
+    #[test]
+    fn squash_merged_branch_is_detected() {
+        // main:    a <- b            (b adds main.txt)
+        // feature: a <- f1 <- f2     (f1 adds feat.txt=one, f2 -> two)
+        // squash:  b <- s            (s adds feat.txt=two, main's copy of feature)
+        // feature's own ref survives; the remote copy is "deleted" (never reffed).
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
+        // The squash commit introduces the feature's *net* change (add feat.txt
+        // = two) on top of main — same hunk as feature's cumulative diff.
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "two")],
+        );
+
+        assert!(!is_ancestor_merged(&repo, f2, s), "no commit is shared after a squash");
+        assert!(is_squash_merged(&repo, f2, s), "patch-id matches the squashed commit");
+        assert!(is_merged_into(&repo, f2, s));
+    }
+
+    #[test]
+    fn unmerged_branch_is_not_merged() {
+        // feature changes a different file that never landed on main.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let g = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+        assert!(!is_ancestor_merged(&repo, g, b));
+        assert!(!is_squash_merged(&repo, g, b));
+        assert!(!is_merged_into(&repo, g, b));
+    }
+
+    #[test]
+    fn unrelated_history_is_not_merged() {
+        // Two roots with no common ancestor: merge_base fails → not merged.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let z = commit(&repo, "refs/heads/orphan", 1000, &[], &[("z.txt", "z")]);
+        assert!(!is_merged_into(&repo, z, a));
+    }
+
+    #[test]
+    fn base_branch_prefers_local_main_then_master_then_head() {
+        let bs = vec![
+            local("feature", Oid::zero(), true),
+            local("master", Oid::zero(), false),
+            local("main", Oid::zero(), false),
+        ];
+        assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("main"));
+
+        let bs = vec![local("feature", Oid::zero(), true), local("master", Oid::zero(), false)];
+        assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("master"));
+
+        let bs = vec![local("feature", Oid::zero(), true), local("dev", Oid::zero(), false)];
+        assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("feature"));
+
+        assert!(base_branch(&[]).is_none());
+    }
+
+    #[test]
+    fn merged_local_branches_classifies_the_set() {
+        // main advances to s (squash of feature). topic is a plain ancestor.
+        // gone is unmerged. HEAD (main) and the base are never classified.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        repo.reference("refs/heads/topic", b, true, "topic").unwrap();
+        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
+        let g = commit(&repo, "refs/heads/gone", 2300, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "two")],
+        );
+
+        let branches = vec![
+            local("main", s, true), // HEAD + base
+            local("topic", b, false),
+            local("feature", f2, false),
+            local("gone", g, false),
+        ];
+        let merged = merged_local_branches(&repo, &branches, s, "main");
+        assert!(merged.contains("topic"), "ancestor merge");
+        assert!(merged.contains("feature"), "squash merge");
+        assert!(!merged.contains("gone"), "never merged");
+        assert!(!merged.contains("main"), "base/HEAD is never classified");
+        assert_eq!(merged.len(), 2);
+    }
+
+    fn gh(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn gh_signal_does_not_classify_a_name_reused_branch_with_novel_commits() {
+        // Regression: an old PR whose head branch was "feature" merged (GitHub
+        // reports "feature" as a merged head ref). A NEW, unmerged branch reuses
+        // that name with novel work. It must NOT be dimmed/hidden just because the
+        // name matches — its content is not in the base.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        // New "feature" adds a file the base has never seen.
+        let f = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("novel.txt", "new work")]);
+
+        let branches = vec![local("main", b, true), local("feature", f, false)];
+        // GitHub claims a merged PR with head "feature".
+        let merged = classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"]));
+        assert!(
+            !merged.contains("feature"),
+            "name reuse with novel content must not be classified merged"
+        );
+        assert!(!branch_changes_landed(&repo, f, b), "branch carries content the base lacks");
+    }
+
+    #[test]
+    fn gh_signal_classifies_a_landed_branch_that_patch_id_alone_would_miss() {
+        // A branch whose changes all landed on the base (content ⊆ base), but via
+        // two separate commits rather than one squash — so no single base commit's
+        // patch-id matches the branch's cumulative diff, and it isn't an ancestor.
+        // The GitHub signal + the content cross-check catch it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Branch adds x.txt and y.txt across two commits.
+        let f1 = commit(&repo, "refs/heads/feature", 1100, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let f2 = commit(&repo, "refs/heads/feature", 1200, &[f1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+        // Base lands the same content, but as two separate commits (no single
+        // squash commit equals the branch's combined diff).
+        let b1 = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let b2 = commit(&repo, "refs/heads/main", 2100, &[b1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+
+        assert!(!is_ancestor_merged(&repo, f2, b2));
+        assert!(!is_squash_merged(&repo, f2, b2), "no single squash commit matches");
+        assert!(branch_changes_landed(&repo, f2, b2), "all content is present in the base");
+
+        let branches = vec![local("main", b2, true), local("feature", f2, false)];
+        // Without the GitHub signal it stays unclassified (content match alone is
+        // not trusted); with it, it's merged.
+        assert!(!classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new()).contains("feature"));
+        assert!(classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"])).contains("feature"));
+    }
+
+    #[test]
+    fn net_empty_branch_against_allow_empty_trunk_commit_counts_as_landed() {
+        // Edge case: a branch that introduces no content change (its tree equals
+        // the fork point) and a base that advanced with an empty commit. The
+        // branch has nothing to land, so content is trivially present in the base.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Branch commit with the SAME tree as `a` (net-empty change).
+        let f = commit(&repo, "refs/heads/feature", 1100, &[a], &[("base.txt", "base")]);
+        // Base advances with an empty commit (same tree again).
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base")]);
+
+        assert!(branch_changes_landed(&repo, f, b), "net-empty branch has nothing to land");
+        let branches = vec![local("main", b, true), local("feature", f, false)];
+        assert!(classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"])).contains("feature"));
+    }
+}

@@ -287,6 +287,12 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         // Shift+B (the per-branch filter), the other branch-visibility control.
         (KeyModifiers::SHIFT, KeyCode::Char('O')) => Some(Action::ToggleRemoteBranches),
 
+        // Show/hide branches already merged into the trunk (merge or squash).
+        // Shift+H — mnemonic "Hide merged" — joins the branch-visibility cluster
+        // with Shift+B (filter) and Shift+O (remotes). Merged branches are dimmed
+        // by default; this toggle removes them from the graph entirely.
+        (KeyModifiers::SHIFT, KeyCode::Char('H')) => Some(Action::ToggleMergedBranches),
+
         // UI
         (_, KeyCode::Char('/')) => Some(Action::Search),
         (KeyModifiers::SHIFT, KeyCode::Char('R')) => Some(Action::Refresh),

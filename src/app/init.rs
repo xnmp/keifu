@@ -39,16 +39,31 @@ impl App {
         // remotes toggle is persisted, so honour it here to avoid a first-frame
         // flash of remote-only commits that the next refresh would remove.
         let branches = repo.get_branches()?;
-        let visible_branches: Vec<BranchInfo> = if ui_state.hide_remote_branches {
-            let remote_only = remote_only_branch_names(&branches);
-            branches
-                .iter()
-                .filter(|b| !remote_only.contains(&b.name))
-                .cloned()
-                .collect()
+        // Persisted visibility toggles are honoured here to avoid a first-frame
+        // flash of commits the next refresh would remove. Merged classification at
+        // startup uses only local git (ancestry + patch-id squash detection); the
+        // GitHub merged-PR signal fills in once its background fetch completes.
+        let remote_only = if ui_state.hide_remote_branches {
+            remote_only_branch_names(&branches)
         } else {
-            branches.clone()
+            std::collections::HashSet::new()
         };
+        let merged_branches = crate::git::merged::base_branch(&branches)
+            .map(|base| {
+                crate::git::merged::merged_local_branches(
+                    repo.repo(),
+                    &branches,
+                    base.tip_oid,
+                    &base.name,
+                )
+            })
+            .unwrap_or_default();
+        let visible_branches: Vec<BranchInfo> = branches
+            .iter()
+            .filter(|b| !remote_only.contains(&b.name))
+            .filter(|b| !(ui_state.hide_merged_branches && merged_branches.contains(&b.name)))
+            .cloned()
+            .collect();
         let remotes = repo.remotes();
         let tags = repo.get_tags();
         let commits = repo.get_commits(INITIAL_COMMIT_LIMIT, &visible_branches, &stashes)?;
@@ -142,6 +157,8 @@ impl App {
             pending_auth: None,
             open_prs: std::collections::HashMap::new(),
             pr_fetch: crate::pr::PrFetch::new(),
+            merged_pr_branches: std::collections::HashSet::new(),
+            merged_branch_fetch: crate::merged_branches::MergedBranchFetch::new(),
             last_pull: None,
             pre_pull_head: None,
             undo_ledger: crate::undo::UndoLedger::default(),
@@ -167,6 +184,9 @@ impl App {
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             hide_remote_branches: ui_state.hide_remote_branches,
+            merged_branches,
+            merged_classify: crate::merged_branches::MergedClassifier::new(),
+            hide_merged_branches: ui_state.hide_merged_branches,
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,

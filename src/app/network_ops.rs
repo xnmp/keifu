@@ -208,6 +208,41 @@ impl App {
         true
     }
 
+    /// Kick off / poll the background merged-PR fetch (`gh pr list --state
+    /// merged`). On a change, hand the new signal to the background classifier;
+    /// its result is applied by `update_merged_classification`. This is the
+    /// primary squash-merge signal (issue #60). Never blocks the UI.
+    pub fn update_merged_prs(&mut self) -> bool {
+        self.merged_branch_fetch.maybe_start(&self.repo_path);
+        let Some(set) = self.merged_branch_fetch.poll() else {
+            return false;
+        };
+        if set == self.merged_pr_branches {
+            return false;
+        }
+        self.merged_pr_branches = set;
+        // Re-run the (off-thread) classification with the new GitHub signal.
+        self.kick_merged_classification();
+        false
+    }
+
+    /// Poll the background merged-branch classifier. When it delivers a set that
+    /// differs from the current one, apply it and rebuild the graph so dimming —
+    /// and hiding, when the toggle is on — reflect the new classification. Never
+    /// blocks the UI thread (the git diffing happened on the worker).
+    pub fn update_merged_classification(&mut self) -> bool {
+        let Some(set) = self.merged_classify.poll() else {
+            return false;
+        };
+        if set == self.merged_branches {
+            return false;
+        }
+        self.merged_branches = set;
+        // Best-effort rebuild: a refresh failure just leaves the prior graph.
+        let _ = self.refresh(false);
+        true
+    }
+
     pub fn poll_fs_watcher(&mut self) -> bool {
         if let Some(pending) = self.pending_watcher.as_mut() {
             if let Some(watcher) = pending.try_take() {
@@ -274,6 +309,7 @@ impl App {
     pub(crate) fn full_update(&mut self) {
         // Skip the PR fetch's 5-min interval on the next poll.
         self.pr_fetch.force();
+        self.merged_branch_fetch.force();
 
         if let Err(e) = self.refresh(true) {
             self.show_error(format!("Refresh failed: {e}"));

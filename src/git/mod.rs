@@ -6,6 +6,7 @@ pub mod commit;
 pub mod diff;
 pub mod extensions;
 pub mod graph;
+pub mod merged;
 pub mod operations;
 pub mod patch;
 pub mod repository;

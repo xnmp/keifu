@@ -179,6 +179,8 @@ fn main() -> Result<()> {
         needs_render |= app.check_auto_refresh();
         needs_render |= app.poll_fs_watcher();
         needs_render |= app.update_open_prs();
+        needs_render |= app.update_merged_prs();
+        needs_render |= app.update_merged_classification();
         needs_render |= app.update_check_status();
         needs_render |= app.update_thread_status();
         needs_render |= app.update_pr_action_status();
