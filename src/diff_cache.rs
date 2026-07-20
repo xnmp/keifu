@@ -259,10 +259,11 @@ impl DiffCache {
                 .push(f.stage_status);
         }
 
-        // This fast path can only relabel existing rows, not split or merge
-        // them. If a path's row count changed (a file became — or stopped
-        // being — partially staged), bail without sealing the cache key so
-        // poll() falls back to a real reload.
+        // This fast path can only relabel or drop existing rows, not
+        // synthesize new ones. If a path's row count changed while still
+        // present in both diffs (a file became — or stopped being —
+        // partially staged), bail without sealing the cache key so poll()
+        // falls back to a real reload.
         let mut full_counts: std::collections::HashMap<&std::path::Path, usize> =
             std::collections::HashMap::new();
         for f in &full.files {
@@ -274,10 +275,24 @@ impl DiffCache {
         {
             return;
         }
+        // Likewise bail if the quick diff introduced a path this fast path
+        // has no line-stats for at all (e.g. a file un-archived back into
+        // the working tree) — it can't fabricate a row, so fall back to a
+        // real reload instead of silently omitting the file.
+        if quick_statuses.keys().any(|p| !full_counts.contains_key(p)) {
+            return;
+        }
 
-        // Update stage_status on each file in the full diff. A path with two
-        // rows is a partially-staged pair whose labels are already one of
-        // each — leave them as they are.
+        // Drop rows for paths no longer present in the quick diff — the
+        // file op (restore/trash/gitignore/archive) removed them from the
+        // working tree entirely, so the full diff's stale entry must not
+        // linger and mask the change.
+        full.files
+            .retain(|f| quick_statuses.contains_key(f.path.as_path()));
+
+        // Update stage_status on each remaining file. A path with two rows
+        // is a partially-staged pair whose labels are already one of each —
+        // leave them as they are.
         for file in &mut full.files {
             if let Some([status]) = quick_statuses.get(file.path.as_path()).map(Vec::as_slice) {
                 file.stage_status = *status;
@@ -892,6 +907,89 @@ mod tests {
         // Cache key sealed to the current status so poll() treats this
         // target as already cached (no reload needed).
         assert_eq!(cache.uncommitted_cache_key.as_ref(), Some(&status));
+    }
+
+    #[test]
+    fn reclassify_drops_files_removed_from_working_tree() {
+        // Regression test for restore/discard: after `r` restores a.txt, the
+        // quick diff (rebuilt from the live working tree) no longer contains
+        // it, but the stale full diff — loaded before the restore — still
+        // does. `cached_diff_or_quick` always prefers the full diff when
+        // present, so a stale row here means the restored file lingers in
+        // the files pane until an unrelated cache-clearing event happens.
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(uncommitted_diff(
+            vec![],
+            vec![
+                diff_file("a.txt", Some(StageStatus::Unstaged)),
+                diff_file("b.txt", Some(StageStatus::Unstaged)),
+            ],
+        ));
+        // a.txt was restored — the fresh quick diff only has b.txt left.
+        let quick = uncommitted_diff(
+            vec![],
+            vec![diff_file("b.txt", Some(StageStatus::Unstaged))],
+        );
+        set_quick(&mut cache, DiffTarget::Uncommitted, quick);
+
+        let status = precise_status();
+        cache.reclassify_uncommitted_staging(Some(&status));
+
+        let full = cache.uncommitted_diff_cache.as_ref().unwrap();
+        assert!(
+            full.files.iter().all(|f| f.path != Path::new("a.txt")),
+            "restored file must not linger in the full diff"
+        );
+        assert_eq!(full.files.len(), 1);
+        assert_eq!(full.unstaged_files.len(), 1);
+        assert_eq!(full.unstaged_files[0].path, PathBuf::from("b.txt"));
+
+        // The fast path handled the removal on its own — the cache key is
+        // sealed so poll() doesn't also kick off a redundant reload.
+        assert_eq!(cache.uncommitted_cache_key.as_ref(), Some(&status));
+
+        // The observable contract callers rely on: the file no longer shows
+        // up via cached_diff_or_quick either.
+        let visible = cache
+            .cached_diff_or_quick(Some(DiffTarget::Uncommitted))
+            .unwrap();
+        assert!(visible.files.iter().all(|f| f.path != Path::new("a.txt")));
+    }
+
+    #[test]
+    fn reclassify_bails_when_quick_has_a_file_full_has_never_seen() {
+        // Mirror image of the removal case: an un-archive (or undo of an
+        // archive) can reintroduce a file into the working tree. The fast
+        // path has no line-stats for it, so it must bail and leave the key
+        // unsealed rather than silently omitting the file from the full
+        // diff while claiming the cache is up to date.
+        let mut cache = DiffCache::new();
+        cache.uncommitted_diff_cache = Some(uncommitted_diff(
+            vec![],
+            vec![diff_file("b.txt", Some(StageStatus::Unstaged))],
+        ));
+        let quick = uncommitted_diff(
+            vec![],
+            vec![
+                diff_file("a.txt", Some(StageStatus::Unstaged)),
+                diff_file("b.txt", Some(StageStatus::Unstaged)),
+            ],
+        );
+        set_quick(&mut cache, DiffTarget::Uncommitted, quick);
+
+        let status = precise_status();
+        cache.reclassify_uncommitted_staging(Some(&status));
+
+        assert!(
+            cache.uncommitted_cache_key.is_none(),
+            "key must stay unsealed so poll() reloads and picks up a.txt"
+        );
+        let full = cache.uncommitted_diff_cache.as_ref().unwrap();
+        assert_eq!(
+            full.files.len(),
+            1,
+            "fast path leaves full diff untouched on bail"
+        );
     }
 
     #[test]
