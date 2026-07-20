@@ -58,10 +58,15 @@ impl App {
                             });
                         }
                     }
-                    ConfirmAction::Merge(name) => {
+                    ConfirmAction::Merge { name, is_remote } => {
                         // Snapshot HEAD so a clean merge can be reset away.
                         let pre_head = self.repo.head_oid();
-                        let outcome = merge_branch(self.repo.repo(), &name)?;
+                        let branch_type = if is_remote {
+                            git2::BranchType::Remote
+                        } else {
+                            git2::BranchType::Local
+                        };
+                        let outcome = merge_branch(self.repo.repo(), &name, branch_type)?;
                         op_outcome = Some((outcome, OperationState::Merge));
                         if outcome == OpOutcome::Completed {
                             if let (Some(pre), Some(post)) = (pre_head, self.repo.head_oid()) {
@@ -79,8 +84,13 @@ impl App {
                             }
                         }
                     }
-                    ConfirmAction::Rebase(name) => {
-                        let outcome = rebase_branch(self.repo.repo(), &name)?;
+                    ConfirmAction::Rebase { name, is_remote } => {
+                        let branch_type = if is_remote {
+                            git2::BranchType::Remote
+                        } else {
+                            git2::BranchType::Local
+                        };
+                        let outcome = rebase_branch(self.repo.repo(), &name, branch_type)?;
                         op_outcome = Some((outcome, OperationState::Rebase));
                     }
                     ConfirmAction::CherryPick(oid) => {

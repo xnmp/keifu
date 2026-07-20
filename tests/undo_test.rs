@@ -144,7 +144,10 @@ fn undo_annotated_tag_delete_says_lightweight() {
 fn undo_merge_resets_head_and_keeps_tree() {
     let (_dir, mut app, a, b) = fixture();
     // Fast-forward merge feature into main: HEAD moves a -> b.
-    run_op_then_undo(&mut app, ConfirmAction::Merge("feature".into()));
+    run_op_then_undo(
+        &mut app,
+        ConfirmAction::Merge { name: "feature".into(), is_remote: false },
+    );
     // Undo resets main back to a.
     assert_eq!(head(&app), a, "HEAD reset to the pre-merge commit");
     assert_ne!(head(&app), b);
@@ -205,7 +208,7 @@ fn undo_merge_blocked_by_a_dirty_tree() {
     let (_dir, mut app, _a, b) = fixture();
     app.mode = AppMode::Confirm {
         message: String::new(),
-        action: ConfirmAction::Merge("feature".into()),
+        action: ConfirmAction::Merge { name: "feature".into(), is_remote: false },
     };
     app.handle_action(Action::Confirm).unwrap();
     assert_eq!(head(&app), b);

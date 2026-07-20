@@ -490,7 +490,7 @@ fn merge_fast_forward() {
     // Go back to default branch and merge (should fast-forward)
     checkout_branch(repo, "master").unwrap();
 
-    merge_branch(repo, "feature").unwrap();
+    merge_branch(repo, "feature", git2::BranchType::Local).unwrap();
 
     assert_eq!(head_oid(repo), feature_oid);
     assert!(repo.workdir().unwrap().join("b.txt").exists());
@@ -514,7 +514,7 @@ fn merge_creates_merge_commit_on_diverged_branches() {
 
     // Go back to default and merge
     checkout_branch(repo, "master").unwrap();
-    merge_branch(repo, "feature").unwrap();
+    merge_branch(repo, "feature", git2::BranchType::Local).unwrap();
 
     // HEAD should be a merge commit with 2 parents
     let head = repo.head().unwrap().peel_to_commit().unwrap();
@@ -534,7 +534,7 @@ fn merge_up_to_date_is_noop() {
     create_branch(repo, "feature", oid).unwrap();
 
     let before = head_oid(repo);
-    merge_branch(repo, "feature").unwrap();
+    merge_branch(repo, "feature", git2::BranchType::Local).unwrap();
     assert_eq!(head_oid(repo), before);
 }
 
@@ -626,7 +626,7 @@ fn rebase_branch_replays_commits_onto_advanced_base() {
 
     // rebase feature onto the advanced base
     checkout_branch(repo, "feature").unwrap();
-    rebase_branch(repo, &default).unwrap();
+    rebase_branch(repo, &default, git2::BranchType::Local).unwrap();
 
     // The branch ref moved to a brand-new tip (commits were replayed).
     let new_tip = repo
@@ -676,7 +676,7 @@ fn rebase_branch_conflict_returns_conflicts_and_leaves_rebase_in_progress() {
     checkout_branch(repo, "feature").unwrap();
 
     // New contract: a conflict is a typed outcome, not an Err.
-    let outcome = rebase_branch(repo, &default).expect("conflict is not an error");
+    let outcome = rebase_branch(repo, &default, git2::BranchType::Local).expect("conflict is not an error");
     assert!(
         matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
         "conflicting rebase returns Conflicts, got {outcome:?}"
@@ -1033,7 +1033,7 @@ fn merge_branch_conflict_returns_conflicts_and_leaves_repo_mid_merge() {
     checkout_branch(repo, &default).unwrap();
 
     // New contract: a conflicting merge is a typed outcome, not an error.
-    let outcome = merge_branch(repo, "feature").expect("conflict is not an error");
+    let outcome = merge_branch(repo, "feature", git2::BranchType::Local).expect("conflict is not an error");
     assert!(
         matches!(outcome, OpOutcome::Conflicts { count } if count == 1),
         "conflicting merge returns Conflicts with the conflict count, got {outcome:?}"
@@ -1132,7 +1132,7 @@ fn start_conflicting_merge(repo: &git2::Repository) -> (String, Oid) {
     checkout_branch(repo, "feature").unwrap();
     commit_file(repo, "f.txt", "feature\n", "feature edit");
     checkout_branch(repo, &default).unwrap();
-    let outcome = merge_branch(repo, "feature").unwrap();
+    let outcome = merge_branch(repo, "feature", git2::BranchType::Local).unwrap();
     assert!(matches!(outcome, OpOutcome::Conflicts { .. }));
     (default, main_head)
 }
@@ -1292,7 +1292,7 @@ fn start_conflicting_rebase(repo: &git2::Repository) -> Oid {
     commit_file(repo, "f.txt", "main\n", "main edit");
     checkout_branch(repo, "feature").unwrap();
     assert!(matches!(
-        rebase_branch(repo, &default).unwrap(),
+        rebase_branch(repo, &default, git2::BranchType::Local).unwrap(),
         OpOutcome::Conflicts { .. }
     ));
     feature_tip
