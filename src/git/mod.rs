@@ -13,7 +13,7 @@ pub mod repository;
 
 pub use askpass::Credentials;
 pub use branch::{branch_authors, remote_only_branch_names, BranchInfo};
-pub use commit::CommitInfo;
+pub use commit::{short_hash, CommitInfo};
 pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,
     FileDiffContent, FileDiffInfo, StageStatus,

@@ -456,7 +456,7 @@ impl App {
                 }
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
-                        message: format!("Cherry-pick commit {}?", &oid.to_string()[..7]),
+                        message: format!("Cherry-pick commit {}?", short_hash(oid)),
                         action: ConfirmAction::CherryPick(oid),
                     };
                 }
@@ -492,7 +492,7 @@ impl App {
             CommitMenuItem::ResetSoft => {
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
-                        message: format!("Reset (soft) to {}?", &oid.to_string()[..7]),
+                        message: format!("Reset (soft) to {}?", short_hash(oid)),
                         action: ConfirmAction::ResetSoft(oid),
                     };
                 }
@@ -500,7 +500,7 @@ impl App {
             CommitMenuItem::ResetMixed => {
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
-                        message: format!("Reset (mixed) to {}?", &oid.to_string()[..7]),
+                        message: format!("Reset (mixed) to {}?", short_hash(oid)),
                         action: ConfirmAction::ResetMixed(oid),
                     };
                 }
@@ -510,7 +510,7 @@ impl App {
                     self.mode = AppMode::Confirm {
                         message: format!(
                             "Reset (HARD) to {}? This will discard changes!",
-                            &oid.to_string()[..7]
+                            short_hash(oid)
                         ),
                         action: ConfirmAction::ResetHard(oid),
                     };
@@ -552,7 +552,7 @@ impl App {
                 }
                 if let Some(oid) = commit_oid {
                     self.mode = AppMode::Confirm {
-                        message: format!("Revert commit {}?", &oid.to_string()[..7]),
+                        message: format!("Revert commit {}?", short_hash(oid)),
                         action: ConfirmAction::Revert(oid),
                     };
                 }
@@ -562,7 +562,7 @@ impl App {
                     let hash = oid.to_string();
                     match copy_to_clipboard(&hash) {
                         Ok(outcome) => self
-                            .toast(crate::toast::ToastKind::Success, format!("Copied {}{}", &hash[..7], outcome.suffix())),
+                            .toast(crate::toast::ToastKind::Success, format!("Copied {}{}", short_hash(oid), outcome.suffix())),
                         Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
                     }
                 }

@@ -29,7 +29,7 @@ use crate::{
             stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
             unstage_all, unstage_file, OpOutcome, PullMode, ResetMode,
         },
-        extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch,
+        extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch, short_hash,
         BranchInfo, CommitDiffInfo, CommitInfo, Credentials, FileChangeKind, FileDiffContent,
         FileDiffInfo, GitRepository, OperationState, StageStatus, WorkingTreeStatus,
     },

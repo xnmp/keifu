@@ -15,10 +15,16 @@ pub struct CommitInfo {
     pub parent_oids: Vec<Oid>,
 }
 
+/// The 7-character abbreviated form of an OID, as shown throughout the UI
+/// (graph rows, toasts, undo prompts, compare mode).
+pub fn short_hash(oid: Oid) -> String {
+    oid.to_string()[..7].to_string()
+}
+
 impl CommitInfo {
     pub fn from_git2_commit(commit: &git2::Commit) -> Self {
         let oid = commit.id();
-        let short_id = oid.to_string()[..7].to_string();
+        let short_id = short_hash(oid);
 
         let author = commit.author();
         let author_name = author.name().unwrap_or("Unknown").to_string();
