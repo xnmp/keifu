@@ -476,6 +476,12 @@ impl StatusBar {
                 hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
+            AppMode::Settings { .. } => {
+                hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
+                hb.hint_static(" 0-9 ", key_style, "number ", desc_style);
+                hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
+            }
             AppMode::PullDivergence { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
                 hb.hint(" Enter ", key_style, "choose ", desc_style, Action::MenuSelect);
@@ -568,6 +574,7 @@ impl StatusBar {
             AppMode::Error { .. } => Some(" ERROR "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::MetadataMenu { .. } => Some(" COLUMNS "),
+            AppMode::Settings { .. } => Some(" SETTINGS "),
             AppMode::PullDivergence { .. } => Some(" PULL "),
             AppMode::CiChecks => Some(" CHECKS "),
             AppMode::PrThread => Some(" PR THREAD "),

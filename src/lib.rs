@@ -8,6 +8,7 @@ pub mod merge_base;
 pub mod palette;
 pub mod undo;
 pub mod config;
+pub mod settings;
 pub mod conflict;
 pub mod debug_server;
 pub mod diff_cache;

@@ -73,6 +73,7 @@ pub fn map_key_to_action(
         AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
         AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
+        AppMode::Settings { .. } => map_settings_menu_mode(key),
         AppMode::PullDivergence { .. } => map_pull_divergence_mode(key),
         AppMode::CiChecks => map_ci_checks_mode(key),
         AppMode::PrThread => map_pr_thread_mode(key),
@@ -145,6 +146,11 @@ fn map_normal_mode(
             && key.code == KeyCode::Char(':');
         if ctrl_p || colon {
             return Some(Action::OpenCommandPalette);
+        }
+
+        // Settings menu: Ctrl+, from any panel (VSCode-style).
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(',') {
+            return Some(Action::OpenSettings);
         }
 
         // Shift+I opens the GitHub issue list from any panel. 'I' is unbound in
@@ -570,6 +576,30 @@ fn map_metadata_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::Cancel)
         }
+        _ => None,
+    }
+}
+
+/// Settings menu: j/k (or arrows) move, Space/Enter toggles or cycles, digits
+/// type a numeric value (committed with Enter), Backspace edits it, Esc closes.
+/// 'q' is intentionally NOT a close key here — it's a digit-adjacent letter and
+/// numeric editing wants letters inert, so only Esc closes.
+fn map_settings_menu_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char(' ')) | (KeyModifiers::NONE, KeyCode::Enter) => {
+            Some(Action::MenuSelect)
+        }
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
+        // Digits feed the numeric edit buffer; the handler ignores them unless
+        // the selected setting is an integer.
+        (KeyModifiers::NONE, KeyCode::Char(c)) if c.is_ascii_digit() => Some(Action::InputChar(c)),
         _ => None,
     }
 }

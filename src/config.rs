@@ -47,6 +47,17 @@ pub enum GraphRenderer {
     Pixel,
 }
 
+impl GraphRenderer {
+    /// The lowercase token used in config.toml (matches `serde(rename_all)`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Unicode => "unicode",
+            Self::Pixel => "pixel",
+        }
+    }
+}
+
 /// Auto-refresh configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -91,12 +102,14 @@ where
 }
 
 impl Config {
+    fn config_path() -> Option<std::path::PathBuf> {
+        dirs::config_dir().map(|p| p.join("keifu/config.toml"))
+    }
+
     /// Load config from ~/.config/keifu/config.toml
     /// Returns default config if file doesn't exist or is invalid
     pub fn load() -> Self {
-        let path = dirs::config_dir()
-            .map(|p| p.join("keifu/config.toml"))
-            .filter(|p| p.exists());
+        let path = Self::config_path().filter(|p| p.exists());
 
         let Some(path) = path else {
             return Self::default();
@@ -106,6 +119,48 @@ impl Config {
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
+    }
+
+    /// Persist the menu-managed settings back to config.toml, preserving the
+    /// file's existing comments, formatting, and any keys keifu doesn't model
+    /// (unknown keys). Uses `toml_edit` so only the specific values are rewritten
+    /// in place rather than re-serializing the whole struct.
+    pub fn save(&self) {
+        let Some(path) = Self::config_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let mut doc = fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| content.parse::<toml_edit::DocumentMut>().ok())
+            .unwrap_or_default();
+
+        self.apply_to_document(&mut doc);
+        let _ = fs::write(&path, doc.to_string());
+    }
+
+    /// Write the menu-managed values into an existing TOML document in place.
+    /// Pure (no I/O) so it can be unit-tested and so `save` reuses it. Existing
+    /// comments, key ordering, and unknown keys in `doc` are left untouched.
+    pub fn apply_to_document(&self, doc: &mut toml_edit::DocumentMut) {
+        use toml_edit::value;
+        // Seed missing sections as standard (non-inline) tables so a freshly
+        // created config.toml reads as `[refresh]` / `[ui]` blocks rather than
+        // inline tables. Existing tables (with their comments) are left as-is.
+        for section in ["refresh", "ui"] {
+            if doc.get(section).is_none() {
+                doc[section] = toml_edit::table();
+            }
+        }
+        doc["refresh"]["auto_refresh"] = value(self.refresh.auto_refresh);
+        doc["refresh"]["refresh_interval"] = value(self.refresh.refresh_interval as i64);
+        doc["refresh"]["auto_fetch"] = value(self.refresh.auto_fetch);
+        doc["refresh"]["fetch_interval"] = value(self.refresh.fetch_interval as i64);
+        doc["ui"]["theme"] = value(self.ui.theme.clone());
+        doc["ui"]["graph_renderer"] = value(self.ui.graph_renderer.as_str());
     }
 }
 
@@ -528,6 +583,84 @@ mod tests {
         assert!(state.side_panel_layout);
         assert_eq!(state.graph_width_cap, None);
         assert_eq!(state.metadata_columns, MetadataColumns::default());
+    }
+
+    // ── Config::save round-trip (toml_edit) ─────────────────────────
+
+    #[test]
+    fn apply_to_document_preserves_comments_and_unknown_keys() {
+        // A config file with comments and a key keifu doesn't model.
+        let original = "\
+# keifu configuration
+[refresh]
+# how often to refresh local state
+auto_refresh = true
+refresh_interval = 10
+auto_fetch = true
+fetch_interval = 60
+
+[ui]
+theme = \"auto\"
+graph_renderer = \"auto\"
+custom_unknown_key = \"keep me\"
+";
+        let mut doc = original.parse::<toml_edit::DocumentMut>().unwrap();
+        let cfg = Config {
+            refresh: RefreshConfig {
+                auto_refresh: false,
+                refresh_interval: 30,
+                auto_fetch: true,
+                fetch_interval: 120,
+            },
+            ui: UiConfig {
+                theme: "dark".to_string(),
+                graph_renderer: GraphRenderer::Pixel,
+            },
+        };
+        cfg.apply_to_document(&mut doc);
+        let out = doc.to_string();
+
+        // Values updated…
+        assert!(out.contains("auto_refresh = false"));
+        assert!(out.contains("refresh_interval = 30"));
+        assert!(out.contains("fetch_interval = 120"));
+        assert!(out.contains("theme = \"dark\""));
+        assert!(out.contains("graph_renderer = \"pixel\""));
+        // …while comments and unknown keys survive.
+        assert!(out.contains("# keifu configuration"));
+        assert!(out.contains("# how often to refresh local state"));
+        assert!(out.contains("custom_unknown_key = \"keep me\""));
+
+        // And the result re-parses back to the written values.
+        let reloaded: Config = toml::from_str(&out).unwrap();
+        assert!(!reloaded.refresh.auto_refresh);
+        assert_eq!(reloaded.refresh.refresh_interval, 30);
+        assert_eq!(reloaded.refresh.fetch_interval, 120);
+        assert_eq!(reloaded.ui.theme, "dark");
+        assert_eq!(reloaded.ui.graph_renderer, GraphRenderer::Pixel);
+    }
+
+    #[test]
+    fn apply_to_document_creates_missing_tables() {
+        // An empty document gains both tables and every managed key.
+        let mut doc = toml_edit::DocumentMut::new();
+        Config::default().apply_to_document(&mut doc);
+        let out = doc.to_string();
+        // Fresh files use standard section headers, not inline tables.
+        assert!(out.contains("[refresh]"), "expected [refresh] header: {out}");
+        assert!(out.contains("[ui]"), "expected [ui] header: {out}");
+        let reloaded: Config = toml::from_str(&out).unwrap();
+        assert!(reloaded.refresh.auto_refresh);
+        assert_eq!(reloaded.refresh.refresh_interval, 10);
+        assert_eq!(reloaded.ui.theme, "auto");
+        assert_eq!(reloaded.ui.graph_renderer, GraphRenderer::Auto);
+    }
+
+    #[test]
+    fn graph_renderer_as_str_matches_serde_tokens() {
+        assert_eq!(GraphRenderer::Auto.as_str(), "auto");
+        assert_eq!(GraphRenderer::Unicode.as_str(), "unicode");
+        assert_eq!(GraphRenderer::Pixel.as_str(), "pixel");
     }
 
     #[test]
