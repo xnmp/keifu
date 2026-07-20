@@ -170,23 +170,35 @@ impl App {
 
     /// Right-click on a graph row: select that commit and open its context menu
     /// anchored at the cursor (clamped on-screen by the renderer).
+    ///
+    /// If the commit menu is already open, this re-targets it instead of being
+    /// swallowed: a right-click on a *different* commit closes the current menu
+    /// and immediately opens the new one (standard GUI context-menu behavior).
+    /// A right-click on the same commit, or off any commit row, just closes it
+    /// — matching the left-click-outside dismissal.
     fn handle_mouse_right_click(&mut self, col: u16, row: u16) {
-        if !matches!(self.mode, AppMode::Normal) {
+        let menu_open = matches!(self.mode, AppMode::CommitMenu { .. });
+        if !menu_open && !matches!(self.mode, AppMode::Normal) {
             return;
         }
-        let ml = self.mouse_layout;
-        if !point_in(ml.graph, col, row) {
-            return;
+
+        let target = self.graph_row_at(col, row);
+
+        if menu_open {
+            // Close first: a re-target starts from a clean slate rather than
+            // mutating the open menu in place.
+            self.mode = AppMode::Normal;
+            let same_commit = target.is_some()
+                && target == self.graph_nav.graph_list_state.selected();
+            if target.is_none() || same_commit {
+                return;
+            }
         }
+
+        let Some(full_idx) = target else {
+            return;
+        };
         self.focused_panel = FocusedPanel::Graph;
-        let inner = inner_rect(ml.graph);
-        let offset = self.graph_nav.graph_list_state.offset();
-        let Some(list_idx) = list_row_index(inner, offset, col, row) else {
-            return;
-        };
-        let Some(full_idx) = self.graph_row_full_idx(list_idx) else {
-            return;
-        };
         self.select_commit_by_full_idx(full_idx);
         self.open_commit_menu();
         // `open_commit_menu` clears the anchor (keyboard opens centered); set it
@@ -195,6 +207,21 @@ impl App {
         if matches!(self.mode, AppMode::CommitMenu { .. }) {
             self.menu_anchor = Some((col, row));
         }
+    }
+
+    /// The graph node index a screen point maps to, if it lands on a commit
+    /// row in the graph panel. Layout math only — independent of `self.mode`,
+    /// so it can be reused to hit-test a click against the commit rows behind
+    /// an open popup.
+    fn graph_row_at(&self, col: u16, row: u16) -> Option<usize> {
+        let ml = self.mouse_layout;
+        if !point_in(ml.graph, col, row) {
+            return None;
+        }
+        let inner = inner_rect(ml.graph);
+        let offset = self.graph_nav.graph_list_state.offset();
+        let list_idx = list_row_index(inner, offset, col, row)?;
+        self.graph_row_full_idx(list_idx)
     }
 
     /// A click landed inside the open popup's rect: if it hit a selectable row,
@@ -316,5 +343,122 @@ impl App {
                 | AppMode::IssueDetail
                 | AppMode::IssueLabelPicker { .. }
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{App, AppMode, MouseLayout};
+    use crate::git::GitRepository;
+    use ratatui::layout::Rect;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .expect("run git");
+    }
+
+    /// A clean (no uncommitted changes) linear repo with three commits, so the
+    /// graph has exactly three commit rows and no connector/uncommitted rows —
+    /// row index in the graph panel maps 1:1 to `graph_layout.nodes` index.
+    fn app_with_three_commits() -> App {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "one\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", "first"]);
+        std::fs::write(dir.join("f.txt"), "two\n").unwrap();
+        git(dir, &["commit", "-q", "-am", "second"]);
+        std::fs::write(dir.join("f.txt"), "three\n").unwrap();
+        git(dir, &["commit", "-q", "-am", "third"]);
+
+        let repo = GitRepository::open(dir).expect("open repo");
+        let mut app = App::from_repo(repo).expect("build app");
+        assert_eq!(app.graph_layout.nodes.len(), 3, "three commits, no folding");
+
+        // A graph panel tall enough to show all three rows starting at row 1
+        // (row 0 is the border): row 1 -> list_idx 0, row 2 -> list_idx 1, ...
+        app.mouse_layout = MouseLayout {
+            graph: Rect::new(0, 0, 40, 10),
+            files: Rect::default(),
+            commit: Rect::default(),
+            main: Rect::default(),
+            side_layout: false,
+        };
+        app
+    }
+
+    /// Right-clicking a commit row when no menu is open selects that commit
+    /// and opens the menu for it.
+    #[test]
+    fn right_click_opens_menu_for_clicked_commit() {
+        let mut app = app_with_three_commits();
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 1 });
+        assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
+        assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
+    }
+
+    /// The bug this fixes: right-clicking a *different* commit row while the
+    /// menu is already open must close the old menu and reopen it for the new
+    /// commit in one action, not be swallowed.
+    #[test]
+    fn right_click_on_different_commit_retargets_open_menu() {
+        let mut app = app_with_three_commits();
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 1 });
+        assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
+        assert_eq!(app.graph_nav.graph_list_state.selected(), Some(0));
+
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 2 });
+
+        assert!(
+            matches!(app.mode, AppMode::CommitMenu { .. }),
+            "menu should reopen for the new commit, not just close"
+        );
+        assert_eq!(
+            app.graph_nav.graph_list_state.selected(),
+            Some(1),
+            "selection should follow the new right-click target"
+        );
+        assert_eq!(
+            app.menu_anchor,
+            Some((5, 2)),
+            "menu should re-anchor at the new click position"
+        );
+    }
+
+    /// Right-clicking the *same* commit row the menu is already open for just
+    /// closes it — mirroring left-click-outside dismissal.
+    #[test]
+    fn right_click_on_same_commit_closes_menu() {
+        let mut app = app_with_three_commits();
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 1 });
+        assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
+
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 1 });
+
+        assert!(matches!(app.mode, AppMode::Normal));
+    }
+
+    /// Right-clicking off the commit rows entirely (outside the graph panel)
+    /// while the menu is open closes it instead of doing nothing.
+    #[test]
+    fn right_click_off_graph_closes_open_menu() {
+        let mut app = app_with_three_commits();
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 1 });
+        assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
+
+        app.handle_mouse_action(crate::action::Action::MouseRightClick { col: 5, row: 50 });
+
+        assert!(matches!(app.mode, AppMode::Normal));
     }
 }
