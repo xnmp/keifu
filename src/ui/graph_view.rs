@@ -644,6 +644,24 @@ impl<'a> GraphViewWidget<'a> {
                 .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, &l))
         };
 
+        // Frame-constant render inputs, gathered once and shared by every row (see
+        // `RowRenderCtx`). Per-row values (`node`, `RowFlags`) travel separately.
+        let ctx = RowRenderCtx {
+            theme,
+            now,
+            pixel_mode,
+            remotes,
+            open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches,
+            base_update_merges,
+            metadata_columns,
+            graph_width,
+            total_width: inner_width,
+            selected_branch_name,
+            trace: trace.as_ref(),
+        };
+
         // In pixel mode, connector rows are folded into their commit row so the
         // list items match the pixel specs one-for-one (same filtered index
         // space). In Unicode mode connectors remain their own rows.
@@ -689,24 +707,8 @@ impl<'a> GraphViewWidget<'a> {
                         .compare_range
                         .is_some_and(|(old, new)| old == c.oid || new == c.oid)
             });
-            let (line, chips) = render_graph_line(
-                node,
-                graph_width,
-                is_selected,
-                is_marked,
-                inner_width,
-                selected_branch_name,
-                theme,
-                now,
-                pixel_mode,
-                remotes,
-                open_prs,
-                &pr_ctx,
-                merged_branches,
-                base_update_merges,
-                metadata_columns,
-                trace.as_ref(),
-            );
+            let (line, chips) =
+                render_graph_line(node, &ctx, RowFlags { is_selected, is_marked });
             items.push(ListItem::new(line));
             chip_hits.push(chips);
         }
@@ -1240,24 +1242,40 @@ fn is_base_update_row(
             .is_some_and(|c| base_update_merges.contains(&c.oid))
 }
 
-#[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
-fn render_graph_line<'a>(
-    node: &GraphNode,
-    graph_width: usize,
-    is_selected: bool,
-    is_marked: bool,
-    total_width: usize,
-    selected_branch_name: Option<&str>,
-    theme: &Theme,
+/// Frame-constant render inputs, built once per frame and shared by every row.
+/// Bundles the ~13 values that used to be threaded individually through
+/// `render_graph_line` / `render_graph_line_tail`; per-row values travel
+/// separately as `node` and `RowFlags`.
+struct RowRenderCtx<'a> {
+    theme: &'a Theme,
     now: DateTime<Local>,
     pixel_mode: bool,
-    remotes: &[String],
-    open_prs: &HashMap<String, PrInfo>,
-    pr_ctx: &PrContext,
-    merged_branches: &HashSet<String>,
-    base_update_merges: &HashSet<git2::Oid>,
+    remotes: &'a [String],
+    open_prs: &'a HashMap<String, PrInfo>,
+    pr_ctx: &'a PrContext<'a>,
+    merged_branches: &'a HashSet<String>,
+    base_update_merges: &'a HashSet<git2::Oid>,
     metadata_columns: MetadataColumns,
-    trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
+    /// Graph column width cap (glyph budget), same for every row this frame.
+    graph_width: usize,
+    /// Total drawable inner width available to a row.
+    total_width: usize,
+    selected_branch_name: Option<&'a str>,
+    /// Selected commit's lit-edge trace set; `None` when tracing is off.
+    trace: Option<&'a std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
+}
+
+/// Per-row render flags decided at the call site.
+#[derive(Clone, Copy)]
+struct RowFlags {
+    is_selected: bool,
+    is_marked: bool,
+}
+
+fn render_graph_line<'a>(
+    node: &GraphNode,
+    ctx: &RowRenderCtx<'_>,
+    flags: RowFlags,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -1266,8 +1284,11 @@ fn render_graph_line<'a>(
     // back-merge connector) are force-dimmed. Decided once here (via the shared
     // `is_base_update_row` predicate) so both the unicode cell renderer and the
     // pixel dim pass agree with the message tail. HEAD is never muted.
-    let is_base_update =
-        is_base_update_row(node, metadata_columns.mute_base_merges, base_update_merges);
+    let is_base_update = is_base_update_row(
+        node,
+        ctx.metadata_columns.mute_base_merges,
+        ctx.base_update_merges,
+    );
 
     // Graph start marker (to distinguish from borders). GRAPH_LEADING_COLUMNS
     // is the shared contract with the pixel overlay's x-offset.
@@ -1278,14 +1299,14 @@ fn render_graph_line<'a>(
     // blank space of the exact same width to keep the text layout identical —
     // plus the `…` marker (in the text layer) when the width cap truncates the
     // row, since the image can't draw it.
-    if pixel_mode {
-        let (budget, ellipsis) = graph_truncation(node.cells.len(), graph_width);
+    if ctx.pixel_mode {
+        let (budget, ellipsis) = graph_truncation(node.cells.len(), ctx.graph_width);
         for _ in 0..budget {
             spans.push(Span::raw(" "));
             left_width += 1;
         }
         if ellipsis {
-            spans.push(Span::styled("…", ellipsis_style(theme)));
+            spans.push(Span::styled("…", ellipsis_style(ctx.theme)));
             left_width += 1;
         }
     } else {
@@ -1295,17 +1316,17 @@ fn render_graph_line<'a>(
         left_width = render_cells_unicode(
             &mut spans,
             node,
-            theme,
+            ctx.theme,
             left_width,
-            graph_width,
-            trace,
+            ctx.graph_width,
+            ctx.trace,
             is_base_update,
         );
     }
 
     // Padding to align to the (capped) graph width. Reclaimed width flows to the
     // message budget: the tail sizes the message from `total_width - left_width`.
-    let graph_display_width = graph_width;
+    let graph_display_width = ctx.graph_width;
     if left_width < graph_display_width + 1 {
         // +1 accounts for the start marker
         let padding = graph_display_width + 1 - left_width;
@@ -1315,28 +1336,12 @@ fn render_graph_line<'a>(
 
     // Reserve blank columns for the author avatar (drawn by a separate image
     // overlay in pixel mode). The message tail then starts after them.
-    if avatars_active(pixel_mode, metadata_columns) {
+    if avatars_active(ctx.pixel_mode, ctx.metadata_columns) {
         spans.push(Span::raw(" ".repeat(AVATAR_RESERVED_CELLS as usize)));
         left_width += AVATAR_RESERVED_CELLS as usize;
     }
 
-    render_graph_line_tail(
-        spans,
-        left_width,
-        node,
-        is_selected,
-        is_marked,
-        total_width,
-        selected_branch_name,
-        theme,
-        now,
-        remotes,
-        open_prs,
-        pr_ctx,
-        merged_branches,
-        is_base_update,
-        metadata_columns,
-    )
+    render_graph_line_tail(spans, left_width, node, ctx, flags, is_base_update)
 }
 
 /// Render the Unicode box-drawing glyphs for a row's cells into `spans`, capped
@@ -1466,23 +1471,13 @@ fn render_cells_unicode(
 
 /// Render everything after the graph column: separator, compare marker,
 /// branch/tag/stash labels, message, and the right-aligned metadata block.
-#[allow(clippy::too_many_arguments)] // cohesive per-row render params; a struct would add indirection without clarity
 fn render_graph_line_tail<'a>(
     mut spans: Vec<Span<'a>>,
     mut left_width: usize,
     node: &GraphNode,
-    is_selected: bool,
-    is_marked: bool,
-    total_width: usize,
-    selected_branch_name: Option<&str>,
-    theme: &Theme,
-    now: DateTime<Local>,
-    remotes: &[String],
-    open_prs: &HashMap<String, PrInfo>,
-    pr_ctx: &PrContext,
-    merged_branches: &HashSet<String>,
+    ctx: &RowRenderCtx<'_>,
+    flags: RowFlags,
     is_base_update: bool,
-    metadata_columns: MetadataColumns,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
     // Separator between graph and commit info
@@ -1490,11 +1485,11 @@ fn render_graph_line_tail<'a>(
     left_width += 1;
 
     // Compare marker: flags commits that are marked or a comparison endpoint.
-    if is_marked {
+    if flags.is_marked {
         spans.push(Span::styled(
             "◆ ",
             Style::default()
-                .fg(theme.search_cursor)
+                .fg(ctx.theme.search_cursor)
                 .add_modifier(Modifier::BOLD),
         ));
         left_width += 2;
@@ -1506,7 +1501,7 @@ fn render_graph_line_tail<'a>(
             Some(count) => format!("uncommitted changes ({})", count),
             None => "uncommitted changes".to_string(),
         };
-        let style = Style::default().fg(theme.text_primary);
+        let style = Style::default().fg(ctx.theme.text_primary);
         spans.push(Span::styled(text, style));
         return (Line::from(spans), chips);
     }
@@ -1518,9 +1513,9 @@ fn render_graph_line_tail<'a>(
     };
 
     // Style definitions
-    let hash_style = Style::default().fg(theme.hash_color);
-    let author_style = Style::default().fg(theme.author_color);
-    let date_style = Style::default().fg(theme.date_color);
+    let hash_style = Style::default().fg(ctx.theme.hash_color);
+    let author_style = Style::default().fg(ctx.theme.author_color);
+    let date_style = Style::default().fg(ctx.theme.date_color);
     // PR-merge commit (#52): a merge that landed a GitHub PR reads as machinery,
     // not authored work, so its message renders greyed (an explicit muted color,
     // distinct from the plain DIM used for ordinary muted merges). Detection is
@@ -1529,19 +1524,19 @@ fn render_graph_line_tail<'a>(
     // this row's commit, so the check stays inside the windowed per-row path.
     // HEAD is never greyed, matching the muted-merge rule below.
     let is_pr_merge = !node.is_head
-        && pr_ctx.is_pr_merge(
+        && ctx.pr_ctx.is_pr_merge(
             node.is_merge(),
             commit.parent_oids.get(1).copied(),
             &commit.message,
         );
     // Muted merge: dim only the message text (VSCode-style) — the graph dot and
     // lines stay full-strength. HEAD is never muted so its message stays legible.
-    let muted_merge = metadata_columns.mute_merges && node.is_merge() && !node.is_head;
+    let muted_merge = ctx.metadata_columns.mute_merges && node.is_merge() && !node.is_head;
     // Collapse merges (#59): a stronger form of muting that replaces the merge
     // commit's message with a bare merge glyph. Same detection seam as
     // `mute_merges` (any merge, never HEAD), so the two options unify rather than
     // duplicate. When on it implies muting even if `mute_merges` is off.
-    let collapse_merge = metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
+    let collapse_merge = ctx.metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
     // Three separate style domains, decided independently and never merged here:
     //   1. message-text precedence (this chain) — which mute wins for the message;
     //   2. connector-cell dim (force_dim ∪ trace) — see `render_cells_unicode`
@@ -1557,13 +1552,13 @@ fn render_graph_line_tail<'a>(
     // ordinary merge muting/collapse, then selection bold.
     let msg_style = if is_base_update {
         Style::default()
-            .fg(theme.text_muted)
+            .fg(ctx.theme.text_muted)
             .add_modifier(Modifier::DIM)
     } else if is_pr_merge {
-        Style::default().fg(theme.text_muted)
+        Style::default().fg(ctx.theme.text_muted)
     } else if muted_merge || collapse_merge {
         Style::default().add_modifier(Modifier::DIM)
-    } else if is_selected {
+    } else if flags.is_selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -1576,18 +1571,18 @@ fn render_graph_line_tail<'a>(
         &node.branch_names,
         node.is_head,
         node.color_index,
-        selected_branch_name,
-        theme,
-        remotes,
+        ctx.selected_branch_name,
+        ctx.theme,
+        ctx.remotes,
     );
 
     // Tag labels render after branch labels with a distinct color.
-    let tag_display = build_tag_labels(&node.tag_names, theme);
+    let tag_display = build_tag_labels(&node.tag_names, ctx.theme);
 
     // Open-PR badge (#42): shown exactly once per PR, on the PR's head commit.
     // Colored by CI status, with review/comment markers (#43).
-    let pr_badge = pr_for_row(commit.oid, &node.branch_names, remotes, pr_ctx, open_prs)
-        .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, theme)));
+    let pr_badge = pr_for_row(commit.oid, &node.branch_names, ctx.remotes, ctx.pr_ctx, ctx.open_prs)
+        .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, ctx.theme)));
     // Chip plus a trailing space.
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
 
@@ -1598,7 +1593,7 @@ fn render_graph_line_tail<'a>(
     let has_merged_branch = node
         .branch_names
         .iter()
-        .any(|n| merged_branches.contains(n));
+        .any(|n| ctx.merged_branches.contains(n));
     // Computed once and reused below (render section) so the badge text is
     // built at most once per row.
     let merged_badge_text = has_merged_branch.then(merged_badge);
@@ -1607,7 +1602,7 @@ fn render_graph_line_tail<'a>(
         .map_or(0, |b| display_width(b) + 1);
 
     // === Right-aligned: date author hash (fixed width) ===
-    let date = format_date_field(commit.timestamp, now); // DATE_FIELD_WIDTH chars
+    let date = format_date_field(commit.timestamp, ctx.now); // DATE_FIELD_WIDTH chars
     let author = truncate_to_width(&commit.author_name, 8);
     let author_formatted = format!("{:<8}", author); // fixed 8 chars
     let hash = truncate_to_width(&commit.short_id, 7);
@@ -1629,11 +1624,11 @@ fn render_graph_line_tail<'a>(
 
     // Calculate remaining space for branch + message + right info
     let graph_width = left_width;
-    let remaining_for_content = total_width.saturating_sub(graph_width);
+    let remaining_for_content = ctx.total_width.saturating_sub(graph_width);
 
     // Determine which right-side elements to show based on available space
     let (show_date, show_author, show_hash, right_width) =
-        compute_right_side_visibility(remaining_for_content, metadata_columns);
+        compute_right_side_visibility(remaining_for_content, ctx.metadata_columns);
 
     // Render branch labels
     for (i, (label, style)) in branch_display.iter().enumerate() {
@@ -1645,8 +1640,8 @@ fn render_graph_line_tail<'a>(
         left_width += display_width(label);
         // Record a clickable region resolving to the underlying branch, so a
         // click on the chip can check that branch out.
-        let branch = resolve_chip_branch(label, &node.branch_names, remotes);
-        let is_merged = branch.as_deref().is_some_and(|n| merged_branches.contains(n));
+        let branch = resolve_chip_branch(label, &node.branch_names, ctx.remotes);
+        let is_merged = branch.as_deref().is_some_and(|n| ctx.merged_branches.contains(n));
         if let Some(name) = branch {
             chips.push(ChipHit {
                 x_start: chip_start as u16,
@@ -1655,7 +1650,7 @@ fn render_graph_line_tail<'a>(
             });
         }
         // A merged branch's chip is dimmed (line color included) so it recedes.
-        let style = if is_merged { merged_style(theme) } else { *style };
+        let style = if is_merged { merged_style(ctx.theme) } else { *style };
         spans.push(Span::styled(label.clone(), style));
     }
     if !branch_display.is_empty() {
@@ -1666,7 +1661,7 @@ fn render_graph_line_tail<'a>(
     // Render merged badge (after branch labels, before the PR badge)
     if let Some(badge) = &merged_badge_text {
         left_width += display_width(badge) + 1;
-        spans.push(Span::styled(badge.clone(), merged_style(theme)));
+        spans.push(Span::styled(badge.clone(), merged_style(ctx.theme)));
         spans.push(Span::raw(" "));
     }
 
@@ -1695,7 +1690,7 @@ fn render_graph_line_tail<'a>(
     let stash_width = if let Some(stash_label) = &node.stash_label {
         let label = format!("{{{}}}", stash_label);
         let stash_style = Style::default()
-            .fg(theme.text_muted)
+            .fg(ctx.theme.text_muted)
             .add_modifier(Modifier::ITALIC);
         let w = display_width(&label) + 1;
         left_width += w;
@@ -1726,7 +1721,7 @@ fn render_graph_line_tail<'a>(
     left_width += message_width;
 
     // Padding so the right-aligned block starts at a fixed column
-    let padding = total_width
+    let padding = ctx.total_width
         .saturating_sub(left_width)
         .saturating_sub(right_width);
     if padding > 0 {
@@ -2907,23 +2902,28 @@ mod tests {
     ) -> Line<'static> {
         let theme = Theme::dark();
         let pr_ctx = PrContext::new(open_prs);
+        let ctx = RowRenderCtx {
+            theme: &theme,
+            now: Local::now(),
+            pixel_mode: false,
+            remotes: &[],
+            open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches: &HashSet::new(),
+            base_update_merges,
+            metadata_columns: cols,
+            graph_width: 4,
+            total_width: 200,
+            selected_branch_name: None,
+            trace: None,
+        };
         let (line, _chips) = render_graph_line(
             node,
-            4,
-            false,
-            false,
-            200,
-            None,
-            &theme,
-            Local::now(),
-            false,
-            &[],
-            open_prs,
-            &pr_ctx,
-            &HashSet::new(),
-            base_update_merges,
-            cols,
-            None,
+            &ctx,
+            RowFlags {
+                is_selected: false,
+                is_marked: false,
+            },
         );
         line
     }
