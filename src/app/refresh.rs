@@ -172,6 +172,14 @@ impl App {
     }
 
     fn refresh_inner(&mut self, force: bool) -> Result<()> {
+        // Re-open the libgit2 handle so we observe on-disk state written by other
+        // processes since the last refresh: pushes/fetches creating or updating
+        // remote-tracking refs, upstream config changes, or pruned refs. A
+        // long-lived handle caches this, which otherwise leaves a just-pushed
+        // branch looking unpushed. Best-effort: on failure keep the old handle
+        // and continue rather than aborting the refresh.
+        let _ = self.repo.reopen();
+
         // Save the current selection state for restoration
         let was_uncommitted_selected = self
             .graph_nav.graph_list_state
