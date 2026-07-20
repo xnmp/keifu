@@ -351,22 +351,8 @@ impl App {
 mod tests {
     use crate::app::{App, AppMode, MouseLayout};
     use crate::git::GitRepository;
+    use crate::test_support::git;
     use ratatui::layout::Rect;
-    use std::process::Command;
-
-    fn git(dir: &std::path::Path, args: &[&str]) {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .expect("run git");
-    }
 
     /// A clean (no uncommitted changes) linear repo with three commits, so the
     /// graph has exactly three commit rows and no connector/uncommitted rows —

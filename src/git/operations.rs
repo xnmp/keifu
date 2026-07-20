@@ -1188,20 +1188,9 @@ mod tests {
     }
 
     use super::fetch_remote;
+    use crate::test_support::git;
     use git2::{BranchType, Repository};
-    use std::path::Path;
     use std::process::Command;
-
-    /// Run a git command in `dir`, asserting success.
-    fn git(dir: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .status()
-            .expect("git invocation failed");
-        assert!(status.success(), "git {args:?} failed");
-    }
 
     #[test]
     fn fetch_remote_prunes_deleted_remote_tracking_refs() {

@@ -449,19 +449,8 @@ impl WorkingTreeStatus {
 #[cfg(test)]
 mod tests {
     use super::GitRepository;
-    use std::path::Path;
+    use crate::test_support::git;
     use std::process::Command;
-
-    /// Run a git command in `dir`, asserting success.
-    fn git(dir: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .status()
-            .expect("git invocation failed");
-        assert!(status.success(), "git {args:?} failed");
-    }
 
     #[test]
     fn reopen_observes_remote_ref_created_after_open() {

@@ -33,6 +33,8 @@ pub mod keybindings;
 pub mod mouse;
 pub mod search;
 pub mod text_editor;
+#[cfg(test)]
+pub mod test_support;
 pub mod toast;
 pub mod tui;
 pub mod ui;
