@@ -116,13 +116,7 @@ impl App {
                     }
                     OpOutcome::Conflicts { count } => {
                         self.focus_conflict_files();
-                        // Keep the workflow guidance in the status bar; toast the
-                        // (easily-missed) conflict outcome prominently.
                         self.set_message(Self::conflict_guidance(count));
-                        self.toast(
-                            ToastKind::Error,
-                            format!("Pulled with {count} conflict{}", if count == 1 { "" } else { "s" }),
-                        );
                     }
                 }
             }
