@@ -158,7 +158,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("Other"),
         Row("Ctrl+P / :", "Command palette (commands, branches, commits)"),
-        Row("Ctrl+,", "Settings menu (toggle/edit persisted settings)"),
+        Row("Ctrl+, / ,", "Settings menu (toggle/edit persisted settings)"),
         Row("Shift+R", "Refresh"),
         Row("F5", "Full update (fetch all remotes + PRs + refresh)"),
         Row("?", "Toggle this help"),

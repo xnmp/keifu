@@ -1,18 +1,51 @@
 //! Terminal control (raw mode, alternate screen)
 
 use std::io::{self, Stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use crossterm::{
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
+
+/// Tracks whether we pushed keyboard-enhancement flags, so [`restore`] pops them
+/// exactly once — and only when they were actually pushed. The main event loop
+/// and the panic hook both call [`restore`]; `swap(false)` makes the pop
+/// idempotent so a crash can't leave the terminal stuck in the enhanced mode and
+/// a double restore can't underflow the terminal's flag stack.
+static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Push the `DISAMBIGUATE_ESCAPE_CODES` keyboard-enhancement flag when the
+/// terminal advertises support. This is what lets the terminal encode
+/// Ctrl+punctuation (e.g. Ctrl+,) which the legacy protocol cannot represent, so
+/// crossterm can actually see those key events. Returns whether it was enabled.
+///
+/// Side effect the callers must account for: with this flag on, the terminal
+/// also delivers `KeyEventKind::Release`/`Repeat` events — `keybindings` filters
+/// those so bindings don't double-fire.
+fn push_keyboard_enhancement(stdout: &mut Stdout) -> Result<bool> {
+    if matches!(supports_keyboard_enhancement(), Ok(true)) {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+        KEYBOARD_ENHANCEMENT_ACTIVE.store(true, Ordering::SeqCst);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
 
 /// Initialize the terminal and enable raw mode and the alternate screen
 pub fn init() -> Result<Tui> {
@@ -22,6 +55,14 @@ pub fn init() -> Result<Tui> {
     // `Event::Paste(String)` instead of a burst of keystrokes, so a pasted
     // token arrives atomically. Terminals without it fall back to keystrokes.
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    // Enable keyboard enhancement after the alternate screen so Ctrl+punctuation
+    // (e.g. Ctrl+,) reaches crossterm. Log the outcome so the user can confirm in
+    // the --log-file whether their terminal supports it.
+    let enhanced = push_keyboard_enhancement(&mut stdout)?;
+    tracing::info!(
+        keyboard_enhancement = enhanced,
+        "terminal keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES)"
+    );
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)
@@ -30,6 +71,12 @@ pub fn init() -> Result<Tui> {
 /// Restore the terminal
 pub fn restore() -> Result<()> {
     disable_raw_mode()?;
+    // Pop enhancement flags first (reverse order of init), and only if we pushed
+    // them. `swap(false)` guarantees the pop runs at most once even though both
+    // the normal exit path and the panic hook call this.
+    if KEYBOARD_ENHANCEMENT_ACTIVE.swap(false, Ordering::SeqCst) {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
     execute!(
         io::stdout(),
         DisableBracketedPaste,
@@ -47,12 +94,16 @@ pub fn restore() -> Result<()> {
 /// whatever the child process left on screen.
 pub fn resume() -> Result<()> {
     enable_raw_mode()?;
+    let mut stdout = io::stdout();
     execute!(
-        io::stdout(),
+        stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
         EnableBracketedPaste
     )?;
+    // Re-enable keyboard enhancement so the resumed session matches startup;
+    // [`restore`] cleared the flag when suspending.
+    push_keyboard_enhancement(&mut stdout)?;
     Ok(())
 }
 

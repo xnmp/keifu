@@ -1,8 +1,8 @@
 //! Keybindings
 
-#[cfg(windows)]
-use crossterm::event::KeyEventKind;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use crate::action::Action;
 use crate::app::{AppMode, FocusedPanel};
@@ -39,8 +39,12 @@ pub fn map_key_to_action(
     files_filter_active: bool,
     commit_filter_active: bool,
 ) -> Option<Action> {
-    #[cfg(windows)]
-    if key.kind != KeyEventKind::Press {
+    // With the keyboard-enhancement flags active (see `tui::init`) the terminal
+    // also delivers Release and Repeat key events, not just Press. Legacy Windows
+    // consoles emit Release too. Drop Release outright — otherwise every binding
+    // would fire a second time when the key is let go. Repeat is deliberately
+    // treated as Press so a held navigation key keeps scrolling.
+    if key.kind == KeyEventKind::Release {
         return None;
     }
 
@@ -219,6 +223,12 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::GoToBottom)
         }
 
+        // Settings menu fallback. Ctrl+, (handled in map_normal_mode) is the
+        // VSCode-style binding, but the legacy terminal protocol cannot encode
+        // Ctrl+punctuation, so plain ',' — free in this scope — keeps the menu
+        // reachable on terminals without keyboard enhancement.
+        (KeyModifiers::NONE, KeyCode::Char(',')) => Some(Action::OpenSettings),
+
         // Jump to HEAD
         (_, KeyCode::Char('@')) => Some(Action::JumpToHead),
 
@@ -361,6 +371,10 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
 
         // Copy the selected file's repo-relative path
         (KeyModifiers::NONE, KeyCode::Char('y')) => Some(Action::CopyPath),
+
+        // Settings menu fallback (see map_graph_mode): plain ',' is free in this
+        // scope and reaches the menu where Ctrl+, cannot be encoded.
+        (KeyModifiers::NONE, KeyCode::Char(',')) => Some(Action::OpenSettings),
 
         // Enter file diff for viewing
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::OpenFileDiff),
@@ -984,5 +998,81 @@ mod tests {
         // Plain 'e' (no ctrl) types a character, not an external-edit request.
         let plain = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
         assert_eq!(map_pr_compose_mode(plain), Some(Action::EditorChar('e')));
+    }
+
+    /// Helper: map a key in Normal mode, Graph panel, no filters/editing.
+    fn map_normal(key: KeyEvent) -> Option<Action> {
+        map_key_to_action(
+            key,
+            &AppMode::Normal,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn release_events_produce_no_action() {
+        // With keyboard enhancement on, the terminal echoes a Release for every
+        // key. It must not re-fire the binding (here: 'p' → Pull in the graph).
+        let press = KeyEvent::new_with_kind(
+            KeyCode::Char('p'),
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        );
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('p'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert_eq!(map_normal(press), Some(Action::Pull));
+        assert_eq!(map_normal(release), None);
+    }
+
+    #[test]
+    fn repeat_events_behave_as_press() {
+        // A held navigation key repeats; Repeat is treated as Press so scrolling
+        // continues while held.
+        let repeat = KeyEvent::new_with_kind(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        );
+        assert_eq!(map_normal(repeat), Some(Action::MoveDown));
+    }
+
+    #[test]
+    fn plain_comma_opens_settings_in_graph_and_files() {
+        // Legacy fallback for the (often unencodable) Ctrl+, binding.
+        let comma = KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE);
+        assert_eq!(
+            map_key_to_action(
+                comma,
+                &AppMode::Normal,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false
+            ),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(
+            map_key_to_action(
+                comma,
+                &AppMode::Normal,
+                FocusedPanel::Files,
+                false,
+                false,
+                false
+            ),
+            Some(Action::OpenSettings)
+        );
+    }
+
+    #[test]
+    fn ctrl_comma_still_opens_settings() {
+        let key = KeyEvent::new(KeyCode::Char(','), KeyModifiers::CONTROL);
+        assert_eq!(map_normal(key), Some(Action::OpenSettings));
     }
 }
