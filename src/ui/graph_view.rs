@@ -342,39 +342,20 @@ fn adjacent_cells(rows: &[RenderRow], i: usize, above: bool) -> Option<Vec<CellT
 ///   area (only Kitty crops), so the cached protocol's width must fit.
 ///
 /// Truncated specs still hash as themselves, so the protocol cache holds.
-pub fn build_pixel_row_specs(
+pub fn build_pixel_base_specs(
     app: &App,
     theme: &Theme,
     graph_width: usize,
     panel_available: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
     use crate::ui::graph_pixels::build_row_spec;
-    // The selected commit's lineage, when tracing is active; non-lit cells
-    // are dimmed. `None` = tracing off, everything full strength.
-    let trace = app.active_trace_lineage();
-    let trace_lit = trace
-        .as_ref()
-        .map(|l| crate::git::graph::trace_lit_edges(&app.graph_layout, l));
-    // Commit → its lane color, for recoloring lit strokes by the commit the
-    // lit-edge relation picked (see apply_trace_dim). Only needed while tracing.
-    let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = if trace.is_some() {
-        app.graph_layout
-            .nodes
-            .iter()
-            .filter_map(|n| {
-                n.commit.as_ref().map(|c| {
-                    let rgb = crate::ui::graph_pixels::color_to_rgb(
-                        theme.lane_color(n.color_index),
-                    );
-                    (c.oid, rgb)
-                })
-            })
-            .collect()
-    } else {
-        Default::default()
-    };
     // Fold connector rows into their following commit row (pixel-only): one spec
     // per rendered row, in the same order and index space as the list items.
+    // These base specs carry NO branch-trace dimming — that is a per-cell colour
+    // overlay independent of the (expensive) curve geometry, so it is applied
+    // lazily to just the on-screen window by `dim_pixel_specs_window`. Keeping
+    // the base geometry trace- and scroll-independent lets it stay cached while
+    // the selection moves, instead of rebuilding every row on every keypress.
     let rows = visible_rows(app, true);
     (0..rows.len())
         .map(|i| {
@@ -388,18 +369,104 @@ pub fn build_pixel_row_specs(
                 &rows[i].underlay,
                 theme,
             );
-            // Mark non-lit cells for dimming. `spec.cells`/`spec.underlay`
-            // are 1:1 with `node.cells`/`rows[i].underlay`, so their OIDs align.
-            if let Some(lit) = &trace_lit {
-                apply_trace_dim(&mut spec.cells, &node.cell_oids, lit, &lane_rgb);
-                apply_trace_dim(&mut spec.underlay, &rows[i].underlay_oids, lit, &lane_rgb);
-            }
             let budget = pixel_row_cells(node.cells.len(), graph_width, panel_available);
             spec.cells.truncate(budget);
             // Keep the underlay within the row's drawn width so it stays inside
             // the rasterized canvas (sized from `cells`).
             let underlay_cap = spec.cells.len();
             spec.underlay.truncate(underlay_cap);
+            spec
+        })
+        .collect()
+}
+
+/// Apply branch-trace dimming to the pixel specs in `[win_start, win_end)` only,
+/// returning a full-length spec list (rows outside the window are cheap empty
+/// placeholders). Dimming recolours/dims per cell but never changes a cell's
+/// geometry, so it can be layered onto the cached, undimmed `base` specs without
+/// rebuilding any curves.
+///
+/// The window must equal `graph_pixels::protocol_window(offset, viewport, len)`:
+/// only those rows are rasterized (`sync_frame`) and only the on-screen subset
+/// `[offset, offset + inner_h)` — always inside the window — is drawn
+/// (`overlay_pixel_graph`), so the placeholders are never rasterized or shown.
+/// Result is byte-identical to dimming every row and slicing the same window.
+pub fn dim_pixel_specs_window(
+    app: &App,
+    theme: &Theme,
+    base: &[crate::ui::graph_pixels::RowSpec],
+    lineage: &std::collections::HashSet<git2::Oid>,
+    win_start: usize,
+    win_end: usize,
+) -> Vec<crate::ui::graph_pixels::RowSpec> {
+    let lit = crate::git::graph::trace_lit_edges(&app.graph_layout, lineage);
+    // Commit → its lane color, for recoloring lit strokes by the commit the
+    // lit-edge relation picked (see apply_trace_dim).
+    let lane_rgb: std::collections::HashMap<git2::Oid, [u8; 3]> = app
+        .graph_layout
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            n.commit.as_ref().map(|c| {
+                let rgb =
+                    crate::ui::graph_pixels::color_to_rgb(theme.lane_color(n.color_index));
+                (c.oid, rgb)
+            })
+        })
+        .collect();
+    // `visible_rows` yields the same folded rows, in the same order, that `base`
+    // was built from (both keyed by the graph generation via the cache), so
+    // `rows[i]` aligns with `base[i]`.
+    let rows = visible_rows(app, true);
+    let row_oids: Vec<RowOids> = rows
+        .iter()
+        .map(|r| RowOids {
+            cells: &r.node.cell_oids,
+            underlay: &r.underlay_oids,
+        })
+        .collect();
+    dim_specs_window_core(base, &row_oids, &lit, &lane_rgb, win_start, win_end)
+}
+
+/// Per-row edge identities for dimming: parallel to a row's pixel `cells` and
+/// `underlay`.
+struct RowOids<'a> {
+    cells: &'a [crate::git::graph::CellOids],
+    underlay: &'a [crate::git::graph::CellOids],
+}
+
+/// Pure core of [`dim_pixel_specs_window`]: clone and dim only the base specs in
+/// `[win_start, win_end)`, leaving empty placeholders elsewhere. Independent of
+/// `App`, so the windowing/placeholder contract is unit-testable directly.
+///
+/// Invariant: for any row inside the window the result is byte-identical to
+/// dimming that row over the full range — dimming is per-row (`apply_trace_dim`
+/// reads only that row's cells and oids), so restricting which rows are built
+/// never changes a built row's content.
+fn dim_specs_window_core(
+    base: &[crate::ui::graph_pixels::RowSpec],
+    row_oids: &[RowOids],
+    lit: &std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>,
+    lane_rgb: &std::collections::HashMap<git2::Oid, [u8; 3]>,
+    win_start: usize,
+    win_end: usize,
+) -> Vec<crate::ui::graph_pixels::RowSpec> {
+    (0..base.len())
+        .map(|i| {
+            if i < win_start || i >= win_end {
+                return crate::ui::graph_pixels::RowSpec {
+                    cells: Vec::new(),
+                    underlay: Vec::new(),
+                };
+            }
+            let mut spec = base[i].clone();
+            if let Some(o) = row_oids.get(i) {
+                // `spec.cells`/`spec.underlay` are (truncated) 1:1 with the
+                // node's cells/underlay, so their OIDs align by index; dimming
+                // only reads the cells that survived truncation.
+                apply_trace_dim(&mut spec.cells, o.cells, lit, lane_rgb);
+                apply_trace_dim(&mut spec.underlay, o.underlay, lit, lane_rgb);
+            }
             spec
         })
         .collect()
@@ -2714,6 +2781,97 @@ mod tests {
         assert_eq!(cells[4].color, red, "lit stroke takes the traced lane color");
         assert!(!cells[1].dim, "shared run cell: primary (traced) edge lights it");
         assert!(cells[0].dim, "the trunk tee is off-lineage here and dims");
+    }
+
+    // ── dim_specs_window_core (windowed pixel-spec dimming) ──────────
+
+    type WindowDimFixture = (
+        Vec<crate::ui::graph_pixels::RowSpec>,
+        Vec<Vec<crate::git::graph::CellOids>>,
+        std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>,
+        std::collections::HashMap<git2::Oid, [u8; 3]>,
+    );
+
+    /// A small fixture of undimmed base specs plus their per-cell edge OIDs,
+    /// with one traced edge lit. `n` single-cell rows: even rows carry the
+    /// traced edge (should stay lit), odd rows an unrelated edge (should dim).
+    fn window_dim_fixture(n: usize) -> WindowDimFixture {
+        use crate::ui::graph_pixels::{CellShape, PixelCell};
+        let traced = (oid(2), oid(2));
+        let other = (oid(9), oid(9));
+        let blue = [0u8, 0, 255];
+        let cell = || PixelCell {
+            shape: CellShape::Pipe,
+            color: blue,
+            secondary: blue,
+            dim: false,
+            dim_secondary: false,
+        };
+        let base: Vec<_> = (0..n)
+            .map(|_| crate::ui::graph_pixels::RowSpec {
+                cells: vec![cell()],
+                underlay: Vec::new(),
+            })
+            .collect();
+        let oids: Vec<Vec<crate::git::graph::CellOids>> = (0..n)
+            .map(|i| vec![(Some(if i % 2 == 0 { traced } else { other }), None)])
+            .collect();
+        let lit = [(traced, oid(2))].into_iter().collect();
+        let lane_rgb = [(oid(2), [255u8, 0, 0])].into_iter().collect();
+        (base, oids, lit, lane_rgb)
+    }
+
+    fn row_oids_of(oids: &[Vec<crate::git::graph::CellOids>]) -> Vec<RowOids<'_>> {
+        oids.iter()
+            .map(|o| RowOids {
+                cells: o.as_slice(),
+                underlay: &[],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn window_dim_builds_only_inside_the_window() {
+        let (base, oids, lit, lane_rgb) = window_dim_fixture(10);
+        let ro = row_oids_of(&oids);
+        let out = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 3, 7);
+
+        assert_eq!(out.len(), base.len(), "result keeps full length");
+        for (i, spec) in out.iter().enumerate() {
+            if (3..7).contains(&i) {
+                assert_eq!(spec.cells.len(), 1, "row {i} is built");
+                // Even rows carry the lit edge (stay bright), odd rows dim.
+                assert_eq!(spec.cells[0].dim, i % 2 != 0, "row {i} dim flag");
+            } else {
+                assert!(
+                    spec.cells.is_empty() && spec.underlay.is_empty(),
+                    "row {i} outside window is an empty placeholder"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn windowed_rows_are_identical_to_full_range_dim() {
+        // The core invariant the windowing relies on: a built row's content does
+        // not depend on which window it was built in, so the on-screen result is
+        // byte-identical to dimming every row.
+        let (base, oids, lit, lane_rgb) = window_dim_fixture(12);
+        let ro = row_oids_of(&oids);
+        let full = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 0, base.len());
+        let windowed = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 4, 9);
+        for i in 4..9 {
+            assert_eq!(windowed[i], full[i], "row {i} matches the full-range dim");
+        }
+    }
+
+    #[test]
+    fn empty_window_builds_nothing() {
+        let (base, oids, lit, lane_rgb) = window_dim_fixture(5);
+        let ro = row_oids_of(&oids);
+        let out = dim_specs_window_core(&base, &ro, &lit, &lane_rgb, 2, 2);
+        assert_eq!(out.len(), 5);
+        assert!(out.iter().all(|s| s.cells.is_empty()));
     }
 
     #[test]
