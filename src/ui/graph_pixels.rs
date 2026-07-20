@@ -80,7 +80,7 @@ pub const TRACE_DIM_ALPHA: f32 = 0.28;
 /// pixel mode, standalone connector rows are collapsed into the following commit
 /// row so lanes converge onto the dot the VSCode way). It's drawn *behind*
 /// `cells` and is part of the hash, so the protocol cache stays correct.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RowSpec {
     pub cells: Vec<PixelCell>,
     pub underlay: Vec<PixelCell>,
@@ -2378,7 +2378,7 @@ mod tests {
     /// review. The 4x files are nearest-neighbour upscales for easy comparison.
     ///
     /// Run with: `cargo test --lib dump_curve_comparison_pngs -- --ignored`.
-    /// Output dir defaults to the session scratchpad; override with
+    /// Output dir defaults to the OS temp dir; override with
     /// `KEIFU_CURVE_HARNESS_DIR`. No PNG-encoder dependency is added — the
     /// `image` crate (already a dependency, with the `png` feature) encodes it.
     #[test]
@@ -2387,9 +2387,10 @@ mod tests {
         let scenes = harness_scenes();
         let (cw, ch) = (12u32, 26u32); // realistic terminal cell metrics
         let dir = std::env::var("KEIFU_CURVE_HARNESS_DIR").unwrap_or_else(|_| {
-            "/tmp/claude-1000/-home-chong-Repos-keifu/\
-             d5df3f23-f127-49f2-86f5-5c3fbd78d246/scratchpad"
-                .to_string()
+            std::env::temp_dir()
+                .join("keifu-curve-harness")
+                .to_string_lossy()
+                .into_owned()
         });
         std::fs::create_dir_all(&dir).expect("create output dir");
         for (name, curve_fn) in [
