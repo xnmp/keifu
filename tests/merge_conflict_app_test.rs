@@ -30,7 +30,7 @@ fn conflicted_merge_app() -> (tempfile::TempDir, App) {
         checkout_branch(repo, "feature").unwrap();
         commit_file(repo, "f.txt", "feature\n", "feature edit");
         checkout_branch(repo, &default).unwrap();
-        let outcome = merge_branch(repo, "feature").unwrap();
+        let outcome = merge_branch(repo, "feature", git2::BranchType::Local).unwrap();
         assert!(matches!(outcome, OpOutcome::Conflicts { .. }));
     }
 
@@ -145,7 +145,7 @@ fn from_working_tree_classifies_conflict_once() {
     commit_file(repo, "f.txt", "feature\n", "feature edit");
     checkout_branch(repo, &default).unwrap();
     assert!(matches!(
-        merge_branch(repo, "feature").unwrap(),
+        merge_branch(repo, "feature", git2::BranchType::Local).unwrap(),
         OpOutcome::Conflicts { .. }
     ));
 

@@ -250,11 +250,21 @@ pub fn create_branch(repo: &Repository, branch_name: &str, from_oid: Oid) -> Res
     Ok(())
 }
 
-/// Delete a branch
+/// Delete a *local* branch.
+///
+/// Intentionally `BranchType::Local` only: deleting a local branch
+/// (`git branch -d`) and deleting a remote-tracking branch's upstream
+/// (`git push <remote> --delete`) are different operations with different
+/// blast radii, so the UI routes them separately before either function is
+/// called — `App::confirm_delete_branch` sends remote-tracking names to
+/// `ConfirmAction::DeleteRemoteBranch` (a push, not this function) and only
+/// reaches this one for `is_remote == false`. If that ever changes and a
+/// remote-tracking name reaches here, the "not found" error below is
+/// accurate: it genuinely doesn't exist under `refs/heads/*`.
 pub fn delete_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     let mut branch = repo
         .find_branch(branch_name, BranchType::Local)
-        .context(format!("Branch '{}' not found", branch_name))?;
+        .context(format!("Local branch '{}' not found", branch_name))?;
 
     if branch.is_head() {
         bail!("Cannot delete current branch");
@@ -266,12 +276,21 @@ pub fn delete_branch(repo: &Repository, branch_name: &str) -> Result<()> {
 
 /// Perform a merge.
 ///
+/// `branch_type` picks which ref namespace `branch_name` resolves in
+/// (`refs/heads/*` vs `refs/remotes/*`). It must be supplied explicitly by
+/// the caller rather than guessed from the name — the UI already knows this
+/// from the selected `BranchInfo::is_remote` at selection time (see
+/// `ConfirmAction::Merge`). A remote-tracking name like `origin/dev` can
+/// only ever resolve under `BranchType::Remote`; passing `BranchType::Local`
+/// for one always fails with "not found" regardless of how fresh the repo
+/// handle is (see the regression tests below for #46).
+///
 /// On a conflicting normal merge this returns `Ok(OpOutcome::Conflicts)` and
 /// deliberately leaves the repo mid-merge (conflicted index + MERGE_HEAD), so
 /// the caller can offer resolve/continue/abort. It is NOT an error.
-pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
+pub fn merge_branch(repo: &Repository, branch_name: &str, branch_type: BranchType) -> Result<OpOutcome> {
     let branch = repo
-        .find_branch(branch_name, BranchType::Local)
+        .find_branch(branch_name, branch_type)
         .context(format!("Branch '{}' not found", branch_name))?;
 
     let reference = branch.get();
@@ -315,19 +334,26 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
             return Ok(OpOutcome::Conflicts { count });
         }
 
-        // Create a merge commit
+        // Create a merge commit. Message follows git's own convention: a
+        // remote-tracking source is called out distinctly from a local branch
+        // (`git merge origin/dev` produces "Merge remote-tracking branch
+        // 'origin/dev'"; `git merge dev` produces "Merge branch 'dev'").
         let signature = repo.signature()?;
         let head = repo.head()?;
         let head_commit = head.peel_to_commit()?;
         let merge_commit = repo.find_commit(annotated_commit.id())?;
         let tree_oid = repo.index()?.write_tree()?;
         let tree = repo.find_tree(tree_oid)?;
+        let message = match branch_type {
+            BranchType::Remote => format!("Merge remote-tracking branch '{}'", branch_name),
+            BranchType::Local => format!("Merge branch '{}'", branch_name),
+        };
 
         repo.commit(
             Some("HEAD"),
             &signature,
             &signature,
-            &format!("Merge branch '{}'", branch_name),
+            &message,
             &tree,
             &[&head_commit, &merge_commit],
         )?;
@@ -340,12 +366,17 @@ pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<OpOutcome> {
 
 /// Perform a rebase (simple implementation).
 ///
+/// `branch_type` picks which ref namespace `onto_branch` resolves in, for the
+/// same reason as [`merge_branch`] — a remote-tracking name like `origin/dev`
+/// only exists under `BranchType::Remote`, and the caller (the UI) already
+/// knows which from the selected `BranchInfo::is_remote`.
+///
 /// On a conflicting step this returns `Ok(OpOutcome::Conflicts)` and leaves the
 /// rebase in progress (REBASE_HEAD etc.) for resolve/continue/abort — it does
 /// NOT abort automatically.
-pub fn rebase_branch(repo: &Repository, onto_branch: &str) -> Result<OpOutcome> {
+pub fn rebase_branch(repo: &Repository, onto_branch: &str, branch_type: BranchType) -> Result<OpOutcome> {
     let onto = repo
-        .find_branch(onto_branch, BranchType::Local)
+        .find_branch(onto_branch, branch_type)
         .context(format!("Branch '{}' not found", onto_branch))?;
 
     let onto_annotated = repo.reference_to_annotated_commit(onto.get())?;
@@ -1042,7 +1073,7 @@ pub fn signature_status_label(code: char) -> &'static str {
 mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_divergent_pull_error, is_https_auth_failure,
-        signature_status_label, url_host, AuthUrl, PullMode,
+        signature_status_label, url_host, AuthUrl, OpOutcome, PullMode,
     };
 
     #[test]
@@ -1222,24 +1253,28 @@ mod tests {
     /// `GitRepository::reopen()` (added for #48, now called at the start of
     /// every refresh).
     ///
-    /// This test reproduces the *exact* call the UI makes — `MergeIntoCurrent`
-    /// on a selected branch calls `merge_branch(repo, &branch.name)`, and for a
-    /// remote-tracking branch `branch.name` is the full `origin/<branch>` form
-    /// (see `BranchInfo::list_all` in `git/branch.rs`, and the menu build in
-    /// `app/commit_menu_actions.rs` which offers `MergeIntoCurrent` for *any*
-    /// non-HEAD branch, local or remote, with no filtering).
+    /// Falsification (see git history on this file / the PR that introduced
+    /// this test): reproducing the *exact* call the UI made —
+    /// `merge_branch(repo, "origin/dev", BranchType::Local)`, because
+    /// `merge_branch` hardcoded `BranchType::Local` — failed with "Branch
+    /// 'origin/dev' not found" identically on a fresh handle, a handle made
+    /// stale by an external `git fetch`, and a reopened handle. `reopen()`
+    /// changed nothing; ref staleness was never the cause. The real bug: a
+    /// remote-tracking ref name like `origin/dev` only resolves under
+    /// `BranchType::Remote` (`refs/remotes/*`), never `BranchType::Local`
+    /// (`refs/heads/*`), no matter how fresh the handle is.
     ///
-    /// Finding: the merge fails identically — same "Branch 'origin/dev' not
-    /// found" error — whether the handle is freshly opened, made stale by an
-    /// external fetch, or explicitly reopened. Ref staleness is not the cause.
-    /// The real bug is that `merge_branch` hardcodes
-    /// `repo.find_branch(branch_name, BranchType::Local)`, which can never
-    /// resolve a remote-tracking ref name like `origin/dev` — that lookup only
-    /// searches `refs/heads/*`. `reopen()` cannot fix this because the ref
-    /// being searched for under `BranchType::Local` genuinely doesn't exist
-    /// there, cached or not.
+    /// Fix: `merge_branch` now takes an explicit `branch_type`, threaded from
+    /// the selected `BranchInfo::is_remote` at the UI call site
+    /// (`ConfirmAction::Merge { name, is_remote }` in `app/mod.rs`, resolved
+    /// in `app/confirm_actions.rs`). This test now asserts the *success* case
+    /// end-to-end: merging `origin/dev` (via `BranchType::Remote`, the same
+    /// resolution the fixed UI path performs) succeeds, uses git's own
+    /// "remote-tracking branch" commit message convention, and the resulting
+    /// commit is reachable from HEAD — mirroring what `git merge origin/dev`
+    /// does in a shell, closing the gap #46 reported.
     #[test]
-    fn merge_into_current_of_remote_branch_fails_not_found_regardless_of_handle_freshness() {
+    fn merge_into_current_of_remote_branch_succeeds_and_is_reachable_from_head() {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
@@ -1258,19 +1293,11 @@ mod tests {
         // Long-lived handle, exactly like the one `App` keeps across refreshes.
         let mut repo = crate::git::GitRepository::open(&local).unwrap();
 
-        // 1) Fresh handle, never stale: the merge already fails "not found".
-        // This alone falsifies the pure ref-caching hypothesis for this code
-        // path — there is no staleness yet, and it still fails.
-        let fresh_err = super::merge_branch(repo.repo(), "origin/dev")
-            .expect_err("merge_branch(\"origin/dev\") must fail even on a fresh handle");
-        assert!(
-            fresh_err.to_string().contains("Branch 'origin/dev' not found"),
-            "unexpected error on fresh handle: {fresh_err}"
-        );
-
-        // Advance `dev` on the remote from a second clone, then update the
-        // local remote-tracking ref via an external `git fetch` — bypassing
-        // our long-lived handle entirely, as the original bug report described.
+        // Advance `dev` on the remote from a second clone (a divergent commit,
+        // so this exercises the "normal merge" path, not just fast-forward),
+        // then update the local remote-tracking ref via an external
+        // `git fetch` — bypassing our long-lived handle entirely, exactly as
+        // the original bug report described.
         let other = tmp.path().join("other");
         Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
         git(&other, &["config", "user.email", "t@t.com"]);
@@ -1280,26 +1307,125 @@ mod tests {
         git(&other, &["add", "b.txt"]);
         git(&other, &["commit", "-qm", "advance dev"]);
         git(&other, &["push", "-q", "origin", "dev"]);
+
+        // Diverge locally too, so the merge is a real (non-fast-forward) merge
+        // commit, matching the general case `git merge origin/dev` handles.
+        std::fs::write(local.join("c.txt"), "c").unwrap();
+        git(&local, &["add", "c.txt"]);
+        git(&local, &["commit", "-qm", "local work"]);
+
         git(&local, &["fetch", "-q", "origin", "dev"]);
 
-        // 2) Now genuinely stale (per the #48 fix's own definition of stale):
-        // still the exact same "not found" error, not a different failure.
-        let stale_err = super::merge_branch(repo.repo(), "origin/dev")
-            .expect_err("merge_branch(\"origin/dev\") must fail on the stale handle too");
+        // Reopen first, matching what `refresh_inner` now does before every
+        // refresh (the #48 fix) — the handle is stale relative to the fetch
+        // above, and reopening is the documented way the app keeps refs
+        // current.
+        repo.reopen().unwrap();
+
+        let pre_head = repo.repo().head().unwrap().target().unwrap();
+
+        let outcome = super::merge_branch(repo.repo(), "origin/dev", BranchType::Remote)
+            .expect("merging origin/dev must succeed, matching `git merge origin/dev`");
+        assert_eq!(outcome, OpOutcome::Completed);
+
+        let post_head = repo.repo().head().unwrap().target().unwrap();
+        assert_ne!(pre_head, post_head, "HEAD must move to a new merge commit");
+
+        let merge_commit = repo.repo().find_commit(post_head).unwrap();
+        assert_eq!(
+            merge_commit.message(),
+            Some("Merge remote-tracking branch 'origin/dev'"),
+            "commit message must follow git's own remote-tracking merge convention"
+        );
+        assert_eq!(merge_commit.parent_count(), 2, "must be a real merge commit");
+
+        // The remote's advanced tip must be an ancestor of the new HEAD, i.e.
+        // actually merged in and reachable — not just a no-op or a wrong ref.
+        let remote_tip = repo
+            .repo()
+            .find_branch("origin/dev", BranchType::Remote)
+            .unwrap()
+            .get()
+            .target()
+            .unwrap();
         assert!(
-            stale_err.to_string().contains("Branch 'origin/dev' not found"),
-            "unexpected error on stale handle: {stale_err}"
+            repo.repo().graph_descendant_of(post_head, remote_tip).unwrap(),
+            "origin/dev's tip must be an ancestor of the merged HEAD"
         );
 
-        // 3) Reopened, exactly as `refresh_inner` now does before every
-        // refresh: the #48 fix changes nothing here either.
+        // And the file introduced only on origin/dev landed in the working tree.
+        assert!(local.join("b.txt").exists(), "content from origin/dev must be merged in");
+    }
+
+    /// Same fix, same shape of bug, for `rebase_branch`: rebasing the current
+    /// branch onto a remote-tracking branch (`CommitMenuItem::Rebase` on a
+    /// selected remote branch) must work end-to-end, not just merge.
+    #[test]
+    fn rebase_onto_remote_branch_succeeds_and_replays_head_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["push", "-q", "origin", "master"]);
+        git(&local, &["branch", "dev"]);
+        git(&local, &["push", "-q", "origin", "dev"]);
+
+        let mut repo = crate::git::GitRepository::open(&local).unwrap();
+
+        // Advance dev upstream from a second clone.
+        let other = tmp.path().join("other");
+        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        git(&other, &["config", "user.email", "t@t.com"]);
+        git(&other, &["config", "user.name", "t"]);
+        git(&other, &["checkout", "-q", "dev"]);
+        std::fs::write(other.join("b.txt"), "b").unwrap();
+        git(&other, &["add", "b.txt"]);
+        git(&other, &["commit", "-qm", "advance dev"]);
+        git(&other, &["push", "-q", "origin", "dev"]);
+
+        // Local diverges with its own commit on master.
+        std::fs::write(local.join("c.txt"), "c").unwrap();
+        git(&local, &["add", "c.txt"]);
+        git(&local, &["commit", "-qm", "local work"]);
+        let local_commit_msg = super::get_last_commit_message(local.to_str().unwrap()).unwrap();
+
+        git(&local, &["fetch", "-q", "origin", "dev"]);
         repo.reopen().unwrap();
-        let reopened_err = super::merge_branch(repo.repo(), "origin/dev")
-            .expect_err("merge_branch(\"origin/dev\") must fail after reopen() too");
-        assert!(
-            reopened_err.to_string().contains("Branch 'origin/dev' not found"),
-            "unexpected error after reopen(): {reopened_err}"
+
+        let remote_tip = repo
+            .repo()
+            .find_branch("origin/dev", BranchType::Remote)
+            .unwrap()
+            .get()
+            .target()
+            .unwrap();
+
+        let outcome = super::rebase_branch(repo.repo(), "origin/dev", BranchType::Remote)
+            .expect("rebasing onto origin/dev must succeed, matching `git rebase origin/dev`");
+        assert_eq!(outcome, OpOutcome::Completed);
+
+        let post_head = repo.repo().head().unwrap().target().unwrap();
+        let replayed = repo.repo().find_commit(post_head).unwrap();
+        assert_eq!(
+            replayed.message().map(str::trim),
+            Some(local_commit_msg.as_str()),
+            "the local commit must be replayed on top, message intact"
         );
+        assert_eq!(replayed.parent_count(), 1);
+        assert_eq!(
+            replayed.parent_id(0).unwrap(),
+            remote_tip,
+            "the replayed commit's parent must be origin/dev's tip"
+        );
+        assert!(local.join("b.txt").exists(), "content from origin/dev must be present after rebase");
+        assert!(local.join("c.txt").exists(), "local work must survive the rebase");
     }
 
     /// Companion finding to the test above: isolates whether a *targeted*

@@ -1175,7 +1175,7 @@ fn confirm_merge_creates_merge_commit() {
 
     app.mode = AppMode::Confirm {
         message: "Merge 'feature'?".to_string(),
-        action: ConfirmAction::Merge("feature".to_string()),
+        action: ConfirmAction::Merge { name: "feature".to_string(), is_remote: false },
     };
     app.handle_action(Action::Confirm).unwrap();
 
@@ -1200,7 +1200,7 @@ fn confirm_rebase_replays_head_onto_branch() {
 
     app.mode = AppMode::Confirm {
         message: "Rebase onto 'feature'?".to_string(),
-        action: ConfirmAction::Rebase("feature".to_string()),
+        action: ConfirmAction::Rebase { name: "feature".to_string(), is_remote: false },
     };
     app.handle_action(Action::Confirm).unwrap();
 

@@ -679,8 +679,14 @@ pub enum ConfirmAction {
     /// Apply the newest undo-ledger entry (branch/tag delete, merge, pull, rename).
     Undo,
     DeleteBranch(String),
-    Merge(String),
-    Rebase(String),
+    /// Merge `name` into the current branch. `is_remote` is the selected
+    /// branch's `BranchInfo::is_remote` at selection time, threaded through
+    /// explicitly so the merge resolves `refs/remotes/<name>` for a
+    /// remote-tracking branch instead of guessing from the name alone.
+    Merge { name: String, is_remote: bool },
+    /// Rebase the current branch onto `name`. Same `is_remote` threading as
+    /// [`ConfirmAction::Merge`].
+    Rebase { name: String, is_remote: bool },
     CherryPick(Oid),
     Revert(Oid),
     ResetSoft(Oid),

@@ -442,7 +442,10 @@ impl App {
                     if !branch.is_head {
                         self.mode = AppMode::Confirm {
                             message: format!("Merge '{}' into current branch?", branch.name),
-                            action: ConfirmAction::Merge(branch.name.clone()),
+                            action: ConfirmAction::Merge {
+                                name: branch.name.clone(),
+                                is_remote: branch.is_remote,
+                            },
                         };
                     }
                 }
@@ -466,7 +469,10 @@ impl App {
                     if !branch.is_head {
                         self.mode = AppMode::Confirm {
                             message: format!("Rebase current branch onto '{}'?", branch.name),
-                            action: ConfirmAction::Rebase(branch.name.clone()),
+                            action: ConfirmAction::Rebase {
+                                name: branch.name.clone(),
+                                is_remote: branch.is_remote,
+                            },
                         };
                     }
                 }
