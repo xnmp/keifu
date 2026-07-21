@@ -1919,3 +1919,46 @@ fn selection_survives_branch_hide_refresh() {
         "the selected commit is preserved across the shrinking refresh"
     );
 }
+
+// ── Startup merged-branch classification (#78) ──────────────────────
+
+/// Startup must NOT classify merged branches synchronously in dim-only mode
+/// (the default): classification is O(branches × tree diffs) and was costing
+/// >1s of time-to-first-frame on branchy repos. The contract: `App::from_repo`
+/// returns with an empty merged set, having already kicked the background
+/// classifier, and polling `update_merged_classification` delivers the real
+/// set (rebuilding the graph) shortly after.
+#[test]
+fn startup_defers_merged_classification_to_the_background() {
+    let (td, repo) = init_repo();
+    let a = commit_file(repo.repo(), "a.txt", "a", "initial");
+    // `topic` at an ancestor of the base tip → unambiguously merged.
+    repo.repo().reference("refs/heads/topic", a, true, "topic").unwrap();
+    commit_file(repo.repo(), "b.txt", "b", "advance base");
+    // The default branch name may be master or main; either is a valid base.
+    let mut app = App::from_repo(GitRepository::open(td.path()).unwrap()).unwrap();
+
+    assert!(
+        app.merged.branches.is_empty(),
+        "init must not classify synchronously (dim-only mode): {:?}",
+        app.merged.branches
+    );
+
+    // The classifier was kicked at init: poll until it delivers.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.update_merged_classification() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background classification never delivered"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        app.merged.branches.contains("topic"),
+        "async classification finds the merged branch: {:?}",
+        app.merged.branches
+    );
+}

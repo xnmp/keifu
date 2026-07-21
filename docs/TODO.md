@@ -484,3 +484,6 @@ Input coalescing (drain buffered nav events per frame), trace lineage/lit-edge c
 
 ### [DONE] #77 Pixel window stale-offset cutoff
 The pixel spec/protocol pass ran before the list render, so its sync window used the pre-clamp scroll offset — page jumps (and G/g even before the lean trace window) left whole bands of the graph blank at the top/bottom. The pass now runs after the list render on the final offset; a mid-frame protocol poisoning triggers an immediate redraw for the Unicode fallback.
+
+### [DONE] #78 Async startup merged-branch classification
+Merged-branch classification (ancestry + patch-id squash scans, >1s on branchy repos) ran synchronously in App::new. Now: synchronous only when hide-merged is on (async fill-in would flash hidden branches); dim-only mode starts unclassified and the background classifier — kicked at init — dims merged branches moments after the first frame.
