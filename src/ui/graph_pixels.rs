@@ -1058,14 +1058,21 @@ fn is_supported_protocol(pt: ProtocolType) -> bool {
     matches!(pt, ProtocolType::Kitty | ProtocolType::Iterm2)
 }
 
-/// Prune `map` down to the keys referenced by `current` when it has reached
-/// `cap`. Keeps the frame's hot set instead of clearing everything (which would
-/// force a re-encode of every visible row the next frame).
-fn prune_over_cap<V>(map: &mut HashMap<RowSpec, V>, current: &[RowSpec], cap: usize) {
-    if map.len() >= cap {
-        let keep: HashSet<&RowSpec> = current.iter().collect();
-        map.retain(|k, _| keep.contains(k));
+/// Evict the least-recently-used half of `map` once it reaches `cap`.
+/// `last_used` extracts each entry's use tick. LRU beats the old
+/// prune-to-current-frame policy: trace dimming mints a few new spec variants
+/// per selection move, so the cap is reached routinely, and nuking all but the
+/// on-screen window forced a full re-encode when scrolling back through
+/// recently-visited rows. Keeping the newest half preserves that history.
+fn prune_lru<V>(map: &mut HashMap<RowSpec, V>, cap: usize, last_used: impl Fn(&V) -> u64) {
+    if map.len() < cap {
+        return;
     }
+    let mut ticks: Vec<u64> = map.values().map(&last_used).collect();
+    ticks.sort_unstable();
+    // Newest half survives: evict everything strictly older than the median.
+    let cutoff = ticks[ticks.len() / 2];
+    map.retain(|_, v| last_used(v) >= cutoff);
 }
 
 /// The half-open row range `[start, end)` whose protocols should be rasterized
@@ -1121,11 +1128,15 @@ pub struct AvatarReq {
 pub struct PixelGraphState {
     picker: Picker,
     font_size: (u16, u16),
-    protocols: HashMap<RowSpec, Protocol>,
+    /// Transmitted row protocols with the tick of their last frame use, for
+    /// LRU eviction (`prune_lru`).
+    protocols: HashMap<RowSpec, (Protocol, u64)>,
     /// Transmitted avatar protocols, keyed by author email.
     avatar_protocols: HashMap<String, Protocol>,
     consecutive_failures: u32,
     poisoned: bool,
+    /// Monotonic frame counter stamped onto every protocol used in a frame.
+    tick: u64,
 }
 
 impl PixelGraphState {
@@ -1139,6 +1150,23 @@ impl PixelGraphState {
     /// event loop starts polling, so the terminal's query reply isn't consumed
     /// by crossterm's reader.
     pub fn new() -> Option<Self> {
+        // Debug/measurement escape hatch: force a protocol without querying the
+        // terminal (headless harnesses can't answer). `KEIFU_FORCE_PIXEL=kitty`
+        // (or `iterm2`) exercises the full spec/rasterize/encode pipeline under
+        // the debug server; the escapes land on a PTY nobody renders.
+        if let Ok(forced) = std::env::var("KEIFU_FORCE_PIXEL") {
+            let pt = match forced.as_str() {
+                "kitty" => ProtocolType::Kitty,
+                "iterm2" => ProtocolType::Iterm2,
+                _ => return None,
+            };
+            // A fixed font size without a terminal query — deliberate: this
+            // path exists precisely because no terminal will answer.
+            #[allow(deprecated)]
+            let mut picker = Picker::from_fontsize((10, 20));
+            picker.set_protocol_type(pt);
+            return Some(Self::from_picker(picker));
+        }
         let picker = Picker::from_query_stdio().ok()?;
         if !is_supported_protocol(picker.protocol_type()) {
             return None;
@@ -1147,14 +1175,20 @@ impl PixelGraphState {
         if font_size.0 == 0 || font_size.1 == 0 {
             return None;
         }
-        Some(Self {
+        Some(Self::from_picker(picker))
+    }
+
+    fn from_picker(picker: Picker) -> Self {
+        let font_size = picker.font_size();
+        Self {
             picker,
             font_size,
             protocols: HashMap::new(),
             avatar_protocols: HashMap::new(),
             consecutive_failures: 0,
             poisoned: false,
-        })
+            tick: 0,
+        }
     }
 
     /// Whether the state can still render. Becomes false after
@@ -1168,20 +1202,30 @@ impl PixelGraphState {
     /// ensures each spec. Stops early once poisoned so a persistent failure
     /// can't trigger a per-frame rasterize/encode storm.
     pub fn sync_frame(&mut self, specs: &[RowSpec]) {
-        prune_over_cap(&mut self.protocols, specs, MAX_CACHED_PROTOCOLS);
+        prune_lru(&mut self.protocols, MAX_CACHED_PROTOCOLS, |(_, t)| *t);
+        self.tick += 1;
+        let mut encoded = 0usize;
         for spec in specs {
             if self.poisoned {
                 break;
             }
-            self.ensure_protocol(spec);
+            encoded += self.ensure_protocol(spec) as usize;
+        }
+        if encoded > 0 {
+            // Measurement hook (issue #79): with tracing on, this should stay
+            // at the handful of rows whose lit-state the selection move
+            // actually changed — the RowSpec-keyed cache covers the rest.
+            tracing::debug!(encoded, window = specs.len(), "sync_frame rasterized+encoded rows");
         }
     }
 
-    /// Rasterize and transmit the protocol for `spec` if not already cached.
+    /// Rasterize and transmit the protocol for `spec` if not already cached
+    /// (stamping its LRU tick either way); returns whether an encode happened.
     /// Tracks consecutive failures so a broken protocol poisons the state.
-    fn ensure_protocol(&mut self, spec: &RowSpec) {
-        if self.protocols.contains_key(spec) {
-            return;
+    fn ensure_protocol(&mut self, spec: &RowSpec) -> bool {
+        if let Some((_, t)) = self.protocols.get_mut(spec) {
+            *t = self.tick;
+            return false;
         }
         let (cw, ch) = self.font_size;
         let img = rasterize_row(spec, cw as u32, ch as u32);
@@ -1194,21 +1238,23 @@ impl PixelGraphState {
             .new_protocol(dyn_img, Rect::new(0, 0, n, 1), Resize::Fit(None))
         {
             Ok(proto) => {
-                self.protocols.insert(spec.clone(), proto);
+                self.protocols.insert(spec.clone(), (proto, self.tick));
                 self.consecutive_failures = 0;
+                true
             }
             Err(_) => {
                 self.consecutive_failures += 1;
                 if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                     self.poisoned = true;
                 }
+                false
             }
         }
     }
 
     /// Look up a cached protocol.
     pub fn get(&self, spec: &RowSpec) -> Option<&Protocol> {
-        self.protocols.get(spec)
+        self.protocols.get(spec).map(|(p, _)| p)
     }
 
     /// Prepare an avatar protocol for each request (deduped by email). Prunes to
@@ -1751,25 +1797,28 @@ mod tests {
     }
 
     #[test]
-    fn prune_over_cap_keeps_only_the_current_frame_set() {
-        // Under cap: nothing is pruned even if none are current.
-        let mut map: HashMap<RowSpec, u32> = HashMap::new();
+    fn prune_lru_evicts_the_stale_half_at_cap() {
+        // Under cap: nothing is pruned regardless of age.
+        let mut map: HashMap<RowSpec, u64> = HashMap::new();
         for c in 0..5u8 {
-            map.insert(spec(vec![pipe([c, 0, 0])]), c as u32);
+            map.insert(spec(vec![pipe([c, 0, 0])]), c as u64);
         }
-        prune_over_cap(&mut map, &[], 100);
+        prune_lru(&mut map, 100, |t| *t);
         assert_eq!(map.len(), 5, "under cap: no eviction");
 
-        // At/over cap: retain exactly the current specs, drop the rest.
-        let keep_a = spec(vec![pipe([1, 0, 0])]);
-        let keep_b = spec(vec![pipe([2, 0, 0])]);
-        let current = vec![keep_a.clone(), keep_b.clone()];
-        prune_over_cap(&mut map, &current, 5);
-        assert_eq!(map.len(), 2);
-        assert!(map.contains_key(&keep_a));
-        assert!(map.contains_key(&keep_b));
-        // A stale key (not in the current frame) is gone.
-        assert!(!map.contains_key(&spec(vec![pipe([4, 0, 0])])));
+        // At cap: the recently-used half survives, the stale half goes — so
+        // scrolling back through recent history stays cache-warm (unlike the
+        // old prune-to-current-frame policy, which re-encoded everything).
+        prune_lru(&mut map, 5, |t| *t);
+        assert!(map.len() < 5, "at cap: something evicted");
+        assert!(
+            map.contains_key(&spec(vec![pipe([4, 0, 0])])),
+            "most recent survives"
+        );
+        assert!(
+            !map.contains_key(&spec(vec![pipe([0, 0, 0])])),
+            "oldest is evicted"
+        );
     }
 
     #[test]
@@ -1842,18 +1891,20 @@ mod tests {
     }
 
     #[test]
-    fn prune_retains_only_the_window_specs() {
-        // Four distinct specs in the cache; the window is a two-spec subset.
+    fn prune_lru_keeps_newer_ticks_over_older() {
+        // Four specs with ascending use ticks; prune at cap keeps the newer
+        // half (median cutoff) — ties at the cutoff survive.
         let all: Vec<RowSpec> = (0..4).map(|i| spec(vec![pipe([i, 0, 0])])).collect();
-        let mut map: HashMap<RowSpec, ()> = all.iter().cloned().map(|s| (s, ())).collect();
-        assert_eq!(map.len(), 4);
-
-        let window = &all[1..3];
-        // cap = 4 (map is at cap) → prune down to the window.
-        prune_over_cap(&mut map, window, 4);
+        let mut map: HashMap<RowSpec, u64> = all
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, s)| (s, i as u64))
+            .collect();
+        prune_lru(&mut map, 4, |t| *t);
         assert_eq!(map.len(), 2);
-        assert!(map.contains_key(&all[1]) && map.contains_key(&all[2]));
-        assert!(!map.contains_key(&all[0]) && !map.contains_key(&all[3]));
+        assert!(map.contains_key(&all[2]) && map.contains_key(&all[3]));
+        assert!(!map.contains_key(&all[0]) && !map.contains_key(&all[1]));
     }
 
     // ── S-curve transition reconstruction (Task 2) ──────────────────────
