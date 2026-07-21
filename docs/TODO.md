@@ -512,7 +512,7 @@ Move toast stack to the bottom-right corner.
 ### [DONE] #86 "7-shaped" corner artifacts on fork rows
 Pixel graph: little 7-shaped sections at lower corners when many lines come from the same parent (fork connectors). Curve-geometry bug.
 
-### [TODO] #87 Input latency diagnostics
+### [DONE] #87 Input latency diagnostics
 MacBook still laggy with tracing off; keypresses appear to queue and "catch up" on the next press. Add event→action→draw timing logs to diagnose.
 
 ### [TODO] #88 Ctrl+Enter deletes local+remote branch

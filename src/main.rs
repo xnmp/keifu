@@ -152,6 +152,13 @@ fn main() -> Result<()> {
     let mut render_deadline: Option<Instant> = None;
 
     // Main loop
+    // Set when input was just processed; measured through the next completed
+    // draw as `input_to_frame` — the user-perceived keypress latency. Slow
+    // ones (>10ms) log live via the perf slow-op path, so a laggy-scroll
+    // report with a --log-file shows exactly which frames were late and the
+    // per-stage `draw.*` ops in the same log say where the time went (#87).
+    let mut input_started: Option<Instant> = None;
+
     loop {
         // Render only when state has changed
         if needs_render {
@@ -161,6 +168,9 @@ fn main() -> Result<()> {
                 ui::draw(frame, &mut app);
             })?;
             app.perf.record("draw", draw_started.elapsed());
+            if let Some(t) = input_started.take() {
+                app.perf.record("input_to_frame", t.elapsed());
+            }
             // Pixel rendering poisoned itself during this draw (protocol
             // failures): the frame on screen has no graph column. Redraw
             // immediately so the Unicode fallback appears without waiting
@@ -193,6 +203,7 @@ fn main() -> Result<()> {
         // without this the input queue outruns the draw rate and the graph
         // keeps scrolling after the finger stops.
         if let Some(event) = event {
+            input_started = Some(Instant::now());
             let mut keep_draining = handle_input_event(&mut terminal, &mut app, event)?;
             let mut drained = 0;
             while keep_draining && drained < MAX_COALESCED_EVENTS {
@@ -203,6 +214,13 @@ fn main() -> Result<()> {
                     }
                     None => break,
                 }
+            }
+            if drained > 0 {
+                // Buffered events caught up in one frame. A steady stream of
+                // these during ordinary (non-held) keying means frames are
+                // slower than the typing rate — correlate with `input_to_frame`
+                // and the `draw.*` stage ops in this log.
+                tracing::debug!(drained, "coalesced buffered input events");
             }
             needs_render = true;
         }
