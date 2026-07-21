@@ -20,6 +20,9 @@ pub struct UiConfig {
     pub theme: String,
     /// How the commit graph lines are rendered.
     pub graph_renderer: GraphRenderer,
+    /// Draw a subtle grey link line from a squash-merged branch's tip to the
+    /// commit that landed it on the trunk (issue #81). Off by default.
+    pub squash_link_lines: bool,
 }
 
 impl Default for UiConfig {
@@ -27,6 +30,7 @@ impl Default for UiConfig {
         Self {
             theme: "auto".to_string(),
             graph_renderer: GraphRenderer::default(),
+            squash_link_lines: false,
         }
     }
 }
@@ -166,6 +170,7 @@ impl Config {
         doc["refresh"]["fast_forward_on_refresh"] = value(self.refresh.fast_forward_on_refresh);
         doc["ui"]["theme"] = value(self.ui.theme.clone());
         doc["ui"]["graph_renderer"] = value(self.ui.graph_renderer.as_str());
+        doc["ui"]["squash_link_lines"] = value(self.ui.squash_link_lines);
     }
 }
 
@@ -674,6 +679,7 @@ custom_unknown_key = \"keep me\"
             ui: UiConfig {
                 theme: "dark".to_string(),
                 graph_renderer: GraphRenderer::Pixel,
+                squash_link_lines: true,
             },
         };
         cfg.apply_to_document(&mut doc);
@@ -686,6 +692,7 @@ custom_unknown_key = \"keep me\"
         assert!(out.contains("fast_forward_on_refresh = true"));
         assert!(out.contains("theme = \"dark\""));
         assert!(out.contains("graph_renderer = \"pixel\""));
+        assert!(out.contains("squash_link_lines = true"));
         // …while comments and unknown keys survive.
         assert!(out.contains("# keifu configuration"));
         assert!(out.contains("# how often to refresh local state"));
@@ -699,6 +706,7 @@ custom_unknown_key = \"keep me\"
         assert!(reloaded.refresh.fast_forward_on_refresh);
         assert_eq!(reloaded.ui.theme, "dark");
         assert_eq!(reloaded.ui.graph_renderer, GraphRenderer::Pixel);
+        assert!(reloaded.ui.squash_link_lines);
     }
 
     #[test]

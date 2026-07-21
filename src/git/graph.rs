@@ -5,7 +5,9 @@ use std::collections::{HashMap, HashSet};
 use git2::Oid;
 
 use super::{BranchInfo, CommitInfo};
-use crate::graph::colors::{ColorAssigner, MAIN_BRANCH_COLOR, UNCOMMITTED_COLOR_INDEX};
+use crate::graph::colors::{
+    ColorAssigner, MAIN_BRANCH_COLOR, SQUASH_LINK_COLOR_INDEX, UNCOMMITTED_COLOR_INDEX,
+};
 
 /// Graph node
 #[derive(Debug, Clone)]
@@ -170,6 +172,10 @@ fn head_first_parent_line(
 /// count is unavailable (e.g. collapsed untracked directories).
 /// head_commit_oid: The OID of the commit that HEAD points to (for uncommitted
 /// changes and for anchoring HEAD's first-parent line to lane 0)
+/// squash_links: `(branch_tip, squash_commit)` pairs to draw a muted-grey link
+/// line between (issue #81). Empty (the option off) leaves the layout
+/// byte-identical to before — the links are a pure post-pass overlay; see
+/// [`inject_squash_links`]. A pair whose endpoints aren't both loaded is skipped.
 pub fn build_graph(
     commits: &[CommitInfo],
     branches: &[BranchInfo],
@@ -177,6 +183,7 @@ pub fn build_graph(
     stashes: &[super::repository::StashInfo],
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
+    squash_links: &[(Oid, Oid)],
 ) -> GraphLayout {
     // Map stash oid -> short label like "stash@{0}"
     let stash_oid_labels: HashMap<Oid, String> = stashes
@@ -661,6 +668,11 @@ pub fn build_graph(
         insert_uncommitted_node(&mut nodes, &mut max_lane, head_commit_oid, count);
     }
 
+    // Overlay squash-merge link lines last, once every row (including the
+    // uncommitted node) is in place, so endpoints are resolved against the final
+    // row set (issue #81). A no-op when `squash_links` is empty.
+    inject_squash_links(&mut nodes, &mut max_lane, squash_links);
+
     GraphLayout { nodes, max_lane }
 }
 
@@ -823,6 +835,162 @@ fn insert_uncommitted_node(
             cell_oids,
         },
     );
+}
+
+/// Overlay muted-grey "squash link" connectors (issue #81): for each
+/// `(branch_tip, squash_commit)` pair whose BOTH endpoints are present as loaded
+/// commit rows, draw a faint grey line joining the two rows — a hint that the
+/// squash-merged branch landed at that trunk commit.
+///
+/// This mirrors [`insert_uncommitted_node`]: a synthetic overlay in the reserved
+/// [`SQUASH_LINK_COLOR_INDEX`], emitting the same cell vocabulary (lane pipes +
+/// branch/merge curves) that both the Unicode and pixel renderers already draw —
+/// no new renderer. It is a **layout-only** overlay: it never touches any
+/// `CommitInfo`, so `is_merge`, [`lineage_oids`], diff targets and branch
+/// classification are all unaffected, and every cell it writes carries a
+/// `(None, None)` primary edge, so branch tracing can never light it — the link
+/// stays permanently dim. (Crossed real lane pipes keep their edge as the
+/// secondary, so tracing still lights *them*.)
+///
+/// A modelled-as-parent edge would be wrong here: the lane router only ever draws
+/// toward OLDER commits (down the graph), but a squash commit is usually NEWER
+/// than the branch tip it landed (it is created at merge time), so the link may
+/// run in either direction between its two rows. This overlay connects the rows
+/// regardless of their order.
+fn inject_squash_links(nodes: &mut [GraphNode], max_lane: &mut usize, links: &[(Oid, Oid)]) {
+    if links.is_empty() {
+        return; // option off (or nothing to link) → layout untouched.
+    }
+    // oid -> row index, for commit-carrying rows only. Row indices are stable —
+    // this overlay never inserts or removes rows — so one map serves every link.
+    let oid_row: HashMap<Oid, usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| n.commit.as_ref().map(|c| (c.oid, i)))
+        .collect();
+
+    for &(tip, target) in links {
+        // Guard: only draw when BOTH endpoints are loaded (e.g. the branch tip is
+        // filtered out when merged branches are hidden, or history is truncated).
+        if let (Some(&r1), Some(&r2)) = (oid_row.get(&tip), oid_row.get(&target)) {
+            if r1 != r2 {
+                draw_squash_link(nodes, max_lane, r1, r2);
+            }
+        }
+    }
+}
+
+/// Draw one squash link between the commit rows `r1` and `r2` on a dedicated
+/// grey lane. Picks a lane whose column is free across the whole span, grows the
+/// graph width only if none is, then leaves the upper commit with a branch-down
+/// curve, runs a grey pipe down the lane, and lands on the lower commit with a
+/// merge curve. See [`inject_squash_links`] for the invariants this preserves.
+fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2: usize) {
+    let (u, l) = (r1.min(r2), r1.max(r2));
+    let ulane = nodes[u].lane;
+    let llane = nodes[l].lane;
+
+    // A lane is usable when its column is Empty across the ENTIRE span [u, l],
+    // so the grey pipe never severs a real lane. The endpoints' own lanes fail
+    // this (their commit dots occupy the column), so the chosen lane is always
+    // distinct from both — the curves are never degenerate.
+    let column_free = |nodes: &[GraphNode], lane: usize| -> bool {
+        let ci = lane * 2;
+        (u..=l).all(|i| {
+            nodes[i]
+                .cells
+                .get(ci)
+                .copied()
+                .unwrap_or(CellType::Empty)
+                == CellType::Empty
+        })
+    };
+    // Prefer the free lane nearest both endpoints (fewest crossings); `max_lane
+    // + 1` is always free as a fallback.
+    let mut link_lane = *max_lane + 1;
+    let mut best_dist = usize::MAX;
+    for cand in 0..=*max_lane + 1 {
+        if column_free(nodes, cand) {
+            let dist = cand.abs_diff(ulane) + cand.abs_diff(llane);
+            if dist < best_dist {
+                best_dist = dist;
+                link_lane = cand;
+            }
+        }
+    }
+
+    if link_lane > *max_lane {
+        *max_lane = link_lane;
+    }
+    // Rows built before a later lane appeared can be short; pad every row so the
+    // link's columns are addressable (matches `insert_uncommitted_node`).
+    let required = (*max_lane + 1) * 2;
+    for n in nodes.iter_mut() {
+        while n.cells.len() < required {
+            n.cells.push(CellType::Empty);
+        }
+        while n.cell_oids.len() < required {
+            n.cell_oids.push((None, None));
+        }
+    }
+
+    let gcol = link_lane * 2;
+
+    // Intermediate rows: a plain grey pipe down the link lane.
+    for node in nodes[(u + 1)..l].iter_mut() {
+        if node.cells[gcol] == CellType::Empty {
+            node.cells[gcol] = CellType::Pipe(SQUASH_LINK_COLOR_INDEX);
+            node.cell_oids[gcol] = (None, None);
+        }
+    }
+
+    // Upper endpoint: the link leaves this commit and heads down the link lane.
+    squash_cross_row(nodes, u, ulane, link_lane);
+    nodes[u].cells[gcol] = if link_lane > ulane {
+        CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX) // ╮
+    } else {
+        CellType::BranchRight(SQUASH_LINK_COLOR_INDEX) // ╭
+    };
+    nodes[u].cell_oids[gcol] = (None, None);
+
+    // Lower endpoint: the link lands on the older commit, ending the lane.
+    squash_cross_row(nodes, l, llane, link_lane);
+    nodes[l].cells[gcol] = if link_lane > llane {
+        CellType::MergeLeft(SQUASH_LINK_COLOR_INDEX) // ╯
+    } else {
+        CellType::MergeRight(SQUASH_LINK_COLOR_INDEX) // ╰
+    };
+    nodes[l].cell_oids[gcol] = (None, None);
+}
+
+/// Draw the grey horizontal run on `row` between a commit's lane and the link
+/// lane, crossing intermediate columns: an empty column becomes a grey
+/// horizontal, an active lane pipe becomes a `HorizontalPipe` crossing (keeping
+/// the crossed lane visible AND keeping its trace edge as the secondary). The
+/// two endpoint columns are left for the caller to place the commit dot / curve.
+fn squash_cross_row(nodes: &mut [GraphNode], row: usize, commit_lane: usize, link_lane: usize) {
+    let (lo, hi) = if link_lane > commit_lane {
+        (commit_lane * 2 + 1, link_lane * 2)
+    } else {
+        (link_lane * 2 + 1, commit_lane * 2)
+    };
+    for col in lo..hi {
+        match nodes[row].cells[col] {
+            CellType::Empty => {
+                nodes[row].cells[col] = CellType::Horizontal(SQUASH_LINK_COLOR_INDEX);
+                nodes[row].cell_oids[col] = (None, None);
+            }
+            CellType::Pipe(pl) => {
+                nodes[row].cells[col] = CellType::HorizontalPipe(SQUASH_LINK_COLOR_INDEX, pl);
+                // The grey run isn't lineage, but the crossed lane pipe keeps its
+                // edge (as secondary) so tracing still lights it.
+                let crossed = nodes[row].cell_oids[col].0;
+                nodes[row].cell_oids[col] = (None, crossed);
+            }
+            // A marker we can't cleanly redraw (a curve/tee): leave it be.
+            _ => {}
+        }
+    }
 }
 
 /// Build cells for one row - color index version
@@ -1441,7 +1609,7 @@ mod tests {
             ci(f2, vec![c]),
             ci(c, vec![z]),
         ];
-        let layout = build_graph(&commits, &[], &[], &[], None, None);
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[]);
         (layout, [a, b, c, f1, f2, z])
     }
 
@@ -1554,7 +1722,7 @@ mod tests {
             ci(c, vec![d]),
             ci(d, vec![]),
         ];
-        let layout = build_graph(&commits, &[], &[], &[], None, None);
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[]);
         (layout, [a, b, c, d, f1, f2])
     }
 
@@ -1672,7 +1840,7 @@ mod tests {
     fn head_feature_branch_claims_lane_zero() {
         let (commits, [m1, m2, f1, z]) = diverged_fixture();
         let branches = [branch("main", m1, false), branch("feature", f1, true)];
-        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1));
+        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1), &[]);
 
         // HEAD's line (F1 and its ancestor Z) sits at the far-left lane 0...
         assert_eq!(layout.nodes[row_of(&layout, f1)].lane, 0, "HEAD tip at lane 0");
@@ -1690,7 +1858,7 @@ mod tests {
     fn head_line_owns_the_main_color_others_do_not() {
         let (commits, [m1, _m2, f1, _z]) = diverged_fixture();
         let branches = [branch("main", m1, false), branch("feature", f1, true)];
-        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1));
+        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1), &[]);
 
         // The lane-0 HEAD line owns the reserved main (blue) colour; the other
         // branch, though processed first, cannot claim it.
@@ -1709,7 +1877,7 @@ mod tests {
         // No branch carries is_head (detached HEAD). Anchoring must use the
         // passed HEAD oid, not branch identity.
         let (commits, [_m1, _m2, f1, z]) = diverged_fixture();
-        let layout = build_graph(&commits, &[], &[], &[], None, Some(f1));
+        let layout = build_graph(&commits, &[], &[], &[], None, Some(f1), &[]);
 
         assert_eq!(layout.nodes[row_of(&layout, f1)].lane, 0, "detached HEAD at lane 0");
         assert_eq!(layout.nodes[row_of(&layout, z)].lane, 0);
@@ -1724,7 +1892,7 @@ mod tests {
         // Fallback: with no HEAD oid, the historical behaviour holds — the
         // first-processed tip keeps lane 0 and the main colour.
         let (commits, [m1, _m2, f1, _z]) = diverged_fixture();
-        let layout = build_graph(&commits, &[], &[], &[], None, None);
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[]);
 
         assert_eq!(layout.nodes[row_of(&layout, m1)].lane, 0);
         assert_eq!(layout.nodes[row_of(&layout, m1)].color_index, MAIN_BRANCH_COLOR);
@@ -1744,7 +1912,7 @@ mod tests {
             ci(foo, vec![z]),
             ci(z, vec![]),
         ];
-        let layout = build_graph(&commits, &[], &[], &[], None, Some(foo));
+        let layout = build_graph(&commits, &[], &[], &[], None, Some(foo), &[]);
 
         assert_eq!(layout.nodes[row_of(&layout, foo)].lane, 0, "HEAD stays leftmost");
         assert_eq!(
@@ -1763,7 +1931,7 @@ mod tests {
         // child's lane. Anchoring only reorders which lane a tip starts on, so
         // the HEAD line's first-parent chain must remain walkable end to end.
         let (commits, [_m1, _m2, f1, z]) = diverged_fixture();
-        let layout = build_graph(&commits, &[], &[], &[], None, Some(f1));
+        let layout = build_graph(&commits, &[], &[], &[], None, Some(f1), &[]);
 
         // F1 -> Z along the (anchored) lane 0.
         assert_eq!(
@@ -1775,5 +1943,146 @@ mod tests {
             same_lane_descendant_row(&layout, row_of(&layout, z)),
             Some(row_of(&layout, f1))
         );
+    }
+
+    // ── squash-merge link lines (#81) ─────────────────────────────────────
+
+    /// The color index a cell is drawn in (`None` for `Empty`).
+    fn cell_color(cell: CellType) -> Option<usize> {
+        match cell {
+            CellType::Empty => None,
+            CellType::Pipe(c)
+            | CellType::Commit(c)
+            | CellType::BranchRight(c)
+            | CellType::BranchLeft(c)
+            | CellType::MergeRight(c)
+            | CellType::MergeLeft(c)
+            | CellType::Horizontal(c)
+            | CellType::TeeRight(c)
+            | CellType::TeeLeft(c)
+            | CellType::TeeUp(c)
+            | CellType::HorizontalPipe(c, _) => Some(c),
+        }
+    }
+
+    /// Whether any cell in the layout is drawn in the reserved squash-link grey.
+    fn has_squash_grey(layout: &GraphLayout) -> bool {
+        layout.nodes.iter().any(|n| {
+            n.cells
+                .iter()
+                .any(|c| cell_color(*c) == Some(SQUASH_LINK_COLOR_INDEX))
+        })
+    }
+
+    /// A trunk tip `S` and a diverged feature tip `F1`, both loaded. Newest-first
+    /// order: S, F1, T, Z. Returns the commit list and `[S, F1, T, Z]`.
+    fn squash_link_fixture() -> (Vec<CommitInfo>, [Oid; 4]) {
+        let (s, f1, t, z) = (oid(1), oid(4), oid(2), oid(9));
+        let commits = vec![
+            ci(s, vec![t]),
+            ci(f1, vec![z]),
+            ci(t, vec![z]),
+            ci(z, vec![]),
+        ];
+        (commits, [s, f1, t, z])
+    }
+
+    #[test]
+    fn squash_link_off_is_byte_identical_and_adds_no_grey() {
+        let (commits, _) = squash_link_fixture();
+        let base = build_graph(&commits, &[], &[], &[], None, None, &[]);
+        // Building again with no links is byte-identical for every cell.
+        let again = build_graph(&commits, &[], &[], &[], None, None, &[]);
+        assert_eq!(base.max_lane, again.max_lane);
+        for (a, b) in base.nodes.iter().zip(&again.nodes) {
+            assert_eq!(a.cells, b.cells, "option-off layout must be stable");
+            assert_eq!(a.cell_oids, b.cell_oids);
+        }
+        assert!(!has_squash_grey(&base), "no link cells when the option is off");
+    }
+
+    #[test]
+    fn squash_link_draws_grey_and_preserves_real_cells() {
+        let (commits, [s, f1, _t, _z]) = squash_link_fixture();
+        let base = build_graph(&commits, &[], &[], &[], None, None, &[]);
+        let linked = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+
+        // The link introduces grey cells; the baseline had none.
+        assert!(!has_squash_grey(&base));
+        assert!(has_squash_grey(&linked), "the link draws grey cells");
+
+        // Every real (non-Empty) baseline cell survives verbatim: the link only
+        // fills empty space / new columns, never disturbing a real stroke.
+        for (bi, bn) in base.nodes.iter().enumerate() {
+            for (col, bcell) in bn.cells.iter().enumerate() {
+                if *bcell != CellType::Empty {
+                    assert_eq!(
+                        linked.nodes[bi].cells.get(col),
+                        Some(bcell),
+                        "real cell at row {bi} col {col} must be unchanged by the link"
+                    );
+                }
+            }
+        }
+
+        // No commit's parentage changes: is_merge and lineage are identical.
+        for i in 0..base.nodes.len() {
+            assert_eq!(base.nodes[i].is_merge(), linked.nodes[i].is_merge());
+        }
+        assert_eq!(
+            lineage_oids(&base, row_of(&base, f1)),
+            lineage_oids(&linked, row_of(&linked, f1)),
+            "the link must not alter the feature's lineage"
+        );
+    }
+
+    #[test]
+    fn squash_link_curves_land_on_both_endpoint_rows() {
+        let (commits, [s, f1, _t, _z]) = squash_link_fixture();
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+
+        // Each endpoint row carries a grey link curve (branch-out or merge-in).
+        for endpoint in [s, f1] {
+            let row = &layout.nodes[row_of(&layout, endpoint)];
+            assert!(
+                row.cells.iter().any(|c| matches!(
+                    c,
+                    CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX)
+                        | CellType::BranchRight(SQUASH_LINK_COLOR_INDEX)
+                        | CellType::MergeLeft(SQUASH_LINK_COLOR_INDEX)
+                        | CellType::MergeRight(SQUASH_LINK_COLOR_INDEX)
+                )),
+                "endpoint row for {endpoint} carries a grey link curve"
+            );
+        }
+
+        // A link whose target isn't loaded draws nothing (both-endpoints guard).
+        let bogus = oid(200);
+        let missing = build_graph(&commits, &[], &[], &[], None, None, &[(f1, bogus)]);
+        assert!(
+            !has_squash_grey(&missing),
+            "no link is drawn when an endpoint isn't loaded"
+        );
+    }
+
+    #[test]
+    fn squash_link_cells_are_never_traced() {
+        let (commits, [s, f1, _t, _z]) = squash_link_fixture();
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+
+        // Tracing either the feature or the trunk must leave the grey link dim.
+        for sel in [f1, s] {
+            let lit = trace_lit_edges(&layout, &lineage_oids(&layout, row_of(&layout, sel)));
+            for node in &layout.nodes {
+                for (i, cell) in node.cells.iter().enumerate() {
+                    if cell_color(*cell) == Some(SQUASH_LINK_COLOR_INDEX) {
+                        assert!(
+                            !cell_is_traced(node.cell_oids[i], &lit),
+                            "a squash-link cell must never light under tracing"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

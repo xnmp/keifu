@@ -126,7 +126,7 @@ fn rasterize_window_budget() {
     let stashes = repo.get_stashes();
     let tags = repo.get_tags();
     let commits = repo.get_commits(200, &branches, &stashes).unwrap();
-    let layout = build_graph(&commits, &branches, &tags, &stashes, None, None);
+    let layout = build_graph(&commits, &branches, &tags, &stashes, None, None, &[]);
     let theme = Theme::dark();
     let n = layout.nodes.len();
     assert!(n >= 50, "fixture should produce a real window of rows, got {n}");

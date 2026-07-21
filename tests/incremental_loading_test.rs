@@ -79,7 +79,7 @@ fn synthetic_history(n: u32) -> (Vec<CommitInfo>, Vec<BranchInfo>) {
 fn profile_10k_rebuild() {
     let (commits, branches) = synthetic_history(10_000);
     let start = std::time::Instant::now();
-    let layout = build_graph(&commits, &branches, &[], &[], None, None);
+    let layout = build_graph(&commits, &branches, &[], &[], None, None, &[]);
     let elapsed = start.elapsed();
     println!(
         "build_graph over {} commits: {:?} (max_lane {})",
