@@ -24,7 +24,7 @@ fn main() {
     let branches = repo.get_branches().unwrap();
     let stashes = repo.get_stashes();
     let tags = repo.get_tags();
-    let commits = repo.get_commits(200, &branches, &stashes).unwrap();
+    let commits = repo.get_commits(200, &branches, &stashes, false).unwrap();
     let head = commits.iter().find(|c| {
         branches.iter().any(|b| b.is_head && b.tip_oid == c.oid)
     });

@@ -368,9 +368,12 @@ impl App {
             .filter(|b| !self.pending_remote_deletions.contains(&b.name))
             .cloned()
             .collect();
-        self.commits = self
-            .repo
-            .get_commits(self.commit_load_limit, &visible_branches, &stashes)?;
+        self.commits = self.repo.get_commits(
+            self.commit_load_limit,
+            &visible_branches,
+            &stashes,
+            self.merged.hide,
+        )?;
         // The whole history is loaded once the walk yields fewer than the limit.
         self.all_commits_loaded = self.commits.len() < self.commit_load_limit;
         let tags = self.repo.get_tags();

@@ -149,14 +149,30 @@ impl GitRepository {
     /// which branches are visible (e.g. by excluding hidden ones), so hiding a
     /// branch removes its exclusive commits from the graph. HEAD and stash
     /// commits are always pushed as well.
+    ///
+    /// `first_parent`: when true, applies `git log --first-parent` semantics
+    /// (via `Revwalk::simplify_first_parent`) — commits reachable only through
+    /// a non-first-parent (merge side) edge are excluded. This is how
+    /// "hide merged branches" actually collapses ancestor-merged branches
+    /// (merge-commit or fast-forward): those branches' refs are already
+    /// filtered out of `branches` by the caller, but every one of their
+    /// commits typically remains reachable from the base tip via the merge's
+    /// second parent, so without first-parent simplification the commit set
+    /// — and hence the graph — is unchanged. Unmerged branches are unaffected
+    /// because their own tips still seed the walk and each tip's first-parent
+    /// chain is always kept.
     pub fn get_commits(
         &self,
         max_count: usize,
         branches: &[BranchInfo],
         stashes: &[StashInfo],
+        first_parent: bool,
     ) -> Result<Vec<CommitInfo>> {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+        if first_parent {
+            revwalk.simplify_first_parent()?;
+        }
 
         // Walk from the tips of the requested (visible) branches.
         for branch in branches {
@@ -536,10 +552,119 @@ mod tests {
         let visible: Vec<BranchInfo> =
             branches.into_iter().filter(|b| !remote_only.contains(&b.name)).collect();
 
-        let commits = repo.get_commits(50, &visible, &[]).unwrap();
+        let commits = repo.get_commits(50, &visible, &[], false).unwrap();
         assert!(
             !commits.iter().any(|c| c.message.contains("c2-remote-only")),
             "remote-only commit leaked into the graph with hide_remote_branches on"
+        );
+    }
+
+    /// Builds a repo with `main` and a `feature` branch merged into `main` via
+    /// a real (non-fast-forward) merge commit, plus a second, unmerged
+    /// `other-feature` branch. Returns the working dir path.
+    fn repo_with_merge_commit(local: &std::path::Path) {
+        Command::new("git").args(["init", "-q", "-b", "main"]).arg(local).status().unwrap();
+        git(local, &["config", "user.email", "t@t.com"]);
+        git(local, &["config", "user.name", "t"]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(local, &["add", "a.txt"]);
+        git(local, &["commit", "-qm", "base"]);
+
+        git(local, &["checkout", "-qb", "feature"]);
+        std::fs::write(local.join("b.txt"), "b").unwrap();
+        git(local, &["add", "b.txt"]);
+        git(local, &["commit", "-qm", "FEATURE-ONLY-COMMIT"]);
+
+        git(local, &["checkout", "-q", "main"]);
+        // A commit on main so the merge isn't a fast-forward.
+        std::fs::write(local.join("c.txt"), "c").unwrap();
+        git(local, &["add", "c.txt"]);
+        git(local, &["commit", "-qm", "main-side-commit"]);
+
+        git(local, &["merge", "--no-ff", "-q", "-m", "merge feature into main", "feature"]);
+
+        // An unmerged branch, never landed on main.
+        git(local, &["checkout", "-qb", "other-feature"]);
+        std::fs::write(local.join("d.txt"), "d").unwrap();
+        git(local, &["add", "d.txt"]);
+        git(local, &["commit", "-qm", "OTHERBRANCH-ONLY-COMMIT"]);
+        git(local, &["checkout", "-q", "main"]);
+    }
+
+    #[test]
+    fn first_parent_off_includes_merged_branch_commits() {
+        // Baseline (issue #91 repro): without first-parent simplification, a
+        // merge-commit-merged branch's exclusive commits remain reachable from
+        // main's tip via the merge's second parent, so they stay in the walk.
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("local");
+        repo_with_merge_commit(&local);
+
+        let repo = GitRepository::open(&local).unwrap();
+        let branches = repo.get_branches().unwrap();
+        // Simulate hide-merged: drop the merged "feature" ref (its commits stay
+        // reachable from main regardless).
+        let visible: Vec<_> = branches.iter().filter(|b| b.name != "feature").cloned().collect();
+
+        let commits = repo.get_commits(50, &visible, &[], false).unwrap();
+        assert!(
+            commits.iter().any(|c| c.message.contains("FEATURE-ONLY-COMMIT")),
+            "without first-parent simplification, the merged branch's unique commit \
+             must still be reachable from main's tip"
+        );
+        assert!(
+            commits.iter().any(|c| c.message.contains("merge feature into main")),
+            "merge commit must be present"
+        );
+    }
+
+    #[test]
+    fn first_parent_on_excludes_merged_branch_commits_but_keeps_merge_commit() {
+        // The #91 fix: with first-parent simplification on, "feature"'s
+        // exclusive commit (only reachable via the merge's non-first parent)
+        // disappears, while the merge commit itself (on main's first-parent
+        // line) remains.
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("local");
+        repo_with_merge_commit(&local);
+
+        let repo = GitRepository::open(&local).unwrap();
+        let branches = repo.get_branches().unwrap();
+        let visible: Vec<_> = branches.iter().filter(|b| b.name != "feature").cloned().collect();
+
+        let commits = repo.get_commits(50, &visible, &[], true).unwrap();
+        assert!(
+            !commits.iter().any(|c| c.message.contains("FEATURE-ONLY-COMMIT")),
+            "first-parent simplification must exclude the merged branch's exclusive commit"
+        );
+        assert!(
+            commits.iter().any(|c| c.message.contains("merge feature into main")),
+            "the merge commit itself (on the first-parent line) must remain"
+        );
+        assert!(
+            commits.iter().any(|c| c.message.contains("main-side-commit")),
+            "main's own first-parent history must remain intact"
+        );
+    }
+
+    #[test]
+    fn first_parent_on_keeps_unmerged_branch_fully_visible() {
+        // An unmerged branch's own tip still seeds the walk directly, so its
+        // first-parent chain (its entire linear history here) must remain
+        // fully visible even with first-parent simplification on.
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("local");
+        repo_with_merge_commit(&local);
+
+        let repo = GitRepository::open(&local).unwrap();
+        let branches = repo.get_branches().unwrap();
+        // "feature" is merged and hidden; "other-feature" is not merged and stays visible.
+        let visible: Vec<_> = branches.iter().filter(|b| b.name != "feature").cloned().collect();
+
+        let commits = repo.get_commits(50, &visible, &[], true).unwrap();
+        assert!(
+            commits.iter().any(|c| c.message.contains("OTHERBRANCH-ONLY-COMMIT")),
+            "an unmerged branch's exclusive commit must remain visible when hide-merged is on"
         );
     }
 }
