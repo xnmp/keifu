@@ -1642,10 +1642,6 @@ fn render_graph_line_tail<'a>(
         None => return (Line::from(spans), chips),
     };
 
-    // Style definitions
-    let hash_style = Style::default().fg(ctx.theme.hash_color);
-    let author_style = Style::default().fg(ctx.theme.author_color);
-    let date_style = Style::default().fg(ctx.theme.date_color);
     // PR-merge commit (#52): a merge that landed a GitHub PR reads as machinery,
     // not authored work, so its message renders greyed (an explicit muted color,
     // distinct from the plain DIM used for ordinary muted merges). Detection is
@@ -1667,6 +1663,26 @@ fn render_graph_line_tail<'a>(
     // `mute_merges` (any merge, never HEAD), so the two options unify rather than
     // duplicate. When on it implies muting even if `mute_merges` is off.
     let collapse_merge = ctx.metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
+    // #92: any of the muted-merge categories above should read grey across the
+    // whole row, not just the message — DIM alone is too subtle (terminal
+    // support is inconsistent), so the hash/author/date columns get the same
+    // explicit `text_muted` foreground the message uses.
+    let row_is_muted = is_base_update || is_pr_merge || muted_merge || collapse_merge;
+    let hash_style = if row_is_muted {
+        Style::default().fg(ctx.theme.text_muted)
+    } else {
+        Style::default().fg(ctx.theme.hash_color)
+    };
+    let author_style = if row_is_muted {
+        Style::default().fg(ctx.theme.text_muted)
+    } else {
+        Style::default().fg(ctx.theme.author_color)
+    };
+    let date_style = if row_is_muted {
+        Style::default().fg(ctx.theme.text_muted)
+    } else {
+        Style::default().fg(ctx.theme.date_color)
+    };
     // Three separate style domains, decided independently and never merged here:
     //   1. message-text precedence (this chain) — which mute wins for the message;
     //   2. connector-cell dim (force_dim ∪ trace) — see `render_cells_unicode`
@@ -1687,7 +1703,9 @@ fn render_graph_line_tail<'a>(
     } else if is_pr_merge {
         Style::default().fg(ctx.theme.text_muted)
     } else if muted_merge || collapse_merge {
-        Style::default().add_modifier(Modifier::DIM)
+        Style::default()
+            .fg(ctx.theme.text_muted)
+            .add_modifier(Modifier::DIM)
     } else if flags.is_selected {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
@@ -3171,18 +3189,81 @@ mod tests {
 
     #[test]
     fn muted_merge_dims_message_text_not_the_graph() {
+        let theme = Theme::dark();
         let node = merge_node("merge-branch-into-main");
-        // Toggle ON: the merge's message text is dimmed.
+        // Toggle ON: the merge's message text is dimmed AND explicitly greyed.
+        // DIM alone isn't reliable — terminal DIM support is inconsistent, so
+        // muted merges must pair it with an explicit `text_muted` fg (#92).
         let muted = message_style(&node, "merge-branch-into-main", true);
         assert!(
             muted.add_modifier.contains(Modifier::DIM),
             "muted merge message should be DIM: {muted:?}"
+        );
+        assert_eq!(
+            muted.fg,
+            Some(theme.text_muted),
+            "muted merge message should have an explicit grey fg, not rely on DIM alone: {muted:?}"
         );
         // Toggle OFF: the message renders at full strength.
         let normal = message_style(&node, "merge-branch-into-main", false);
         assert!(
             !normal.add_modifier.contains(Modifier::DIM),
             "un-muted merge message must not be DIM: {normal:?}"
+        );
+        assert_eq!(normal.fg, None, "un-muted merge message must not be greyed");
+    }
+
+    #[test]
+    fn muted_merge_greys_metadata_columns_not_normal_rows() {
+        // #92: the whole row should read grey for a muted merge, not just the
+        // message — hash/author/date columns get the same explicit
+        // `text_muted` foreground.
+        let theme = Theme::dark();
+        let cols = MetadataColumns {
+            author: true,
+            hash: true,
+            date: true,
+            mute_merges: true,
+            mute_base_merges: false,
+            collapse_merges: false,
+            avatars: false,
+        };
+        let author_text = format!("{:<8}", "a"); // author_name is "a", padded to 8
+        let hash_text = "abc1234"; // short_id, already 7 chars
+
+        let merge = merge_node("merge-branch-into-main");
+        let line = render_row_with(&merge, &HashMap::new(), cols, &HashSet::new());
+        let author_style = find_style(&line, &author_text).expect("author span");
+        let hash_style = find_style(&line, hash_text).expect("hash span");
+        assert_eq!(
+            author_style.fg,
+            Some(theme.text_muted),
+            "muted merge author column should be greyed: {author_style:?}"
+        );
+        assert_eq!(
+            hash_style.fg,
+            Some(theme.text_muted),
+            "muted merge hash column should be greyed: {hash_style:?}"
+        );
+
+        // A normal (non-merge) row keeps its ordinary per-column metadata
+        // colors (not the shared muted grey). Note: in the dark theme
+        // `hash_color`/`date_color` happen to equal `text_muted`'s value, so
+        // "not muted" is asserted via the actual expected color rather than a
+        // simple inequality against `text_muted`.
+        let normal = commit_node(1, "normal commit", &[]);
+        let normal_line = render_row_with(&normal, &HashMap::new(), cols, &HashSet::new());
+        let normal_author = find_style(&normal_line, &author_text).expect("author span");
+        let normal_hash = find_style(&normal_line, hash_text).expect("hash span");
+        assert_eq!(
+            normal_author.fg,
+            Some(theme.author_color),
+            "normal row author column should use author_color, not be greyed: {normal_author:?}"
+        );
+        assert_eq!(
+            normal_hash.fg,
+            Some(theme.hash_color),
+            "normal row hash column should use hash_color: {normal_hash:?}"
         );
     }
 
