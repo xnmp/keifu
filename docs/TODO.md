@@ -490,3 +490,6 @@ Merged-branch classification (ancestry + patch-id squash scans, >1s on branchy r
 
 ### [DONE] #79 Traced re-encode set: measured minimal; LRU protocol cache
 Measured (via new KEIFU_FORCE_PIXEL + encode-count logging): with tracing on, a selection move re-encodes only the 0-5 rows whose lit-state changed — the RowSpec-keyed protocol cache already restricts the set. Shipped the real gap found while measuring: the cache's at-cap prune nuked everything but the current frame (full re-encode when scrolling back); it now evicts the least-recently-used half.
+
+### [DONE] #80 Perf gates
+Permanent startup phase timings (startup.* ops in the exit perf summary) and a perf regression test suite: wall-clock budgets (~10-30x measured, catching algorithmic blowups) for startup and window rasterization, plus an instrumentation contract test. Deterministic counter tests (e.g. #78's no-sync-classification gate) remain the primary absolute gates.
