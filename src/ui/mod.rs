@@ -922,6 +922,47 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
     render_toasts(frame, app, theme);
 }
 
+/// Height (rows) of a single bordered toast box.
+const TOAST_HEIGHT: u16 = 3;
+/// Max width (columns) of a toast box.
+const TOAST_MAX_WIDTH: u16 = 44;
+/// Blank rows/columns kept between toasts, the screen edge, and the status bar.
+const TOAST_MARGIN: u16 = 1;
+/// Rows reserved at the bottom of the screen for the status bar. Every screen
+/// `render_toasts` is called from (main view, full-screen diff, issue screen)
+/// lays out its status bar as a `Constraint::Length(1)` row spanning the full
+/// frame width, so toasts anchor above that fixed strip.
+const STATUS_BAR_HEIGHT: u16 = 1;
+
+/// Compute the rect for the toast at `slot` (0 = nearest the bottom-right
+/// corner, i.e. the newest toast; increasing `slot` stacks upward), given the
+/// full frame `area`. Returns `None` when that slot has no room: the toast
+/// box doesn't fit width-wise, or stacking `slot` boxes upward from the
+/// reserved status-bar strip would run past the top margin. Pure function of
+/// its inputs — no rendering — so placement math is unit-testable without a
+/// terminal.
+fn toast_slot_rect(area: Rect, slot: u16) -> Option<Rect> {
+    let width = TOAST_MAX_WIDTH.min(area.width.saturating_sub(TOAST_MARGIN * 2));
+    if width < 8 {
+        return None;
+    }
+    // Space from the bottom of the frame to the bottom edge of this slot's
+    // box: the status bar row, a margin above it, then `slot` full boxes
+    // already stacked below this one.
+    let bottom_offset = STATUS_BAR_HEIGHT
+        .saturating_add(TOAST_MARGIN)
+        .saturating_add(slot.saturating_mul(TOAST_HEIGHT));
+    let needed = bottom_offset
+        .saturating_add(TOAST_HEIGHT)
+        .saturating_add(TOAST_MARGIN); // + top margin
+    if needed > area.height {
+        return None;
+    }
+    let y = area.height - bottom_offset - TOAST_HEIGHT;
+    let x = area.width.saturating_sub(width + TOAST_MARGIN);
+    Some(Rect::new(x, y, width, TOAST_HEIGHT))
+}
+
 fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
     use crate::toast::ToastKind;
     let toasts = app.toasts.visible();
@@ -929,23 +970,13 @@ fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
         return;
     }
     let area = frame.area();
-    // Each toast is a 3-row bordered box; width fits the text within bounds.
-    const MAX_W: u16 = 44;
-    const H: u16 = 3;
-    let margin = 1u16;
-    let width = MAX_W.min(area.width.saturating_sub(margin * 2));
-    if width < 8 || area.height < H + margin {
-        return;
-    }
 
-    // Newest on top: iterate newest → oldest, stacking downward from the top.
+    // Newest nearest the corner: iterate newest → oldest, stacking upward from
+    // just above the status bar.
     for (i, toast) in toasts.iter().rev().enumerate() {
-        let y = margin + i as u16 * H;
-        if y + H > area.height {
+        let Some(rect) = toast_slot_rect(area, i as u16) else {
             break;
-        }
-        let x = area.width.saturating_sub(width + margin);
-        let rect = Rect::new(x, y, width, H);
+        };
 
         let (accent, icon) = match toast.kind {
             ToastKind::Success => (theme.pr_ci_pass, "✓"),
@@ -957,7 +988,7 @@ fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(accent))
             .style(Style::default().bg(theme.popup_bg));
-        let text_w = width.saturating_sub(4) as usize; // borders + icon + space
+        let text_w = rect.width.saturating_sub(4) as usize; // borders + icon + space
         let line = Line::from(vec![
             Span::styled(
                 format!("{icon} "),
@@ -1232,5 +1263,110 @@ mod tests {
         // Overflow but the pane is too short to host a track between corners.
         assert!(!scrollbar_needed(20, 10, 2));
         assert!(!scrollbar_needed(20, 0, 1));
+    }
+
+    // ── Toast placement (#85: bottom-right corner) ─────────────────────
+
+    #[test]
+    fn toast_anchors_to_bottom_right_clear_of_the_status_bar() {
+        let area = Rect::new(0, 0, 80, 24);
+        let rect = toast_slot_rect(area, 0).expect("plenty of room in an 80x24 screen");
+
+        // Right-aligned.
+        assert!(
+            rect.x + rect.width < area.width,
+            "toast must not touch the right edge (needs a margin column)"
+        );
+        assert!(
+            rect.x + rect.width + TOAST_MARGIN * 3 >= area.width,
+            "toast should hug the right edge, not float in the middle: {rect:?}"
+        );
+        // Bottom-anchored: sits above the reserved status-bar row, not at the
+        // top of the screen (regression guard for the old top-right spot).
+        assert!(
+            rect.y > area.height / 2,
+            "toast should live in the bottom half of the screen: {rect:?}"
+        );
+        let status_bar_row = area.height - STATUS_BAR_HEIGHT;
+        assert!(
+            rect.y + rect.height <= status_bar_row,
+            "toast box (bottom {}) must not cover the status bar row ({status_bar_row}): {rect:?}",
+            rect.y + rect.height
+        );
+    }
+
+    #[test]
+    fn toast_slots_stack_upward_without_overlapping() {
+        let area = Rect::new(0, 0, 80, 24);
+        let newest = toast_slot_rect(area, 0).unwrap();
+        let older = toast_slot_rect(area, 1).unwrap();
+        let oldest = toast_slot_rect(area, 2).unwrap();
+
+        // Each older toast sits strictly above the one nearer the corner.
+        assert!(older.y + older.height <= newest.y, "slot 1 must sit above slot 0");
+        assert!(oldest.y + oldest.height <= older.y, "slot 2 must sit above slot 1");
+        // All slots share the same right-aligned column and width.
+        assert_eq!(older.x, newest.x);
+        assert_eq!(oldest.x, newest.x);
+        assert_eq!(older.width, newest.width);
+    }
+
+    #[test]
+    fn toast_slot_rect_none_on_a_too_short_terminal() {
+        // Not enough rows for even one 3-row toast plus its margins and the
+        // status bar strip.
+        let area = Rect::new(0, 0, 80, 4);
+        assert_eq!(toast_slot_rect(area, 0), None);
+    }
+
+    #[test]
+    fn toast_slot_rect_none_on_a_too_narrow_terminal() {
+        // Height is generous but width can't fit even the minimum toast body.
+        let area = Rect::new(0, 0, 6, 24);
+        assert_eq!(toast_slot_rect(area, 0), None);
+    }
+
+    #[test]
+    fn toast_slot_rect_stops_once_more_toasts_than_fit() {
+        // Sized to fit exactly one toast slot above the status bar:
+        // top margin(1) + box(3) + margin(1) + status bar(1) = 6 rows.
+        let area = Rect::new(0, 0, 80, 6);
+        assert!(toast_slot_rect(area, 0).is_some(), "first slot fits exactly");
+        assert_eq!(
+            toast_slot_rect(area, 1),
+            None,
+            "a second stacked toast has no remaining room"
+        );
+    }
+
+    #[test]
+    fn render_toasts_draws_in_the_bottom_right_and_leaves_the_status_row_blank() {
+        use crate::toast::ToastKind;
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let theme = Theme::dark();
+        let mut app = App::test_fixture();
+        let now = std::time::Instant::now();
+        app.toasts.push(ToastKind::Success, "saved", now);
+        app.toasts.push(ToastKind::Info, "syncing", now);
+
+        let mut term = Terminal::new(TestBackend::new(50, 12)).unwrap();
+        term.draw(|f| render_toasts(f, &app, &theme)).unwrap();
+        let buf = term.backend().buffer();
+
+        // The status bar's row (the very last one) is untouched by toasts —
+        // render_toasts must stay clear of it.
+        let last_row_blank = (0..50).all(|x| buf[(x, 11)].symbol() == " ");
+        assert!(last_row_blank, "toasts must not draw into the status bar row");
+
+        // The old top-right home for toasts is now empty.
+        let top_right_blank = (0..3).all(|y| (30..50).all(|x| buf[(x, y)].symbol() == " "));
+        assert!(top_right_blank, "toasts must have moved off the top-right corner");
+
+        // Something was actually painted near the bottom-right corner, just
+        // above the reserved status row.
+        let bottom_right_painted =
+            (7..11).any(|y| (30..50).any(|x| buf[(x, y)].symbol() != " "));
+        assert!(bottom_right_painted, "expected toast content near the bottom-right corner");
     }
 }
