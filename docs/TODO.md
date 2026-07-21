@@ -497,13 +497,13 @@ Permanent startup phase timings (startup.* ops in the exit perf summary) and a p
 ### [TODO] #81 Squash-merge origin link line
 Option: subtle grey linking line from a squash-merged branch's tip to the squash commit on the base. Depends on #82's classification data.
 
-### [TODO] #82 Squash-merged branches not hidden
+### [DONE] #82 Squash-merged branches not hidden
 Bug: branches merged via squash aren't being hidden by hide-merged. Investigate patch-id + gh-signal classification paths.
 
 ### [TODO] #83 Remote-ahead-of-local display question
 Clarify/verify: is the remote branch shown when it's ahead of the local branch and the remote tip is at a HEAD? Document current behavior, then decide.
 
-### [TODO] #84 F5 fast-forwards non-divergent locals (option)
+### [DONE] #84 F5 fast-forwards non-divergent locals (option)
 Option: refresh (F5) also fast-forwards local branches that are strictly behind their upstream (no divergence).
 
 ### [DONE] #85 Toasts bottom-right
