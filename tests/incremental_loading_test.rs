@@ -125,11 +125,11 @@ fn chunk_continuation_has_no_gaps_or_duplicates() {
     let (_dir, git, _oids) = linear_repo(30);
     let branches = git.get_branches().unwrap();
 
-    let full = git.get_commits(30, &branches, &[]).unwrap();
+    let full = git.get_commits(30, &branches, &[], false).unwrap();
     let full_oids: Vec<Oid> = full.iter().map(|c| c.oid).collect();
 
     for limit in [10usize, 20, 30, 40] {
-        let chunk = git.get_commits(limit, &branches, &[]).unwrap();
+        let chunk = git.get_commits(limit, &branches, &[], false).unwrap();
         let chunk_oids: Vec<Oid> = chunk.iter().map(|c| c.oid).collect();
         let expected = &full_oids[..limit.min(full_oids.len())];
         assert_eq!(

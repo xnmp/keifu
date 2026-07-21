@@ -96,7 +96,12 @@ impl App {
         let remotes = repo.remotes();
         let tags = repo.get_tags();
         phase!("tags");
-        let commits = repo.get_commits(INITIAL_COMMIT_LIMIT, &visible_branches, &stashes)?;
+        let commits = repo.get_commits(
+            INITIAL_COMMIT_LIMIT,
+            &visible_branches,
+            &stashes,
+            ui_state.hide_merged_branches,
+        )?;
         phase!("commits");
         // If the first walk yielded fewer than the limit, the whole history fits.
         let all_commits_loaded = commits.len() < INITIAL_COMMIT_LIMIT;

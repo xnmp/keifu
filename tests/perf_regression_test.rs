@@ -125,7 +125,7 @@ fn rasterize_window_budget() {
     let branches = repo.get_branches().unwrap();
     let stashes = repo.get_stashes();
     let tags = repo.get_tags();
-    let commits = repo.get_commits(200, &branches, &stashes).unwrap();
+    let commits = repo.get_commits(200, &branches, &stashes, false).unwrap();
     let layout = build_graph(&commits, &branches, &tags, &stashes, None, None, &[]);
     let theme = Theme::dark();
     let n = layout.nodes.len();

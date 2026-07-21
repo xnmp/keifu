@@ -719,7 +719,7 @@ fn detached_orphan_head_commit_appears_in_history() {
     // The branch still points at `first`; `orphan` is reachable only via HEAD.
     let branches = git_repo.get_branches().unwrap();
     let stashes = git_repo.get_stashes();
-    let commits = git_repo.get_commits(500, &branches, &stashes).unwrap();
+    let commits = git_repo.get_commits(500, &branches, &stashes, false).unwrap();
     assert!(
         commits.iter().any(|c| c.oid == orphan),
         "detached HEAD commit missing from history"
