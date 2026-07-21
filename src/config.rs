@@ -72,6 +72,9 @@ pub struct RefreshConfig {
     /// Interval in seconds for remote fetch (minimum: 10, default: 60)
     #[serde(deserialize_with = "deserialize_fetch_interval")]
     pub fetch_interval: u64,
+    /// On a manual refresh (F5), fast-forward local branches strictly behind
+    /// their upstream (no divergence). Off by default.
+    pub fast_forward_on_refresh: bool,
 }
 
 impl Default for RefreshConfig {
@@ -81,6 +84,7 @@ impl Default for RefreshConfig {
             refresh_interval: 10,
             auto_fetch: true,
             fetch_interval: 60,
+            fast_forward_on_refresh: false,
         }
     }
 }
@@ -159,6 +163,7 @@ impl Config {
         doc["refresh"]["refresh_interval"] = value(self.refresh.refresh_interval as i64);
         doc["refresh"]["auto_fetch"] = value(self.refresh.auto_fetch);
         doc["refresh"]["fetch_interval"] = value(self.refresh.fetch_interval as i64);
+        doc["refresh"]["fast_forward_on_refresh"] = value(self.refresh.fast_forward_on_refresh);
         doc["ui"]["theme"] = value(self.ui.theme.clone());
         doc["ui"]["graph_renderer"] = value(self.ui.graph_renderer.as_str());
     }
@@ -664,6 +669,7 @@ custom_unknown_key = \"keep me\"
                 refresh_interval: 30,
                 auto_fetch: true,
                 fetch_interval: 120,
+                fast_forward_on_refresh: true,
             },
             ui: UiConfig {
                 theme: "dark".to_string(),
@@ -677,6 +683,7 @@ custom_unknown_key = \"keep me\"
         assert!(out.contains("auto_refresh = false"));
         assert!(out.contains("refresh_interval = 30"));
         assert!(out.contains("fetch_interval = 120"));
+        assert!(out.contains("fast_forward_on_refresh = true"));
         assert!(out.contains("theme = \"dark\""));
         assert!(out.contains("graph_renderer = \"pixel\""));
         // …while comments and unknown keys survive.
@@ -689,6 +696,7 @@ custom_unknown_key = \"keep me\"
         assert!(!reloaded.refresh.auto_refresh);
         assert_eq!(reloaded.refresh.refresh_interval, 30);
         assert_eq!(reloaded.refresh.fetch_interval, 120);
+        assert!(reloaded.refresh.fast_forward_on_refresh);
         assert_eq!(reloaded.ui.theme, "dark");
         assert_eq!(reloaded.ui.graph_renderer, GraphRenderer::Pixel);
     }

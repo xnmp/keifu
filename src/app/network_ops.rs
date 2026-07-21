@@ -17,6 +17,14 @@ impl App {
         match result {
             Ok(()) => {
                 self.refresh_latches.auto_fetch = false;
+                // Opt-in fast-forward of local branches strictly behind their
+                // upstream. Only on a user-initiated refresh (F5 / manual fetch),
+                // never on silent auto-fetch. Runs after the fetch made remote-
+                // tracking refs current and before the refresh below, so the one
+                // refresh renders the moved branches at their new tips.
+                if !silent && self.config.refresh.fast_forward_on_refresh {
+                    self.fast_forward_on_refresh();
+                }
                 if matches!(self.mode, AppMode::FileDiff { .. }) {
                     self.pending_refresh = true;
                 } else {
@@ -345,6 +353,35 @@ impl App {
 
     pub(crate) fn start_fetch_all(&mut self) {
         self.dispatch_net_op(RetryableOp::FetchAll, 0);
+    }
+
+    /// Fast-forward every local branch strictly behind its upstream (opt-in via
+    /// `refresh.fast_forward_on_refresh`). Reports a single summary toast when
+    /// anything moved and stays silent when nothing did; per-branch failures are
+    /// logged and folded into the summary rather than aborting the sweep. The
+    /// caller refreshes afterward so moved branches render at their new tips.
+    pub(crate) fn fast_forward_on_refresh(&mut self) {
+        let summary = crate::git::operations::fast_forward_behind_branches(self.repo.repo());
+        if summary.is_empty() {
+            return;
+        }
+        for (branch, err) in &summary.failed {
+            tracing::warn!(branch = %branch, error = %err, "fast-forward on refresh failed");
+        }
+        let moved = summary.moved.len();
+        let failed = summary.failed.len();
+        let plural = if moved == 1 { "" } else { "es" };
+        if failed == 0 {
+            self.toast(
+                crate::toast::ToastKind::Success,
+                format!("Fast-forwarded {moved} branch{plural}"),
+            );
+        } else {
+            self.toast(
+                crate::toast::ToastKind::Error,
+                format!("Fast-forwarded {moved}, {failed} failed"),
+            );
+        }
     }
 
     /// F5 "full update": force an immediate PR refetch, refresh the graph/status
