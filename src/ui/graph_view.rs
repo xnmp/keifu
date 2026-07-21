@@ -1663,6 +1663,23 @@ fn render_graph_line_tail<'a>(
     // `mute_merges` (any merge, never HEAD), so the two options unify rather than
     // duplicate. When on it implies muting even if `mute_merges` is off.
     let collapse_merge = ctx.metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
+    // PR-landed subject rewrite (#99): a commit whose raw subject is GitHub
+    // merge/squash machinery — "Merge pull request #123 from …" or "Title
+    // (#123)" — reads better as "<icon> #123 <PR title>". Qualifies via the
+    // same `is_pr_merge` detection for merge commits (so it agrees with the
+    // greying above), or the squash-subject parser for single-parent commits.
+    // `collapse_merge` is a stronger reduction (drops the message entirely),
+    // so it wins when both would otherwise apply — resolved down where the
+    // message text is actually chosen.
+    let pr_landed_subject = ctx.metadata_columns.pr_subjects.then(|| {
+        if is_pr_merge {
+            crate::pr::pr_landed_subject(&commit.message, &commit.full_message, true)
+        } else if commit.parent_oids.len() == 1 {
+            crate::pr::pr_landed_subject(&commit.message, &commit.full_message, false)
+        } else {
+            None
+        }
+    }).flatten();
     // #92: any of the muted-merge categories above should read grey across the
     // whole row, not just the message — DIM alone is too subtle (terminal
     // support is inconsistent), so the hash/author/date columns get the same
@@ -1859,10 +1876,14 @@ fn render_graph_line_tail<'a>(
         .saturating_sub(tag_width)
         .saturating_sub(stash_width)
         .saturating_sub(right_width);
-    // Collapse (#59) replaces the whole message with a single merge glyph;
-    // otherwise the message is truncated to its width budget as usual.
+    // Collapse (#59) replaces the whole message with a single merge glyph — the
+    // strongest reduction, so it wins over a PR-subject rewrite (#99) on the
+    // same row. Otherwise a qualifying PR-landed commit shows "<icon> #n
+    // <title>"; anything else truncates the raw message as usual.
     let message = if collapse_merge {
         MERGE_ICON.to_string()
+    } else if let Some((number, title)) = &pr_landed_subject {
+        truncate_to_width(&format!("{PR_BADGE_ICON} #{number} {title}"), available_for_message)
     } else {
         truncate_to_width(&commit.message, available_for_message)
     };
@@ -2666,6 +2687,7 @@ mod tests {
             mute_base_merges: false,
             collapse_merges: false,
             avatars: false,
+            pr_subjects: true,
         }
     }
 
@@ -3187,6 +3209,7 @@ mod tests {
             mute_base_merges: false,
             collapse_merges: false,
             avatars: false,
+            pr_subjects: true,
         };
         render_row_with(node, open_prs, cols, &HashSet::new())
     }
@@ -3288,6 +3311,7 @@ mod tests {
             mute_base_merges: false,
             collapse_merges: false,
             avatars: false,
+            pr_subjects: true,
         };
         let author_text = format!("{:<8}", "a"); // author_name is "a", padded to 8
         let hash_text = "abc1234"; // short_id, already 7 chars
@@ -3349,6 +3373,7 @@ mod tests {
             mute_base_merges,
             collapse_merges,
             avatars: false,
+            pr_subjects: true,
         }
     }
 
@@ -3526,12 +3551,112 @@ mod tests {
             mute_base_merges: false,
             collapse_merges: true,
             avatars: false,
+            pr_subjects: true,
         };
         let line = render_row_with(&node, &HashMap::new(), cols, &HashSet::new());
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains(MERGE_ICON), "glyph shown");
         // The short hash (`abc1234`) still renders in its column.
         assert!(text.contains("abc1234"), "hash column preserved: {text:?}");
+    }
+
+    // ── PR-landed subject rewrite (#99) ───────────────────────────────
+
+    /// MetadataColumns with only `pr_subjects` and `collapse_merges` set.
+    fn cols_pr_subjects(pr_subjects: bool, collapse_merges: bool) -> MetadataColumns {
+        MetadataColumns {
+            author: false,
+            hash: false,
+            date: false,
+            mute_merges: false,
+            mute_base_merges: false,
+            collapse_merges,
+            avatars: false,
+            pr_subjects,
+        }
+    }
+
+    /// A merge node whose full message carries a body (subject + blank line +
+    /// title), the real shape of a GitHub merge-commit message.
+    fn merge_node_with_body(oid_byte: u8, subject: &str, title: &str, parents: [u8; 2]) -> GraphNode {
+        let mut n = merge_node_full(oid_byte, subject, parents);
+        n.commit.as_mut().unwrap().full_message = format!("{subject}\n\n{title}\n");
+        n
+    }
+
+    #[test]
+    fn pr_merge_commit_rewritten_to_number_and_title_when_toggle_on() {
+        let node = merge_node_with_body(
+            40,
+            "Merge pull request #123 from owner/feat",
+            "Add the frobnicator",
+            [1, 2],
+        );
+        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("#123 Add the frobnicator"),
+            "rewritten subject present: {text:?}"
+        );
+        assert!(
+            !text.contains("Merge pull request"),
+            "raw merge subject text absent: {text:?}"
+        );
+    }
+
+    #[test]
+    fn pr_merge_commit_keeps_raw_subject_when_toggle_off() {
+        let node = merge_node_with_body(
+            41,
+            "Merge pull request #123 from owner/feat",
+            "Add the frobnicator",
+            [1, 2],
+        );
+        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("Merge pull request #123 from owner/feat"),
+            "raw subject kept when toggle is off: {text:?}"
+        );
+        assert!(!text.contains("#123 Add the frobnicator"), "no rewrite: {text:?}");
+    }
+
+    #[test]
+    fn squash_commit_subject_rewritten_to_number_and_title() {
+        let node = commit_node(50, "Add the frobnicator (#456)", &[]);
+        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("#456 Add the frobnicator"),
+            "rewritten squash subject: {text:?}"
+        );
+        assert!(!text.contains("(#456)"), "raw parens suffix absent: {text:?}");
+    }
+
+    #[test]
+    fn squash_commit_keeps_raw_subject_when_toggle_off() {
+        let node = commit_node(51, "Add the frobnicator (#456)", &[]);
+        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("Add the frobnicator (#456)"),
+            "raw subject kept when toggle is off: {text:?}"
+        );
+    }
+
+    #[test]
+    fn collapse_merges_wins_over_pr_subject_rewrite_on_the_same_row() {
+        let node = merge_node_with_body(
+            42,
+            "Merge pull request #123 from owner/feat",
+            "Add the frobnicator",
+            [1, 2],
+        );
+        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, true), &HashSet::new());
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains(MERGE_ICON), "collapse glyph wins: {text:?}");
+        assert!(!text.contains("#123"), "pr-subject rewrite suppressed: {text:?}");
+        assert!(!text.contains("Merge pull request"), "raw subject also suppressed: {text:?}");
     }
 
     // ── connector folding (pixel mode) ───────────────────────────────

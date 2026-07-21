@@ -551,5 +551,5 @@ Bug: squash-merged branches still aren't hidden by hide-merged and draw no link 
 ### [DONE] #98 PR badges before branch pill
 In graph rows, PR badges now render BEFORE the branch name pill.
 
-### [TODO] #99 PR-styled subjects for PR-landing commits (option)
-Toggleable option: a commit that landed a merged PR — the PR's merge commit or its squash commit — shows an icon + PR number + title instead of the raw "Merge pull request #x from y" / "title (#x)" subject.
+### [DONE] #99 PR-styled subjects for PR-landing commits (option)
+Toggleable option (default ON, `pr_subjects` in `MetadataColumns`): a commit that landed a merged PR — the PR's merge commit or its squash commit — shows an icon + PR number + title instead of the raw "Merge pull request #x from y" / "title (#x)" subject. Pure parser `pr::pr_landed_subject` extracts `(number, title)` strictly (merge: number off the subject, title = first non-blank body line after it, else `None` rather than inventing one; squash: strict `<title> (#n)` suffix, exactly one space before the paren, nothing after). Rendered in `render_graph_line_tail`; `collapse_merges` wins when both would apply to the same row.

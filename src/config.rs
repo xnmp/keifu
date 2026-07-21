@@ -197,6 +197,10 @@ pub struct MetadataColumns {
     pub collapse_merges: bool,
     /// Show round author avatars (pixel mode only).
     pub avatars: bool,
+    /// Rewrite a commit that landed a merged GitHub PR — a PR merge commit or
+    /// a squash commit — to show "<icon> #<n> <PR title>" instead of the raw
+    /// subject (issue #99). Default on.
+    pub pr_subjects: bool,
 }
 
 impl Default for MetadataColumns {
@@ -209,6 +213,7 @@ impl Default for MetadataColumns {
             mute_base_merges: false,
             collapse_merges: false,
             avatars: false,
+            pr_subjects: true,
         }
     }
 }
@@ -223,10 +228,11 @@ pub enum MetadataColumn {
     MuteBaseMerges,
     CollapseMerges,
     Avatars,
+    PrSubjects,
 }
 
 impl MetadataColumn {
-    pub const ALL: [MetadataColumn; 7] = [
+    pub const ALL: [MetadataColumn; 8] = [
         Self::Author,
         Self::Hash,
         Self::Date,
@@ -234,6 +240,7 @@ impl MetadataColumn {
         Self::MuteBaseMerges,
         Self::CollapseMerges,
         Self::Avatars,
+        Self::PrSubjects,
     ];
 
     pub fn label(self) -> &'static str {
@@ -245,6 +252,7 @@ impl MetadataColumn {
             Self::MuteBaseMerges => "Mute base-update merges",
             Self::CollapseMerges => "Collapse merge messages",
             Self::Avatars => "Avatars",
+            Self::PrSubjects => "PR number & title subjects",
         }
     }
 }
@@ -259,6 +267,7 @@ impl MetadataColumns {
             MetadataColumn::MuteBaseMerges => self.mute_base_merges,
             MetadataColumn::CollapseMerges => self.collapse_merges,
             MetadataColumn::Avatars => self.avatars,
+            MetadataColumn::PrSubjects => self.pr_subjects,
         }
     }
 
@@ -271,6 +280,7 @@ impl MetadataColumns {
             MetadataColumn::MuteBaseMerges => self.mute_base_merges = !self.mute_base_merges,
             MetadataColumn::CollapseMerges => self.collapse_merges = !self.collapse_merges,
             MetadataColumn::Avatars => self.avatars = !self.avatars,
+            MetadataColumn::PrSubjects => self.pr_subjects = !self.pr_subjects,
         }
     }
 }
@@ -526,6 +536,9 @@ mod tests {
         // Avatars default OFF (opt-in via Shift+M), including for an older
         // state file lacking the key.
         assert!(!state.metadata_columns.avatars);
+        // PR-landed subjects default ON, including for an older state file
+        // lacking the key.
+        assert!(state.metadata_columns.pr_subjects);
     }
 
     #[test]
@@ -547,6 +560,7 @@ mod tests {
                 mute_base_merges: true,
                 collapse_merges: true,
                 avatars: false,
+                pr_subjects: false,
             },
         };
         let serialized = toml::to_string(&state).unwrap();
@@ -564,6 +578,7 @@ mod tests {
         assert!(restored.metadata_columns.mute_base_merges);
         assert!(restored.metadata_columns.collapse_merges);
         assert!(!restored.metadata_columns.avatars);
+        assert!(!restored.metadata_columns.pr_subjects);
     }
 
     #[test]
@@ -578,6 +593,20 @@ mod tests {
         cols.toggle(MetadataColumn::MuteMerges);
         assert!(!cols.mute_merges);
         assert!(!cols.is_visible(MetadataColumn::MuteMerges));
+    }
+
+    #[test]
+    fn pr_subjects_defaults_on_and_round_trips() {
+        // Default is ON; an older state.toml (no pr_subjects key) keeps it ON.
+        assert!(MetadataColumns::default().pr_subjects);
+        let older: UiState =
+            toml::from_str("[metadata_columns]\nauthor = true\nhash = true\ndate = true\n").unwrap();
+        assert!(older.metadata_columns.pr_subjects, "missing key defaults ON");
+
+        let mut cols = MetadataColumns::default();
+        cols.toggle(MetadataColumn::PrSubjects);
+        assert!(!cols.pr_subjects);
+        assert!(!cols.is_visible(MetadataColumn::PrSubjects));
     }
 
     #[test]
