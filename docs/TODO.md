@@ -506,7 +506,7 @@ Clarify/verify: is the remote branch shown when it's ahead of the local branch a
 ### [TODO] #84 F5 fast-forwards non-divergent locals (option)
 Option: refresh (F5) also fast-forwards local branches that are strictly behind their upstream (no divergence).
 
-### [TODO] #85 Toasts bottom-right
+### [DONE] #85 Toasts bottom-right
 Move toast stack to the bottom-right corner.
 
 ### [DONE] #86 "7-shaped" corner artifacts on fork rows
