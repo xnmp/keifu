@@ -639,6 +639,20 @@ pub fn is_divergent_pull_error(stderr: &str) -> bool {
         || stderr.contains("fatal: Not possible")
 }
 
+/// Whether a pull failure is due to uncommitted local changes blocking the
+/// merge/rebase (dirty worktree or index) — an expected, user-actionable
+/// condition (commit or stash), not a hard error. Covers both the merge form
+/// ("would be overwritten by merge ... commit or stash") and the rebase forms
+/// ("cannot pull with rebase: You have unstaged changes / Your index contains
+/// uncommitted changes").
+pub fn is_dirty_worktree_pull_error(stderr: &str) -> bool {
+    stderr.contains("would be overwritten")
+        || stderr.contains("cannot pull with rebase")
+        || stderr.contains("commit or stash them")
+        || stderr.contains("You have unstaged changes")
+        || stderr.contains("index contains uncommitted changes")
+}
+
 /// Extract the missing ref name from a "couldn't find remote ref <ref>" error.
 fn parse_missing_ref(stderr: &str) -> Option<String> {
     stderr
@@ -672,6 +686,7 @@ pub fn humanize_git_error(stderr: &str) -> Option<String> {
     }
     if stderr.contains("would be overwritten by merge")
         || stderr.contains("Your local changes to the following files would be overwritten")
+        || stderr.contains("cannot pull with rebase")
     {
         return Some("Local changes would be overwritten — commit or stash them first".to_string());
     }
@@ -1228,8 +1243,9 @@ pub fn signature_status_label(code: char) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_auth_url, humanize_git_error, is_divergent_pull_error, is_https_auth_failure,
-        signature_status_label, url_host, AuthUrl, OpOutcome, PullMode,
+        extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
+        is_divergent_pull_error, is_https_auth_failure, signature_status_label, url_host, AuthUrl,
+        OpOutcome, PullMode,
     };
 
     #[test]
@@ -1298,6 +1314,29 @@ mod tests {
     }
 
     #[test]
+    fn dirty_worktree_predicate_matches_merge_and_rebase_forms() {
+        // Merge form.
+        assert!(is_dirty_worktree_pull_error(
+            "error: Your local changes to the following files would be overwritten by merge:\n\ta.txt\nPlease commit your changes or stash them before you merge.\nAborting"
+        ));
+        // Rebase forms (dirty worktree / dirty index).
+        assert!(is_dirty_worktree_pull_error(
+            "error: cannot pull with rebase: You have unstaged changes."
+        ));
+        assert!(is_dirty_worktree_pull_error(
+            "error: cannot pull with rebase: Your index contains uncommitted changes."
+        ));
+        // Divergence and auth failures are NOT dirty-worktree conditions.
+        assert!(!is_dirty_worktree_pull_error(
+            "fatal: Not possible to fast-forward, aborting."
+        ));
+        assert!(!is_dirty_worktree_pull_error(
+            "fatal: Authentication failed for 'https://github.com/o/r'"
+        ));
+        assert!(!is_dirty_worktree_pull_error("Already up to date."));
+    }
+
+    #[test]
     fn humanize_maps_known_failures_to_guidance() {
         // Auth (both HTTPS credential and SSH key forms).
         assert!(humanize_git_error("fatal: could not read Username for 'https://github.com'")
@@ -1315,6 +1354,10 @@ mod tests {
         )
         .unwrap()
         .contains("commit or stash"));
+        // Rebase-mode dirty worktree gets the same commit-or-stash guidance.
+        assert!(humanize_git_error("error: cannot pull with rebase: You have unstaged changes.")
+            .unwrap()
+            .contains("commit or stash"));
         // index.lock.
         assert!(humanize_git_error(
             "fatal: Unable to create '/repo/.git/index.lock': File exists."
