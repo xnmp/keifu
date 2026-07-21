@@ -1351,17 +1351,45 @@ pub fn same_lane_ancestor_row(layout: &GraphLayout, selected_full_idx: usize) ->
 /// are merge commits that spawn onto new lanes (their non-first-parent edge
 /// absorbs this line instead of continuing it).
 ///
-/// Returns `None` for a connector/uncommitted row, or when nothing continues
-/// this lane upward — i.e. the tip of the lane.
+/// When no same-lane first-parent child exists — the selection sits at the
+/// tip of its lane — falls back to [`merge_commit_row`]: the commit on
+/// another lane that merged this lane in (this lane's oid as one of ITS
+/// non-first parents). This lets Ctrl+Up climb from a merged branch's tip
+/// straight to the merge commit instead of no-opping there.
+///
+/// Returns `None` only when nothing continues this lane upward at all —
+/// an unmerged branch tip, a connector/uncommitted row, or an out-of-range
+/// index.
 pub fn same_lane_descendant_row(layout: &GraphLayout, selected_full_idx: usize) -> Option<usize> {
     let node = layout.nodes.get(selected_full_idx)?;
     let commit = node.commit.as_ref()?;
     let (cur_oid, cur_lane) = (commit.oid, node.lane);
+    layout
+        .nodes
+        .iter()
+        .position(|n| {
+            n.lane == cur_lane
+                && n.commit
+                    .as_ref()
+                    .is_some_and(|c| c.parent_oids.first() == Some(&cur_oid))
+        })
+        .or_else(|| merge_commit_row(layout, cur_oid))
+}
+
+/// Row index of the commit that merged `oid` in — i.e. the earliest-row
+/// commit whose `parent_oids` contains `oid` at some index `i > 0` (a
+/// non-first, "merged in" parent edge; same rule `trace_lit_edges` uses to
+/// light a merge arc). Lane-agnostic: the merge commit lives on the branch
+/// being merged INTO, never on `oid`'s own lane.
+///
+/// If more than one commit merged this lane in, `layout.nodes` is walked
+/// top to bottom (newest first) so `position` naturally returns the
+/// topmost one.
+fn merge_commit_row(layout: &GraphLayout, oid: Oid) -> Option<usize> {
     layout.nodes.iter().position(|n| {
-        n.lane == cur_lane
-            && n.commit
-                .as_ref()
-                .is_some_and(|c| c.parent_oids.first() == Some(&cur_oid))
+        n.commit
+            .as_ref()
+            .is_some_and(|c| c.parent_oids.iter().skip(1).any(|p| *p == oid))
     })
 }
 
@@ -1770,10 +1798,10 @@ mod tests {
     }
 
     #[test]
-    fn same_lane_navigation_ignores_non_first_parent_merges() {
-        // The feature line F1—F2 is absorbed into B as a *non-first* parent,
-        // so walking descendants from F1/F2 must never jump to B — only a
-        // first-parent child continues a lane.
+    fn same_lane_navigation_ignores_non_first_parent_merges_for_ancestor_walk() {
+        // The feature line F1—F2 is absorbed into B as a *non-first* parent.
+        // Descending (Ctrl+Down, first-parent only) must never treat that as
+        // continuing the trunk lane.
         let (layout, [_a, _b, _c, d, f1, f2]) = lane_nav_fixture();
 
         let f1_row = row_of(&layout, f1);
@@ -1785,9 +1813,48 @@ mod tests {
             same_lane_ancestor_row(&layout, f2_row),
             Some(row_of(&layout, d))
         );
-        // ...but nothing continues *up* from F1 (no commit's first parent is
-        // F1 — B's first parent is C, not F1).
-        assert_eq!(same_lane_descendant_row(&layout, f1_row), None);
+    }
+
+    #[test]
+    fn same_lane_descendant_at_lane_top_jumps_to_the_merge_commit() {
+        // F1 is the tip of the feature lane: no commit's FIRST parent is F1
+        // (B's first parent is C), so the old behavior no-opped here. B's
+        // parents are [C, F1] though — F1 is B's non-first ("merged in")
+        // parent — so Ctrl+Up from F1 should now land on B, the commit that
+        // merged this lane into the trunk.
+        let (layout, [_a, b, _c, _d, f1, _f2]) = lane_nav_fixture();
+
+        assert_eq!(
+            same_lane_descendant_row(&layout, row_of(&layout, f1)),
+            Some(row_of(&layout, b))
+        );
+    }
+
+    #[test]
+    fn same_lane_descendant_unmerged_branch_tip_still_none() {
+        // A branch tip that nothing ever merges (not even as a non-first
+        // parent) must still no-op — a true end of the lane.
+        let (a, b, tip) = (oid(1), oid(2), oid(7));
+        let commits = vec![ci(tip, vec![b]), ci(a, vec![b]), ci(b, vec![])];
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[]);
+
+        assert_eq!(same_lane_descendant_row(&layout, row_of(&layout, tip)), None);
+    }
+
+    #[test]
+    fn same_lane_descendant_prefers_first_parent_child_over_merge_fallback() {
+        // Mid-lane navigation is unchanged: when a same-lane first-parent
+        // child exists, it wins even though this commit is ALSO merged
+        // elsewhere as a non-first parent — the fallback only kicks in when
+        // the first-parent search comes up empty.
+        let (layout, [_a, b, c, _d, _f1, _f2]) = lane_nav_fixture();
+
+        // B's first parent is C, so walking up from C lands on B exactly as
+        // before — B merging F1 in as a non-first parent doesn't interfere.
+        assert_eq!(
+            same_lane_descendant_row(&layout, row_of(&layout, c)),
+            Some(row_of(&layout, b))
+        );
     }
 
     #[test]
