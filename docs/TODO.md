@@ -526,3 +526,21 @@ Round 3 (user repro on keifu's own graph): a lane that terminates where a wide a
 
 ### [TODO] #90 Remote-counterpart disambiguation
 Follow-up from #88's adversarial review: when a branch has no upstream and exists on multiple remotes, the name-match fallback picks by list order; prefer the configured push remote and only trust an upstream whose short name matches. Low risk (target is displayed and secondary-key gated), but worth tightening.
+
+### [DONE] #91 Hide merged branches appears to do nothing
+Bug: toggling hide-merged has no visible effect. Investigate the setting → classification → graph filter data flow.
+
+### [DONE] #92 Merge commits not muted enough
+Merge commit rows should read as grey (subject/author/date), not just slightly dimmed.
+
+### [DONE] #93 Ctrl+Up at lane top jumps to merge target
+When lane navigation hits the top of a lane, Ctrl+Up should follow the merge edge into the branch the lane was merged INTO.
+
+### [DONE] #94 Trace toggle becomes a setting
+`t` trace toggle should be a settings entry; remove its indicator from the status bar.
+
+### [DONE] #95 Push feedback via toast
+Push outcome should report as a toast, not occupy the status bar.
+
+### [TODO] #96 Pull error (needs stash) blocks UI
+A pull failing on dirty local changes keeps showing on the status bar and the UI can't be accessed until dismissed. Error should be non-blocking (toast), ideally with stash guidance.
