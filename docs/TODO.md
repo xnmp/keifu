@@ -542,5 +542,5 @@ When lane navigation hits the top of a lane, Ctrl+Up should follow the merge edg
 ### [DONE] #95 Push feedback via toast
 Push outcome should report as a toast, not occupy the status bar.
 
-### [TODO] #96 Pull error (needs stash) blocks UI
+### [DONE] #96 Pull error (needs stash) blocks UI
 A pull failing on dirty local changes keeps showing on the status bar and the UI can't be accessed until dismissed. Error should be non-blocking (toast), ideally with stash guidance.
