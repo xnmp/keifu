@@ -30,15 +30,29 @@ impl App {
         terminal_bg: Option<(u8, u8, u8)>,
     ) -> Result<Self> {
         let now = Instant::now();
+        // Startup phase timings, folded into the exit perf summary (and the
+        // live slow-op log) so "startup feels slow" reports come with their
+        // own breakdown — the #78 sync-classification regression sat invisible
+        // here for lack of exactly this.
+        let mut perf = crate::perf::PerfStats::default();
+        let mut phase_started = Instant::now();
+        macro_rules! phase {
+            ($name:literal) => {{
+                perf.record(concat!("startup.", $name), phase_started.elapsed());
+                phase_started = Instant::now();
+            }};
+        }
         let repo_path = repo.path.clone();
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
         let stashes = repo.get_stashes();
+        phase!("stashes");
         // The per-branch picker hides nothing at startup, but the show/hide-
         // remotes toggle is persisted, so honour it here to avoid a first-frame
         // flash of remote-only commits that the next refresh would remove.
         let branches = repo.get_branches()?;
+        phase!("branches");
         // Persisted visibility toggles are honoured here to avoid a first-frame
         // flash of commits the next refresh would remove.
         let remote_only = if ui_state.hide_remote_branches {
@@ -68,6 +82,7 @@ impl App {
         } else {
             std::collections::HashSet::new()
         };
+        phase!("classify_merged");
         let visible_branches: Vec<BranchInfo> = branches
             .iter()
             .filter(|b| !remote_only.contains(&b.name))
@@ -76,10 +91,13 @@ impl App {
             .collect();
         let remotes = repo.remotes();
         let tags = repo.get_tags();
+        phase!("tags");
         let commits = repo.get_commits(INITIAL_COMMIT_LIMIT, &visible_branches, &stashes)?;
+        phase!("commits");
         // If the first walk yielded fewer than the limit, the whole history fits.
         let all_commits_loaded = commits.len() < INITIAL_COMMIT_LIMIT;
         let (working_tree_status, initial_message) = Self::working_tree_status_snapshot(&repo);
+        phase!("working_tree_status");
         let initial_message_time = initial_message.as_ref().map(|_| now);
         let op_state = repo.operation_state();
         let conflict_count = repo.conflicted_count();
@@ -96,6 +114,7 @@ impl App {
             head_commit_oid,
         );
 
+        phase!("build_graph");
         let mut graph_nav = GraphNav::new();
         graph_nav.rebuild_branch_positions(&graph_layout, &repo.remotes());
         let has_uncommitted_node = graph_layout
@@ -106,6 +125,9 @@ impl App {
             graph_nav.selected_branch_position = Some(0);
         }
 
+        // The last phase!() leaves a restart nobody reads; acknowledge it.
+        let _ = phase_started;
+        perf.record("startup.app_new_total", now.elapsed());
         let mut app = Self {
             mode: AppMode::Normal,
             repo,
@@ -206,7 +228,7 @@ impl App {
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,
-            perf: crate::perf::PerfStats::default(),
+            perf,
             mouse_layout: MouseLayout::default(),
             last_click: None,
             files_view_offset: 0,
