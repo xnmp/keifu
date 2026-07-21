@@ -487,3 +487,6 @@ The pixel spec/protocol pass ran before the list render, so its sync window used
 
 ### [DONE] #78 Async startup merged-branch classification
 Merged-branch classification (ancestry + patch-id squash scans, >1s on branchy repos) ran synchronously in App::new. Now: synchronous only when hide-merged is on (async fill-in would flash hidden branches); dim-only mode starts unclassified and the background classifier — kicked at init — dims merged branches moments after the first frame.
+
+### [DONE] #79 Traced re-encode set: measured minimal; LRU protocol cache
+Measured (via new KEIFU_FORCE_PIXEL + encode-count logging): with tracing on, a selection move re-encodes only the 0-5 rows whose lit-state changed — the RowSpec-keyed protocol cache already restricts the set. Shipped the real gap found while measuring: the cache's at-cap prune nuked everything but the current frame (full re-encode when scrolling back); it now evicts the least-recently-used half.

@@ -99,6 +99,19 @@ cargo run --example raster_debug -- <repo> <commit_prefix> <cell_w> <cell_h> out
 DUMP_CELLS=1 ... # also dumps CellType rows and crossing dim flags
 ```
 
+To exercise the full spec → rasterize → encode pipeline under the headless
+debug server (where no terminal answers the protocol query), force a protocol:
+
+```bash
+KEIFU_FORCE_PIXEL=kitty KEIFU_LOG=debug keifu --debug-listen ... --log-file ...
+```
+
+The escapes land on the PTY unrendered, but the pipeline runs for real; each
+frame that rasterizes+encodes rows logs `sync_frame rasterized+encoded rows
+encoded=N window=M` at debug level — the per-keypress `encoded` count is the
+measure of protocol-cache churn (with tracing on it should stay at the handful
+of rows whose lit-state the selection move changed).
+
 `examples/gap_scan.rs` scans such a PNG for hairline gaps (short background
 runs between strokes) and can crop+magnify a region:
 
