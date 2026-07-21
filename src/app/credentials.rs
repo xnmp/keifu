@@ -71,6 +71,7 @@ impl App {
             RetryableOp::Push(PushSpec::Current) => self.repo.head_upstream_remote(),
             RetryableOp::Push(PushSpec::Publish { remote, .. }) => Some(remote.clone()),
             RetryableOp::Push(PushSpec::ToRemote { remote }) => Some(remote.clone()),
+            RetryableOp::Push(PushSpec::Delete { remote, .. }) => Some(remote.clone()),
             RetryableOp::Pull { remote: Some(r), .. } => Some(r.clone()),
             RetryableOp::Pull { remote: None, .. } => self.repo.head_upstream_remote(),
         };

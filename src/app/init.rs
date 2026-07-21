@@ -153,6 +153,7 @@ impl App {
                 files_pane
             },
             hidden_branches: std::collections::HashSet::new(),
+            pending_remote_deletions: std::collections::HashSet::new(),
             branch_authors: std::collections::HashMap::new(),
             branch_authors_key: Vec::new(),
             commit_editor: crate::text_editor::TextEditor::new(),

@@ -29,6 +29,11 @@ pub enum Action {
     Checkout,
     CreateBranch,
     DeleteBranch,
+    /// Secondary confirm in a delete-branch dialog: also delete the branch's
+    /// remote counterpart. Bound to Ctrl+Enter (with a plain `R` fallback for
+    /// terminals that can't encode Ctrl+Enter). Only acts on a
+    /// [`crate::app::ConfirmAction::DeleteBranchWithRemote`]; a no-op otherwise.
+    ConfirmDeleteBranchAndRemote,
     Fetch,
     Pull,
     Push,

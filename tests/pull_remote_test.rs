@@ -8,8 +8,8 @@
 use std::path::Path;
 
 use keifu::git::operations::{
-    create_branch, delete_remote_branch, fetch_remote, is_divergent_pull_error, prune_remote, pull,
-    push_current, push_set_upstream, OpOutcome, PullMode,
+    create_branch, fetch_remote, is_divergent_pull_error, prune_remote, pull,
+    push_current, push_delete, push_set_upstream, OpOutcome, PullMode,
 };
 use keifu::git::{GitRepository, OperationState};
 
@@ -220,7 +220,7 @@ fn delete_remote_branch_removes_it_from_remote() {
     git_cli(&path, &["push", "origin", "feature"]);
     assert!(!git_cli(&path, &["ls-remote", "--heads", "origin", "feature"]).trim().is_empty());
 
-    delete_remote_branch(&path, "origin", "feature").unwrap();
+    push_delete(&path, "origin", "feature", None).unwrap();
 
     assert!(
         git_cli(&path, &["ls-remote", "--heads", "origin", "feature"]).trim().is_empty(),

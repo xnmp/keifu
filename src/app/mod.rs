@@ -21,7 +21,7 @@ use crate::{
             apply_patch_cached_reverse, apply_patch_worktree_reverse, cherry_pick,
             checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
-            create_lightweight_tag, delete_branch, delete_remote_branch, delete_tag,
+            create_lightweight_tag, delete_branch, delete_tag,
             extract_auth_url, get_last_commit_message, is_annotated_tag, is_https_auth_failure,
             reset_hard_checked, url_host,
             humanize_git_error, is_divergent_pull_error, merge_branch, prune_remote, push_tag,
@@ -689,6 +689,15 @@ pub enum ConfirmAction {
     /// Apply the newest undo-ledger entry (branch/tag delete, merge, pull, rename).
     Undo,
     DeleteBranch(String),
+    /// Delete a local branch that also has a remote counterpart. Plain confirm
+    /// (Enter) deletes only the local branch; the secondary confirm
+    /// (Ctrl+Enter / `R`, see [`crate::action::Action::ConfirmDeleteBranchAndRemote`])
+    /// also deletes `remote/branch` on the remote.
+    DeleteBranchWithRemote {
+        name: String,
+        remote: String,
+        branch: String,
+    },
     /// Merge `name` into the current branch. `is_remote` is the selected
     /// branch's `BranchInfo::is_remote` at selection time, threaded through
     /// explicitly so the merge resolves `refs/remotes/<name>` for a
@@ -888,6 +897,13 @@ pub struct App {
     /// Files pane subsystem state
     pub files_pane: FilesPaneState,
     pub hidden_branches: std::collections::HashSet<String>,
+    /// Remote-tracking refnames (`origin/feature`) whose deletion is in flight.
+    /// Filtered out of the graph so an optimistic delete's branch disappears
+    /// immediately and stays gone across any refresh that fires before the
+    /// async `git push --delete` completes (the on-disk ref lingers until then).
+    /// Cleared per refname when the delete op resolves — success leaves the ref
+    /// genuinely gone, failure triggers a refresh so it reappears.
+    pub pending_remote_deletions: std::collections::HashSet<String>,
     /// Branch name -> author name, shown in the branch-filter picker. Computed
     /// lazily when the picker opens (see `open_branch_filter`), never on every
     /// refresh — attribution runs one revwalk per branch.

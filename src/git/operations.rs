@@ -873,8 +873,16 @@ pub fn push_to_origin(repo_path: &str) -> Result<()> {
 }
 
 /// Delete a branch on a remote (`git push <remote> --delete <branch>`).
-pub fn delete_remote_branch(repo_path: &str, remote: &str, branch: &str) -> Result<()> {
-    run_git(repo_path, &["push", remote, "--delete", branch])?;
+///
+/// Credentials-aware so it flows through the same async op + auth-retry pipeline
+/// as a normal push ([`crate::app::PushSpec::Delete`]).
+pub fn push_delete(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    run_git_creds(repo_path, &["push", remote, "--delete", branch], creds)?;
     Ok(())
 }
 

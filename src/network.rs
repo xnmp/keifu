@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use crate::config::RefreshConfig;
 use crate::git::operations::{
-    fetch_all, fetch_remote, pull, push_current, push_head_to_remote, push_set_upstream, OpOutcome,
-    PullMode,
+    fetch_all, fetch_remote, pull, push_current, push_delete, push_head_to_remote,
+    push_set_upstream, OpOutcome, PullMode,
 };
 use crate::git::Credentials;
 
@@ -22,6 +22,10 @@ pub enum PushSpec {
     /// (`git push <remote> HEAD`) — chosen when the picked remote isn't the
     /// configured upstream.
     ToRemote { remote: String },
+    /// Delete `branch` on `remote` (`git push <remote> --delete <branch>`).
+    /// Routed through the push pipeline so it shares the auth-retry + busy-guard
+    /// machinery; the UI removes the branch optimistically before dispatch.
+    Delete { remote: String, branch: String },
 }
 
 /// Manages async fetch/pull/push operations and auto-refresh timers.
@@ -136,6 +140,7 @@ impl NetworkManager {
                 format!("Publishing {branch} to {remote}...")
             }
             PushSpec::ToRemote { remote } => format!("Pushing to {remote}..."),
+            PushSpec::Delete { remote, branch } => format!("Deleting {remote}/{branch}..."),
         };
         thread::spawn(move || {
             let result = match spec {
@@ -145,6 +150,9 @@ impl NetworkManager {
                 }
                 PushSpec::ToRemote { remote } => {
                     push_head_to_remote(&path, &remote, creds.as_ref())
+                }
+                PushSpec::Delete { remote, branch } => {
+                    push_delete(&path, &remote, &branch, creds.as_ref())
                 }
             }
             .map_err(|e| e.to_string());
@@ -271,5 +279,16 @@ impl NetworkManager {
         let _ = tx.send(result);
         self.fetch_receiver = Some(rx);
         self.fetch_silent = silent;
+    }
+
+    /// Test-only: complete a push (or push-based delete) synchronously with
+    /// `result`, without spawning a thread, so `poll_push` immediately yields it.
+    /// Lets `update_push_status` completion handling (incl. optimistic-delete
+    /// restore) be exercised deterministically.
+    #[cfg(test)]
+    pub(crate) fn complete_push_for_test(&mut self, result: Result<(), String>) {
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(result);
+        self.push_receiver = Some(rx);
     }
 }

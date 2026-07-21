@@ -363,6 +363,9 @@ impl App {
             .filter(|b| !self.hidden_branches.contains(&b.name))
             .filter(|b| !remote_only.contains(&b.name))
             .filter(|b| !(self.merged.hide && self.merged.branches.contains(&b.name)))
+            // Optimistically-deleted remote branches are hidden until their
+            // async `git push --delete` resolves (see `pending_remote_deletions`).
+            .filter(|b| !self.pending_remote_deletions.contains(&b.name))
             .cloned()
             .collect();
         self.commits = self
