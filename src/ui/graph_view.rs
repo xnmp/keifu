@@ -1778,6 +1778,22 @@ fn render_graph_line_tail<'a>(
     let (show_date, show_author, show_hash, right_width) =
         compute_right_side_visibility(remaining_for_content, ctx.metadata_columns);
 
+    // Render open-PR badge (#98: moved before the branch pill so PR context
+    // leads the row instead of trailing it). Emits nothing when absent, so
+    // there's no leading gap before the branch labels on PR-less rows.
+    if let Some((badge, color)) = &pr_badge {
+        let style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
+        let chip_start = left_width;
+        left_width += display_width(badge) + 1;
+        chips.push(ChipHit {
+            x_start: chip_start as u16,
+            x_end: (chip_start + display_width(badge)) as u16,
+            target: ChipTarget::PrBadge,
+        });
+        spans.push(Span::styled(badge.clone(), style));
+        spans.push(Span::raw(" "));
+    }
+
     // Render branch labels
     for (i, (label, style)) in branch_display.iter().enumerate() {
         if i > 0 {
@@ -1806,24 +1822,10 @@ fn render_graph_line_tail<'a>(
         left_width += 1;
     }
 
-    // Render merged badge (after branch labels, before the PR badge)
+    // Render merged badge (after branch labels)
     if let Some(badge) = &merged_badge_text {
         left_width += display_width(badge) + 1;
         spans.push(Span::styled(badge.clone(), merged_style(ctx.theme)));
-        spans.push(Span::raw(" "));
-    }
-
-    // Render open-PR badge (after branch labels, before tags)
-    if let Some((badge, color)) = &pr_badge {
-        let style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
-        let chip_start = left_width;
-        left_width += display_width(badge) + 1;
-        chips.push(ChipHit {
-            x_start: chip_start as u16,
-            x_end: (chip_start + display_width(badge)) as u16,
-            target: ChipTarget::PrBadge,
-        });
-        spans.push(Span::styled(badge.clone(), style));
         spans.push(Span::raw(" "));
     }
 
@@ -2521,6 +2523,65 @@ mod tests {
         let open = open_map(vec![("feat", pr(7))]); // head_oid None
         let tip = commit_node(9, "tip", &["feat"]);
         assert!(row_text(&tip, &open).contains("#7"));
+    }
+
+    #[test]
+    fn pr_badge_renders_before_branch_pill() {
+        // #98: the PR badge should lead the row, not trail the branch pill.
+        let open = open_map(vec![("feat", pr_head(77, 5))]);
+        let node = commit_node(5, "head of the feature", &["feat"]);
+        let line = render_row(&node, &open, false);
+
+        let badge_idx = line
+            .spans
+            .iter()
+            .position(|s| s.content.contains("#77"))
+            .unwrap_or_else(|| panic!("PR badge span not found: {line:?}"));
+        let branch_idx = line
+            .spans
+            .iter()
+            .position(|s| s.content.as_ref() == "[feat]")
+            .unwrap_or_else(|| panic!("branch pill span not found: {line:?}"));
+        assert!(
+            badge_idx < branch_idx,
+            "PR badge should render before the branch pill: {line:?}"
+        );
+
+        // Exactly one separating space span between the badge and the pill —
+        // no double space, no missing gap.
+        let between: Vec<&str> = line.spans[badge_idx + 1..branch_idx]
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(
+            between,
+            vec![" "],
+            "exactly one space between the badge and the pill: {line:?}"
+        );
+    }
+
+    #[test]
+    fn pr_badge_absent_leaves_single_separator_before_branch_pill() {
+        // A row with a branch pill but no PR badge must still be preceded by
+        // just the ordinary one-space graph/content separator — not a stray
+        // extra gap left over from the (now absent) badge slot.
+        let node = commit_node(9, "no pr here", &["feat"]);
+        let line = render_row(&node, &HashMap::new(), false);
+        let branch_idx = line
+            .spans
+            .iter()
+            .position(|s| s.content.as_ref() == "[feat]")
+            .unwrap_or_else(|| panic!("branch pill span not found: {line:?}"));
+        assert_eq!(
+            line.spans[branch_idx - 1].content.as_ref(),
+            " ",
+            "exactly one separator space before the pill: {line:?}"
+        );
+        assert_ne!(
+            line.spans[branch_idx - 2].content.as_ref(),
+            " ",
+            "no double space before the branch pill when there's no PR badge: {line:?}"
+        );
     }
 
     #[test]
