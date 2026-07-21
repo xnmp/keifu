@@ -515,8 +515,11 @@ Pixel graph: little 7-shaped sections at lower corners when many lines come from
 ### [DONE] #87 Input latency diagnostics
 MacBook still laggy with tracing off; keypresses appear to queue and "catch up" on the next press. Add event→action→draw timing logs to diagnose.
 
-### [TODO] #88 Ctrl+Enter deletes local+remote branch
+### [DONE] #88 Ctrl+Enter deletes local+remote branch
 Branch delete confirm: third option (Ctrl+Enter) that also deletes the remote branch when one exists.
 
-### [TODO] #89 Optimistic remote branch deletion
+### [DONE] #89 Optimistic remote branch deletion
 Remote branch deletion updates the UI immediately and reconciles on failure, instead of blocking on the remote round-trip.
+
+### [TODO] #90 Remote-counterpart disambiguation
+Follow-up from #88's adversarial review: when a branch has no upstream and exists on multiple remotes, the name-match fallback picks by list order; prefer the configured push remote and only trust an upstream whose short name matches. Low risk (target is displayed and secondary-key gated), but worth tightening.
