@@ -294,16 +294,33 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Pre-render pass: compute layout metrics that update App scroll state
     let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
 
-    // Pixel graph pre-pass: (re)build the row specs and transmit their
-    // protocols (needs &mut app) before the immutable borrow taken by the graph
-    // widget. Specs are capped to the width the overlay will draw and cached
-    // until the layout, filter, or width changes.
-    // Branch-trace dimming for the visible window, layered onto the cached base
-    // specs. `Some` only while tracing is active with a non-empty lineage; the
-    // owned Vec lives until the overlay pass so both `sync_frame` and
-    // `overlay_pixel_graph` see the same dimmed rows.
+    // Render widgets
+    // Inner height (minus the block's top/bottom borders) is the drawable row
+    // count; the widget builds only the rows this viewport can show.
+    // Pixel mode is decided up front (it changes connector folding); the pixel
+    // spec/protocol pass runs AFTER the list render so it sees the FINAL scroll
+    // offset — ratatui clamps a stale offset during render to keep the
+    // selection visible, and a window computed from the pre-render offset
+    // missed whole bands at the top/bottom on page jumps and G/g.
+    let pixel_mode = app.pixel_graph.is_some();
+    let graph_viewport = graph_area.height.saturating_sub(2);
+    let graph_widget =
+        GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode, graph_viewport);
+    app.graph_chip_hits = graph_widget.chip_hits.clone();
+    frame.render_stateful_widget(
+        graph_widget,
+        graph_area,
+        &mut app.graph_nav.graph_list_state,
+    );
+
+    // Pixel graph pass: (re)build the row specs, dim the window, and transmit
+    // protocols (needs &mut app), now that the list render has settled the
+    // offset. Specs are capped to the width the overlay will draw and cached
+    // until the layout, filter, or width changes. `pixel_frame_dim` is `Some`
+    // only while a dim source is active; the owned Vec lives until the overlay
+    // below so `sync_frame` and `overlay_pixel_graph` see the same dimmed rows.
     let mut pixel_frame_dim: Option<Vec<graph_pixels::RowSpec>> = None;
-    let pixel_mode = if app.pixel_graph.is_some() {
+    let pixel_active = if pixel_mode {
         let panel_available = graph_area
             .width
             .saturating_sub(2)
@@ -335,6 +352,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 specs,
             ));
         }
+        // The post-render offset: exactly what the overlay will draw from.
         let offset = app.graph_nav.graph_list_state.offset();
         let viewport = graph_area.height.saturating_sub(2) as usize;
         let base_len = app.pixel_specs_cache.as_ref().unwrap().4.len();
@@ -382,7 +400,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         };
         if !active {
             // Protocol creation kept failing — drop pixel rendering and fall
-            // back to Unicode glyphs for the rest of the session.
+            // back to Unicode glyphs for the rest of the session (the text
+            // renderer already drew this frame in pixel folding; the next
+            // frame renders full Unicode glyphs).
             app.pixel_graph = None;
         }
         active
@@ -393,26 +413,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Prepare avatar protocols for the visible authors (pixel mode + toggle on).
     // Built from an immutable borrow into an owned Vec first, so the mutable
     // `pixel_graph` borrow that transmits them doesn't overlap.
-    if pixel_mode && app.metadata_columns.avatars {
+    if pixel_active && app.metadata_columns.avatars {
         let reqs = build_avatar_reqs(app);
         if let Some(pg) = app.pixel_graph.as_mut() {
             pg.sync_avatars(&reqs);
         }
     }
 
-    // Render widgets
-    // Inner height (minus the block's top/bottom borders) is the drawable row
-    // count; the widget builds only the rows this viewport can show.
-    let graph_viewport = graph_area.height.saturating_sub(2);
-    let graph_widget =
-        GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode, graph_viewport);
-    app.graph_chip_hits = graph_widget.chip_hits.clone();
-    frame.render_stateful_widget(
-        graph_widget,
-        graph_area,
-        &mut app.graph_nav.graph_list_state,
-    );
-    if pixel_mode {
+    if pixel_active {
         // Draw the dimmed window overlay when tracing, else the cached base
         // specs. The on-screen rows the overlay reads are inside the window, so
         // the dim overlay always has real specs there.
