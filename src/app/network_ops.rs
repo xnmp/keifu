@@ -167,17 +167,27 @@ impl App {
                     }
                 }
             }
-            Err(e) => {
-                // A --ff-only pull that fails on divergence isn't an error to
-                // surface — offer merge/rebase instead.
-                if is_divergent_pull_error(&e) && self.last_pull.is_some() {
-                    self.mode = AppMode::PullDivergence { selected: 0 };
-                } else if !self.try_prompt_credentials(&e, flight) {
-                    self.show_git_error(e);
-                }
-            }
+            Err(e) => self.handle_pull_error(e, flight),
         }
         true
+    }
+
+    /// Route a pull failure to the right surface. Divergence offers the
+    /// merge/rebase picker; a dirty worktree (#96) is an expected, actionable
+    /// condition — an error toast, never the input-swallowing error modal;
+    /// auth failures prompt for credentials; anything else is a genuine error
+    /// and gets the modal.
+    fn handle_pull_error(&mut self, e: String, flight: Option<InFlightOp>) {
+        if is_divergent_pull_error(&e) && self.last_pull.is_some() {
+            self.mode = AppMode::PullDivergence { selected: 0 };
+        } else if is_dirty_worktree_pull_error(&e) {
+            let msg = humanize_git_error(&e).unwrap_or_else(|| {
+                "Pull blocked by local changes — commit or stash them first".to_string()
+            });
+            self.toast(ToastKind::Error, msg);
+        } else if !self.try_prompt_credentials(&e, flight) {
+            self.show_git_error(e);
+        }
     }
 
     pub fn is_fetching(&self) -> bool {
@@ -513,6 +523,31 @@ mod tests {
         let repo = GitRepository::open(tempdir.path()).unwrap();
         let app = App::from_repo(repo).unwrap();
         (tempdir, app)
+    }
+
+    /// #96: a pull blocked by uncommitted local changes is an expected,
+    /// actionable condition — it must surface as an error toast and leave the
+    /// UI fully usable, never the input-swallowing `AppMode::Error` modal.
+    #[test]
+    fn dirty_worktree_pull_error_toasts_instead_of_modal() {
+        let (_tempdir, mut app) = test_app();
+        app.handle_pull_error(
+            "error: Your local changes to the following files would be overwritten by merge:\n\ta.txt\nPlease commit your changes or stash them before you merge.\nAborting".to_string(),
+            None,
+        );
+        assert!(
+            matches!(app.mode, AppMode::Normal),
+            "mode must stay Normal (UI accessible), got {:?}",
+            app.mode
+        );
+        assert!(
+            app.toasts.visible().iter().any(|t| t.text.contains("commit or stash")),
+            "expected a commit-or-stash error toast"
+        );
+
+        // An unrecognized pull failure still gets the error modal.
+        app.handle_pull_error("some unexpected failure".to_string(), None);
+        assert!(matches!(app.mode, AppMode::Error { .. }));
     }
 
     /// A persistently-failing silent auto-fetch (e.g. offline) must report
