@@ -491,7 +491,7 @@ pub fn build_row_spec(
         .iter()
         .enumerate()
         .map(|(col, cell)| {
-            cell_to_pixel(
+            let mut px = cell_to_pixel(
                 cell,
                 col,
                 underlay_above,
@@ -499,7 +499,22 @@ pub fn build_row_spec(
                 CommitStyle::Normal,
                 theme,
                 head_rgb,
-            )
+            );
+            // A folded connector's vertical shadows the host row's lane segment
+            // at this column (both draw the same canvas span). When the row
+            // below curve-feeds the host's bottom half — an arm lands at
+            // mid-height — the shadow must stop there too, or it pokes half a
+            // cell past the join and dangles as an orphan stub wherever the
+            // lane terminates at that join (#86 round 3).
+            if matches!(px.shape, CellShape::Pipe | CellShape::HorizontalPipe) {
+                px.curved_below |= below.and_then(|c| c.get(col)).is_some_and(|c| {
+                    matches!(
+                        c,
+                        CellType::MergeLeft(_) | CellType::MergeRight(_) | CellType::TeeUp(_)
+                    )
+                });
+            }
+            px
         })
         .collect();
     let mut incoming = above_row
@@ -2600,6 +2615,80 @@ mod tests {
         let lane_cx = PAD_X + 2 * CW + CW / 2;
         assert_eq!(alpha(&img_b, lane_cx, 0), 0, "no straight stub at the lane center");
         assert_eq!(alpha(&img_b, lane_cx, 1), 0, "no straight stub at the lane center");
+    }
+
+    /// #86 round 3: a folded connector's vertical (here the pipe half of a
+    /// HorizontalPipe) shadows the host cell's lane segment. When the row below
+    /// curve-feeds the host's bottom half — a wide arm merges in at mid-height,
+    /// terminating the lane — the shadow must stop at the join too. It used to
+    /// draw full height, dangling half a cell past the join as an orphan stub
+    /// (the "/|" artifact: tilted-looking arm tip + floating vertical).
+    ///
+    /// Layout mirrors the real repro (keifu's own graph, rows 114–116):
+    ///   row A: dot on lane 4 (col 8)
+    ///   row B: host pipe on col 8, folded connector with HorizontalPipe there
+    ///   row C: dot on col 0, folded connector Tee(0) ─ run(1) ─ MergeLeft(1)
+    ///          whose arm lands at row B's center on col 8.
+    #[test]
+    fn folded_pipe_stops_at_curve_fed_join() {
+        let theme = Theme::dark();
+        let e = CellType::Empty;
+        let cells_a: Vec<CellType> = vec![e, e, e, e, e, e, e, e, CellType::Commit(1)];
+        let mut cells_b: Vec<CellType> = vec![e; 9];
+        cells_b[0] = CellType::Commit(0);
+        cells_b[8] = CellType::Pipe(1);
+        let mut under_b: Vec<CellType> = vec![e; 9];
+        under_b[8] = CellType::HorizontalPipe(2, 1);
+        let mut cells_c: Vec<CellType> = vec![e; 9];
+        cells_c[0] = CellType::Commit(0);
+        let mut under_c: Vec<CellType> = vec![CellType::TeeRight(0)];
+        under_c.extend(std::iter::repeat_n(CellType::Horizontal(1), 7));
+        under_c.push(CellType::MergeLeft(1));
+
+        let mut node_b = commit_node();
+        node_b.cells = cells_b.clone();
+        // Adjacent views as the app builds them (graph_view::adjacent_cells):
+        // above = row B's own underlay over row A; below = row C's underlay
+        // over row C.
+        let above_view: Vec<CellType> = (0..9)
+            .map(|i| if under_b[i] != e { under_b[i] } else { cells_a[i] })
+            .collect();
+        let below_view: Vec<CellType> = (0..9)
+            .map(|i| if under_c[i] != e { under_c[i] } else { cells_c[i] })
+            .collect();
+        let spec = build_row_spec(
+            Some(&above_view),
+            &node_b,
+            Some(&below_view),
+            &under_b,
+            Some(NeighborRow { underlay: &[], cells: &cells_a }),
+            Some(NeighborRow { underlay: &under_c, cells: &cells_c }),
+            &theme,
+        );
+
+        // Both the host pipe and its connector shadow learn the join.
+        assert!(spec.cells[8].curved_below, "host pipe's bottom half is curve-fed");
+        assert!(
+            spec.underlay[8].curved_below,
+            "folded connector's shadow must stop at the curve-fed join"
+        );
+
+        let img = rasterize_row(&spec, CW, CH);
+        let lane_cx = PAD_X + 8 * CW + CW / 2;
+        // Lane intact above the join (toward the dot in row A)…
+        assert!(alpha(&img, lane_cx, 2) > 0, "lane above the join still drawn");
+        // …and the arm's tail lands at the join (row center).
+        assert!(alpha(&img, lane_cx, CH / 2) > 0, "arm tail reaches the join");
+        // Below the join the lane has terminated: the arm's cubic has already
+        // peeled left of the lane center by y = cy + 5 (its stroke clears the
+        // column), so any paint here is the orphan stub.
+        for y in (CH / 2 + 5)..CH {
+            assert_eq!(
+                alpha(&img, lane_cx, y),
+                0,
+                "orphan stub below the join at y={y}"
+            );
+        }
     }
 
     // ── dev before/after harness ────────────────────────────────────────
