@@ -149,12 +149,26 @@ fn render_scrollbar(
 
 /// Render the main UI
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    // Per-stage draw timings (`draw.*` ops): slow stages (>10ms) log live and
+    // aggregate into the exit perf summary, so a laggy-frame report localizes
+    // itself — the gap between `draw` (recorded around terminal.draw in
+    // main.rs, including ratatui's buffer diff + terminal write/flush) and the
+    // stages below is the present/transmit cost the app can't see (#87).
+    let mut stage_started = std::time::Instant::now();
+    macro_rules! stage {
+        ($app:expr, $name:literal) => {{
+            $app.perf
+                .record(concat!("draw.", $name), stage_started.elapsed());
+            stage_started = std::time::Instant::now();
+        }};
+    }
     // Rebuild display items so they match the latest diff data.
     // Selection is path-based so this doesn't reset it.
     app.sync_file_list_cache();
     // Branch-trace frame cache: O(graph) lineage/lit/color builds happen only
     // when the selection or graph changed; every renderer below reads the cache.
     app.ensure_trace_cache();
+    stage!(app, "prep");
 
     let theme = app.theme();
     let area = frame.area();
@@ -293,6 +307,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Pre-render pass: compute layout metrics that update App scroll state
     let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
+    stage!(app, "detail_layout");
 
     // Render widgets
     // Inner height (minus the block's top/bottom borders) is the drawable row
@@ -312,6 +327,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         graph_area,
         &mut app.graph_nav.graph_list_state,
     );
+    stage!(app, "graph_widget");
 
     // Pixel graph pass: (re)build the row specs, dim the window, and transmit
     // protocols (needs &mut app), now that the list render has settled the
@@ -413,6 +429,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Prepare avatar protocols for the visible authors (pixel mode + toggle on).
     // Built from an immutable borrow into an owned Vec first, so the mutable
     // `pixel_graph` borrow that transmits them doesn't overlap.
+    stage!(app, "pixel_pass");
     if pixel_active && app.metadata_columns.avatars {
         let reqs = build_avatar_reqs(app);
         if let Some(pg) = app.pixel_graph.as_mut() {
@@ -432,6 +449,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             overlay_avatars(frame, app, graph_area);
         }
     }
+    stage!(app, "overlay");
     let mut files_state = FilesPaneState {
         selected: Some(app.file_selected_index()),
         offset: 0,
@@ -824,10 +842,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Toasts render last, so they sit on top of every panel and popup.
     render_toasts(frame, app, &theme);
+    stage!(app, "panels");
+    // The last stage!() leaves a restart nobody reads; acknowledge it.
+    let _ = stage_started;
 }
 
-/// Render stacked toast notifications in the top-right corner, newest on top,
-/// over whatever else is on screen.
 /// Draw a full-screen issue view (list or detail) plus any centered overlay
 /// (compose / label picker / label filter) and the shared status bar. Mirrors
 /// the `FileDiff` full-screen path.
