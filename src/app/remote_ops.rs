@@ -230,7 +230,7 @@ impl App {
 
     /// Delete `branch` on `remote` optimistically: hide it from the graph now,
     /// then run `git push <remote> --delete <branch>` asynchronously through the
-    /// push pipeline (so it shares the auth-retry + progress-message + busy
+    /// push pipeline (so it shares the auth-retry + start-toast + busy
     /// machinery). `update_push_status` toasts success, or — on a terminal
     /// failure — surfaces the error and refreshes, which drops the refname from
     /// `pending_remote_deletions` so the branch reappears.
@@ -251,7 +251,7 @@ impl App {
         if let Err(e) = self.rebuild_and_restore(false) {
             self.report_refresh_error(e);
         }
-        // Dispatch the async delete (sets the sticky "Deleting …" progress msg).
+        // Dispatch the async delete (toasts the "Deleting …" start message).
         self.dispatch_net_op(RetryableOp::Push(PushSpec::Delete { remote, branch }), 0);
     }
 }

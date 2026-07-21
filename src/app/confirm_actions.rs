@@ -417,6 +417,18 @@ mod tests {
         assert!(app.is_pushing());
         assert!(matches!(app.mode, AppMode::Normal));
 
+        // #95: the push start is reported as a toast, not a sticky
+        // status-bar message — the status bar stays reserved for pull.
+        assert!(
+            app.toasts.visible().iter().any(|t| t.text.contains("Deleting origin/feature")),
+            "expected a start toast for the remote-branch delete"
+        );
+        assert_eq!(
+            app.get_message(),
+            None,
+            "push start must not set a sticky status-bar message"
+        );
+
         // Drain the (local, file://) push to completion.
         for _ in 0..1000 {
             if app.update_push_status() {

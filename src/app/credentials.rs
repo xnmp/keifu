@@ -44,13 +44,18 @@ impl App {
             ),
         };
 
-        // Fetch progress is a one-shot event notification → toast (a silent
-        // auto-fetch yields no message, so it stays quiet). Push/pull progress
-        // is a sticky message that persists for the whole in-flight op.
-        let is_fetch = matches!(&op, RetryableOp::Fetch { .. } | RetryableOp::FetchAll);
+        // Fetch and push progress are one-shot event notifications → toast (a
+        // silent auto-fetch yields no message, so it stays quiet). Pull alone
+        // keeps a sticky status-bar message that persists for the whole
+        // in-flight op (its completion can hand off into the conflict-resolve
+        // flow, so the status bar stays the right place for that context).
+        let is_toast = matches!(
+            &op,
+            RetryableOp::Fetch { .. } | RetryableOp::FetchAll | RetryableOp::Push(_)
+        );
         self.in_flight_op = Some(InFlightOp { op, host, had_creds, silent, attempts });
         if let Some(msg) = message {
-            if is_fetch {
+            if is_toast {
                 self.toast(crate::toast::ToastKind::Info, msg);
             } else {
                 self.set_progress_message(msg);
