@@ -510,7 +510,7 @@ Option: refresh (F5) also fast-forwards local branches that are strictly behind 
 Move toast stack to the bottom-right corner.
 
 ### [DONE] #86 "7-shaped" corner artifacts on fork rows
-Pixel graph: little 7-shaped sections at lower corners when many lines come from the same parent (fork connectors). Curve-geometry bug.
+Pixel graph: little 7-shaped sections at lower corners when many lines come from the same parent (fork connectors). Round 1: length-based tessellation + boundary-crossing handle extension. Round 2 (user repro at small cell sizes): the elbow radius collapses quadratically with cell height, so dot-anchored ends of wide arms now tilt their tangent toward the far end (the dot hides the junction); pipe-joining ends stay strictly vertical for seam tiling. Cross-row spoke_on_dot flags keep both halves of each cubic identical.
 
 ### [DONE] #87 Input latency diagnostics
 MacBook still laggy with tracing off; keypresses appear to queue and "catch up" on the next press. Add event→action→draw timing logs to diagnose.

@@ -3631,6 +3631,7 @@ mod tests {
             dim_secondary: false,
             curved_above: false,
             curved_below: false,
+            spoke_on_dot: false,
         };
         let mut cells = vec![
             solid(CellShape::TeeRight, [92, 92, 255]),
@@ -3689,6 +3690,7 @@ mod tests {
             dim_secondary: false,
             curved_above: false,
             curved_below: false,
+            spoke_on_dot: false,
         };
         let base: Vec<_> = (0..n)
             .map(|_| crate::ui::graph_pixels::RowSpec {
