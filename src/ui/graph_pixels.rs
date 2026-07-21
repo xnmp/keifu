@@ -739,9 +739,32 @@ fn run_style(cell: &PixelCell) -> ([u8; 3], bool) {
 /// When both endpoints share a y (a flat dot↔dot / stub run, `dy == 0`) the two
 /// control points collapse onto the endpoint line and the cubic degenerates to a
 /// straight horizontal segment — the correct shape for a horizontal bridge.
+///
+/// **Wide arms** (many lanes of dx over one row of dy — fork fans) get their
+/// control points pushed symmetrically *past* the midpoint: end curvature is
+/// κ₀ = ⅔·dx/(h+e)², so extending the handles by `e` visibly enlarges the
+/// elbow radius that otherwise reads as a hard "7" corner (#86). The push is 0
+/// for arms up to ~2 lanes (the classic VSCode S is untouched), ramps with
+/// dx/h, and caps at 0.6·h so the boundary crossing keeps real vertical speed
+/// (at e = h the curve would run flat along the row seam). Symmetric handles
+/// keep the crossing at the x-midpoint and both end tangents vertical, so the
+/// two rows' clipped halves still tile exactly.
 fn cubic_between(a: Endpoint, b: Endpoint) -> [(f32, f32); 4] {
     let ymid = (a.y + b.y) / 2.0;
-    [(a.x, a.y), (a.x, ymid), (b.x, ymid), (b.x, b.y)]
+    let h = ((b.y - a.y) / 2.0).abs();
+    let e = if h > 0.0 {
+        let ratio = (b.x - a.x).abs() / h;
+        (0.2 * (ratio - 2.0)).clamp(0.0, 0.6) * h
+    } else {
+        0.0
+    };
+    let dir = (b.y - a.y).signum();
+    [
+        (a.x, a.y),
+        (a.x, ymid + dir * e),
+        (b.x, ymid - dir * e),
+        (b.x, b.y),
+    ]
 }
 
 /// Reconstruct a row's lane transitions from its cells into smooth cubic curves.
@@ -911,11 +934,20 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
 /// trunk — which previously let a bright traced curve bury a dim sibling's
 /// lead-in under the bright layer (the "pink lead-in to a green branch" bug).
 fn draw_cubic(canvas: &mut Canvas, curve: &Curve, half: f32) {
-    const STEPS: usize = 48;
     let (p0, p1, p2, p3) = (curve.p0, curve.p1, curve.p2, curve.p3);
+    // Tessellation density scales with the control-polygon length (an upper
+    // bound on arc length), targeting ~1.5px chords. A fixed step count left
+    // wide fork arms — many lanes of dx squeezed into one row of dy — with
+    // ~12°-per-chord elbows that read as polygonal "7" corners (#86); the
+    // tight-radius transition needs sub-pixel chords to render round.
+    let ctrl_len = {
+        let d = |a: (f32, f32), b: (f32, f32)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        d(p0, p1) + d(p1, p2) + d(p2, p3)
+    };
+    let steps = ((ctrl_len / 1.5).ceil() as usize).clamp(24, 400);
     let mut prev = p0;
-    for i in 1..=STEPS {
-        let t = i as f32 / STEPS as f32;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
         let mt = 1.0 - t;
         let (a, b, cc, d) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
         let x = a * p0.0 + b * p1.0 + cc * p2.0 + d * p3.0;
@@ -2273,18 +2305,22 @@ mod tests {
             .iter()
             .find(|c| approx(c.p3.1, -(CH as f32) / 2.0))
             .expect("up-merge curve");
-        // Both control points share the hub's x (vertical tangent) and sit on
-        // the row boundary the curve crosses (the endpoints' y-midpoint).
+        // Both control points share the hub's x (vertical tangent). A narrow
+        // arm's handle sits exactly on the row boundary (the endpoints'
+        // y-midpoint); a wide arm's extends past it by the elbow-widening `e`
+        // (see `cubic_between`) — here the down-branch spans 2 lanes (e = 0)
+        // and the up-merge 4 lanes (ratio 4 → e = 0.2·(4−2)·h = 0.4·h).
         assert!(approx(down.p1.0, down.p0.0), "down hub handle is vertical over the dot");
         assert!(
             approx(down.p1.1, CH as f32),
-            "down hub handle on the bottom row boundary: {:?}",
+            "narrow down arm's handle on the bottom row boundary: {:?}",
             down.p1
         );
         assert!(approx(up.p1.0, up.p0.0), "up hub handle is vertical over the dot");
+        let h = CH as f32 / 2.0;
         assert!(
-            approx(up.p1.1, 0.0),
-            "up hub handle on the top row boundary: {:?}",
+            approx(up.p1.1, -0.4 * h),
+            "wide up arm's handle extends 0.4h past the top boundary: {:?}",
             up.p1
         );
     }
