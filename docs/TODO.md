@@ -494,7 +494,7 @@ Measured (via new KEIFU_FORCE_PIXEL + encode-count logging): with tracing on, a 
 ### [DONE] #80 Perf gates
 Permanent startup phase timings (startup.* ops in the exit perf summary) and a perf regression test suite: wall-clock budgets (~10-30x measured, catching algorithmic blowups) for startup and window rasterization, plus an instrumentation contract test. Deterministic counter tests (e.g. #78's no-sync-classification gate) remain the primary absolute gates.
 
-### [TODO] #81 Squash-merge origin link line
+### [DONE] #81 Squash-merge origin link line
 Option: subtle grey linking line from a squash-merged branch's tip to the squash commit on the base. Depends on #82's classification data.
 
 ### [DONE] #82 Squash-merged branches not hidden
