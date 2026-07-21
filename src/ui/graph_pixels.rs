@@ -76,6 +76,13 @@ pub struct PixelCell {
     pub curved_above: bool,
     /// Same for the bottom edge (the cell below is a `Merge*`/`TeeUp` corner).
     pub curved_below: bool,
+    /// For spoke shapes (`Merge*`/`Branch*`/`TeeUp`/`Tee*`-as-spoke): the lane
+    /// this spoke continues into in the adjacent row holds a commit DOT (the
+    /// line terminates there) rather than a continuing pipe. A dot hides the
+    /// junction, so a wide arm may leave it with a tilted tangent
+    /// (`cubic_between`); a pipe-joining spoke must stay strictly vertical to
+    /// tile with the straight lane across the row seam.
+    pub spoke_on_dot: bool,
 }
 
 /// Alpha applied to non-traced graph cells while branch tracing is active.
@@ -226,6 +233,7 @@ fn solid(shape: CellShape, rgb: [u8; 3]) -> PixelCell {
         dim_secondary: false,
         curved_above: false,
         curved_below: false,
+        spoke_on_dot: false,
     }
 }
 
@@ -262,6 +270,7 @@ fn cell_to_pixel(
             dim_secondary: false,
             curved_above: false,
             curved_below: false,
+            spoke_on_dot: false,
         },
         CellType::Commit(ci) => {
             let connect_up = above
@@ -287,6 +296,7 @@ fn cell_to_pixel(
                 dim_secondary: false,
                 curved_above: false,
                 curved_below: false,
+                spoke_on_dot: false,
             }
         }
     };
@@ -310,7 +320,41 @@ fn cell_to_pixel(
             )
         });
     }
+    // Spoke shapes: does this spoke's lane hold a commit DOT in the row it
+    // continues into? Up-spokes look above, down-spokes below (a Tee doubles
+    // as a down-spoke when a dot flanks its run — flag it by its trunk's
+    // continuation too). Feeds `cubic_between`'s wide-arm tilt.
+    let is_dot = |cells: Option<&[CellType]>| {
+        cells
+            .and_then(|c| c.get(col))
+            .is_some_and(|c| matches!(c, CellType::Commit(_)))
+    };
+    match px.shape {
+        CellShape::MergeLeft | CellShape::MergeRight | CellShape::TeeUp => {
+            px.spoke_on_dot = is_dot(above);
+        }
+        CellShape::BranchLeft
+        | CellShape::BranchRight
+        | CellShape::TeeLeft
+        | CellShape::TeeRight => {
+            px.spoke_on_dot = is_dot(below);
+        }
+        _ => {}
+    }
     px
+}
+
+/// Merge a folded-connector layer over a row's cells, preferring non-empty
+/// connector cells — the same rule as graph_view's `adjacent_cells`, kept in
+/// lockstep so spec-build and incoming reconstruction see identical views.
+fn merge_underlay_over(underlay: &[CellType], cells: &[CellType]) -> Vec<CellType> {
+    let w = underlay.len().max(cells.len());
+    (0..w)
+        .map(|col| match underlay.get(col) {
+            Some(u) if *u != CellType::Empty => *u,
+            _ => cells.get(col).copied().unwrap_or(CellType::Empty),
+        })
+        .collect()
 }
 
 /// The drawn content of a row physically adjacent to the one being built,
@@ -332,6 +376,8 @@ pub struct NeighborRow<'a> {
 fn incoming_curves(
     neighbor: NeighborRow,
     from_above: bool,
+    self_cells: &[CellType],
+    self_view: &[CellType],
     theme: &Theme,
     head_rgb: [u8; 3],
 ) -> Vec<CellCurve> {
@@ -340,10 +386,35 @@ fn incoming_curves(
         if cells.is_empty() {
             continue;
         }
+        // Pixelize each layer against the SAME facing view the neighbour's own
+        // spec build used to compute `spoke_on_dot`, or the two halves of a
+        // cubic would disagree on the wide-arm tilt at the seam:
+        // - above-neighbour cells' down-spokes were flagged against OUR merged
+        //   self-view (their `below` = adjacent_cells = underlay-over-cells);
+        // - above-neighbour UNDERLAY down-spokes against the neighbour's OWN
+        //   cells (a folded connector faces its host row directly);
+        // - below-neighbour cells' up-spokes against merge(neighbour.underlay,
+        //   OUR cells) (their `above` = adjacent_cells with THEIR underlay
+        //   between us);
+        // - below-neighbour UNDERLAY up-spokes against OUR raw cells.
+        // The neighbour's far side stays None — curves that don't cross our
+        // boundary are filtered out below.
+        let merged_up: Vec<CellType>;
+        let (nb_above, nb_below): (Option<&[CellType]>, Option<&[CellType]>) = if from_above {
+            let facing = if from_underlay { neighbor.cells } else { self_view };
+            (None, Some(facing))
+        } else if from_underlay {
+            (Some(self_cells), None)
+        } else {
+            merged_up = merge_underlay_over(neighbor.underlay, self_cells);
+            (Some(&merged_up), None)
+        };
         let px: Vec<PixelCell> = cells
             .iter()
             .enumerate()
-            .map(|(col, c)| cell_to_pixel(c, col, None, None, CommitStyle::Normal, theme, head_rgb))
+            .map(|(col, c)| {
+                cell_to_pixel(c, col, nb_above, nb_below, CommitStyle::Normal, theme, head_rgb)
+            })
             .collect();
         let dy = if from_above { -2.0 } else { 2.0 };
         for c in transition_curves(&px, 2.0, 2.0) {
@@ -406,21 +477,37 @@ pub fn build_row_spec(
         .enumerate()
         .map(|(col, cell)| cell_to_pixel(cell, col, above, below, style, theme, head_rgb))
         .collect();
-    // Folded connector cells carry no commit dots, so their connectivity is
-    // irrelevant; resolve them with no neighbours.
+    // This row's merged self-view (folded underlay preferred over own cells,
+    // mirroring graph_view's `adjacent_cells`): the view our below-neighbour
+    // faced when it computed ITS spoke flags — reconstruction must match.
+    let self_view = merge_underlay_over(underlay, &node.cells);
+    // Folded connector cells carry no commit dots of their own; resolve them
+    // against the rows the connector actually faces — the RAW cells of the
+    // row above (its up-spokes land there; the merged view would mask the dot
+    // behind the connector's own cell) and this row's own cells below — so
+    // their spokes learn whether they land on a dot.
+    let underlay_above = above_row.map(|n| n.cells);
     let underlay = underlay
         .iter()
         .enumerate()
         .map(|(col, cell)| {
-            cell_to_pixel(cell, col, None, None, CommitStyle::Normal, theme, head_rgb)
+            cell_to_pixel(
+                cell,
+                col,
+                underlay_above,
+                Some(&node.cells),
+                CommitStyle::Normal,
+                theme,
+                head_rgb,
+            )
         })
         .collect();
     let mut incoming = above_row
-        .map(|n| incoming_curves(n, true, theme, head_rgb))
+        .map(|n| incoming_curves(n, true, &node.cells, &self_view, theme, head_rgb))
         .unwrap_or_default();
     incoming.extend(
         below_row
-            .map(|n| incoming_curves(n, false, theme, head_rgb))
+            .map(|n| incoming_curves(n, false, &node.cells, &self_view, theme, head_rgb))
             .unwrap_or_default(),
     );
     RowSpec {
@@ -682,6 +769,11 @@ struct Endpoint {
     y: f32,
     color: [u8; 3],
     dim: bool,
+    /// The endpoint is anchored on a commit dot (a flanking-dot hub, or a
+    /// spoke landing on a dot in the adjacent row). Dots hide the junction, so
+    /// wide arms may leave such an endpoint with a tilted tangent; endpoints
+    /// joining straight pipes must stay vertical (see `cubic_between`).
+    on_dot: bool,
 }
 
 /// A resolved transition curve: a cubic bezier plus its color / dim layer.
@@ -752,17 +844,23 @@ fn run_style(cell: &PixelCell) -> ([u8; 3], bool) {
 fn cubic_between(a: Endpoint, b: Endpoint) -> [(f32, f32); 4] {
     let ymid = (a.y + b.y) / 2.0;
     let h = ((b.y - a.y) / 2.0).abs();
-    let e = if h > 0.0 {
-        let ratio = (b.x - a.x).abs() / h;
-        (0.2 * (ratio - 2.0)).clamp(0.0, 0.6) * h
-    } else {
-        0.0
-    };
+    let dx = b.x - a.x;
+    let ratio = if h > 0.0 { dx.abs() / h } else { 0.0 };
+    let e = (0.2 * (ratio - 2.0)).clamp(0.0, 0.6) * h;
     let dir = (b.y - a.y).signum();
+    // Dot-anchored ends of wide arms additionally tilt their tangent toward
+    // the far end: end curvature κ₀ ∝ dx/(h+e)² collapses quadratically with
+    // cell height, so at small fonts the handle extension alone still leaves
+    // a hard "7" corner (#86 round 2). The dot covers the junction, so a
+    // tilted departure is safe there; pipe-joining ends (on_dot = false) keep
+    // the strictly vertical tangent that tiles with the lane across the seam.
+    let tilt = (0.12 * (ratio - 3.5)).clamp(0.0, 0.4);
+    let tilt_a = if a.on_dot { tilt } else { 0.0 };
+    let tilt_b = if b.on_dot { tilt } else { 0.0 };
     [
         (a.x, a.y),
-        (a.x, ymid + dir * e),
-        (b.x, ymid - dir * e),
+        (a.x + tilt_a * dx, ymid + dir * e),
+        (b.x - tilt_b * dx, ymid - dir * e),
         (b.x, b.y),
     ]
 }
@@ -820,11 +918,11 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
         // Commit dots immediately flanking the run anchor it at mid-height.
         let mut has_dot = false;
         if l > 0 && matches!(cells[l - 1].shape, CellShape::Commit { .. }) {
-            hubs.push(Endpoint { x: cx(l - 1), y: cy, color: run_color, dim: run_dim });
+            hubs.push(Endpoint { x: cx(l - 1), y: cy, color: run_color, dim: run_dim, on_dot: true });
             has_dot = true;
         }
         if r + 1 < n && matches!(cells[r + 1].shape, CellShape::Commit { .. }) {
-            hubs.push(Endpoint { x: cx(r + 1), y: cy, color: run_color, dim: run_dim });
+            hubs.push(Endpoint { x: cx(r + 1), y: cy, color: run_color, dim: run_dim, on_dot: true });
             has_dot = true;
         }
 
@@ -832,13 +930,13 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
             let (color, dim) = (cell.color, cell.dim);
             match cell.shape {
                 CellShape::MergeLeft | CellShape::MergeRight => {
-                    spokes.push(Endpoint { x: cx(c), y: above_cy, color, dim });
+                    spokes.push(Endpoint { x: cx(c), y: above_cy, color, dim, on_dot: cell.spoke_on_dot });
                 }
                 CellShape::BranchLeft | CellShape::BranchRight => {
-                    spokes.push(Endpoint { x: cx(c), y: below_cy, color, dim });
+                    spokes.push(Endpoint { x: cx(c), y: below_cy, color, dim, on_dot: cell.spoke_on_dot });
                 }
                 CellShape::TeeUp => {
-                    spokes.push(Endpoint { x: cx(c), y: above_cy, color, dim });
+                    spokes.push(Endpoint { x: cx(c), y: above_cy, color, dim, on_dot: cell.spoke_on_dot });
                 }
                 CellShape::TeeRight | CellShape::TeeLeft => {
                     // A Tee's trunk continues DOWN to a not-yet-shown parent (the
@@ -852,9 +950,11 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
                     // bug). With no flanking dot the Tee is a fork connector's
                     // trunk hub, which stays at mid-height so its up-arms fan out.
                     if has_dot {
-                        spokes.push(Endpoint { x: cx(c), y: below_cy, color, dim });
+                        spokes.push(Endpoint { x: cx(c), y: below_cy, color, dim, on_dot: cell.spoke_on_dot });
                     } else {
-                        hubs.push(Endpoint { x: cx(c), y: cy, color, dim });
+                        // A trunk hub is a straight line, not a dot: arms must
+                        // leave it vertically to sit flush on the trunk.
+                        hubs.push(Endpoint { x: cx(c), y: cy, color, dim, on_dot: false });
                     }
                 }
                 _ => {} // Horizontal / HorizontalPipe: run body.
@@ -886,7 +986,7 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
                 } else {
                     (l + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw
                 };
-                let end = Endpoint { x: far_x, y: cy, color: run_color, dim: run_dim };
+                let end = Endpoint { x: far_x, y: cy, color: run_color, dim: run_dim, on_dot: false };
                 push(&mut curves, primary, end, run_color, run_dim);
             }
         } else if spokes.len() >= 2 {
@@ -902,7 +1002,7 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
             } else {
                 (l + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw
             };
-            let end = Endpoint { x: far_x, y: cy, color: s.color, dim: s.dim };
+            let end = Endpoint { x: far_x, y: cy, color: s.color, dim: s.dim, on_dot: false };
             push(&mut curves, end, s, s.color, s.dim);
         } else {
             // No endpoints at all (a bare horizontal run): draw it straight.
@@ -911,12 +1011,14 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
                 y: cy,
                 color: run_color,
                 dim: run_dim,
+                on_dot: false,
             };
             let b = Endpoint {
                 x: (r + 1 + PIXEL_LEFT_PAD_CELLS as usize) as f32 * cw,
                 y: cy,
                 color: run_color,
                 dim: run_dim,
+                on_dot: false,
             };
             push(&mut curves, a, b, run_color, run_dim);
         }
@@ -2305,19 +2407,26 @@ mod tests {
             .iter()
             .find(|c| approx(c.p3.1, -(CH as f32) / 2.0))
             .expect("up-merge curve");
-        // Both control points share the hub's x (vertical tangent). A narrow
-        // arm's handle sits exactly on the row boundary (the endpoints'
-        // y-midpoint); a wide arm's extends past it by the elbow-widening `e`
-        // (see `cubic_between`) — here the down-branch spans 2 lanes (e = 0)
-        // and the up-merge 4 lanes (ratio 4 → e = 0.2·(4−2)·h = 0.4·h).
-        assert!(approx(down.p1.0, down.p0.0), "down hub handle is vertical over the dot");
+        // A narrow arm keeps the classic vertical hub tangent with its handle
+        // exactly on the row boundary. A wide arm from a DOT-anchored hub both
+        // extends its handle past the boundary (`e = 0.2·(ratio−2)·h`) and
+        // tilts it toward the spoke (`tilt = 0.12·(ratio−3.5)`) — the dot
+        // hides the junction, and without the tilt the elbow radius collapses
+        // at small cell heights (the "7" corner). Here: down-branch spans 2
+        // lanes (e = 0, no tilt), up-merge 4 lanes (e = 0.4h, tilt = 0.06).
+        assert!(approx(down.p1.0, down.p0.0), "narrow down arm's hub tangent stays vertical");
         assert!(
             approx(down.p1.1, CH as f32),
             "narrow down arm's handle on the bottom row boundary: {:?}",
             down.p1
         );
-        assert!(approx(up.p1.0, up.p0.0), "up hub handle is vertical over the dot");
         let h = CH as f32 / 2.0;
+        let dx = up.p3.0 - up.p0.0;
+        assert!(
+            approx(up.p1.0, up.p0.0 + 0.06 * dx),
+            "wide up arm's dot-anchored handle tilts toward the spoke: {:?}",
+            up.p1
+        );
         assert!(
             approx(up.p1.1, -0.4 * h),
             "wide up arm's handle extends 0.4h past the top boundary: {:?}",
