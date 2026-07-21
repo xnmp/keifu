@@ -500,8 +500,8 @@ Option: subtle grey linking line from a squash-merged branch's tip to the squash
 ### [DONE] #82 Squash-merged branches not hidden
 Bug: branches merged via squash aren't being hidden by hide-merged. Investigate patch-id + gh-signal classification paths.
 
-### [TODO] #83 Remote-ahead-of-local display question
-Clarify/verify: is the remote branch shown when it's ahead of the local branch and the remote tip is at a HEAD? Document current behavior, then decide.
+### [DONE] #83 Remote-ahead-of-local display question
+Verified: with hide-remotes OFF, a remote branch ahead of its local shows its extra commits on their own rows with a cloud chip, and is navigable (dedup is per-node, so only same-tip local/remote pairs collapse to the synced chip). With hide-remotes ON, ahead-remote commits are hidden deliberately (#57's cap-at-local-tip). No change needed.
 
 ### [DONE] #84 F5 fast-forwards non-divergent locals (option)
 Option: refresh (F5) also fast-forwards local branches that are strictly behind their upstream (no divergence).
