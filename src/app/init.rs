@@ -68,19 +68,23 @@ impl App {
         // background classifier below — merged branches fade to dim within a
         // moment instead of blocking the first frame. The GitHub merged-PR
         // signal fills in once its background fetch completes, either way.
-        let merged_branches = if ui_state.hide_merged_branches {
+        let (merged_branches, squash_targets) = if ui_state.hide_merged_branches {
             crate::git::merged::base_branch(&branches)
                 .map(|base| {
-                    crate::git::merged::merged_local_branches(
+                    crate::git::merged::classify_merged_branches_with_targets(
                         repo.repo(),
                         &branches,
                         base.tip_oid,
                         &base.name,
+                        &std::collections::HashSet::new(),
                     )
                 })
                 .unwrap_or_default()
         } else {
-            std::collections::HashSet::new()
+            (
+                std::collections::HashSet::new(),
+                std::collections::HashMap::new(),
+            )
         };
         phase!("classify_merged");
         let visible_branches: Vec<BranchInfo> = branches
@@ -105,6 +109,22 @@ impl App {
             .as_ref()
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
+        // Squash-link edges (issue #81), only when the option is on. In hide mode
+        // the merged tips are filtered out of `visible_branches`, so build_graph's
+        // both-endpoints-loaded guard makes the links inert there; in the default
+        // dim mode `squash_targets` fills in with the async classifier and a later
+        // rebuild draws them.
+        let squash_links: Vec<(git2::Oid, git2::Oid)> = if config.ui.squash_link_lines {
+            squash_targets
+                .iter()
+                .filter_map(|(name, &target)| {
+                    let tip = branches.iter().find(|b| &b.name == name)?.tip_oid;
+                    Some((tip, target))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let graph_layout = build_graph(
             &commits,
             &visible_branches,
@@ -112,6 +132,7 @@ impl App {
             &stashes,
             uncommitted_count,
             head_commit_oid,
+            &squash_links,
         );
 
         phase!("build_graph");
@@ -220,6 +241,7 @@ impl App {
             hide_remote_branches: ui_state.hide_remote_branches,
             merged: MergedState {
                 branches: merged_branches,
+                squash_targets,
                 classify: crate::merged_branch_fetch::MergedClassifier::new(),
                 hide: ui_state.hide_merged_branches,
                 pr_branches: std::collections::HashSet::new(),

@@ -303,13 +303,14 @@ impl App {
     /// and hiding, when the toggle is on — reflect the new classification. Never
     /// blocks the UI thread (the git diffing happened on the worker).
     pub fn update_merged_classification(&mut self) -> bool {
-        let Some(set) = self.merged.classify.poll() else {
+        let Some((set, targets)) = self.merged.classify.poll() else {
             return false;
         };
-        if set == self.merged.branches {
+        if set == self.merged.branches && targets == self.merged.squash_targets {
             return false;
         }
         self.merged.branches = set;
+        self.merged.squash_targets = targets;
         // Only the merged filter/dimming changed — the refs on disk are
         // unchanged — so run just the graph rebuild + selection restore +
         // cache reconcile, skipping the expensive `reload_refs` (repo reopen +

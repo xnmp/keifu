@@ -21,9 +21,16 @@ pub const LANE_COLORS: [Color; 11] = [
 /// Color index for uncommitted changes (gray)
 pub const UNCOMMITTED_COLOR_INDEX: usize = usize::MAX;
 
+/// Color index reserved for squash-merge link lines: the muted-grey connector
+/// drawn from a squash-merged branch's tip to the commit that landed it on the
+/// trunk (issue #81). A reserved sentinel — like [`UNCOMMITTED_COLOR_INDEX`] —
+/// so the link never collides with a real lane color and is styled by a single
+/// dedicated theme entry in both renderers.
+pub const SQUASH_LINK_COLOR_INDEX: usize = usize::MAX - 1;
+
 /// Get a color from a color index
 pub fn get_color_by_index(color_index: usize) -> Color {
-    if color_index == UNCOMMITTED_COLOR_INDEX {
+    if color_index == UNCOMMITTED_COLOR_INDEX || color_index == SQUASH_LINK_COLOR_INDEX {
         return Color::DarkGray;
     }
     LANE_COLORS[color_index % LANE_COLORS.len()]

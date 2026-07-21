@@ -101,6 +101,11 @@ pub struct Theme {
     // Graph lane colors (indexed by color_index from graph layout)
     pub lane_colors: [Color; 11],
     pub uncommitted_color: Color,
+    /// Squash-merge link line: the muted grey connector from a squash-merged
+    /// branch's tip to its landing commit on the trunk (issue #81). A subtle,
+    /// recessive grey distinct from the lane palette so the link reads as a hint,
+    /// not a branch.
+    pub squash_link_color: Color,
 
     // Whether syntax highlighting should use dark ANSI colors (for light backgrounds)
     pub syntax_use_dark_colors: bool,
@@ -215,6 +220,9 @@ impl Theme {
                 Color::LightRed,
             ],
             uncommitted_color: Color::DarkGray,
+            // A dim blue-grey, deliberately cooler and more recessive than the
+            // uncommitted grey so a squash link reads as a faint hint.
+            squash_link_color: Color::Rgb(90, 96, 110),
             syntax_use_dark_colors: false,
         }
     }
@@ -325,6 +333,9 @@ impl Theme {
                 Color::Rgb(180, 0, 0),    // dark red
             ],
             uncommitted_color: Color::Gray,
+            // A soft blue-grey for light backgrounds: darker than the page but
+            // clearly lighter and cooler than the lane inks, so the link recedes.
+            squash_link_color: Color::Rgb(150, 156, 168),
             syntax_use_dark_colors: true,
         }
     }
@@ -353,6 +364,9 @@ impl Theme {
         self.text_secondary = mix(bg, contrast, 0.45);
         self.text_muted = mix(bg, contrast, 0.40);
         self.uncommitted_color = mix(bg, contrast, 0.40);
+        // The squash link sits a step more recessive than the uncommitted grey,
+        // so it reads as a faint connecting hint rather than an active lane.
+        self.squash_link_color = mix(bg, contrast, 0.33);
         // Metadata columns: one muted-gray family tinted by the terminal bg, so
         // they recede below the graph and message and never clash with lane
         // colors. A subtle brightness ladder keeps the columns distinguishable —
@@ -496,8 +510,11 @@ impl Theme {
 
     /// Get a lane color by index (replaces graph::colors::get_color_by_index).
     pub fn lane_color(&self, color_index: usize) -> Color {
-        if color_index == usize::MAX {
+        if color_index == crate::graph::colors::UNCOMMITTED_COLOR_INDEX {
             return self.uncommitted_color;
+        }
+        if color_index == crate::graph::colors::SQUASH_LINK_COLOR_INDEX {
+            return self.squash_link_color;
         }
         self.lane_colors[color_index % self.lane_colors.len()]
     }

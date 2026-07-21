@@ -84,6 +84,7 @@ fn fetch_merged_branches(repo_path: &str) -> Result<HashSet<String>, String> {
 
 // ── Local merged-branch classification, run off the UI thread ────────────────
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use git2::{Oid, Repository};
@@ -137,8 +138,13 @@ impl ClassifyInput {
 /// (potentially expensive: ancestry + bounded patch-id scans per branch)
 /// classification runs on a worker thread and the UI polls a channel, so a
 /// refresh never does git diffing inline on the UI thread.
+/// The classifier's result: the set of merged branch names, plus a `branch name
+/// → squash landing commit` map for the squash-merged ones (drives the link
+/// line, issue #81). See [`crate::git::merged::classify_merged_branches_with_targets`].
+pub type MergedClassification = (HashSet<String>, HashMap<String, Oid>);
+
 pub struct MergedClassifier {
-    receiver: Option<Receiver<HashSet<String>>>,
+    receiver: Option<Receiver<MergedClassification>>,
     /// Signature of the input currently in flight or last completed. A new
     /// request with the same signature is a no-op.
     last_signature: Option<u64>,
@@ -177,14 +183,14 @@ impl MergedClassifier {
         self.receiver = Some(rx);
     }
 
-    /// Poll for a completed classification. Returns the merged-branch-name set on
-    /// completion, else `None`.
-    pub fn poll(&mut self) -> Option<HashSet<String>> {
+    /// Poll for a completed classification. Returns the merged-branch-name set
+    /// and squash-target map on completion, else `None`.
+    pub fn poll(&mut self) -> Option<MergedClassification> {
         let rx = self.receiver.as_ref()?;
         match rx.try_recv() {
-            Ok(set) => {
+            Ok(result) => {
                 self.receiver = None;
-                Some(set)
+                Some(result)
             }
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
@@ -199,12 +205,12 @@ impl MergedClassifier {
 }
 
 /// Open the repo by path and run the pure classifier. An unopenable repo yields
-/// an empty set (the feature is silently absent, like the gh path).
-fn classify(input: &ClassifyInput) -> HashSet<String> {
+/// an empty result (the feature is silently absent, like the gh path).
+fn classify(input: &ClassifyInput) -> MergedClassification {
     let Ok(repo) = Repository::open(&input.repo_path) else {
-        return HashSet::new();
+        return (HashSet::new(), HashMap::new());
     };
-    crate::git::merged::classify_merged_branches(
+    crate::git::merged::classify_merged_branches_with_targets(
         &repo,
         &input.branches,
         input.base_tip,

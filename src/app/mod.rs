@@ -811,6 +811,11 @@ pub struct MergedState {
     /// background classifier; drives the dimmed rendering and the hide-merged
     /// toggle. Not persisted — it's derived from the repo + PR state.
     pub branches: std::collections::HashSet<String>,
+    /// `branch name → squash landing commit` for the squash-merged subset of
+    /// `branches` (issue #81). Delivered alongside `branches` by the classifier;
+    /// consumed only to draw the optional grey squash-link line, gated by
+    /// `config.ui.squash_link_lines`. Empty for ancestry/fast-forward merges.
+    pub squash_targets: std::collections::HashMap<String, git2::Oid>,
     /// Background classifier that computes `branches` off the UI thread, so a
     /// refresh never does per-branch git diffing inline.
     pub classify: crate::merged_branch_fetch::MergedClassifier,
@@ -1561,6 +1566,25 @@ impl App {
         self.merged.classify.maybe_start(input);
     }
 
+    /// The squash-link edges to feed [`build_graph`]: `(branch_tip, squash_commit)`
+    /// for each squash-merged branch, but only when the `squash_link_lines` option
+    /// is on. Empty (option off) leaves the layout byte-identical. Each branch
+    /// name is resolved to its current tip OID; `build_graph` further guards that
+    /// both endpoints are loaded before drawing anything (issue #81).
+    pub(crate) fn squash_link_edges(&self) -> Vec<(git2::Oid, git2::Oid)> {
+        if !self.config.ui.squash_link_lines {
+            return Vec::new();
+        }
+        self.merged
+            .squash_targets
+            .iter()
+            .filter_map(|(name, &target)| {
+                let tip = self.branches.iter().find(|b| &b.name == name)?.tip_oid;
+                Some((tip, target))
+            })
+            .collect()
+    }
+
     /// Recompute the set of base-update ("back-merge") commits (issue #55) from
     /// the current open PRs and base branch, storing it in `base_update_merges`.
     /// Cheap (bounded per-PR walks on the UI thread's repo handle) and guarded by
@@ -1729,11 +1753,15 @@ impl App {
     ) -> Result<()> {
         let old_hide_remote = self.hide_remote_branches;
         let old_hide_merged = self.merged.hide;
+        let old_squash_links = self.config.ui.squash_link_lines;
         descriptor.set(self, value);
         self.persist_settings();
         if self.hide_remote_branches != old_hide_remote
             || self.merged.hide != old_hide_merged
+            || self.config.ui.squash_link_lines != old_squash_links
         {
+            // These change which commits (or synthetic link lines) the graph
+            // contains, which a bare field write can't realize — rebuild it.
             self.refresh(true)?;
         }
         Ok(())

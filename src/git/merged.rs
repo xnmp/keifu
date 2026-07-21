@@ -19,7 +19,7 @@
 //! is layered on top by the caller — this module is the local-git fallback that
 //! also works for non-GitHub repos.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use git2::{Oid, Repository, Tree};
 
@@ -62,18 +62,43 @@ pub fn is_squash_merged(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> bo
         // via `is_ancestor_merged`; report it here too for a standalone call.
         return true;
     }
-    let Some(branch_patch) = combined_patch_id(repo, fork, branch_tip) else {
-        return false;
-    };
+    squash_target_from_fork(repo, fork, branch_tip, base_tip).is_some()
+}
+
+/// The **squash commit** on the base that landed `branch_tip`'s work: the single
+/// commit on the base whose diff carries the same patch-id as the branch's
+/// cumulative diff since the fork point. `Some(oid)` names it; `None` when there
+/// is no such squash (unrelated histories, an ancestry/fast-forward merge with
+/// no distinct squash commit, or a branch that never landed).
+///
+/// This is the concrete counterpart to [`is_squash_merged`]: same detection, but
+/// it returns *which* commit matched so a link line can be drawn to it (issue
+/// #81). Bounded by [`SQUASH_SCAN_LIMIT`].
+pub fn squash_merge_target(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> Option<Oid> {
+    let fork = repo.merge_base(branch_tip, base_tip).ok()?;
+    if fork == branch_tip {
+        // Fully-contained branch: an ancestry merge, not a squash — there is no
+        // single distinct landing commit to name, so report no target.
+        return None;
+    }
+    squash_target_from_fork(repo, fork, branch_tip, base_tip)
+}
+
+/// Shared core of [`is_squash_merged`] / [`squash_merge_target`]: given the fork
+/// point, find the single base commit whose diff patch-id equals the branch's
+/// cumulative diff. Returns the matching commit's Oid, or `None`.
+fn squash_target_from_fork(
+    repo: &Repository,
+    fork: Oid,
+    branch_tip: Oid,
+    base_tip: Oid,
+) -> Option<Oid> {
+    let branch_patch = combined_patch_id(repo, fork, branch_tip)?;
 
     // Walk the base from its tip back toward (but not past) the fork point,
     // comparing each single-parent commit's patch-id with the branch's.
-    let Ok(mut walk) = repo.revwalk() else {
-        return false;
-    };
-    if walk.push(base_tip).is_err() {
-        return false;
-    }
+    let mut walk = repo.revwalk().ok()?;
+    walk.push(base_tip).ok()?;
     // Hiding the fork stops the walk from descending into shared history.
     let _ = walk.hide(fork);
 
@@ -91,10 +116,10 @@ pub fn is_squash_merged(repo: &Repository, branch_tip: Oid, base_tip: Oid) -> bo
         };
         let pid = tree_diff_patch_id(repo, parent.tree().ok().as_ref(), commit.tree().ok().as_ref());
         if pid == Some(branch_patch) {
-            return true;
+            return Some(oid);
         }
     }
-    false
+    None
 }
 
 /// Patch-id of the branch's cumulative diff from the fork point to its tip.
@@ -232,14 +257,48 @@ pub fn classify_merged_branches(
     base_name: &str,
     gh_merged: &HashSet<String>,
 ) -> HashSet<String> {
+    classify_merged_branches_with_targets(repo, branches, base_tip, base_name, gh_merged).0
+}
+
+/// Like [`classify_merged_branches`], but additionally reports **which trunk
+/// commit** landed each *squash-merged* branch. Returns the merged-branch-name
+/// set (identical to [`classify_merged_branches`], unchanged semantics) plus a
+/// `branch name → squash commit Oid` map covering only the branches with a
+/// concrete squash landing commit (a patch-id match against a base tip).
+///
+/// Ancestry / fast-forward merges have no single distinct landing commit to
+/// name, so they appear in the set but never in the map — the link line (issue
+/// #81) is specifically about squashes. When both a local and a remote trunk tip
+/// could match, the first base tip that yields a target wins (they carry the same
+/// squash, so any is correct).
+pub fn classify_merged_branches_with_targets(
+    repo: &Repository,
+    branches: &[BranchInfo],
+    base_tip: Oid,
+    base_name: &str,
+    gh_merged: &HashSet<String>,
+) -> (HashSet<String>, HashMap<String, Oid>) {
     // Measure against the local trunk *and* its remote-tracking tip when the
     // local one lags (the post-fetch, pre-pull state) — see [`base_tips`].
     let tips = base_tips(branches, base_tip, base_name);
-    branches
-        .iter()
-        .filter(|b| branch_is_merged(repo, b, &tips, base_name, gh_merged))
-        .map(|b| b.name.clone())
-        .collect()
+    let mut merged = HashSet::new();
+    let mut targets = HashMap::new();
+    for b in branches {
+        if !branch_is_merged(repo, b, &tips, base_name, gh_merged) {
+            continue;
+        }
+        merged.insert(b.name.clone());
+        // Record the squash landing commit when one is nameable. Purely additive
+        // over the yes/no classification above — a branch with no squash target
+        // (ancestry merge, or a GitHub-only content match) stays out of the map.
+        if let Some(target) = tips
+            .iter()
+            .find_map(|&t| squash_merge_target(repo, b.tip_oid, t))
+        {
+            targets.insert(b.name.clone(), target);
+        }
+    }
+    (merged, targets)
 }
 
 /// Local-only classification (no GitHub signal) — ancestry + squash detection.
@@ -487,6 +546,51 @@ mod tests {
         assert!(!merged.contains("gone"), "never merged");
         assert!(!merged.contains("main"), "base/HEAD is never classified");
         assert_eq!(merged.len(), 2);
+
+        // The targets variant reports the same set PLUS the squash landing
+        // commit for the squash-merged branch only.
+        let (merged2, targets) =
+            classify_merged_branches_with_targets(&repo, &branches, s, "main", &HashSet::new());
+        assert_eq!(merged2, merged, "target variant's set matches the plain one");
+        assert_eq!(
+            targets.get("feature"),
+            Some(&s),
+            "feature squash-links to the squash commit s"
+        );
+        assert!(
+            !targets.contains_key("topic"),
+            "an ancestry merge has no single squash landing commit"
+        );
+        assert!(!targets.contains_key("gone"), "unmerged branch has no target");
+    }
+
+    #[test]
+    fn squash_merge_target_names_the_commit_or_none() {
+        // main:    a <- b <- s   (s squashes feature onto main)
+        // feature: a <- f1 <- f2
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "two")],
+        );
+        assert_eq!(
+            squash_merge_target(&repo, f2, s),
+            Some(s),
+            "the squash commit is named"
+        );
+        // A branch that never landed has no target.
+        let g = commit(&repo, "refs/heads/gone", 2300, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+        assert_eq!(squash_merge_target(&repo, g, s), None, "unmerged → no target");
+        // An ancestry (fully-contained) branch is not a squash → no target.
+        assert_eq!(squash_merge_target(&repo, b, s), None, "ancestry → no target");
     }
 
     fn remote(name: &str, tip: Oid) -> BranchInfo {

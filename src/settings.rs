@@ -353,6 +353,12 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             metadata_columns.collapse_merges,
             metadata_columns.collapse_merges
         ),
+        config_bool!(
+            "Squash-merge link lines",
+            Graph,
+            None,
+            ui.squash_link_lines
+        ),
         state_bool!(
             "Author avatars",
             Graph,
