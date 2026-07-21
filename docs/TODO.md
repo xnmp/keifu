@@ -493,3 +493,30 @@ Measured (via new KEIFU_FORCE_PIXEL + encode-count logging): with tracing on, a 
 
 ### [DONE] #80 Perf gates
 Permanent startup phase timings (startup.* ops in the exit perf summary) and a perf regression test suite: wall-clock budgets (~10-30x measured, catching algorithmic blowups) for startup and window rasterization, plus an instrumentation contract test. Deterministic counter tests (e.g. #78's no-sync-classification gate) remain the primary absolute gates.
+
+### [TODO] #81 Squash-merge origin link line
+Option: subtle grey linking line from a squash-merged branch's tip to the squash commit on the base. Depends on #82's classification data.
+
+### [TODO] #82 Squash-merged branches not hidden
+Bug: branches merged via squash aren't being hidden by hide-merged. Investigate patch-id + gh-signal classification paths.
+
+### [TODO] #83 Remote-ahead-of-local display question
+Clarify/verify: is the remote branch shown when it's ahead of the local branch and the remote tip is at a HEAD? Document current behavior, then decide.
+
+### [TODO] #84 F5 fast-forwards non-divergent locals (option)
+Option: refresh (F5) also fast-forwards local branches that are strictly behind their upstream (no divergence).
+
+### [TODO] #85 Toasts bottom-right
+Move toast stack to the bottom-right corner.
+
+### [TODO] #86 "7-shaped" corner artifacts on fork rows
+Pixel graph: little 7-shaped sections at lower corners when many lines come from the same parent (fork connectors). Curve-geometry bug.
+
+### [TODO] #87 Input latency diagnostics
+MacBook still laggy with tracing off; keypresses appear to queue and "catch up" on the next press. Add event→action→draw timing logs to diagnose.
+
+### [TODO] #88 Ctrl+Enter deletes local+remote branch
+Branch delete confirm: third option (Ctrl+Enter) that also deletes the remote branch when one exists.
+
+### [TODO] #89 Optimistic remote branch deletion
+Remote branch deletion updates the UI immediately and reconciles on failure, instead of blocking on the remote round-trip.
