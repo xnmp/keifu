@@ -1924,10 +1924,10 @@ fn selection_survives_branch_hide_refresh() {
 
 /// Startup must NOT classify merged branches synchronously in dim-only mode
 /// (the default): classification is O(branches × tree diffs) and was costing
-/// >1s of time-to-first-frame on branchy repos. The contract: `App::from_repo`
-/// returns with an empty merged set, having already kicked the background
-/// classifier, and polling `update_merged_classification` delivers the real
-/// set (rebuilding the graph) shortly after.
+/// over a second of time-to-first-frame on branchy repos. The contract:
+/// `App::from_repo` returns with an empty merged set, having already kicked
+/// the background classifier, and polling `update_merged_classification`
+/// delivers the real set (rebuilding the graph) shortly after.
 #[test]
 fn startup_defers_merged_classification_to_the_background() {
     let (td, repo) = init_repo();
