@@ -472,6 +472,12 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             },
             refresh.fetch_interval
         ),
+        config_bool!(
+            "Fast-forward on refresh",
+            Refresh,
+            None,
+            refresh.fast_forward_on_refresh
+        ),
         // ── Interface ──────────────────────────────────────────────
         state_bool!(
             "Side-panel layout",

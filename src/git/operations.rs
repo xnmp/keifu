@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
-use git2::{BranchType, Oid, Repository, Status};
+use git2::{BranchType, Oid, Repository, Status, StatusOptions};
 
 use super::askpass::{self, Credentials};
 use super::repository::OperationState;
@@ -368,6 +368,148 @@ pub fn merge_branch(repo: &Repository, branch_name: &str, branch_type: BranchTyp
     }
 
     Ok(OpOutcome::Completed)
+}
+
+/// Summary of a [`fast_forward_behind_branches`] sweep.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct FastForwardSummary {
+    /// Local branch names moved up to their upstream tip.
+    pub moved: Vec<String>,
+    /// `(branch, error)` for branches whose fast-forward failed. Collected, not
+    /// fatal — one bad branch never aborts the rest of the sweep.
+    pub failed: Vec<(String, String)>,
+}
+
+impl FastForwardSummary {
+    /// Nothing moved and nothing failed (so no summary is warranted).
+    pub fn is_empty(&self) -> bool {
+        self.moved.is_empty() && self.failed.is_empty()
+    }
+}
+
+/// Whether the working tree is clean enough to fast-forward the checked-out
+/// branch: no staged or unstaged changes to tracked files and no conflicts.
+///
+/// Untracked and ignored files are allowed — this mirrors `git merge --ff-only`,
+/// which succeeds with untracked files present. Should a checkout actually need
+/// to clobber an untracked file, libgit2's default SAFE checkout refuses and
+/// fails that single branch, rather than this precheck blocking every branch
+/// whenever any stray untracked file exists.
+pub fn working_tree_clean_for_ff(repo: &Repository) -> Result<bool> {
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(false).include_ignored(false);
+    let statuses = repo.statuses(Some(&mut opts))?;
+    Ok(statuses.is_empty())
+}
+
+/// Fast-forward every local branch that is strictly behind its upstream
+/// (`ahead == 0 && behind > 0`), leaving diverged, ahead, and up-to-date
+/// branches untouched.
+///
+/// - A non-checked-out branch moves by a pure ref update (retargeted to the
+///   upstream tip; no working tree is involved, so it is always safe).
+/// - The checked-out branch is fast-forwarded properly (ref update + working-
+///   tree checkout, reusing [`merge_branch`]'s fast-forward path) only when the
+///   working tree is clean; a dirty tree skips it silently.
+///
+/// Per-branch failures are collected into [`FastForwardSummary::failed`] and
+/// never abort the remaining branches. Callers refresh afterward so the moved
+/// branches render at their new tips.
+pub fn fast_forward_behind_branches(repo: &Repository) -> FastForwardSummary {
+    let mut summary = FastForwardSummary::default();
+
+    // The checked-out branch's short name, when HEAD is on a branch (not detached).
+    let head_branch = repo
+        .head()
+        .ok()
+        .filter(|h| h.is_branch())
+        .and_then(|h| h.shorthand().map(str::to_string));
+
+    // Snapshot local branch names first so we don't hold the branches iterator
+    // (an immutable repo borrow) across the mutating fast-forwards below.
+    let names: Vec<String> = match repo.branches(Some(BranchType::Local)) {
+        Ok(iter) => iter
+            .filter_map(std::result::Result::ok)
+            .filter_map(|(b, _)| b.name().ok().flatten().map(str::to_string))
+            .collect(),
+        Err(_) => return summary,
+    };
+
+    // Only relevant for the checked-out branch; computed once.
+    let clean = working_tree_clean_for_ff(repo).unwrap_or(false);
+
+    for name in names {
+        let is_checked_out = head_branch.as_deref() == Some(name.as_str());
+        match fast_forward_one_behind(repo, &name, is_checked_out, clean) {
+            Ok(true) => summary.moved.push(name),
+            Ok(false) => {}
+            Err(e) => summary.failed.push((name, e.to_string())),
+        }
+    }
+    summary
+}
+
+/// Fast-forward a single local branch iff it is strictly behind its upstream.
+///
+/// Returns `Ok(true)` when it moved, `Ok(false)` when it was ineligible (no
+/// upstream, not strictly behind) or a dirty checked-out branch was skipped, and
+/// `Err` on an actual failure.
+fn fast_forward_one_behind(
+    repo: &Repository,
+    name: &str,
+    is_checked_out: bool,
+    working_tree_clean: bool,
+) -> Result<bool> {
+    let branch = repo.find_branch(name, BranchType::Local)?;
+    let local_oid = branch
+        .get()
+        .target()
+        .context("local branch has no target")?;
+
+    // Only branches that track an upstream are eligible.
+    let Ok(upstream) = branch.upstream() else {
+        return Ok(false);
+    };
+    let Some(up_oid) = upstream.get().target() else {
+        return Ok(false);
+    };
+
+    // Strictly behind: no local-only commits, at least one upstream-only commit.
+    let (ahead, behind) = repo.graph_ahead_behind(local_oid, up_oid)?;
+    if ahead != 0 || behind == 0 {
+        return Ok(false);
+    }
+
+    if is_checked_out {
+        // A dirty working tree is skipped silently, not reported as a failure.
+        if !working_tree_clean {
+            return Ok(false);
+        }
+        // Reuse the merge machinery's fast-forward path (ref + working-tree
+        // checkout) rather than reimplementing it. For a strictly-behind branch
+        // `git merge <upstream>` is always a fast-forward.
+        let up_name = upstream
+            .name()?
+            .context("upstream ref has no name")?
+            .to_string();
+        let up_type = if upstream.get().is_remote() {
+            BranchType::Remote
+        } else {
+            BranchType::Local
+        };
+        match merge_branch(repo, &up_name, up_type)? {
+            OpOutcome::Completed => Ok(true),
+            OpOutcome::Conflicts { .. } => {
+                bail!("unexpected conflicts fast-forwarding '{name}'")
+            }
+        }
+    } else {
+        // Pure ref update: retarget the local branch to the upstream tip. No
+        // working tree is touched, so this is always safe.
+        let mut reference = branch.into_reference();
+        reference.set_target(up_oid, &format!("fast-forward: {name} -> upstream"))?;
+        Ok(true)
+    }
 }
 
 /// Perform a rebase (simple implementation).
