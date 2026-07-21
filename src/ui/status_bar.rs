@@ -167,8 +167,6 @@ impl StatusBar {
         let pr_hint = pr_hint_label(selected_pr.map(|pr| pr.number));
         let pr_has_ci = selected_pr.is_some_and(|pr| pr.ci != crate::pr::CiStatus::None);
         let graph_cappable = (app.graph_layout.max_lane + 1) * 2 > 4;
-        let trace_traceable = crate::git::graph::graph_has_enough_lanes(&app.graph_layout);
-        let trace_enabled = app.trace_enabled;
         let diff_word_wrap = app.diff_word_wrap;
 
         // Compare-mode and watcher-disconnect chips (see the fns' docs):
@@ -370,15 +368,6 @@ impl StatusBar {
                                 // Only when the graph is wide enough to be capped.
                                 if graph_cappable {
                                     hb.hint_static(" <> ", key_style, "width ", desc_style);
-                                }
-                                // Only on branchy graphs, where tracing helps.
-                                if trace_traceable {
-                                    let label = if trace_enabled {
-                                        "trace on "
-                                    } else {
-                                        "trace off "
-                                    };
-                                    hb.hint(" t ", key_style, label, desc_style, Action::ToggleTrace);
                                 }
                                 hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
                                 hb.hint(" B ", key_style, "branches ", desc_style, Action::OpenBranchFilter);
