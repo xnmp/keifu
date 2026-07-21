@@ -438,6 +438,47 @@ mod tests {
 
     // ── #89: optimistic delete — failure restores the branch ────────────
 
+    /// The adversarial-review gap (#89): an HTTPS auth failure keeps the
+    /// optimistic hide for the retry — but CANCELLING the credential prompt
+    /// abandons the op, so the hide must be dropped and the branch restored,
+    /// or the UI shows a branch as deleted that still exists on the remote.
+    #[test]
+    fn auth_cancel_restores_optimistically_hidden_branch() {
+        let (_td, mut app) = app_local_and_remote_feature();
+        app.pending_remote_deletions.insert("origin/feature".to_string());
+        app.in_flight_op = Some(InFlightOp {
+            op: RetryableOp::Push(PushSpec::Delete {
+                remote: "origin".to_string(),
+                branch: "feature".to_string(),
+            }),
+            host: Some("github.com".to_string()),
+            had_creds: false,
+            silent: false,
+            attempts: 0,
+        });
+        // Auth failure → credential prompt opens, hide deliberately kept.
+        app.network.complete_push_for_test(Err(
+            "Authentication failed for 'https://github.com/u/r.git/'".to_string(),
+        ));
+        app.update_push_status();
+        assert!(app.pending_auth.is_some(), "auth prompt should be pending");
+        assert!(
+            app.pending_remote_deletions.contains("origin/feature"),
+            "hide is kept while the retry is possible"
+        );
+
+        app.auth_cancel();
+
+        assert!(
+            app.pending_remote_deletions.is_empty(),
+            "cancelling the prompt must drop the optimistic hide"
+        );
+        assert!(
+            app.branches.iter().any(|b| b.is_remote && b.name == "origin/feature"),
+            "origin/feature should reappear after cancelling"
+        );
+    }
+
     #[test]
     fn failed_remote_delete_restores_branch_and_toasts_error() {
         let (_td, mut app) = app_local_and_remote_feature();
