@@ -974,7 +974,7 @@ pub struct App {
     // Status message with auto-clear
     pub message: Option<String>,
     pub message_time: Option<std::time::Instant>,
-    /// Whether the current message is a network-progress message ("Pushing…")
+    /// Whether the current message is a network-progress message ("Pulling…")
     /// that should stay visible for the whole in-flight op, versus a plain
     /// transient status message that strictly obeys the 5s timeout. Progress
     /// messages are cleared on op completion so they can never be resurrected

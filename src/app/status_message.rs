@@ -28,9 +28,10 @@ impl App {
         self.message_sticky = false;
     }
 
-    /// Set a network-progress message ("Pushing…", "Pulling…") that persists for
-    /// the whole in-flight operation rather than obeying the plain timeout. Must
-    /// be paired with `clear_progress_message()` on op completion.
+    /// Set a network-progress message ("Pulling…") that persists for the whole
+    /// in-flight operation rather than obeying the plain timeout. Must be
+    /// paired with `clear_progress_message()` on op completion. Only pull uses
+    /// this — fetch and push report their start via a toast instead.
     pub(crate) fn set_progress_message(&mut self, msg: impl Into<String>) {
         self.message = Some(msg.into());
         self.message_time = Some(Instant::now());

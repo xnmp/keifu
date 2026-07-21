@@ -73,9 +73,8 @@ impl App {
         let Some(result) = self.network.poll_push() else {
             return false;
         };
-        // The "Pushing…"/"Deleting…" progress message has served its purpose;
-        // clear it so it can't be resurrected by a later network op.
-        self.clear_progress_message();
+        // Push start is reported via toast (see `dispatch_net_op`), not a
+        // sticky status message, so there is nothing to clear here.
         let flight = self.in_flight_op.take();
         // A remote-branch deletion rides the push pipeline; identify it so
         // completion produces the right toast (and restores on failure).
