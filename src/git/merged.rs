@@ -153,30 +153,69 @@ pub fn branch_changes_landed(repo: &Repository, branch_tip: Oid, base_tip: Oid) 
     diff.deltas().all(|d| d.status() == git2::Delta::Deleted)
 }
 
+/// The trunk tips to measure "merged" against: the chosen base tip, plus its
+/// remote-tracking counterpart (`origin/<base>`) when the base is a *local*
+/// trunk and the remote copy is a distinct commit.
+///
+/// A squash lands on the remote branch first, and keifu auto-fetches, so the
+/// local trunk routinely lags `origin/<trunk>` until the user pulls. Measuring
+/// only the local tip misses every squash-merge that has been fetched but not
+/// pulled, and the GitHub-PR signal doesn't rescue it either (no `gh`, or the
+/// content cross-check runs against the same stale local tip) — so NEITHER path
+/// fires and the merged branch stays visible. Adding the remote tip closes that
+/// gap (issue #82). The evidence tested against it is the same (ancestry / exact
+/// patch-id), so this only widens *where* a landing is looked for, not what
+/// counts as one — no new false-positive surface.
+///
+/// Bounded: at most two tips, so per-branch classification cost at most doubles
+/// (one extra ancestry query + one extra bounded patch-id scan). Classification
+/// already runs off the UI thread.
+fn base_tips(branches: &[BranchInfo], base_tip: Oid, base_name: &str) -> Vec<Oid> {
+    let mut tips = vec![base_tip];
+    // A bare (local) trunk name like "main"/"master" is the only case with a
+    // distinct `origin/…` counterpart to add; an already-remote base has none.
+    if !base_name.contains('/') {
+        let remote = format!("origin/{base_name}");
+        if let Some(b) = branches
+            .iter()
+            .find(|b| b.is_remote && b.name == remote && b.tip_oid != base_tip)
+        {
+            tips.push(b.tip_oid);
+        }
+    }
+    tips
+}
+
 /// Whether a single branch counts as merged into the trunk. Local branches only
 /// (a surviving squash-merged ref is local); never the trunk itself or the
 /// checked-out HEAD — hiding or dimming the branch you are on is more confusing
 /// than useful.
 ///
-/// Merged when **any** of:
-///  - ancestry: the branch tip is contained in the base (merge / fast-forward);
-///  - squash: the branch's cumulative diff matches a squashed commit on the base;
+/// `base_tips` are the trunk tips to test against (local trunk plus, when it
+/// lags, its `origin/…` counterpart — see [`base_tips`]). Merged when **any** of:
+///  - ancestry: the branch tip is contained in a base (merge / fast-forward);
+///  - squash: the branch's cumulative diff matches a squashed commit on a base;
 ///  - GitHub says a PR with this head branch merged **and** the branch carries no
-///    content the base lacks ([`branch_changes_landed`]). The content cross-check
+///    content some base lacks ([`branch_changes_landed`]). The content cross-check
 ///    is what makes the (name-based) GitHub signal safe against name reuse.
 fn branch_is_merged(
     repo: &Repository,
     b: &BranchInfo,
-    base_tip: Oid,
+    base_tips: &[Oid],
     base_name: &str,
     gh_merged: &HashSet<String>,
 ) -> bool {
-    if b.is_remote || b.is_head || b.name == base_name || b.tip_oid == base_tip {
+    if b.is_remote || b.is_head || b.name == base_name || base_tips.contains(&b.tip_oid) {
         return false;
     }
-    is_ancestor_merged(repo, b.tip_oid, base_tip)
-        || is_squash_merged(repo, b.tip_oid, base_tip)
-        || (gh_merged.contains(&b.name) && branch_changes_landed(repo, b.tip_oid, base_tip))
+    let landed_in_git = base_tips
+        .iter()
+        .any(|&t| is_ancestor_merged(repo, b.tip_oid, t) || is_squash_merged(repo, b.tip_oid, t));
+    landed_in_git
+        || (gh_merged.contains(&b.name)
+            && base_tips
+                .iter()
+                .any(|&t| branch_changes_landed(repo, b.tip_oid, t)))
 }
 
 /// Names of the **local** branches merged into the base branch, combining local
@@ -193,9 +232,12 @@ pub fn classify_merged_branches(
     base_name: &str,
     gh_merged: &HashSet<String>,
 ) -> HashSet<String> {
+    // Measure against the local trunk *and* its remote-tracking tip when the
+    // local one lags (the post-fetch, pre-pull state) — see [`base_tips`].
+    let tips = base_tips(branches, base_tip, base_name);
     branches
         .iter()
-        .filter(|b| branch_is_merged(repo, b, base_tip, base_name, gh_merged))
+        .filter(|b| branch_is_merged(repo, b, &tips, base_name, gh_merged))
         .map(|b| b.name.clone())
         .collect()
 }
@@ -445,6 +487,90 @@ mod tests {
         assert!(!merged.contains("gone"), "never merged");
         assert!(!merged.contains("main"), "base/HEAD is never classified");
         assert_eq!(merged.len(), 2);
+    }
+
+    fn remote(name: &str, tip: Oid) -> BranchInfo {
+        BranchInfo {
+            name: name.into(),
+            is_head: false,
+            is_remote: true,
+            upstream: None,
+            tip_oid: tip,
+            ahead: 0,
+            behind: 0,
+        }
+    }
+
+    #[test]
+    fn squash_landed_on_remote_trunk_is_classified_when_local_trunk_lags() {
+        // Issue #82. A feature is squash-merged onto `origin/main`; keifu has
+        // fetched (so origin/main carries the squash) but the user hasn't pulled,
+        // so local `main` still sits at the fork point. Classification must still
+        // hide the feature — measured against the ahead remote tip, not just the
+        // stale local one.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        // Fork point; local main stays here (stale).
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Feature: two commits building feat.txt (multi-commit, so only the
+        // *cumulative* diff equals the squash — the case #82 is about).
+        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        // Squash lands the feature's net diff on origin/main (single commit).
+        let s = commit(&repo, "refs/remotes/origin/main", 3000, &[a], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        // An unrelated branch that genuinely never landed.
+        let g = commit(&repo, "refs/heads/gone", 2300, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+
+        let branches = vec![
+            local("main", a, true), // stale local trunk, also HEAD
+            remote("origin/main", s),
+            local("feature", f2, false),
+            local("gone", g, false),
+        ];
+        // Sanity: against the stale local tip alone, the squash is invisible.
+        assert!(!is_squash_merged(&repo, f2, a), "stale local tip cannot see the squash");
+        assert!(is_squash_merged(&repo, f2, s), "remote tip carries the squash");
+
+        // base_branch prefers the (stale) local main; classification must reach
+        // through to origin/main anyway.
+        let base = base_branch(&branches).unwrap();
+        assert_eq!(base.name, "main");
+        let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
+        assert!(merged.contains("feature"), "squash on ahead remote trunk must be classified");
+        assert!(!merged.contains("gone"), "genuinely unmerged branch stays visible");
+        assert!(!merged.contains("main"), "the trunk itself is never classified");
+        assert!(!merged.contains("origin/main"), "remote branches are never classified");
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn ancestor_merge_on_remote_trunk_is_classified_when_local_trunk_lags() {
+        // The same remote-tip reach must also cover a plain (non-squash) merge
+        // that has been fetched into origin/main but not pulled to local main.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let t = commit(&repo, "refs/heads/topic", 2000, &[a], &[("base.txt", "base"), ("t.txt", "t")]);
+        // origin/main advanced to include topic and one further commit; local
+        // main lags at `a`. topic is a strict ancestor of origin/main's tip.
+        let u = commit(&repo, "refs/remotes/origin/main", 2500, &[t], &[("base.txt", "base"), ("t.txt", "t"), ("u.txt", "u")]);
+        let branches = vec![local("main", a, true), remote("origin/main", u), local("topic", t, false)];
+        let base = base_branch(&branches).unwrap();
+        let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
+        assert!(merged.contains("topic"), "ancestor merge visible only on remote trunk must classify");
+    }
+
+    #[test]
+    fn base_tips_omits_matching_or_absent_remote_trunk() {
+        // When local main is up to date (origin/main equal), the remote adds no
+        // second tip — behaviour is identical to before.
+        let z = Oid::zero();
+        let branches = vec![local("main", z, true), remote("origin/main", z)];
+        assert_eq!(base_tips(&branches, z, "main"), vec![z], "equal remote adds no tip");
+        // A remote base name has no bare `origin/…` counterpart to add.
+        assert_eq!(base_tips(&branches, z, "origin/main"), vec![z]);
+        // No remote trunk present at all → just the local tip.
+        assert_eq!(base_tips(&[local("main", z, true)], z, "main"), vec![z]);
     }
 
     fn gh(names: &[&str]) -> HashSet<String> {
