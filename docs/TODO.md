@@ -521,5 +521,8 @@ Branch delete confirm: third option (Ctrl+Enter) that also deletes the remote br
 ### [DONE] #89 Optimistic remote branch deletion
 Remote branch deletion updates the UI immediately and reconciles on failure, instead of blocking on the remote round-trip.
 
+### [DONE] #86-r3 Folded-connector pipe overshoots a curve-fed join
+Round 3 (user repro on keifu's own graph): a lane that terminates where a wide arm merges in shows a "/|" — the arm's tilted-looking tip plus an orphan vertical stub dangling half a cell below the join. Not a tilt regression (renders identically pre-3eecd60): the folded connector's vertical (e.g. HorizontalPipe under a dot) shadows the host cell's lane segment, but its curved_below is computed against the host row's own cells instead of the row-below view, so it never learns the bottom half is curve-fed and draws full height past the join.
+
 ### [TODO] #90 Remote-counterpart disambiguation
 Follow-up from #88's adversarial review: when a branch has no upstream and exists on multiple remotes, the name-match fallback picks by list order; prefer the configured push remote and only trust an upstream whose short name matches. Low risk (target is displayed and secondary-key gated), but worth tightening.

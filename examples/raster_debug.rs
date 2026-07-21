@@ -120,14 +120,30 @@ fn main() {
     for i in start..end {
         let (node_idx, underlay, underlay_oids) = &folded[i];
         let node = &layout.nodes[*node_idx];
+        // App semantics (graph_view::adjacent_cells): the underlay physically
+        // between the dot and the neighbour wins per column — row i's own
+        // underlay for the above view, row i+1's underlay for the below view.
+        let merge_view = |underlay: &[keifu::git::graph::CellType],
+                          cells: &[keifu::git::graph::CellType]| {
+            let w = underlay.len().max(cells.len());
+            (0..w)
+                .map(|col| match underlay.get(col) {
+                    Some(u) if *u != keifu::git::graph::CellType::Empty => *u,
+                    _ => cells
+                        .get(col)
+                        .copied()
+                        .unwrap_or(keifu::git::graph::CellType::Empty),
+                })
+                .collect::<Vec<_>>()
+        };
         let above = if i > 0 {
-            Some(layout.nodes[folded[i - 1].0].cells.clone())
+            Some(merge_view(underlay, &layout.nodes[folded[i - 1].0].cells))
         } else {
             None
         };
         let below = folded
             .get(i + 1)
-            .map(|(ni, _, _)| layout.nodes[*ni].cells.clone());
+            .map(|(ni, u, _)| merge_view(u, &layout.nodes[*ni].cells));
         let neighbor = |j: usize| keifu::ui::graph_pixels::NeighborRow {
             underlay: &folded[j].1,
             cells: &layout.nodes[folded[j].0].cells,
