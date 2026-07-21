@@ -481,3 +481,6 @@ Lane-transition beziers span row-center to row-center (VSCode geometry): curves 
 
 ### [DONE] #76 Scroll latency batch
 Input coalescing (drain buffered nav events per frame), trace lineage/lit-edge cache keyed by (generation, selection), pixel sync window shrunk to viewport+margin while trace dim is active, .archive/ walk cached out of the draw path.
+
+### [DONE] #77 Pixel window stale-offset cutoff
+The pixel spec/protocol pass ran before the list render, so its sync window used the pre-clamp scroll offset — page jumps (and G/g even before the lean trace window) left whole bands of the graph blank at the top/bottom. The pass now runs after the list render on the final offset; a mid-frame protocol poisoning triggers an immediate redraw for the Unicode fallback.

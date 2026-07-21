@@ -156,11 +156,16 @@ fn main() -> Result<()> {
         // Render only when state has changed
         if needs_render {
             let draw_started = Instant::now();
+            let had_pixel_graph = app.pixel_graph.is_some();
             terminal.draw(|frame| {
                 ui::draw(frame, &mut app);
             })?;
             app.perf.record("draw", draw_started.elapsed());
-            needs_render = false;
+            // Pixel rendering poisoned itself during this draw (protocol
+            // failures): the frame on screen has no graph column. Redraw
+            // immediately so the Unicode fallback appears without waiting
+            // for the next input event.
+            needs_render = had_pixel_graph && app.pixel_graph.is_none();
         }
 
         if app.should_quit {
