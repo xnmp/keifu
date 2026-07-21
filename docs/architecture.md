@@ -311,15 +311,26 @@ settings exist and how they behave.
   (`tree_diff_patch_id`) against it. A match means the branch's changes landed
   on the base as a squash commit. Patch-ids are content-addressed
   (`diff.patchid()`), so this survives rebase/re-authoring, not just identical
-  commits.
+  commits. The diffs are generated with **zero context lines** (issue #97): a
+  patch-id normally folds surrounding context into its hash, so a trunk commit
+  editing lines *near* the branch's change (within the default 3-line window)
+  shifts the context and breaks the match even though the squash adds exactly
+  the same lines. Keying only on the changed lines makes the id survive an
+  advancing base while still requiring the whole cumulative change set to be
+  identical (it narrows, not widens, what the hash covers).
 - `base_branch()` — preference cascade: local `main` → local `master` →
   `origin/main` → `origin/master` → checked-out HEAD.
-- `branch_changes_landed()` — a GitHub-signal cross-check: given `gh`'s
-  merged-PR list says a branch merged, this diffs the branch's tree against
-  the base's tree and requires every delta to be `Delta::Deleted` — any
-  Added/Modified/Renamed content means the branch (or a same-named
-  replacement) still carries novel work, so the GitHub signal alone can't be
-  trusted (guards against branch-name reuse).
+- `branch_content_in_base()` — a GitHub-signal cross-check: given `gh`'s
+  merged-PR list says a branch merged, this runs a **three-way merge**
+  (`merge_trees`) of the branch into the base with the fork point as the
+  common ancestor, and reports contained only when the merged tree equals the
+  base tree (and doesn't conflict). Anchoring to the fork ancestor is what lets
+  it survive an advancing base — a trunk edit to a file the branch also carries
+  an older copy of is attributed to the base side, not counted as branch work
+  (issue #97). Any change the base lacks leaves the merged tree ≠ base (or
+  conflicts), so the GitHub signal alone can't be trusted (guards against
+  branch-name reuse, and against a conflict-resolved landing being over-claimed
+  locally).
 
 **Async infrastructure** (`src/merged_branch_fetch.rs`):
 - The merged-PR-branch poll (`gh pr list --state merged`, 10s timeout, 300s

@@ -544,3 +544,6 @@ Push outcome should report as a toast, not occupy the status bar.
 
 ### [DONE] #96 Pull error (needs stash) blocks UI
 A pull failing on dirty local changes keeps showing on the status bar and the UI can't be accessed until dismissed. Error should be non-blocking (toast), ideally with stash guidance.
+
+### [DONE] #97 Squash merges onto an advanced base not classified
+Bug: squash-merged branches still aren't hidden by hide-merged and draw no link line when the trunk advanced since the fork. Two independent failures, both when the base moved on near the branch's edits: (1) the local patch-id squash scan folded diff *context* into the hash, so a trunk commit editing lines adjacent to the branch's change broke the match — fixed by generating the diffs with zero context lines (`tree_diff_patch_id`), keying the id only on changed lines while still requiring the whole cumulative change set to match; (2) the GitHub-signal cross-check `branch_changes_landed` used a raw base→branch tree diff and read a file the branch was merely *behind* on as novel work — replaced with `branch_content_in_base`, a three-way merge against the fork ancestor that reports contained only when merging the branch into the base is a no-op. Both are exact/sound, not fuzzy: an unlanded branch (or a conflict-resolved landing) is never classified locally.
