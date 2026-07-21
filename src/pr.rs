@@ -373,6 +373,76 @@ pub fn message_is_github_merge(summary: &str) -> bool {
     !digits.is_empty() && rest[digits.len()..].starts_with(' ')
 }
 
+/// A commit whose raw subject is machinery, not authored prose, because it's
+/// how a GitHub PR landed: either the default merge-commit subject (title
+/// lives in the body) or the default squash-merge subject (title inlined
+/// before a trailing `(#123)`). Extracts `(pr_number, pr_title)` so the
+/// renderer can show "#123 <title>" instead (issue #99).
+///
+/// Pure and format-strict by design — no fuzzy matching, so a commit that
+/// merely *mentions* a PR/issue number never gets rewritten:
+/// - merge commits: `is_merge` true and `summary` starts with
+///   `"Merge pull request #<digits> from"`; the title is the first non-blank
+///   line *after* the subject line in `full_message`. No such line → `None`
+///   (keep the raw subject rather than inventing a title).
+/// - squash commits: `is_merge` false and `summary` ends with a strict
+///   `<title> (#<digits>)` suffix — exactly one space before the paren, and
+///   nothing after the closing paren.
+pub fn pr_landed_subject(summary: &str, full_message: &str, is_merge: bool) -> Option<(u64, String)> {
+    if is_merge {
+        parse_merge_pr_subject(summary, full_message)
+    } else {
+        parse_squash_pr_subject(summary)
+    }
+}
+
+/// `"Merge pull request #123 from owner/branch"` (subject) followed by a blank
+/// line and the PR title (body) — GitHub's default merge-commit shape.
+fn parse_merge_pr_subject(summary: &str, full_message: &str) -> Option<(u64, String)> {
+    let rest = summary.trim_start().strip_prefix("Merge pull request #")?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() || !rest[digits.len()..].starts_with(" from") {
+        return None;
+    }
+    let number: u64 = digits.parse().ok()?;
+    // Skip the subject line itself (full_message's first line), then take the
+    // first non-blank line that follows as the title.
+    let title = full_message.lines().skip(1).map(str::trim).find(|l| !l.is_empty())?;
+    Some((number, title.to_string()))
+}
+
+/// `"<title> (#123)"` — GitHub's default squash-merge subject. Anchored at the
+/// end: exactly one space before the paren, and the paren group holds nothing
+/// but `#<digits>`, so trailing text after the paren or extra spacing before
+/// it disqualifies the match rather than being fuzzily accepted.
+fn parse_squash_pr_subject(summary: &str) -> Option<(u64, String)> {
+    let s = summary.trim_end();
+    if !s.ends_with(')') {
+        return None;
+    }
+    let open_idx = s.rfind('(')?;
+    let bytes = s.as_bytes();
+    if open_idx == 0 || bytes[open_idx - 1] != b' ' {
+        return None;
+    }
+    // Exactly one space before '(' — the byte before that space must not
+    // itself be a space (rules out "title  (#123)").
+    if open_idx >= 2 && bytes[open_idx - 2] == b' ' {
+        return None;
+    }
+    let inner = &s[open_idx + 1..s.len() - 1];
+    let digits = inner.strip_prefix('#')?;
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let title = s[..open_idx - 1].trim_end();
+    if title.is_empty() {
+        return None;
+    }
+    let number: u64 = digits.parse().ok()?;
+    Some((number, title.to_string()))
+}
+
 /// Build the background open-PR fetcher: `gh pr list` every [`PR_FETCH_INTERVAL`]
 /// on a worker thread, routed through the generic [`IntervalFetch`].
 pub fn open_pr_fetch() -> IntervalFetch<HashMap<String, PrInfo>> {
@@ -773,5 +843,81 @@ mod tests {
             pr_refresh_summary(&old, &new).as_deref(),
             Some("PRs: 2 new, 1 CI update")
         );
+    }
+
+    // ── pr_landed_subject ─────────────────────────────────────────────
+
+    #[test]
+    fn merge_subject_with_body_title_extracts_number_and_title() {
+        let summary = "Merge pull request #123 from owner/feat-branch";
+        let full = "Merge pull request #123 from owner/feat-branch\n\nAdd the frobnicator\n";
+        assert_eq!(
+            pr_landed_subject(summary, full, true),
+            Some((123, "Add the frobnicator".to_string()))
+        );
+    }
+
+    #[test]
+    fn merge_subject_with_no_body_title_returns_none() {
+        // No non-blank line after the subject — don't invent a title.
+        let summary = "Merge pull request #123 from owner/feat-branch";
+        let full = "Merge pull request #123 from owner/feat-branch\n\n\n";
+        assert_eq!(pr_landed_subject(summary, full, true), None);
+
+        let full_no_body_at_all = "Merge pull request #123 from owner/feat-branch";
+        assert_eq!(pr_landed_subject(summary, full_no_body_at_all, true), None);
+    }
+
+    #[test]
+    fn merge_subject_title_is_trimmed() {
+        let summary = "Merge pull request #7 from owner/x";
+        let full = "Merge pull request #7 from owner/x\n\n   Padded title   \nmore body\n";
+        assert_eq!(
+            pr_landed_subject(summary, full, true),
+            Some((7, "Padded title".to_string()))
+        );
+    }
+
+    #[test]
+    fn squash_subject_extracts_number_and_title() {
+        let summary = "Some title (#456)";
+        assert_eq!(
+            pr_landed_subject(summary, "irrelevant", false),
+            Some((456, "Some title".to_string()))
+        );
+    }
+
+    #[test]
+    fn squash_subject_with_extra_text_after_paren_returns_none() {
+        let summary = "Some title (#456) extra text";
+        assert_eq!(pr_landed_subject(summary, "irrelevant", false), None);
+    }
+
+    #[test]
+    fn squash_subject_with_double_space_before_paren_returns_none() {
+        let summary = "Some title  (#456)";
+        assert_eq!(pr_landed_subject(summary, "irrelevant", false), None);
+    }
+
+    #[test]
+    fn squash_subject_with_empty_title_returns_none() {
+        let summary = "(#456)";
+        assert_eq!(pr_landed_subject(summary, "irrelevant", false), None);
+    }
+
+    #[test]
+    fn subject_merely_referencing_an_issue_mid_line_returns_none() {
+        // No trailing "(#n)" suffix — mid-sentence mention, not the squash shape.
+        let summary = "Fix bug referenced in #123 for good measure";
+        assert_eq!(pr_landed_subject(summary, "irrelevant", false), None);
+
+        // Also not a merge subject.
+        assert_eq!(pr_landed_subject(summary, "irrelevant", true), None);
+    }
+
+    #[test]
+    fn non_merge_prefix_is_never_treated_as_a_merge_subject() {
+        let summary = "Merge branch 'main' into feature";
+        assert_eq!(pr_landed_subject(summary, "Merge branch 'main' into feature\n\nsome body", true), None);
     }
 }

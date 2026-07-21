@@ -353,6 +353,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             metadata_columns.collapse_merges,
             metadata_columns.collapse_merges
         ),
+        state_bool!(
+            "PR number & title subjects",
+            Graph,
+            None,
+            metadata_columns.pr_subjects,
+            metadata_columns.pr_subjects
+        ),
         config_bool!(
             "Squash-merge link lines",
             Graph,
@@ -576,6 +583,7 @@ mod tests {
                 mute_base_merges: true,
                 collapse_merges: true,
                 avatars: true,
+                pr_subjects: false,
             },
         };
         let mut rebuilt = UiState::default();
