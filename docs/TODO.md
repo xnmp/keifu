@@ -509,7 +509,7 @@ Option: refresh (F5) also fast-forwards local branches that are strictly behind 
 ### [TODO] #85 Toasts bottom-right
 Move toast stack to the bottom-right corner.
 
-### [TODO] #86 "7-shaped" corner artifacts on fork rows
+### [DONE] #86 "7-shaped" corner artifacts on fork rows
 Pixel graph: little 7-shaped sections at lower corners when many lines come from the same parent (fork connectors). Curve-geometry bug.
 
 ### [TODO] #87 Input latency diagnostics
