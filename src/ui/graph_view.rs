@@ -1878,12 +1878,14 @@ fn render_graph_line_tail<'a>(
         .saturating_sub(right_width);
     // Collapse (#59) replaces the whole message with a single merge glyph — the
     // strongest reduction, so it wins over a PR-subject rewrite (#99) on the
-    // same row. Otherwise a qualifying PR-landed commit shows "<icon> #n
-    // <title>"; anything else truncates the raw message as usual.
+    // same row. Otherwise a qualifying PR-landed commit shows "<icon> <title>"
+    // — no number (#101: the parsed number is sometimes an issue reference,
+    // and the title alone reads cleaner); anything else truncates the raw
+    // message as usual.
     let message = if collapse_merge {
         MERGE_ICON.to_string()
-    } else if let Some((number, title)) = &pr_landed_subject {
-        truncate_to_width(&format!("{PR_BADGE_ICON} #{number} {title}"), available_for_message)
+    } else if let Some((_, title)) = &pr_landed_subject {
+        truncate_to_width(&format!("{PR_BADGE_ICON} {title}"), available_for_message)
     } else {
         truncate_to_width(&commit.message, available_for_message)
     };
@@ -3585,7 +3587,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_merge_commit_rewritten_to_number_and_title_when_toggle_on() {
+    fn pr_merge_commit_rewritten_to_icon_and_title_when_toggle_on() {
         let node = merge_node_with_body(
             40,
             "Merge pull request #123 from owner/feat",
@@ -3595,9 +3597,12 @@ mod tests {
         let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text.contains("#123 Add the frobnicator"),
+            text.contains(&format!("{PR_BADGE_ICON} Add the frobnicator")),
             "rewritten subject present: {text:?}"
         );
+        // #101: the number stays hidden — it's sometimes an issue reference,
+        // and the title alone reads cleaner.
+        assert!(!text.contains("#123"), "PR number hidden: {text:?}");
         assert!(
             !text.contains("Merge pull request"),
             "raw merge subject text absent: {text:?}"
@@ -3618,19 +3623,19 @@ mod tests {
             text.contains("Merge pull request #123 from owner/feat"),
             "raw subject kept when toggle is off: {text:?}"
         );
-        assert!(!text.contains("#123 Add the frobnicator"), "no rewrite: {text:?}");
+        assert!(!text.contains(&PR_BADGE_ICON.to_string()), "no rewrite: {text:?}");
     }
 
     #[test]
-    fn squash_commit_subject_rewritten_to_number_and_title() {
+    fn squash_commit_subject_rewritten_to_icon_and_title() {
         let node = commit_node(50, "Add the frobnicator (#456)", &[]);
         let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text.contains("#456 Add the frobnicator"),
+            text.contains(&format!("{PR_BADGE_ICON} Add the frobnicator")),
             "rewritten squash subject: {text:?}"
         );
-        assert!(!text.contains("(#456)"), "raw parens suffix absent: {text:?}");
+        assert!(!text.contains("#456"), "number (possibly an issue ref) hidden: {text:?}");
     }
 
     #[test]

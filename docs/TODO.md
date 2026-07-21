@@ -553,3 +553,9 @@ In graph rows, PR badges now render BEFORE the branch name pill.
 
 ### [DONE] #99 PR-styled subjects for PR-landing commits (option)
 Toggleable option (default ON, `pr_subjects` in `MetadataColumns`): a commit that landed a merged PR — the PR's merge commit or its squash commit — shows an icon + PR number + title instead of the raw "Merge pull request #x from y" / "title (#x)" subject. Pure parser `pr::pr_landed_subject` extracts `(number, title)` strictly (merge: number off the subject, title = first non-blank body line after it, else `None` rather than inventing one; squash: strict `<title> (#n)` suffix, exactly one space before the paren, nothing after). Rendered in `render_graph_line_tail`; `collapse_merges` wins when both would apply to the same row.
+
+### [TODO] #100 Squash hide/link-lines still failing on real repos
+User repro persists after #97: squash-merged branches not hidden, no link lines. Build an extensive suite around realistic squash shapes (update-merges from base, deep scan caps, remote-only branches, base selection) plus a wild-repo test via refs/pull/N/head, and fix what it exposes. Check whether classification covers remote-only branches and whether #81 link lines sit behind a default-off option.
+
+### [DONE] #101 PR subjects: drop the number
+Rewritten PR subjects show icon + title only — the parsed number is sometimes an issue reference, and the number adds noise anyway.
