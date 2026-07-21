@@ -97,17 +97,20 @@ pub fn squash_merge_target(repo: &Repository, branch_tip: Oid, base_tip: Oid) ->
 /// really is contained, so a collision (whose merge would place the change in two
 /// places, or delete it from one the base kept) is rejected. Together they name a
 /// real squash without ever hiding genuinely unlanded work (issue #97).
+///
+/// The containment check runs against the **matched commit** (the landing
+/// point), not the base tip: after a genuine squash, later trunk commits are
+/// free to edit the very lines the branch introduced, and by the tip those
+/// edits would three-way-conflict with the branch and wrongly un-classify a
+/// branch that really did land. At the squash commit itself the branch's work
+/// is contained by construction, while a collision's differing placement still
+/// fails there.
 fn squash_target_from_fork(
     repo: &Repository,
     fork: Oid,
     branch_tip: Oid,
     base_tip: Oid,
 ) -> Option<Oid> {
-    // Cheap, exact gate first: if the branch isn't actually contained in the
-    // base, no patch-id hit can be a genuine squash (it would be a collision).
-    if !branch_content_in_base(repo, branch_tip, base_tip) {
-        return None;
-    }
     let branch_patch = combined_patch_id(repo, fork, branch_tip)?;
 
     // Walk the base from its tip back toward (but not past) the fork point,
@@ -130,7 +133,11 @@ fn squash_target_from_fork(
             continue;
         };
         let pid = tree_diff_patch_id(repo, parent.tree().ok().as_ref(), commit.tree().ok().as_ref());
-        if pid == Some(branch_patch) {
+        // A pid hit is a candidate, not proof (zero-context ids can collide) —
+        // confirm the branch's work is exactly contained at this landing point,
+        // and keep scanning past a collision in case the real squash sits
+        // deeper in the walk.
+        if pid == Some(branch_patch) && branch_content_in_base(repo, branch_tip, oid) {
             return Some(oid);
         }
     }
@@ -680,6 +687,31 @@ mod tests {
         );
         // The link-line target (#81) is still nameable: the squash commit `s`.
         assert_eq!(squash_merge_target(&repo, f2, s), Some(s));
+    }
+
+    #[test]
+    fn squash_survives_later_trunk_edits_to_the_landed_lines() {
+        // After a genuine squash, the trunk keeps evolving — including editing
+        // the very lines the branch introduced. Containment against the base
+        // TIP three-way-conflicts then (branch adds FEAT where the tip has
+        // FEAT-v2), so the cross-check must run at the matched squash commit,
+        // where the work is contained by construction.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\n")]);
+        let f = commit(&repo, "refs/heads/feature", 1100, &[a], &[("file.txt", "L1\nL2\nFEAT\nL3\n")]);
+        let s = commit(&repo, "refs/heads/main", 2000, &[a], &[("file.txt", "L1\nL2\nFEAT\nL3\n")]);
+        // Trunk later rewrites the landed line.
+        let t = commit(&repo, "refs/heads/main", 3000, &[s], &[("file.txt", "L1\nL2\nFEAT-v2\nL3\n")]);
+
+        // Sanity: the gap this test pins down — at the tip the branch is no
+        // longer cleanly contained, so a tip-anchored gate would miss it.
+        assert!(!branch_content_in_base(&repo, f, t));
+        assert!(
+            is_squash_merged(&repo, f, t),
+            "a squashed branch must stay classified after trunk edits its lines"
+        );
+        assert_eq!(squash_merge_target(&repo, f, t), Some(s), "link target is the squash commit");
     }
 
     #[test]
