@@ -88,12 +88,19 @@ impl<'a> Widget for ConfirmDialog<'a> {
             .theme
             .popup_block_in(" Confirm ", self.theme.confirm_border);
 
-        let lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  {}", self.message),
-                Style::default().fg(self.theme.text_primary),
-            )),
+        // The first line of the message is the prompt (primary color); any
+        // following `\n`-separated lines are hint/advertisement text (muted),
+        // matching the muted-hint style used elsewhere in these dialogs.
+        let mut lines = vec![Line::from("")];
+        for (i, segment) in self.message.split('\n').enumerate() {
+            let style = if i == 0 {
+                Style::default().fg(self.theme.text_primary)
+            } else {
+                Style::default().fg(self.theme.text_muted)
+            };
+            lines.push(Line::from(Span::styled(format!("  {segment}"), style)));
+        }
+        lines.extend([
             Line::from(""),
             Line::from(vec![
                 Span::styled(
@@ -109,7 +116,7 @@ impl<'a> Widget for ConfirmDialog<'a> {
                 ),
                 Span::raw(": No"),
             ]),
-        ];
+        ]);
 
         let paragraph = Paragraph::new(lines).block(block);
         Widget::render(paragraph, area, buf);

@@ -32,7 +32,8 @@ impl App {
 
     /// Open the destructive Confirm for deleting `name` — routing to a remote
     /// delete (`git push <remote> --delete`) when `name` is a remote-tracking
-    /// ref, or a local branch delete otherwise.
+    /// ref, a local+remote delete offer when a local branch also exists on a
+    /// remote, or a plain local branch delete otherwise.
     pub(crate) fn confirm_delete_branch(&mut self, name: String) {
         let is_remote = self
             .branches
@@ -47,10 +48,53 @@ impl App {
                 return;
             }
         }
+        // Local branch that also lives on a remote: offer to delete both.
+        if let Some((remote, branch)) = self.remote_counterpart(&name) {
+            self.mode = AppMode::Confirm {
+                message: format!(
+                    "Delete branch '{name}'?\nEnter: delete local · Ctrl+Enter / R: also delete {remote}/{branch}"
+                ),
+                action: ConfirmAction::DeleteBranchWithRemote { name, remote, branch },
+            };
+            return;
+        }
         self.mode = AppMode::Confirm {
             message: format!("Delete branch '{}'?", name),
             action: ConfirmAction::DeleteBranch(name),
         };
+    }
+
+    /// The `(remote, branch)` a local branch also exists as, if any — used to
+    /// offer a combined local+remote delete. Prefers the branch's configured
+    /// upstream (its authoritative push target) when that upstream is present as
+    /// a remote-tracking ref; otherwise falls back to any remote-tracking ref
+    /// whose short name matches (`origin/<name>`). Returns `None` for a
+    /// local-only branch or a name that isn't a local branch.
+    pub(crate) fn remote_counterpart(&self, local_name: &str) -> Option<(String, String)> {
+        let local = self
+            .branches
+            .iter()
+            .find(|b| !b.is_remote && b.name == local_name)?;
+        // Authoritative: the configured upstream, when it exists as a ref.
+        if let Some(upstream) = &local.upstream {
+            let tracked = self
+                .branches
+                .iter()
+                .any(|b| b.is_remote && &b.name == upstream);
+            if tracked {
+                if let Some(split) = self.split_remote_ref(upstream) {
+                    return Some(split);
+                }
+            }
+        }
+        // Fallback: a remote-tracking ref whose short name matches.
+        self.branches
+            .iter()
+            .filter(|b| b.is_remote)
+            .find_map(|b| {
+                self.split_remote_ref(&b.name)
+                    .filter(|(_, branch)| branch == local_name)
+            })
     }
 
     pub(crate) fn open_commit_menu(&mut self) {

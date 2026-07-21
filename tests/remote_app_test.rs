@@ -116,13 +116,28 @@ fn delete_remote_branch_flow_removes_branch_from_remote() {
         other => panic!("expected a Confirm dialog, got {other:?}"),
     }
 
-    // Confirming performs the remote delete synchronously.
+    // Confirming kicks off an optimistic async delete: the branch is hidden
+    // immediately and removed on the remote in the background (issue #89).
     app.handle_action(Action::Confirm).unwrap();
+    assert!(
+        app.pending_remote_deletions.contains("origin/feature"),
+        "branch should be hidden optimistically"
+    );
+    assert!(app.is_pushing(), "a background delete should be in flight");
+
+    // Drain the (local, file://) delete to completion.
+    for _ in 0..1000 {
+        if app.update_push_status() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
 
     assert!(
         git_cli(&path, &["ls-remote", "--heads", "origin", "feature"]).trim().is_empty(),
         "feature should be deleted from origin"
     );
+    assert!(app.pending_remote_deletions.is_empty());
     // HEAD branch is untouched.
     assert_eq!(current_branch(app.repo.repo()), branch);
 }

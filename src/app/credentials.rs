@@ -71,6 +71,7 @@ impl App {
             RetryableOp::Push(PushSpec::Current) => self.repo.head_upstream_remote(),
             RetryableOp::Push(PushSpec::Publish { remote, .. }) => Some(remote.clone()),
             RetryableOp::Push(PushSpec::ToRemote { remote }) => Some(remote.clone()),
+            RetryableOp::Push(PushSpec::Delete { remote, .. }) => Some(remote.clone()),
             RetryableOp::Pull { remote: Some(r), .. } => Some(r.clone()),
             RetryableOp::Pull { remote: None, .. } => self.repo.head_upstream_remote(),
         };
@@ -186,7 +187,24 @@ impl App {
 
     /// Cancel an in-progress credential prompt (Esc at either step).
     pub(crate) fn auth_cancel(&mut self) {
-        self.pending_auth = None;
+        // Cancelling abandons the pending op for good. If that op was an
+        // optimistic remote-branch deletion, the branch was hidden on
+        // dispatch and the completion handler that would have unhidden it
+        // will never run — drop the pending-hide and refresh so the branch
+        // reappears instead of staying wrongly deleted-looking until restart.
+        if let Some(pending) = self.pending_auth.take() {
+            if let RetryableOp::Push(crate::network::PushSpec::Delete { remote, branch }) =
+                &pending.op
+            {
+                self.pending_remote_deletions
+                    .remove(&format!("{remote}/{branch}"));
+                self.toast(
+                    crate::toast::ToastKind::Info,
+                    format!("Remote deletion of {remote}/{branch} cancelled"),
+                );
+                let _ = self.refresh(false);
+            }
+        }
         self.mode = AppMode::Normal;
     }
 

@@ -73,19 +73,49 @@ impl App {
         let Some(result) = self.network.poll_push() else {
             return false;
         };
-        // The "Pushing…" progress message has served its purpose; clear it so it
-        // can't be resurrected by a later network op.
+        // The "Pushing…"/"Deleting…" progress message has served its purpose;
+        // clear it so it can't be resurrected by a later network op.
         self.clear_progress_message();
         let flight = self.in_flight_op.take();
+        // A remote-branch deletion rides the push pipeline; identify it so
+        // completion produces the right toast (and restores on failure).
+        let delete_target = flight.as_ref().and_then(|f| match &f.op {
+            RetryableOp::Push(PushSpec::Delete { remote, branch }) => {
+                Some((remote.clone(), branch.clone()))
+            }
+            _ => None,
+        });
         match result {
             Ok(()) => {
-                self.toast(ToastKind::Success, "Pushed");
+                if let Some((remote, branch)) = &delete_target {
+                    // The ref is gone upstream and locally (push --delete prunes
+                    // the tracking ref); drop the optimistic hide and reconcile.
+                    self.pending_remote_deletions.remove(&format!("{remote}/{branch}"));
+                    self.toast(ToastKind::Success, format!("Deleted {remote}/{branch}"));
+                } else {
+                    self.toast(ToastKind::Success, "Pushed");
+                }
                 if let Err(e) = self.refresh(true) {
                     self.report_refresh_error(e);
                 }
             }
             Err(e) => {
-                if !self.try_prompt_credentials(&e, flight) {
+                // An HTTPS auth failure opens the credential prompt and retries
+                // the same op; keep the optimistic hide in place for the retry.
+                if self.try_prompt_credentials(&e, flight) {
+                    // Prompt opened — nothing else to do.
+                } else if let Some((remote, branch)) = &delete_target {
+                    // Terminal deletion failure: surface it and undo the
+                    // optimistic hide via a refresh so the branch reappears.
+                    self.pending_remote_deletions.remove(&format!("{remote}/{branch}"));
+                    self.toast(
+                        ToastKind::Error,
+                        format!("Delete {remote}/{branch} failed: {e}"),
+                    );
+                    if let Err(re) = self.refresh(true) {
+                        self.report_refresh_error(re);
+                    }
+                } else {
                     self.show_git_error(e);
                 }
             }

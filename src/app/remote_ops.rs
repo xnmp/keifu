@@ -227,6 +227,33 @@ impl App {
     pub(crate) fn split_remote_ref(&self, refname: &str) -> Option<(String, String)> {
         crate::git::split_remote_ref(&self.repo.remotes(), refname)
     }
+
+    /// Delete `branch` on `remote` optimistically: hide it from the graph now,
+    /// then run `git push <remote> --delete <branch>` asynchronously through the
+    /// push pipeline (so it shares the auth-retry + progress-message + busy
+    /// machinery). `update_push_status` toasts success, or — on a terminal
+    /// failure — surfaces the error and refreshes, which drops the refname from
+    /// `pending_remote_deletions` so the branch reappears.
+    ///
+    /// Gated by the network busy guard: a second deletion (or any push/pull/
+    /// fetch) already in flight blocks a new one rather than racing it.
+    pub(crate) fn start_remote_branch_deletion(&mut self, remote: String, branch: String) {
+        if self.network.is_busy() {
+            self.toast(crate::toast::ToastKind::Info, BUSY_PULL_IN_PROGRESS);
+            return;
+        }
+        // Optimistic: hide the remote-tracking ref and rebuild the graph now.
+        // Using the pending set (rather than mutating `self.branches`) keeps the
+        // branch hidden even if a refresh reloads it from disk before the async
+        // delete lands.
+        let refname = format!("{remote}/{branch}");
+        self.pending_remote_deletions.insert(refname);
+        if let Err(e) = self.rebuild_and_restore(false) {
+            self.report_refresh_error(e);
+        }
+        // Dispatch the async delete (sets the sticky "Deleting …" progress msg).
+        self.dispatch_net_op(RetryableOp::Push(PushSpec::Delete { remote, branch }), 0);
+    }
 }
 
 /// Default-selected row in the remote picker: the branch's upstream remote when

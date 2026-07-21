@@ -919,7 +919,16 @@ fn map_search_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_confirm_mode(key: KeyEvent) -> Option<Action> {
+    // Secondary confirm (delete-branch "also delete remote"): Ctrl+Enter, with a
+    // plain `R` fallback because the legacy terminal protocol can't encode
+    // Ctrl+Enter without the kitty keyboard enhancement (same reachability
+    // concern as the Ctrl+, settings binding). The handler ignores it for any
+    // confirm action that isn't a DeleteBranchWithRemote.
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(Action::ConfirmDeleteBranchAndRemote);
+    }
     match key.code {
+        KeyCode::Char('R') => Some(Action::ConfirmDeleteBranchAndRemote),
         KeyCode::Char('y') | KeyCode::Enter => Some(Action::Confirm),
         KeyCode::Char('n') | KeyCode::Esc => Some(Action::Cancel),
         _ => None,
@@ -1074,5 +1083,34 @@ mod tests {
     fn ctrl_comma_still_opens_settings() {
         let key = KeyEvent::new(KeyCode::Char(','), KeyModifiers::CONTROL);
         assert_eq!(map_normal(key), Some(Action::OpenSettings));
+    }
+
+    #[test]
+    fn confirm_mode_plain_enter_is_primary_confirm() {
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(map_confirm_mode(enter), Some(Action::Confirm));
+        let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(map_confirm_mode(y), Some(Action::Confirm));
+    }
+
+    #[test]
+    fn confirm_mode_ctrl_enter_routes_to_secondary_confirm() {
+        // Ctrl+Enter is the "also delete remote" secondary confirm.
+        let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(
+            map_confirm_mode(ctrl_enter),
+            Some(Action::ConfirmDeleteBranchAndRemote)
+        );
+    }
+
+    #[test]
+    fn confirm_mode_r_is_ctrl_enter_fallback() {
+        // `R` reaches the secondary confirm on terminals that can't encode
+        // Ctrl+Enter (no kitty keyboard enhancement).
+        let r = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE);
+        assert_eq!(
+            map_confirm_mode(r),
+            Some(Action::ConfirmDeleteBranchAndRemote)
+        );
     }
 }

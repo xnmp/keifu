@@ -433,9 +433,18 @@ impl StatusBar {
                 hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::Confirm);
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
-            AppMode::Confirm { .. } => {
+            AppMode::Confirm { action, .. } => {
                 hb.hint(" y ", key_style, "yes ", desc_style, Action::Confirm);
                 hb.hint(" n ", key_style, "no", desc_style, Action::Cancel);
+                if matches!(action, crate::app::ConfirmAction::DeleteBranchWithRemote { .. }) {
+                    hb.hint(
+                        " Ctrl+Enter/R ",
+                        key_style,
+                        "also delete remote",
+                        desc_style,
+                        Action::ConfirmDeleteBranchAndRemote,
+                    );
+                }
             }
             AppMode::Error { .. } => {
                 // In error mode, show the message then a single close hint.
