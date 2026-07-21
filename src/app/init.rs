@@ -40,24 +40,34 @@ impl App {
         // flash of remote-only commits that the next refresh would remove.
         let branches = repo.get_branches()?;
         // Persisted visibility toggles are honoured here to avoid a first-frame
-        // flash of commits the next refresh would remove. Merged classification at
-        // startup uses only local git (ancestry + patch-id squash detection); the
-        // GitHub merged-PR signal fills in once its background fetch completes.
+        // flash of commits the next refresh would remove.
         let remote_only = if ui_state.hide_remote_branches {
             remote_only_branch_names(&branches)
         } else {
             std::collections::HashSet::new()
         };
-        let merged_branches = crate::git::merged::base_branch(&branches)
-            .map(|base| {
-                crate::git::merged::merged_local_branches(
-                    repo.repo(),
-                    &branches,
-                    base.tip_oid,
-                    &base.name,
-                )
-            })
-            .unwrap_or_default();
+        // Merged-branch classification (ancestry + patch-id squash detection) is
+        // O(branches × tree diffs) — over a second of startup on branchy repos
+        // (#78). Pay it synchronously ONLY when merged branches are *hidden*:
+        // there an async fill-in would flash soon-to-vanish branches on screen.
+        // In the default dim-only mode we start unclassified and kick the
+        // background classifier below — merged branches fade to dim within a
+        // moment instead of blocking the first frame. The GitHub merged-PR
+        // signal fills in once its background fetch completes, either way.
+        let merged_branches = if ui_state.hide_merged_branches {
+            crate::git::merged::base_branch(&branches)
+                .map(|base| {
+                    crate::git::merged::merged_local_branches(
+                        repo.repo(),
+                        &branches,
+                        base.tip_oid,
+                        &base.name,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            std::collections::HashSet::new()
+        };
         let visible_branches: Vec<BranchInfo> = branches
             .iter()
             .filter(|b| !remote_only.contains(&b.name))
@@ -96,7 +106,7 @@ impl App {
             graph_nav.selected_branch_position = Some(0);
         }
 
-        Ok(Self {
+        let mut app = Self {
             mode: AppMode::Normal,
             repo,
             repo_path,
@@ -212,7 +222,14 @@ impl App {
             pixel_graph: None,
             pixel_specs_cache: None,
             trace_cache: None,
-        })
+        };
+        // Dim-only mode starts unclassified (see `merged_branches` above):
+        // hand the branch set to the background classifier right away so
+        // merged branches dim within a moment of the first frame.
+        if !app.merged.hide {
+            app.kick_merged_classification();
+        }
+        Ok(app)
     }
 
     /// Build an `App` on a throwaway, empty temp git repository, for tests.
