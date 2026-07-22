@@ -624,17 +624,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame.render_widget(PullDivergenceDialog::new(*selected, &theme), popup_area);
             rendered_popup = Some(popup_area);
         }
-        AppMode::Settings { selected, editing } => {
+        AppMode::Settings {
+            selected,
+            editing,
+            query,
+        } => {
             use self::settings_menu::SettingsMenuWidget;
             let values = app.settings_snapshot();
             // Rows + 4 group headers + footer + borders; cap to the frame.
+            // (A filter only ever shrinks the row count, so sizing off the
+            // full, unfiltered list is a safe upper bound.)
             let want = (crate::settings::descriptors().len()
                 + crate::settings::SettingGroup::ALL.len()
                 + 3) as u16;
             let height = want.min(area.height.saturating_sub(2)).max(6);
             let popup_area = centered_rect_fixed(52, height, area);
             frame.render_widget(
-                SettingsMenuWidget::new(&values, *selected, editing.as_deref(), &theme),
+                SettingsMenuWidget::new(&values, *selected, editing.as_deref(), query, &theme),
                 popup_area,
             );
             rendered_popup = Some(popup_area);

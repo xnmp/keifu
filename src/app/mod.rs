@@ -321,11 +321,14 @@ pub enum AppMode {
         selected: usize,
     },
     /// Settings menu (Ctrl+,): the full inventory of user-facing settings,
-    /// grouped and editable. `selected` indexes `settings::descriptors()`;
-    /// `editing` holds the in-progress numeric buffer when typing a value.
+    /// grouped and editable. `selected` indexes `settings::descriptors()`
+    /// (always a real, absolute index — never a position within the filtered
+    /// subset); `editing` holds the in-progress numeric buffer when typing a
+    /// value; `query` fuzzy-filters the list, matching the command palette.
     Settings {
         selected: usize,
         editing: Option<String>,
+        query: String,
     },
     /// A `--ff-only` pull failed on divergent branches: choose merge or rebase.
     /// The remote/branch to rerun with are held in `App.last_pull`.
@@ -1747,6 +1750,7 @@ impl App {
         self.mode = AppMode::Settings {
             selected: 0,
             editing: None,
+            query: String::new(),
         };
     }
 
@@ -1775,63 +1779,110 @@ impl App {
         Ok(())
     }
 
-    /// Settings menu: navigate, toggle/cycle, type numeric values, close. Edits
-    /// apply live and persist immediately.
+    /// Settings menu: navigate, toggle/cycle, type numeric values, fuzzy-filter
+    /// by label, close. Edits apply live and persist immediately.
+    ///
+    /// `selected` is always a real (absolute) index into `descriptors()`, even
+    /// while a filter is active — navigation and typing keep it synced to the
+    /// currently-visible subset (`crate::settings::filter_descriptors`), the
+    /// same "position lookup within a visible-index list" pattern the graph
+    /// panel's commit filter uses.
     fn handle_settings_action(&mut self, action: Action) -> Result<()> {
-        use crate::settings::{clamp_int, cycle_value, descriptors, SettingKind, SettingValue};
+        use crate::settings::{
+            clamp_int, cycle_value, descriptors, filter_descriptors, SettingKind, SettingValue,
+        };
 
         let ds = descriptors();
-        let n = ds.len();
-        let (selected, editing) = match &self.mode {
-            AppMode::Settings { selected, editing } => (*selected, editing.clone()),
+        let (selected, editing, query) = match &self.mode {
+            AppMode::Settings {
+                selected,
+                editing,
+                query,
+            } => (*selected, editing.clone(), query.clone()),
             _ => return Ok(()),
         };
+        let visible = filter_descriptors(&ds, &query);
 
         match action {
             Action::MoveUp => {
-                if let AppMode::Settings { selected, editing } = &mut self.mode {
-                    *selected = (*selected + n - 1) % n;
-                    *editing = None;
+                if !visible.is_empty() {
+                    let pos = visible.iter().position(|&i| i == selected).unwrap_or(0);
+                    let new_pos = (pos + visible.len() - 1) % visible.len();
+                    if let AppMode::Settings {
+                        selected, editing, ..
+                    } = &mut self.mode
+                    {
+                        *selected = visible[new_pos];
+                        *editing = None;
+                    }
                 }
             }
             Action::MoveDown => {
-                if let AppMode::Settings { selected, editing } = &mut self.mode {
-                    *selected = (*selected + 1) % n;
-                    *editing = None;
+                if !visible.is_empty() {
+                    let pos = visible.iter().position(|&i| i == selected).unwrap_or(0);
+                    let new_pos = (pos + 1) % visible.len();
+                    if let AppMode::Settings {
+                        selected, editing, ..
+                    } = &mut self.mode
+                    {
+                        *selected = visible[new_pos];
+                        *editing = None;
+                    }
                 }
             }
             Action::MenuSelect => {
-                let d = &ds[selected];
-                match (&editing, d.kind) {
-                    // Commit a typed numeric value.
-                    (Some(buf), SettingKind::Int { .. }) => {
-                        let parsed = buf.parse::<u64>().ok();
-                        if let AppMode::Settings { editing, .. } = &mut self.mode {
-                            *editing = None;
+                // Only act on a setting that's actually shown under the
+                // current filter (guards against a stale selection).
+                if visible.contains(&selected) {
+                    let d = &ds[selected];
+                    match (&editing, d.kind) {
+                        // Commit a typed numeric value.
+                        (Some(buf), SettingKind::Int { .. }) => {
+                            let parsed = buf.parse::<u64>().ok();
+                            if let AppMode::Settings { editing, .. } = &mut self.mode {
+                                *editing = None;
+                            }
+                            if let Some(parsed) = parsed {
+                                let value = SettingValue::Int(clamp_int(&d.kind, parsed));
+                                self.commit_setting(d, value)?;
+                            }
                         }
-                        if let Some(parsed) = parsed {
-                            let value = SettingValue::Int(clamp_int(&d.kind, parsed));
-                            self.commit_setting(d, value)?;
+                        // Otherwise cycle/toggle the current value.
+                        _ => {
+                            let next = cycle_value(&d.kind, d.get(self));
+                            self.commit_setting(d, next)?;
                         }
-                    }
-                    // Otherwise cycle/toggle the current value.
-                    _ => {
-                        let next = cycle_value(&d.kind, d.get(self));
-                        self.commit_setting(d, next)?;
                     }
                 }
             }
-            // Digit typing builds a numeric edit buffer for Int settings.
-            Action::InputChar(c) if c.is_ascii_digit() => {
-                if matches!(ds[selected].kind, SettingKind::Int { .. }) {
-                    if let AppMode::Settings { editing, .. } = &mut self.mode {
-                        let buf = editing.get_or_insert_with(String::new);
-                        // Cap length so absurd input can't overflow u64.
-                        if buf.len() < 7 {
-                            buf.push(c);
-                        }
+            // A digit starts (or continues) an inline numeric edit only when
+            // no filter is active yet and the selected setting takes a
+            // number — the pre-existing shortcut. Once a filter is active
+            // (or the setting isn't numeric), typing always wins: digits
+            // fall through to the catch-all arm below and filter like any
+            // other character.
+            Action::InputChar(c)
+                if c.is_ascii_digit()
+                    && (editing.is_some()
+                        || (query.is_empty()
+                            && matches!(ds[selected].kind, SettingKind::Int { .. }))) =>
+            {
+                if let AppMode::Settings { editing, .. } = &mut self.mode {
+                    let buf = editing.get_or_insert_with(String::new);
+                    // Cap length so absurd input can't overflow u64.
+                    if buf.len() < 7 {
+                        buf.push(c);
                     }
                 }
+            }
+            // Everything else (letters, and digits once filtering or off a
+            // numeric setting) types into the filter query. This also cancels
+            // an in-progress numeric edit — typing a non-digit mid-edit means
+            // the user's switched to searching, not finishing the number.
+            Action::InputChar(c) => {
+                let mut new_query = query;
+                new_query.push(c);
+                self.apply_settings_query(new_query);
             }
             Action::InputBackspace => {
                 if let AppMode::Settings {
@@ -1844,14 +1895,30 @@ impl App {
                             *editing = None;
                         }
                     }
+                } else if !query.is_empty() {
+                    let mut new_query = query;
+                    new_query.pop();
+                    self.apply_settings_query(new_query);
                 }
             }
+            Action::InputBackspaceWord if editing.is_none() && !query.is_empty() => {
+                let mut new_query = query;
+                crate::text_editor::pop_word(&mut new_query);
+                self.apply_settings_query(new_query);
+            }
+            Action::InputClearLine if editing.is_none() && !query.is_empty() => {
+                self.apply_settings_query(String::new());
+            }
             Action::Cancel => {
-                // Esc cancels an in-progress edit first, else closes the menu.
+                // Esc unwinds one layer at a time: cancel an in-progress
+                // numeric edit first, else clear an active filter, else
+                // close the menu.
                 if editing.is_some() {
                     if let AppMode::Settings { editing, .. } = &mut self.mode {
                         *editing = None;
                     }
+                } else if !query.is_empty() {
+                    self.apply_settings_query(String::new());
                 } else {
                     self.mode = AppMode::Normal;
                 }
@@ -1859,6 +1926,30 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Apply a new settings-menu filter query: if the current selection fell
+    /// out of the now-visible subset, jump to the first visible item (mirrors
+    /// `BranchFilter`'s "reset selection on filter change"). Also cancels any
+    /// in-progress numeric edit, since filtering and editing are exclusive.
+    fn apply_settings_query(&mut self, new_query: String) {
+        use crate::settings::{descriptors, filter_descriptors};
+        let ds = descriptors();
+        let visible = filter_descriptors(&ds, &new_query);
+        if let AppMode::Settings {
+            selected,
+            editing,
+            query,
+        } = &mut self.mode
+        {
+            *editing = None;
+            if !visible.contains(selected) {
+                if let Some(&first) = visible.first() {
+                    *selected = first;
+                }
+            }
+            *query = new_query;
+        }
     }
 
     /// Pull-divergence prompt: pick merge (0) or rebase (1), or cancel. The
@@ -1904,6 +1995,217 @@ impl App {
         // Close the error on any key
         if matches!(action, Action::Quit | Action::Cancel | Action::Confirm) {
             self.mode = AppMode::Normal;
+        }
+    }
+}
+
+#[cfg(test)]
+mod settings_menu_filter_tests {
+    use super::*;
+    use crate::test_support::git;
+
+    fn test_app() -> (tempfile::TempDir, App) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", "initial"]);
+        let repo = GitRepository::open(dir).expect("open repo");
+        let app = App::from_repo(repo).expect("build app");
+        (tmp, app)
+    }
+
+    fn type_str(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_action(Action::InputChar(c)).expect("type char");
+        }
+    }
+
+    fn settings_query(app: &App) -> &str {
+        match &app.mode {
+            AppMode::Settings { query, .. } => query,
+            other => panic!("expected AppMode::Settings, got {other:?}"),
+        }
+    }
+
+    fn settings_selected(app: &App) -> usize {
+        match &app.mode {
+            AppMode::Settings { selected, .. } => *selected,
+            other => panic!("expected AppMode::Settings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typing_narrows_selection_to_the_fuzzy_matching_subset() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        type_str(&mut app, "dim");
+
+        assert_eq!(settings_query(&app), "dim");
+        let ds = crate::settings::descriptors();
+        let visible = crate::settings::filter_descriptors(&ds, "dim");
+        assert!(!visible.is_empty(), "test fixture: 'dim' must match something");
+        assert!(
+            visible.contains(&settings_selected(&app)),
+            "selection must land inside the filtered subset"
+        );
+        assert_eq!(ds[settings_selected(&app)].label, "Dim merged branches");
+    }
+
+    #[test]
+    fn empty_query_leaves_every_descriptor_reachable() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        let ds = crate::settings::descriptors();
+        assert_eq!(settings_query(&app), "");
+        // Walking MoveDown the full length must visit every descriptor
+        // exactly once before wrapping — i.e. nothing is pre-filtered.
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(settings_selected(&app));
+        for _ in 1..ds.len() {
+            app.handle_action(Action::MoveDown).unwrap();
+            seen.insert(settings_selected(&app));
+        }
+        assert_eq!(seen.len(), ds.len());
+    }
+
+    #[test]
+    fn no_match_yields_an_empty_list_and_navigation_is_a_no_op() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        type_str(&mut app, "zzzqqqxxx_no_such_setting");
+        let before = settings_selected(&app);
+        app.handle_action(Action::MoveDown).unwrap();
+        app.handle_action(Action::MoveUp).unwrap();
+        assert_eq!(settings_selected(&app), before, "no visible rows to move between");
+    }
+
+    #[test]
+    fn navigation_clamps_within_the_filtered_subset() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        // "e" matches many settings; the point is just that every step must
+        // stay inside the filtered set — never park on a filtered-out row.
+        type_str(&mut app, "e");
+        let ds = crate::settings::descriptors();
+        let visible = crate::settings::filter_descriptors(&ds, "e");
+        assert!(visible.len() > 1, "test fixture needs >1 match to prove clamping");
+        for _ in 0..(visible.len() * 2 + 1) {
+            app.handle_action(Action::MoveDown).unwrap();
+            assert!(visible.contains(&settings_selected(&app)));
+        }
+        for _ in 0..(visible.len() * 2 + 1) {
+            app.handle_action(Action::MoveUp).unwrap();
+            assert!(visible.contains(&settings_selected(&app)));
+        }
+    }
+
+    #[test]
+    fn menu_select_toggles_the_currently_filtered_setting() {
+        let (_tmp, mut app) = test_app();
+        let before = app.merged.dim;
+        app.open_settings();
+        type_str(&mut app, "Dim merged"); // unique match: "Dim merged branches"
+        assert_eq!(
+            crate::settings::descriptors()[settings_selected(&app)].label,
+            "Dim merged branches"
+        );
+        app.handle_action(Action::MenuSelect).unwrap();
+        assert_eq!(app.merged.dim, !before, "MenuSelect must act on the filtered selection");
+    }
+
+    #[test]
+    fn esc_first_clears_the_query_then_closes_the_menu() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        type_str(&mut app, "dim");
+        assert_eq!(settings_query(&app), "dim");
+
+        app.handle_action(Action::Cancel).unwrap();
+        assert_eq!(
+            settings_query(&app),
+            "",
+            "first Esc clears the query but stays open"
+        );
+        assert!(matches!(app.mode, AppMode::Settings { .. }));
+
+        app.handle_action(Action::Cancel).unwrap();
+        assert!(
+            matches!(app.mode, AppMode::Normal),
+            "second Esc (now with an empty query) closes the menu"
+        );
+    }
+
+    #[test]
+    fn esc_with_no_query_closes_immediately() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        app.handle_action(Action::Cancel).unwrap();
+        assert!(matches!(app.mode, AppMode::Normal));
+    }
+
+    #[test]
+    fn backspace_pops_the_query_one_character_at_a_time() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        type_str(&mut app, "dim");
+        app.handle_action(Action::InputBackspace).unwrap();
+        assert_eq!(settings_query(&app), "di");
+        app.handle_action(Action::InputBackspace).unwrap();
+        app.handle_action(Action::InputBackspace).unwrap();
+        assert_eq!(settings_query(&app), "");
+        // Backspacing an already-empty query is a no-op, not a close.
+        app.handle_action(Action::InputBackspace).unwrap();
+        assert_eq!(settings_query(&app), "");
+        assert!(matches!(app.mode, AppMode::Settings { .. }));
+    }
+
+    #[test]
+    fn digit_starts_a_numeric_edit_only_while_the_query_is_empty() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        // Move onto an Int-kind setting ("Graph split ratio %").
+        let ds = crate::settings::descriptors();
+        let int_idx = ds
+            .iter()
+            .position(|d| matches!(d.kind, crate::settings::SettingKind::Int { .. }))
+            .expect("fixture needs an Int setting");
+        while settings_selected(&app) != int_idx {
+            app.handle_action(Action::MoveDown).unwrap();
+        }
+        // With an empty query, a digit starts the legacy numeric-edit buffer.
+        app.handle_action(Action::InputChar('4')).unwrap();
+        match &app.mode {
+            AppMode::Settings { editing, query, .. } => {
+                assert_eq!(editing.as_deref(), Some("4"));
+                assert_eq!(query, "");
+            }
+            other => panic!("expected Settings mode, got {other:?}"),
+        }
+        // A non-digit character mid-edit cancels the edit and starts filtering.
+        app.handle_action(Action::InputChar('x')).unwrap();
+        match &app.mode {
+            AppMode::Settings { editing, query, .. } => {
+                assert_eq!(*editing, None, "typing a letter must cancel the numeric edit");
+                assert_eq!(query, "x");
+            }
+            other => panic!("expected Settings mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn digits_filter_once_a_query_is_already_active() {
+        let (_tmp, mut app) = test_app();
+        app.open_settings();
+        type_str(&mut app, "e"); // start a non-empty text filter first
+        app.handle_action(Action::InputChar('5')).unwrap();
+        match &app.mode {
+            AppMode::Settings { editing, query, .. } => {
+                assert_eq!(*editing, None, "digit must not start a numeric edit mid-filter");
+                assert_eq!(query, "e5");
+            }
+            other => panic!("expected Settings mode, got {other:?}"),
         }
     }
 }

@@ -601,26 +601,29 @@ fn map_metadata_menu_mode(key: KeyEvent) -> Option<Action> {
     }
 }
 
-/// Settings menu: j/k (or arrows) move, Space/Enter toggles or cycles, digits
-/// type a numeric value (committed with Enter), Backspace edits it, Esc closes.
-/// 'q' is intentionally NOT a close key here — it's a digit-adjacent letter and
-/// numeric editing wants letters inert, so only Esc closes.
+/// Settings menu: arrows move, Space/Enter toggles or cycles, typing
+/// fuzzy-filters the list by label (mirrors the command palette), Backspace
+/// edits the filter (or an in-progress numeric buffer), Esc unwinds one layer
+/// at a time (cancel edit → clear filter → close).
+///
+/// 'j'/'k' are intentionally NOT nav aliases here (unlike other list modes)
+/// since they're ordinary filterable letters once typing is live — only the
+/// arrow keys move the selection. Space stays a toggle, not filter text
+/// (matching `BranchFilter`, which reserves Space for its own toggle too).
 fn map_settings_menu_mode(key: KeyEvent) -> Option<Action> {
+    if let Some(action) = map_text_editing_shortcut(key) {
+        return Some(action);
+    }
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
-            Some(Action::MoveUp)
-        }
-        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
-            Some(Action::MoveDown)
-        }
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
         (KeyModifiers::NONE, KeyCode::Char(' ')) | (KeyModifiers::NONE, KeyCode::Enter) => {
             Some(Action::MenuSelect)
         }
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
-        // Digits feed the numeric edit buffer; the handler ignores them unless
-        // the selected setting is an integer.
-        (KeyModifiers::NONE, KeyCode::Char(c)) if c.is_ascii_digit() => Some(Action::InputChar(c)),
+        (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         _ => None,
     }
 }
@@ -1092,6 +1095,68 @@ mod tests {
     fn ctrl_comma_still_opens_settings() {
         let key = KeyEvent::new(KeyCode::Char(','), KeyModifiers::CONTROL);
         assert_eq!(map_normal(key), Some(Action::OpenSettings));
+    }
+
+    #[test]
+    fn settings_menu_letters_type_into_the_filter_not_nav_shortcuts() {
+        // 'j'/'k' used to be MoveDown/MoveUp aliases; once typing filters the
+        // list they must behave like every other letter.
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(map_settings_menu_mode(j), Some(Action::InputChar('j')));
+        assert_eq!(map_settings_menu_mode(k), Some(Action::InputChar('k')));
+        // An arbitrary letter also types.
+        let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert_eq!(map_settings_menu_mode(d), Some(Action::InputChar('d')));
+        // Uppercase (Shift held) types too.
+        let shift_d = KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT);
+        assert_eq!(map_settings_menu_mode(shift_d), Some(Action::InputChar('D')));
+    }
+
+    #[test]
+    fn settings_menu_arrows_still_navigate() {
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(map_settings_menu_mode(up), Some(Action::MoveUp));
+        assert_eq!(map_settings_menu_mode(down), Some(Action::MoveDown));
+    }
+
+    #[test]
+    fn settings_menu_space_and_enter_still_select_not_type() {
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(map_settings_menu_mode(space), Some(Action::MenuSelect));
+        assert_eq!(map_settings_menu_mode(enter), Some(Action::MenuSelect));
+    }
+
+    #[test]
+    fn settings_menu_digits_still_route_through_input_char() {
+        // The handler (not the keybinding layer) decides whether a digit
+        // starts a numeric edit or filters, based on live state.
+        let five = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
+        assert_eq!(map_settings_menu_mode(five), Some(Action::InputChar('5')));
+    }
+
+    #[test]
+    fn settings_menu_esc_backspace_map_unconditionally() {
+        // The three-way Esc priority (cancel edit / clear filter / close) and
+        // backspace's dual role (filter vs numeric buffer) are decided by the
+        // action handler, not the keybinding layer — both always map here.
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let bs = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(map_settings_menu_mode(esc), Some(Action::Cancel));
+        assert_eq!(map_settings_menu_mode(bs), Some(Action::InputBackspace));
+    }
+
+    #[test]
+    fn settings_menu_ctrl_w_and_ctrl_u_edit_shortcuts_still_work() {
+        let ctrl_w = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
+        let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(
+            map_settings_menu_mode(ctrl_w),
+            Some(Action::InputBackspaceWord)
+        );
+        assert_eq!(map_settings_menu_mode(ctrl_u), Some(Action::InputClearLine));
     }
 
     #[test]
