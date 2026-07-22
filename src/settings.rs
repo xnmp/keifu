@@ -522,6 +522,20 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             side_panel_layout,
             side_panel_layout
         ),
+        state_bool!(
+            "Hide files pane",
+            Interface,
+            None,
+            hide_files_pane,
+            hide_files_pane
+        ),
+        state_bool!(
+            "Hide commit pane",
+            Interface,
+            None,
+            hide_commit_pane,
+            hide_commit_pane
+        ),
         SettingDescriptor {
             label: "Theme",
             group: Interface,
@@ -600,6 +614,8 @@ mod tests {
             dim_merged_branches: false,
             files_group_by_folder: true,
             hide_stashes: true,
+            hide_files_pane: true,
+            hide_commit_pane: true,
             metadata_columns: MetadataColumns {
                 author: false,
                 hash: false,

@@ -1109,6 +1109,15 @@ pub struct App {
     // Layout
     pub side_panel_layout: bool,
 
+    /// Hide the files pane entirely (#116). Persisted in `UiState`. Focus and
+    /// mouse hit-testing must never land on a hidden pane; flows that
+    /// explicitly navigate to files (conflicts, "go to files") un-hide it
+    /// instead of silently no-opping.
+    pub hide_files_pane: bool,
+
+    /// Hide the commit-detail pane entirely (#116). Persisted in `UiState`.
+    pub hide_commit_pane: bool,
+
     /// When true, remote-only branches (remote refs with no matching local
     /// branch) are hidden from the graph — their labels and their exclusive
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
@@ -1544,6 +1553,76 @@ impl App {
     /// Toggle whether remote-only branches are shown in the graph (persisted).
     /// Rebuilds the graph so their exclusive commits appear/disappear, not just
     /// their labels. Composes with the per-branch filter.
+    /// Whether a panel is currently visible — the invariant every focus path
+    /// (cycling, mouse, force-focus) must respect: focus never lands on a
+    /// hidden pane (#116). The graph is always visible.
+    pub(crate) fn panel_visible(&self, panel: FocusedPanel) -> bool {
+        match panel {
+            FocusedPanel::Graph => true,
+            FocusedPanel::Files => !self.hide_files_pane,
+            FocusedPanel::CommitDetail => !self.hide_commit_pane,
+        }
+    }
+
+    /// The next visible panel in cycle order from `from` (forward = the
+    /// PanelRight direction Graph → Files → CommitDetail). Falls back to the
+    /// graph, which is always visible.
+    pub(crate) fn next_visible_panel(&self, from: FocusedPanel, forward: bool) -> FocusedPanel {
+        let forward_order = [
+            FocusedPanel::Graph,
+            FocusedPanel::Files,
+            FocusedPanel::CommitDetail,
+        ];
+        let pos = forward_order.iter().position(|p| *p == from).unwrap_or(0);
+        let step = if forward { 1 } else { forward_order.len() - 1 };
+        let mut at = pos;
+        for _ in 0..forward_order.len() {
+            at = (at + step) % forward_order.len();
+            if self.panel_visible(forward_order[at]) {
+                return forward_order[at];
+            }
+        }
+        FocusedPanel::Graph
+    }
+
+    /// Focus the files pane, un-hiding it first when hidden (#116): every
+    /// caller expresses explicit intent to work with files (conflict guidance,
+    /// "go to files", returning from the diff viewer), so the pane must
+    /// actually appear — a hidden pane silently holding focus would strand
+    /// input.
+    pub(crate) fn focus_files_pane(&mut self) {
+        if self.hide_files_pane {
+            self.hide_files_pane = false;
+            self.save_ui_state();
+        }
+        self.focused_panel = FocusedPanel::Files;
+    }
+
+    /// Toggle the files pane's visibility (persisted, #116). Hiding the pane
+    /// that holds focus moves focus to the graph.
+    pub(crate) fn toggle_files_pane(&mut self) {
+        self.hide_files_pane = !self.hide_files_pane;
+        if !self.panel_visible(self.focused_panel) {
+            self.focused_panel = FocusedPanel::Graph;
+        }
+        self.save_ui_state();
+        let state = if self.hide_files_pane { "hidden" } else { "shown" };
+        self.toast(crate::toast::ToastKind::Info, format!("Files pane {state}"));
+    }
+
+    /// Toggle the commit-detail pane's visibility (persisted, #116). Hiding the
+    /// pane that holds focus moves focus to the graph.
+    pub(crate) fn toggle_commit_pane(&mut self) {
+        self.hide_commit_pane = !self.hide_commit_pane;
+        if !self.panel_visible(self.focused_panel) {
+            self.editing_commit_message = false;
+            self.focused_panel = FocusedPanel::Graph;
+        }
+        self.save_ui_state();
+        let state = if self.hide_commit_pane { "hidden" } else { "shown" };
+        self.toast(crate::toast::ToastKind::Info, format!("Commit pane {state}"));
+    }
+
     pub(crate) fn toggle_remote_branches(&mut self) -> Result<()> {
         self.hide_remote_branches = !self.hide_remote_branches;
         self.save_ui_state();

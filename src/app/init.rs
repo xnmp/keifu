@@ -193,7 +193,9 @@ impl App {
             graph_layout,
             graph_generation: 0,
             graph_nav,
-            focused_panel: if ui_state.side_panel_layout {
+            // A hidden files pane must not hold startup focus (#116) — the
+            // side-layout default only applies while that pane is visible.
+            focused_panel: if ui_state.side_panel_layout && !ui_state.hide_files_pane {
                 FocusedPanel::Files
             } else {
                 FocusedPanel::Graph
@@ -268,6 +270,8 @@ impl App {
             repo_dirty: false,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
+            hide_files_pane: ui_state.hide_files_pane,
+            hide_commit_pane: ui_state.hide_commit_pane,
             hide_remote_branches: ui_state.hide_remote_branches,
             hide_stashes: ui_state.hide_stashes,
             merged: MergedState {

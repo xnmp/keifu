@@ -189,7 +189,7 @@ impl App {
                     self.sync_file_list_cache();
                     self.select_file_at(self.flat_index_to_display_index(fi));
                 }
-                self.focused_panel = FocusedPanel::Files;
+                self.focus_files_pane();
                 self.return_to_normal();
             }
             _ => {}
@@ -364,7 +364,7 @@ impl App {
         if new_file_list.is_empty() {
             self.diff_source = None;
             self.mode = AppMode::Normal;
-            self.focused_panel = FocusedPanel::Files;
+            self.focus_files_pane();
             self.toast(crate::toast::ToastKind::Info, "No changes remaining");
             return Ok(());
         }

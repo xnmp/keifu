@@ -158,7 +158,7 @@ impl App {
             self.graph_nav.graph_list_state.select(Some(0));
             self.graph_nav.selected_branch_position = None;
         }
-        self.focused_panel = FocusedPanel::Files;
+        self.focus_files_pane();
         // The async uncommitted diff may not have run yet; compute the quick
         // file list synchronously so conflicts show without a frame delay.
         self.diff_cache.set_quick_uncommitted(self.repo.repo());
@@ -242,6 +242,25 @@ mod tests {
     use crate::app::App;
     use crate::git::{GitRepository, OperationState};
     use crate::test_support::git;
+
+    /// #116: conflict guidance routes the user to the files pane; if that pane
+    /// is hidden, it must be un-hidden — focus landing on an invisible pane
+    /// would strand input with no visible cue.
+    #[test]
+    fn conflict_focus_unhides_a_hidden_files_pane() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        std::fs::write(tmp.path().join("f.txt"), "x\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+        let repo = GitRepository::open(tmp.path()).unwrap();
+        let mut app = App::from_repo(repo).unwrap();
+
+        app.hide_files_pane = true;
+        app.focus_conflict_files();
+        assert!(!app.hide_files_pane, "conflict flow must reveal the files pane");
+        assert_eq!(app.focused_panel, crate::app::FocusedPanel::Files);
+    }
 
     // ── Pure predicate: op_guard_message ────────────────────────────────
 

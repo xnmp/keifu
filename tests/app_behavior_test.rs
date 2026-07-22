@@ -2132,3 +2132,72 @@ fn startup_defers_merged_classification_to_the_background() {
         app.merged.branches
     );
 }
+
+// ── Pane visibility (#116) ──────────────────────────────────────────
+
+#[test]
+fn hiding_the_focused_pane_moves_focus_to_the_graph() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.focused_panel = FocusedPanel::Files;
+    app.handle_action(Action::ToggleFilesPane).unwrap();
+    assert!(app.hide_files_pane);
+    assert_eq!(
+        app.focused_panel,
+        FocusedPanel::Graph,
+        "focus must never remain on a hidden pane"
+    );
+    assert!(
+        app.toasts.visible().iter().any(|t| t.text.contains("Files pane hidden")),
+        "the toggle reports its new state"
+    );
+
+    // Toggling again brings the pane back (focus stays where it is).
+    app.handle_action(Action::ToggleFilesPane).unwrap();
+    assert!(!app.hide_files_pane);
+    assert!(app.toasts.visible().iter().any(|t| t.text.contains("Files pane shown")));
+}
+
+#[test]
+fn hiding_the_commit_pane_stops_commit_editing() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    app.focused_panel = FocusedPanel::CommitDetail;
+    app.editing_commit_message = true;
+    app.handle_action(Action::ToggleCommitPane).unwrap();
+    assert!(app.hide_commit_pane);
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    assert!(
+        !app.editing_commit_message,
+        "a hidden editor must not keep capturing keystrokes"
+    );
+}
+
+#[test]
+fn panel_cycling_skips_hidden_panes() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    // Files hidden: Graph → CommitDetail → Graph in both directions.
+    app.handle_action(Action::ToggleFilesPane).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    app.handle_action(Action::PanelRight).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::CommitDetail, "skips hidden Files");
+    app.handle_action(Action::PanelRight).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    app.handle_action(Action::PanelLeft).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::CommitDetail);
+
+    // Both hidden: cycling stays on the graph.
+    app.handle_action(Action::ToggleCommitPane).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    app.handle_action(Action::PanelRight).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::Graph, "graph is the only visible panel");
+    app.handle_action(Action::PanelLeft).unwrap();
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+}

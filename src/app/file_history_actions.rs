@@ -97,7 +97,7 @@ impl App {
             }
             Action::Cancel | Action::Quit => {
                 self.mode = AppMode::Normal;
-                self.focused_panel = FocusedPanel::Files;
+                self.focus_files_pane();
             }
             _ => {}
         }
