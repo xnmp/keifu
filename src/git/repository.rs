@@ -503,12 +503,15 @@ mod tests {
     }
 
     #[test]
-    fn hide_remote_branches_caps_walk_at_local_tip_when_behind() {
-        // Issue #57: a local branch that is behind its remote-tracking upstream
-        // must not leak the remote-only commits into the graph once
-        // hide_remote_branches is on. This exercises the exact filtering the
-        // app performs (git::remote_only_branch_names -> drop from the
-        // walk-tip list -> get_commits) against a real repo.
+    fn hide_remote_branches_keeps_tracked_upstream_visible_when_local_is_behind() {
+        // Issue #105: a local branch's own configured upstream must stay
+        // visible with hide_remote_branches on, even when the local tip is
+        // behind it (e.g. someone pushed an update the local branch hasn't
+        // pulled yet). That upstream tip carries real, user-relevant history
+        // — hiding it would hide the local branch's own pushed-but-unpulled
+        // commits, not just a stranger's branch. This exercises the exact
+        // filtering the app performs (git::remote_only_branch_names -> drop
+        // from the walk-tip list -> get_commits) against a real repo.
         use crate::git::{remote_only_branch_names, BranchInfo};
 
         let tmp = tempfile::tempdir().unwrap();
@@ -548,14 +551,17 @@ mod tests {
 
         // Simulate the app's hide-remote-branches filtering (app/refresh.rs,
         // app/init.rs): remote-only branches are dropped before the walk.
+        // origin/main is `main`'s configured upstream, so it must not be
+        // classified remote-only despite the tip mismatch.
         let remote_only = remote_only_branch_names(&branches);
+        assert!(!remote_only.contains("origin/main"), "tracked upstream must not be remote-only");
         let visible: Vec<BranchInfo> =
             branches.into_iter().filter(|b| !remote_only.contains(&b.name)).collect();
 
         let commits = repo.get_commits(50, &visible, &[], false).unwrap();
         assert!(
-            !commits.iter().any(|c| c.message.contains("c2-remote-only")),
-            "remote-only commit leaked into the graph with hide_remote_branches on"
+            commits.iter().any(|c| c.message.contains("c2-remote-only")),
+            "local branch's own pushed-but-unpulled upstream commit was hidden with hide_remote_branches on"
         );
     }
 
