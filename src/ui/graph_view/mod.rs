@@ -16,16 +16,20 @@ use crate::{
     config::MetadataColumns,
     git::graph::{CellType, GraphNode},
     mouse::{ChipHit, ChipTarget},
-    pr::{CiStatus, PrContext, PrInfo, ReviewState},
+    pr::{PrContext, PrInfo},
 };
 
+mod badges;
 mod chips;
 mod geometry;
 mod metrics;
 mod rows;
 
+pub use badges::pr_for_branch_labels;
+use badges::{merged_badge, merged_style, pr_for_row, PR_BADGE_ICON};
+
 pub use chips::REMOTE_ONLY_ICON;
-use chips::{optimize_branch_display, strip_remote};
+use chips::optimize_branch_display;
 
 pub use geometry::{
     avatar_overlay_x, avatars_active, effective_graph_width, next_graph_cap, AVATAR_GAP_CELLS,
@@ -614,34 +618,11 @@ impl<'a> GraphViewWidget<'a> {
     }
 }
 
-/// Nerd Font octicons for the open-PR badge and its actioned markers.
-const PR_BADGE_ICON: char = '\u{f407}'; // nf-oct-git_pull_request
-const PR_APPROVED_ICON: char = '\u{f42e}'; // nf-oct-check
-const PR_CHANGES_ICON: char = '\u{f440}'; // nf-oct-diff (±)
-const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
-
 /// The bare merge glyph a collapsed merge commit shows in place of its message
 /// (#59), and the icon [`merged_badge`] prefixes its "merged" label with — the
 /// same nf-oct-git_merge icon, so a collapsed merge or a landed branch both
 /// read as "this is a merge" at a glance.
 const MERGE_ICON: &str = "\u{f419}"; // nf-oct-git_merge
-
-/// Badge appended to a branch already merged into the trunk (merge or squash).
-/// Rendered muted/dimmed; the branch chips themselves are dimmed to match.
-/// Derived from [`MERGE_ICON`] so the glyph's codepoint exists in one place.
-fn merged_badge() -> String {
-    format!("{MERGE_ICON} merged")
-}
-
-/// Style for merged-branch *decorations* (the "⚡ merged" pill): flat muted grey
-/// and dimmed, so a landed branch's badge recedes without disappearing (the
-/// hide-merged toggle removes it entirely). Name chips use [`merged_chip_style`]
-/// instead, so they keep their lane hue.
-fn merged_style(theme: &Theme) -> Style {
-    Style::default()
-        .fg(theme.text_muted)
-        .add_modifier(Modifier::DIM)
-}
 
 /// Style for a *merged branch name chip* (issue #90): take the chip's own
 /// unmerged style and mute its lane color toward the recessive tone (via
@@ -656,83 +637,6 @@ fn merged_chip_style(base: Style, theme: &Theme) -> Style {
         .fg
         .map_or(theme.text_muted, |c| theme.merged_chip_color(c));
     base.fg(muted).add_modifier(Modifier::DIM)
-}
-
-/// The first open PR (in branch-label order) whose head branch matches one of
-/// this node's branch labels. Remote refs are matched by their stripped name
-/// (handles non-origin remotes), so `origin/feat` and a local `feat` both match
-/// a PR whose `headRefName` is `feat`.
-pub fn pr_for_branch_labels<'p>(
-    branch_names: &[String],
-    remotes: &[String],
-    open_prs: &'p HashMap<String, PrInfo>,
-) -> Option<&'p PrInfo> {
-    branch_names.iter().find_map(|name| {
-        let bare = strip_remote(name, remotes).unwrap_or(name.as_str());
-        open_prs.get(bare)
-    })
-}
-
-/// The open PR to badge on a graph row, or `None`. Primary, data-driven rule
-/// (#42): the row's commit is a PR's head commit — this pins the badge to
-/// exactly one row per PR, even when a local and a remote ref for the same
-/// branch sit on different commits. Fallback: a head-branch *name* label, but
-/// only for PRs `gh` gave no head OID for. A PR that has a head OID is therefore
-/// only ever badged on that exact commit and can never double-render via a
-/// branch label, which is what old name-only matching did.
-fn pr_for_row<'p>(
-    commit_oid: git2::Oid,
-    branch_names: &[String],
-    remotes: &[String],
-    pr_ctx: &PrContext<'p>,
-    open_prs: &'p HashMap<String, PrInfo>,
-) -> Option<&'p PrInfo> {
-    if let Some(pr) = pr_ctx.pr_for_head_commit(commit_oid) {
-        return Some(pr);
-    }
-    branch_names.iter().find_map(|name| {
-        let bare = strip_remote(name, remotes).unwrap_or(name.as_str());
-        open_prs.get(bare).filter(|pr| pr.head_oid.is_none())
-    })
-}
-
-/// Compact badge text for an open PR, e.g. ` #12 ✓ ` (approved with outside
-/// comments). Review marker first (approved / changes-requested), then a
-/// comment marker when a non-author has commented.
-fn pr_badge_text(pr: &PrInfo) -> String {
-    let mut s = format!("{} #{}", PR_BADGE_ICON, pr.number);
-    match pr.review {
-        ReviewState::Approved => {
-            s.push(' ');
-            s.push(PR_APPROVED_ICON);
-        }
-        ReviewState::ChangesRequested => {
-            s.push(' ');
-            s.push(PR_CHANGES_ICON);
-        }
-        ReviewState::None => {}
-    }
-    if pr.outside_activity {
-        s.push(' ');
-        s.push(PR_COMMENT_ICON);
-    }
-    s
-}
-
-/// Badge chip color across four states (#88): failing checks (red) and running
-/// checks (orange) take precedence over merge readiness — a red/pending PR isn't
-/// mergeable anyway. Only once checks are green does merge readiness split the
-/// tone: full green when clear to merge, chartreuse when passing-but-blocked
-/// (changes requested, conflicts, draft, behind base). No checks → neutral blue.
-/// Pure and frame-free so the decision can be unit-tested directly.
-fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
-    match pr.ci {
-        CiStatus::None => theme.pr_badge,
-        CiStatus::Fail => theme.pr_ci_fail,
-        CiStatus::Pending => theme.pr_ci_pending,
-        CiStatus::Pass if pr.is_merge_blocked() => theme.pr_ci_pass_blocked,
-        CiStatus::Pass => theme.pr_ci_pass,
-    }
 }
 
 /// Determine which right-side elements (date, author, hash) to display based on available width.
@@ -1256,10 +1160,16 @@ fn render_graph_line_tail<'a>(
 
     // Open-PR badge (#42): shown exactly once per PR, on the PR's head commit.
     // Colored by CI status, with review/comment markers (#43).
-    let pr_badge = pr_for_row(commit.oid, &node.branch_names, ctx.remotes, ctx.pr_ctx, ctx.open_prs)
-        .map(|pr| (pr_badge_text(pr), pr_badge_color(pr, ctx.theme)));
+    let pr_badge = pr_for_row(
+        commit.oid,
+        &node.branch_names,
+        ctx.remotes,
+        ctx.pr_ctx,
+        ctx.open_prs,
+        ctx.theme,
+    );
     // Chip plus a trailing space.
-    let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
+    let pr_badge_width = pr_badge.as_ref().map_or(0, |b| display_width(&b.text) + 1);
 
     // Merged badge: shown when one of this node's local branches has already
     // landed on the trunk (merge commit, fast-forward, or squash) AND the
@@ -1312,16 +1222,16 @@ fn render_graph_line_tail<'a>(
     // Render open-PR badge (#98: moved before the branch pill so PR context
     // leads the row instead of trailing it). Emits nothing when absent, so
     // there's no leading gap before the branch labels on PR-less rows.
-    if let Some((badge, color)) = &pr_badge {
-        let style = Style::default().fg(*color).add_modifier(Modifier::BOLD);
+    if let Some(badge) = &pr_badge {
+        let style = Style::default().fg(badge.color).add_modifier(Modifier::BOLD);
         let chip_start = left_width;
-        left_width += display_width(badge) + 1;
+        left_width += display_width(&badge.text) + 1;
         chips.push(ChipHit {
             x_start: chip_start as u16,
-            x_end: (chip_start + display_width(badge)) as u16,
+            x_end: (chip_start + display_width(&badge.text)) as u16,
             target: ChipTarget::PrBadge,
         });
-        spans.push(Span::styled(badge.clone(), style));
+        spans.push(Span::styled(badge.text.clone(), style));
         spans.push(Span::raw(" "));
     }
 
@@ -1479,7 +1389,7 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
 mod tests {
     use super::*;
     use super::rows::fold_rows;
-    use crate::pr::MergeState;
+    use crate::pr::{CiStatus, MergeState, ReviewState};
 
     // ── build_tag_labels ─────────────────────────────────────────────
 
@@ -1534,136 +1444,6 @@ mod tests {
         }
     }
 
-    fn pr_with(number: u64, ci: CiStatus, review: ReviewState, outside: bool) -> PrInfo {
-        pr_full(number, ci, review, MergeState::Clear, outside)
-    }
-
-    fn pr_full(
-        number: u64,
-        ci: CiStatus,
-        review: ReviewState,
-        merge_state: MergeState,
-        outside: bool,
-    ) -> PrInfo {
-        PrInfo {
-            number,
-            url: "u".to_string(),
-            title: "t".to_string(),
-            ci,
-            review,
-            merge_state,
-            outside_activity: outside,
-            head_oid: None,
-        }
-    }
-
-    fn prs(pairs: &[(&str, u64)]) -> HashMap<String, PrInfo> {
-        pairs.iter().map(|(b, n)| (b.to_string(), pr(*n))).collect()
-    }
-
-    #[test]
-    fn pr_matches_local_branch_label() {
-        let open = prs(&[("feat/x", 12)]);
-        let names = vec!["feat/x".to_string()];
-        let found = pr_for_branch_labels(&names, &[], &open);
-        assert_eq!(found.map(|p| p.number), Some(12));
-    }
-
-    #[test]
-    fn pr_matches_remote_ref_by_stripped_name() {
-        let open = prs(&[("feat/x", 3)]);
-        // Both origin and a non-origin remote strip to the PR's head branch.
-        let remotes = vec!["origin".to_string(), "upstream".to_string()];
-        assert_eq!(
-            pr_for_branch_labels(&["origin/feat/x".to_string()], &remotes, &open).map(|p| p.number),
-            Some(3)
-        );
-        assert_eq!(
-            pr_for_branch_labels(&["upstream/feat/x".to_string()], &remotes, &open)
-                .map(|p| p.number),
-            Some(3)
-        );
-    }
-
-    #[test]
-    fn pr_no_match_returns_none() {
-        let open = prs(&[("feat/x", 1)]);
-        assert!(pr_for_branch_labels(&["other".to_string()], &[], &open).is_none());
-        // A slashed local branch is not stripped, so it won't accidentally match
-        // a PR whose head is the trailing segment.
-        let open2 = prs(&[("x", 9)]);
-        assert!(pr_for_branch_labels(&["feature/x".to_string()], &["origin".to_string()], &open2).is_none());
-    }
-
-    #[test]
-    fn pr_first_matching_label_wins() {
-        let open = prs(&[("b", 2), ("a", 1)]);
-        // Labels checked in order; "a" comes first, so PR #1.
-        let names = vec!["a".to_string(), "b".to_string()];
-        assert_eq!(pr_for_branch_labels(&names, &[], &open).map(|p| p.number), Some(1));
-    }
-
-    #[test]
-    fn pr_badge_text_is_compact() {
-        let text = pr_badge_text(&pr(42));
-        assert!(text.contains("#42"));
-        assert!(text.starts_with(PR_BADGE_ICON));
-        // Icon(1) + space(1) + "#42"(3) = 5 display columns.
-        assert_eq!(display_width(&text), 5);
-    }
-
-    #[test]
-    fn pr_badge_appends_review_then_comment_markers() {
-        // Plain: no markers.
-        let plain = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::None, false));
-        assert!(!plain.contains(PR_APPROVED_ICON));
-        assert!(!plain.contains(PR_COMMENT_ICON));
-
-        // Approved → check glyph; changes-requested → diff glyph (mutually exclusive).
-        let approved = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::Approved, false));
-        assert!(approved.contains(PR_APPROVED_ICON));
-        assert!(!approved.contains(PR_CHANGES_ICON));
-        let changes =
-            pr_badge_text(&pr_with(1, CiStatus::Fail, ReviewState::ChangesRequested, false));
-        assert!(changes.contains(PR_CHANGES_ICON));
-        assert!(!changes.contains(PR_APPROVED_ICON));
-
-        // Outside comment → comment glyph, appended after the review marker.
-        let both = pr_badge_text(&pr_with(12, CiStatus::Pass, ReviewState::Approved, true));
-        assert!(both.contains(PR_APPROVED_ICON) && both.contains(PR_COMMENT_ICON));
-        let check_at = both.find(PR_APPROVED_ICON).unwrap();
-        let comment_at = both.find(PR_COMMENT_ICON).unwrap();
-        assert!(check_at < comment_at, "review marker precedes comment: {both:?}");
-        // Icon(1)+" #12"(4) + " ✓"(2) + " ⌘"(2) = 9 columns.
-        assert_eq!(display_width(&both), 9);
-    }
-
-    #[test]
-    fn pr_badge_color_follows_ci_status() {
-        let theme = Theme::dark();
-        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::None, ReviewState::None, false), &theme), theme.pr_badge);
-        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pass, ReviewState::None, false), &theme), theme.pr_ci_pass);
-        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pending, ReviewState::None, false), &theme), theme.pr_ci_pending);
-        assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Fail, ReviewState::None, false), &theme), theme.pr_ci_fail);
-    }
-
-    #[test]
-    fn pr_badge_color_splits_passing_by_merge_readiness() {
-        let theme = Theme::dark();
-        // Green checks + clear to merge → full green.
-        let clear = pr_full(1, CiStatus::Pass, ReviewState::None, MergeState::Clear, false);
-        assert_eq!(pr_badge_color(&clear, &theme), theme.pr_ci_pass);
-        // Green checks but a blocking merge state → chartreuse "passing-but-blocked".
-        let blocked = pr_full(1, CiStatus::Pass, ReviewState::None, MergeState::Blocked, false);
-        assert_eq!(pr_badge_color(&blocked, &theme), theme.pr_ci_pass_blocked);
-        // Green checks but changes requested → also chartreuse, via the review path.
-        let changes = pr_full(1, CiStatus::Pass, ReviewState::ChangesRequested, MergeState::Clear, false);
-        assert_eq!(pr_badge_color(&changes, &theme), theme.pr_ci_pass_blocked);
-        // The blocked tone is distinct from both full-green and pending.
-        assert_ne!(theme.pr_ci_pass_blocked, theme.pr_ci_pass);
-        assert_ne!(theme.pr_ci_pass_blocked, theme.pr_ci_pending);
-    }
-
     #[test]
     fn merged_chip_keeps_lane_hue_muted_not_flat_grey() {
         // A merged branch chip (#90) must derive from its own lane color, muted —
@@ -1684,17 +1464,6 @@ mod tests {
         // And it is visibly distinct from the unmerged chip's style.
         assert_ne!(merged, unmerged, "merged chip differs from the unmerged chip");
         assert!(merged.add_modifier.contains(Modifier::DIM), "merged chip is dimmed");
-    }
-
-    #[test]
-    fn pr_badge_color_ci_precedes_merge_state() {
-        // A blocked merge state must not override failing/pending CI: those states
-        // aren't mergeable regardless, so red/orange still win.
-        let theme = Theme::dark();
-        let fail_blocked = pr_full(1, CiStatus::Fail, ReviewState::ChangesRequested, MergeState::Blocked, false);
-        assert_eq!(pr_badge_color(&fail_blocked, &theme), theme.pr_ci_fail);
-        let pending_blocked = pr_full(1, CiStatus::Pending, ReviewState::ChangesRequested, MergeState::Blocked, false);
-        assert_eq!(pr_badge_color(&pending_blocked, &theme), theme.pr_ci_pending);
     }
 
     // ── one badge per PR, on its head commit (#42) ───────────────────
@@ -1827,19 +1596,6 @@ mod tests {
             " ",
             "no double space before the branch pill when there's no PR badge: {line:?}"
         );
-    }
-
-    #[test]
-    fn pr_badge_full_row_encodes_approved_and_comment_state() {
-        // #43: a full-row render surfaces the approved + outside-comment markers.
-        let mut approved = pr_head(1, 5);
-        approved.review = ReviewState::Approved;
-        approved.outside_activity = true;
-        let open = open_map(vec![("feat", approved)]);
-        let node = commit_node(5, "x", &[]);
-        let text = row_text(&node, &open);
-        assert!(text.contains(PR_APPROVED_ICON), "approved glyph present: {text:?}");
-        assert!(text.contains(PR_COMMENT_ICON), "comment glyph present: {text:?}");
     }
 
     // ── PR merge commits render greyed (#52) ─────────────────────────
