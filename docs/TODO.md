@@ -603,6 +603,9 @@ Bug: the #81 grey squash-link connector rendered as two curves aimed at a phanto
 ### [DONE] #108 Dim merged branches dims the whole lane
 "Dim merged branches" dims everything a merged branch contributes — its exclusive commits' rows (message + metadata) and the graph dots/lines — in both renderers, gated on the existing setting; instant toggle, composes with trace dim. Landed via PR #86. Also fixed latent pixel bug: the trace pass dimmed every cell when tracing was off.
 
+### [DONE] #117 Branch-chip click targets recorded at construction (GH #98)
+Found by the #102 seam-pinning tests: `resolve_chip_branch` recovered the click target by parsing the rendered label, so an abbreviated (`...`) label — or one whose name collides with the chip's own delimiters — resolved to `None` and the click silently did nothing. Now each `BranchChip` records the source ref at its construction site (`optimize_branch_display` builds chips directly; the parsing helper is deleted): abbreviation and decoration are presentation-only and can never break hit-testing. Combined multi-branch chips keep their pre-existing target (first shown branch).
+
 ### [DONE] #116 Errors are red toasts, never a blocking modal
 User request: error messages showed in the status bar via the input-swallowing `AppMode::Error` modal — the UI was locked until dismissed. Now `App::show_error` pushes an Error toast (red, ✗): mode stays Normal, input keeps working, TTL raised 8s → 12s so the only error surface isn't missed, and Esc dismisses lingering error toasts before taking its usual quit/cancel meaning (info/success toasts never intercept Esc — they expire in 4s and swallowing Esc for them would make quit feel unreliable). `AppMode::Error` is deleted outright (enum variant, keybinding map, status-bar arms, debug-server state string); sticky state (conflict guidance, latched background-check errors, network progress) stays on the status bar as designed.
 

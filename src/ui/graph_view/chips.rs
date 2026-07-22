@@ -3,9 +3,10 @@
 //! `optimize_branch_display` turns a commit's raw branch names into the compact
 //! `[name]` chips the row renders — collapsing synced local/remote pairs, adding
 //! remote/synced icons, deduping remote twins, budgeting width, and folding the
-//! overflow into a `+N` marker. Each resulting [`BranchChip`] also carries the
-//! real branch name it resolves to, so the render tail and mouse hit-testing no
-//! longer re-derive it from the decorated label.
+//! overflow into a `+N` marker. Each resulting [`BranchChip`] carries the real
+//! ref it was built from (#98): the click target is recorded at construction,
+//! never re-parsed from the decorated label, so abbreviation (`...`) and label
+//! decoration can never break hit-testing.
 
 use ratatui::style::{Modifier, Style};
 
@@ -18,10 +19,10 @@ pub const REMOTE_ONLY_ICON: &str = "\u{f0c2}"; //
 pub(super) const SYNCED_ICON: &str = "↔";
 
 /// A rendered branch chip: its decorated label, the style it draws with, and the
-/// real branch name it resolves to (for click hit-testing), or `None` when the
-/// chip decoration maps to no branch. Plain data feeding the render tail — the
-/// resolved `branch` is computed once, at construction, from the same inputs the
-/// render tail used to re-derive it, so hit-testing is unchanged.
+/// real branch name a click on it resolves to. `branch` is the source ref the
+/// label was built from, recorded at construction (#98) — every chip today maps
+/// to a ref, but the field stays `Option` so future non-branch decorations can
+/// opt out of hit-testing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BranchChip {
     pub label: String,
@@ -75,41 +76,16 @@ pub(super) fn optimize_branch_display(
     theme: &Theme,
     remotes: &[String],
 ) -> Vec<BranchChip> {
-    // Build the decorated (label, style) pairs, then fold in the click-resolution
-    // that used to run at render time so each chip carries its real branch name.
-    // Resolution uses the same inputs (`label`, `branch_names`, `remotes`) the
-    // render tail passed to `resolve_chip_branch`, so hit-testing is unchanged.
-    optimize_branch_labels(
-        branch_names,
-        is_head,
-        color_index,
-        selected_branch_name,
-        theme,
-        remotes,
-    )
-    .into_iter()
-    .map(|(label, style)| {
-        let branch = resolve_chip_branch(&label, branch_names, remotes);
-        BranchChip {
-            label,
-            style,
-            branch,
-        }
-    })
-    .collect()
-}
-
-/// The decorated `(label, style)` pairs before branch resolution. Kept as a
-/// separate function so the layout logic is untouched by the typed-chip return.
-fn optimize_branch_labels(
-    branch_names: &[String],
-    is_head: bool,
-    color_index: usize,
-    selected_branch_name: Option<&str>,
-    theme: &Theme,
-    remotes: &[String],
-) -> Vec<(String, Style)> {
     use std::collections::HashSet;
+
+    // Each construction site below records the ref its label was built from as
+    // the chip's click target (#98). The label is presentation only — it may be
+    // abbreviated or decorated past recognition without affecting hit-testing.
+    let chip = |label: String, style: Style, branch: &str| BranchChip {
+        label,
+        style,
+        branch: Some(branch.to_string()),
+    };
 
     if branch_names.is_empty() {
         return Vec::new();
@@ -195,8 +171,9 @@ fn optimize_branch_labels(
         if strip_remote(name, remotes).is_some() {
             let prefix = format!("{} ", REMOTE_ONLY_ICON);
             // Single-remote repos drop the "<remote>/" prefix (cloud conveys it).
+            // The chip still targets the full remote ref.
             let display = chip_display_name(name, remotes);
-            return vec![(make_label(&prefix, display, None), make_style(name))];
+            return vec![chip(make_label(&prefix, display, None), make_style(name), name)];
         }
     } else if branch_names.len() == 2 {
         let synced_local = branch_names.iter().find(|name| {
@@ -207,12 +184,13 @@ fn optimize_branch_labels(
         });
         if let Some(local) = synced_local {
             let prefix = format!("{} ", SYNCED_ICON);
-            return vec![(make_label(&prefix, local, None), make_style(local))];
+            // The collapsed synced pair targets the local branch.
+            return vec![chip(make_label(&prefix, local, None), make_style(local), local)];
         }
     }
 
     // Process branches in original order (matches tab order from filter_remote_duplicates)
-    let mut result: Vec<(String, Style)> = Vec::new();
+    let mut result: Vec<BranchChip> = Vec::new();
     for name in branch_names {
         if let Some(bare) = strip_remote(name, remotes) {
             // Remote branch: skip if matching local exists (dedup keeps a
@@ -224,9 +202,9 @@ fn optimize_branch_labels(
                 // Single remote: drop the prefix but add the cloud icon so this
                 // remote-only chip still reads as remote in a multi-branch row.
                 let prefix = format!("{} ", REMOTE_ONLY_ICON);
-                result.push((make_label(&prefix, bare, None), make_style(name)));
+                result.push(chip(make_label(&prefix, bare, None), make_style(name), name));
             } else {
-                result.push((make_label("", name, None), make_style(name)));
+                result.push(chip(make_label("", name, None), make_style(name), name));
             }
         } else {
             // Local branch: mark with the ↔ icon (same convention as the
@@ -240,7 +218,7 @@ fn optimize_branch_labels(
             } else {
                 String::new()
             };
-            result.push((make_label(&prefix, name, None), make_style(name)));
+            result.push(chip(make_label(&prefix, name, None), make_style(name), name));
         }
     }
 
@@ -279,8 +257,8 @@ fn optimize_branch_labels(
         // branch is selected/navigated to: that would make badge order flap
         // as the cursor moves, which is the bug this fixes.
         let mut combined = String::new();
-        for (pos, (label, _)) in result.iter().take(shown).enumerate() {
-            let (icon, clean_name) = split_label(label);
+        for (pos, c) in result.iter().take(shown).enumerate() {
+            let (icon, clean_name) = split_label(&c.label);
             // Only the last shown label carries the "+N" suffix
             let extra = if pos == shown - 1 { extra_count } else { 0 };
             // Reserve budget for the icon so the abbreviated name plus its
@@ -306,8 +284,14 @@ fn optimize_branch_labels(
             })
             .unwrap_or(0)
             .min(result.len().saturating_sub(1));
-        let style = result[selected_idx].1;
-        return vec![(combined, style)];
+        let style = result[selected_idx].style;
+        // The combined chip targets the first shown branch — the one whose
+        // label leads the chip — matching the pre-#98 resolution behavior.
+        return vec![BranchChip {
+            label: combined,
+            style,
+            branch: result[0].branch.clone(),
+        }];
     }
 
     result
@@ -366,37 +350,6 @@ fn abbreviate_branch_label(name: &str, max_width: usize, extra_count: usize) -> 
     let head = truncate_to_width(rest, head_available);
 
     format!("[{}{}{}{}]{}", prefix, head, ELLIPSIS, tail, suffix)
-}
-
-/// Recover the branch name a rendered chip `label` refers to, matching it
-/// against the node's `branch_names`. Chip labels are decorated (`[name]`, an
-/// optional remote/synced icon prefix, a possible ` +N` overflow suffix), so we
-/// strip the decoration to a bare name and find the branch whose bare form
-/// matches (a local branch, or a remote ref bare-equal to it). Returns `None`
-/// when nothing matches (e.g. a non-branch decoration).
-fn resolve_chip_branch(label: &str, branch_names: &[String], remotes: &[String]) -> Option<String> {
-    // Strip the leading '[' and any icon prefix, then take up to the first
-    // delimiter (']', ' ', or the start of a "+N" overflow marker).
-    let s = label.trim_start_matches('[');
-    let s = s
-        .strip_prefix(REMOTE_ONLY_ICON)
-        .or_else(|| s.strip_prefix(SYNCED_ICON))
-        .map(str::trim_start)
-        .unwrap_or(s);
-    let bare = s.split([']', ' ']).next().unwrap_or(s);
-    if bare.is_empty() {
-        return None;
-    }
-    // Exact local match first, then a remote ref whose bare name matches.
-    branch_names
-        .iter()
-        .find(|n| n.as_str() == bare)
-        .or_else(|| {
-            branch_names
-                .iter()
-                .find(|n| strip_remote(n, remotes) == Some(bare))
-        })
-        .cloned()
 }
 
 #[cfg(test)]
@@ -485,45 +438,25 @@ mod tests {
         assert!(display_width(&out[0]) <= 40, "label too wide: {}", out[0]);
     }
 
-    // ── chip click resolution (resolve_chip_branch) ──────────────────────
+    // ── chip click targets (#98: recorded at construction) ───────────────
 
     #[test]
-    fn resolve_chip_branch_recovers_the_branch_name() {
+    fn every_chip_carries_the_ref_it_was_built_from() {
+        // Construction records the click target directly (#98); there is no
+        // label parsing to break. Plain and slashed local names both carry
+        // themselves.
+        let theme = Theme::dark();
         let remotes = vec!["origin".to_string()];
-        let names = vec!["main".to_string(), "feature/x".to_string()];
-        // Plain local label.
-        assert_eq!(
-            resolve_chip_branch("[main]", &names, &remotes).as_deref(),
-            Some("main")
-        );
-        // Label with a slash in the name.
-        assert_eq!(
-            resolve_chip_branch("[feature/x]", &names, &remotes).as_deref(),
-            Some("feature/x")
-        );
-        // Synced-icon prefix is stripped before matching.
-        let synced = format!("[{} main]", SYNCED_ICON);
-        assert_eq!(
-            resolve_chip_branch(&synced, &names, &remotes).as_deref(),
-            Some("main")
-        );
-        // A cloud-icon remote-only chip (single-remote repo drops the prefix)
-        // resolves back to the full remote ref.
-        let remote_names = vec!["origin/dev".to_string()];
-        let cloud = format!("[{} dev]", REMOTE_ONLY_ICON);
-        assert_eq!(
-            resolve_chip_branch(&cloud, &remote_names, &remotes).as_deref(),
-            Some("origin/dev")
-        );
-        // No matching branch → None.
-        assert_eq!(resolve_chip_branch("[nope]", &names, &remotes), None);
+        let names = vec!["feature/x".to_string()];
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &remotes);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].branch.as_deref(), Some("feature/x"));
     }
 
     #[test]
     fn optimize_branch_display_chip_carries_resolved_branch() {
-        // The click-resolution folded into chip construction (#77): each chip's
-        // `branch` is the real ref name a click on it checks out — the same
-        // value the render tail used to re-derive via `resolve_chip_branch`.
+        // Each chip's `branch` is the real ref name a click on it checks out,
+        // recorded at construction (#77, hardened by #98).
         let theme = Theme::dark();
         let remotes = vec!["origin".to_string()];
 
@@ -961,13 +894,12 @@ mod tests {
             "the abbreviation ellipsis is present: {:?}",
             out[0].label
         );
-        // FINDING (item 4): the ellipsized label no longer contains the full
-        // branch name, so `resolve_chip_branch` cannot match it and the chip
-        // resolves to None — a click on a truncated branch chip checks out
-        // nothing. Pinning actual behavior (the intent was Some(<full name>)).
+        // #98: the click target is recorded at construction, so abbreviation
+        // cannot break it — the chip still resolves to the full branch name.
         assert_eq!(
-            out[0].branch, None,
-            "an abbreviated chip does not resolve back to its branch: {:?}",
+            out[0].branch.as_deref(),
+            Some(format!("feature/{}", "a".repeat(50)).as_str()),
+            "an abbreviated chip still targets its full branch name: {:?}",
             out[0]
         );
     }
@@ -987,11 +919,12 @@ mod tests {
             bracketed[0].label
         );
         assert!(bracketed[0].label.contains("wip"), "{:?}", bracketed[0].label);
-        // FINDING (item 5): the ']' inside the name collides with the chip's own
-        // ']' delimiter, so resolution stops early and the chip resolves to None.
+        // #98: the target is recorded at construction, so delimiter collisions
+        // in the label cannot corrupt it.
         assert_eq!(
-            bracketed[0].branch, None,
-            "a ']' inside the name breaks resolution: {:?}",
+            bracketed[0].branch.as_deref(),
+            Some("wip[1]"),
+            "a ']' inside the name no longer breaks the click target: {:?}",
             bracketed[0]
         );
 
