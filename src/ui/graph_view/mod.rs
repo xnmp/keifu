@@ -1097,6 +1097,49 @@ mod tests {
     }
 
     #[test]
+    fn merged_badge_span_is_emitted_in_the_rendered_line() {
+        // Emission companion to the decision tests above: the rendered line
+        // carries the merged badge as its own span, in the merged style.
+        let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+        let theme = Theme::dark();
+        let open_prs = HashMap::new();
+        let pr_ctx = PrContext::new(&open_prs);
+        let ctx = RowRenderCtx {
+            theme: &theme,
+            now: Local::now(),
+            pixel_mode: false,
+            remotes: &[],
+            open_prs: &open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches: &merged,
+            merged_dim: true,
+            merged_lane_oids: None,
+            base_update_merges: &HashSet::new(),
+            metadata_columns: merge_cols(true, false, false),
+            graph_width: 4,
+            total_width: 200,
+            selected_branch_name: None,
+            trace: None,
+        };
+        let (line, _chips) = render_graph_line(
+            &node,
+            &ctx,
+            RowFlags {
+                is_selected: false,
+                is_marked: false,
+            },
+        );
+        let badge = merged_badge();
+        let style = find_style(&line, &badge).expect("merged badge span emitted");
+        assert_eq!(
+            style,
+            super::badges::merged_style(&theme),
+            "badge uses the merged style"
+        );
+    }
+
+    #[test]
     fn squash_merged_branch_dims_when_dim_setting_on() {
         // #106: squash-classified branches flow through the same
         // `merged_branches` set as ancestry/fast-forward ones (there is no
@@ -1589,6 +1632,22 @@ mod tests {
         assert_eq!(model.message, RowMessage::Collapse, "collapse selects the merge glyph");
         // Collapse implies muting: the message style is dimmed.
         assert!(model.msg_style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn collapse_glyph_is_emitted_dimmed_in_the_rendered_line() {
+        // Emission companion to the decision test above: the rendered line
+        // actually carries the bare glyph as its own span, muted + DIM.
+        let node = merge_node_full(31, "Merge branch 'topic'", [1, 2]);
+        let line = render_row_with(
+            &node,
+            &HashMap::new(),
+            merge_cols(false, false, true),
+            &HashSet::new(),
+        );
+        let style = find_style(&line, MERGE_ICON).expect("merge glyph span emitted");
+        assert_eq!(style.fg, Some(Theme::dark().text_muted), "glyph is muted");
+        assert!(style.add_modifier.contains(Modifier::DIM), "glyph is dimmed");
     }
 
     #[test]
