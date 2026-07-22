@@ -271,6 +271,7 @@ fn state_json(app: &App) -> Value {
         // Settings-menu-managed flags, exposed so tests can assert persistence
         // across restarts.
         "hide_remote_branches": app.hide_remote_branches,
+        "hide_stashes": app.hide_stashes,
         "trace_enabled": app.trace_enabled,
         "diff_word_wrap": app.diff_word_wrap,
         "graph_renderer": app.config.ui.graph_renderer.as_str(),

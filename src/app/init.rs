@@ -67,7 +67,14 @@ impl App {
         let head_name = repo.head_name();
         let head_detached = repo.is_head_detached();
 
-        let stashes = repo.get_stashes();
+        // The hide-stashes toggle is persisted; honour it here so stash entries
+        // (and stash-only commits) don't flash before the next refresh. An empty
+        // slice keeps the graph build byte-identical to a repo with no stashes.
+        let stashes = if ui_state.hide_stashes {
+            Vec::new()
+        } else {
+            repo.get_stashes()
+        };
         phase!("stashes");
         // The per-branch picker hides nothing at startup, but the show/hide-
         // remotes toggle is persisted, so honour it here to avoid a first-frame
@@ -262,6 +269,7 @@ impl App {
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
             hide_remote_branches: ui_state.hide_remote_branches,
+            hide_stashes: ui_state.hide_stashes,
             merged: MergedState {
                 branches: merged_branches,
                 squash_targets,

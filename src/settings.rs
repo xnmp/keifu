@@ -354,6 +354,7 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             merged.dim,
             dim_merged_branches
         ),
+        state_bool!("Hide stashes", Graph, None, hide_stashes, hide_stashes),
         state_bool!(
             "Mute merge commits",
             Graph,
@@ -598,6 +599,7 @@ mod tests {
             hide_merged_branches: true,
             dim_merged_branches: false,
             files_group_by_folder: true,
+            hide_stashes: true,
             metadata_columns: MetadataColumns {
                 author: false,
                 hash: false,

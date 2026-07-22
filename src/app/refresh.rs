@@ -340,7 +340,14 @@ impl App {
     /// Must NOT touch: the selection index or the diff/search caches. May fail
     /// if the revwalk fails.
     fn rebuild_graph(&mut self) -> Result<()> {
-        let stashes = self.repo.get_stashes();
+        // Hide-stashes filters at the source: an empty slice pushes no stash
+        // tips into the revwalk (so stash-only commits vanish) and yields no
+        // stash nodes in `build_graph`. When off, the graph is byte-identical.
+        let stashes = if self.hide_stashes {
+            Vec::new()
+        } else {
+            self.repo.get_stashes()
+        };
         let uncommitted_count = self
             .working_tree_status
             .as_ref()

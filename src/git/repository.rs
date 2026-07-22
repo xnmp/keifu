@@ -559,6 +559,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hide_stashes_drops_stash_node_and_stash_only_commits() {
+        // The hide-stashes toggle filters at the App layer by passing an empty
+        // stash slice into get_commits + build_graph. This asserts that altitude:
+        // an empty slice removes the stash node AND any commit reachable only as
+        // a stash parent, while the populated slice keeps both.
+        use crate::git::graph::build_graph;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("local");
+        Command::new("git").args(["init", "-q", "-b", "main"]).arg(&local).status().unwrap();
+        git(&local, &["config", "user.email", "t@t.com"]);
+        git(&local, &["config", "user.name", "t"]);
+        std::fs::write(local.join("a.txt"), "a").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "c1"]);
+        std::fs::write(local.join("a.txt"), "a2").unwrap();
+        git(&local, &["add", "a.txt"]);
+        git(&local, &["commit", "-qm", "STASH-BASE-COMMIT"]);
+        // Stash a working-tree change (its base is STASH-BASE-COMMIT), then roll
+        // main back one commit so STASH-BASE-COMMIT is reachable ONLY via the
+        // stash's parent — i.e. a stash-only commit.
+        std::fs::write(local.join("a.txt"), "dirty").unwrap();
+        git(&local, &["stash", "push", "-q", "-m", "wip"]);
+        git(&local, &["reset", "-q", "--hard", "HEAD~1"]);
+
+        let mut repo = GitRepository::open(&local).unwrap();
+        let branches = repo.get_branches().unwrap();
+        let tags = repo.get_tags();
+        let head = repo.head_oid();
+        let stashes = repo.get_stashes();
+        assert_eq!(stashes.len(), 1, "one stash expected");
+
+        // Stashes shown: the stash node and the stash-only base commit appear.
+        let commits = repo.get_commits(50, &branches, &stashes, false).unwrap();
+        assert!(
+            commits.iter().any(|c| c.message.contains("STASH-BASE-COMMIT")),
+            "stash-only base commit must be walked when stashes are shown"
+        );
+        let shown = build_graph(&commits, &branches, &tags, &stashes, None, head, &[]);
+        assert!(
+            shown.nodes.iter().any(|n| n.is_stash),
+            "a stash node must be present when stashes are shown"
+        );
+
+        // Stashes hidden (empty slice — the App gate): no stash node, and the
+        // stash-only commit is gone since nothing else reaches it.
+        let commits_hidden = repo.get_commits(50, &branches, &[], false).unwrap();
+        assert!(
+            !commits_hidden.iter().any(|c| c.message.contains("STASH-BASE-COMMIT")),
+            "stash-only commit must vanish when stashes are hidden"
+        );
+        let hidden = build_graph(&commits_hidden, &branches, &tags, &[], None, head, &[]);
+        assert!(
+            !hidden.nodes.iter().any(|n| n.is_stash),
+            "no stash node may remain when stashes are hidden"
+        );
+    }
+
     /// Builds a repo with `main` and a `feature` branch merged into `main` via
     /// a real (non-fast-forward) merge commit, plus a second, unmerged
     /// `other-feature` branch. Returns the working dir path.

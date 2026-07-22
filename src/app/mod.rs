@@ -1112,6 +1112,10 @@ pub struct App {
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide_remote_branches: bool,
 
+    /// When true, stash entries (and any commits reachable only as stash
+    /// parents) are hidden from the graph. Persisted in `UiState`.
+    pub hide_stashes: bool,
+
     // Which metadata columns (author/hash/date) render on each commit row.
     pub metadata_columns: crate::config::MetadataColumns,
 
@@ -1763,8 +1767,9 @@ impl App {
 
     /// Write one setting's new value to the live app state, persist it, and
     /// rebuild the graph if the change was one a bare field write can't realize
-    /// on its own — the branch visibility toggles (`hide_remote_branches` /
-    /// `hide_merged_branches`), which change which commits are in the graph.
+    /// on its own — the branch/stash visibility toggles (`hide_remote_branches` /
+    /// `hide_merged_branches` / `hide_stashes`), which change which commits are
+    /// in the graph.
     fn commit_setting(
         &mut self,
         descriptor: &crate::settings::SettingDescriptor,
@@ -1772,11 +1777,13 @@ impl App {
     ) -> Result<()> {
         let old_hide_remote = self.hide_remote_branches;
         let old_hide_merged = self.merged.hide;
+        let old_hide_stashes = self.hide_stashes;
         let old_squash_links = self.config.ui.squash_link_lines;
         descriptor.set(self, value);
         self.persist_settings();
         if self.hide_remote_branches != old_hide_remote
             || self.merged.hide != old_hide_merged
+            || self.hide_stashes != old_hide_stashes
             || self.config.ui.squash_link_lines != old_squash_links
         {
             // These change which commits (or synthetic link lines) the graph
