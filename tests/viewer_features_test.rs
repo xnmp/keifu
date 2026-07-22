@@ -1,7 +1,6 @@
-//! Integration tests for the three viewer features:
+//! Integration tests for the viewer features:
 //!   1. Compare two arbitrary commits (tree-to-tree diff + mark/compare flow)
 //!   2. Per-file history (git log --follow) + opening a history entry's diff
-//!   3. Commit signature status (%G? plumbing)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,10 +11,7 @@ use tempfile::TempDir;
 use keifu::action::Action;
 use keifu::app::{App, AppMode, FileHistoryEntry};
 use keifu::diff_cache::DiffTarget;
-use keifu::git::{
-    commit_signature_status, file_history, signature_status_label, CommitDiffInfo, FileChangeKind,
-    GitRepository,
-};
+use keifu::git::{file_history, CommitDiffInfo, FileChangeKind, GitRepository};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -252,21 +248,6 @@ fn file_history_enter_opens_that_commits_file_diff() {
         }
         other => panic!("expected FileDiff, got {other:?}"),
     }
-
-    drop(dir);
-}
-
-// ── Feature 3: signature status ─────────────────────────────────────
-
-#[test]
-fn unsigned_commit_reads_as_unsigned() {
-    let (dir, repo) = init_repo();
-    let c1 = commit_at(&repo, "f.txt", "1\n", "c1", 1000);
-    let path = dir.path().to_string_lossy().to_string();
-
-    // No GPG key material in CI, so the commit is genuinely unsigned.
-    assert_eq!(commit_signature_status(&path, c1).unwrap(), 'N');
-    assert_eq!(signature_status_label('N'), "unsigned");
 
     drop(dir);
 }

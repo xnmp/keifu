@@ -1618,16 +1618,22 @@ pub fn merged_lane_oids(commits: &[CommitInfo], live_tips: &[Oid]) -> HashSet<Oi
 /// Whether a single `(child, parent)` edge touches a dimmed (merged-lane)
 /// commit: either endpoint is in `merged`. An edge to/from a vanishing commit
 /// is exactly a stroke hide-merged would remove, so this is what the merged-lane
-/// dim (issue #108) fades. `None` (no edge) never touches.
-pub fn edge_touches_merged(edge: Option<CellEdge>, merged: &HashSet<Oid>) -> bool {
-    edge.is_some_and(|(child, parent)| merged.contains(&child) || merged.contains(&parent))
+/// dim (issue #108) fades. `None` (no edge) never touches. An edge touching
+/// `exempt` — the selected commit — never counts: the commit under the cursor
+/// keeps its dot and its own strokes live even on a merged lane, so selecting
+/// a dimmed commit un-dims what the user is inspecting.
+pub fn edge_touches_merged(edge: Option<CellEdge>, merged: &HashSet<Oid>, exempt: Option<Oid>) -> bool {
+    edge.is_some_and(|(child, parent)| {
+        !exempt.is_some_and(|e| e == child || e == parent)
+            && (merged.contains(&child) || merged.contains(&parent))
+    })
 }
 
 /// Whether a cell (by its `(primary, secondary)` edges) touches a merged-lane
 /// commit. Either edge counts — the Unicode text path dims the whole glyph;
 /// the pixel path fades each edge independently (see `apply_merged_lane_dim`).
-pub fn cell_touches_merged(oids: CellOids, merged: &HashSet<Oid>) -> bool {
-    edge_touches_merged(oids.0, merged) || edge_touches_merged(oids.1, merged)
+pub fn cell_touches_merged(oids: CellOids, merged: &HashSet<Oid>, exempt: Option<Oid>) -> bool {
+    edge_touches_merged(oids.0, merged, exempt) || edge_touches_merged(oids.1, merged, exempt)
 }
 
 #[cfg(test)]
@@ -2857,12 +2863,25 @@ mod tests {
     fn edge_and_cell_touch_merged_on_either_endpoint() {
         let merged: HashSet<Oid> = [oid(4)].into_iter().collect();
         // Either endpoint in the set makes the edge touch.
-        assert!(edge_touches_merged(Some((oid(4), oid(3))), &merged));
-        assert!(edge_touches_merged(Some((oid(1), oid(4))), &merged));
-        assert!(!edge_touches_merged(Some((oid(1), oid(3))), &merged));
-        assert!(!edge_touches_merged(None, &merged));
+        assert!(edge_touches_merged(Some((oid(4), oid(3))), &merged, None));
+        assert!(edge_touches_merged(Some((oid(1), oid(4))), &merged, None));
+        assert!(!edge_touches_merged(Some((oid(1), oid(3))), &merged, None));
+        assert!(!edge_touches_merged(None, &merged, None));
         // A cell touches when either of its two edges does.
-        assert!(cell_touches_merged((None, Some((oid(4), oid(3)))), &merged));
-        assert!(!cell_touches_merged((Some((oid(1), oid(2))), None), &merged));
+        assert!(cell_touches_merged((None, Some((oid(4), oid(3)))), &merged, None));
+        assert!(!cell_touches_merged((Some((oid(1), oid(2))), None), &merged, None));
+    }
+
+    #[test]
+    fn selected_commit_exempts_its_edges_from_merged_touch() {
+        // An edge touching the exempt (selected) commit never reads merged —
+        // even when its other endpoint is also in the set — so the selected
+        // dot and its own strokes stay live; unrelated edges still dim.
+        let merged: HashSet<Oid> = [oid(4), oid(5)].into_iter().collect();
+        assert!(!edge_touches_merged(Some((oid(4), oid(3))), &merged, Some(oid(4))));
+        assert!(!edge_touches_merged(Some((oid(4), oid(5))), &merged, Some(oid(4))));
+        assert!(!edge_touches_merged(Some((oid(1), oid(4))), &merged, Some(oid(4))));
+        assert!(edge_touches_merged(Some((oid(5), oid(3))), &merged, Some(oid(4))));
+        assert!(!cell_touches_merged((Some((oid(4), oid(3))), None), &merged, Some(oid(4))));
     }
 }

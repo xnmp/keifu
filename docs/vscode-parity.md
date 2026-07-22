@@ -61,9 +61,6 @@ files pane.)
 - **Per-file history** — files pane `h` lists commits that touched the selected
   path via `git log --follow` (rename-aware, capped at 200) in a picker; `Enter`
   opens that commit's diff for the file, `Esc` returns.
-- **Signature status** — commit detail shows a `Sig:` line from `git log -1
-  --format=%G?`, memoized per OID (`sig_status_cache`). Unsigned commits render
-  subtly; valid/bad signatures stand out.
 
 ## Notable full-parity areas
 

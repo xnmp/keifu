@@ -165,6 +165,11 @@ pub(super) struct RowRenderCtx<'a> {
     /// graph strokes (any cell edge touching one of these commits) dim — the
     /// same strokes hide-merged would remove.
     pub merged_lane_oids: Option<&'a HashSet<git2::Oid>>,
+    /// The selected commit, exempt from merged-lane dimming: any stroke touching
+    /// it renders live (see `edge_touches_merged`), pairing with the selected
+    /// row's text un-mute in [`resolve_row_model`] so the commit under the
+    /// cursor never reads greyed-out.
+    pub merged_exempt: Option<git2::Oid>,
     pub base_update_merges: &'a HashSet<git2::Oid>,
     pub metadata_columns: MetadataColumns,
     /// Graph column width cap (glyph budget), same for every row this frame.
@@ -228,6 +233,14 @@ pub(super) fn resolve_row_model(
     is_base_update: bool,
     is_merged_lane: bool,
 ) -> RowModel {
+    // Selection exemption: the row under the cursor never reads merged-dimmed.
+    // The widget-level `selection_style` only subtracts the DIM bit; the muted
+    // *foreground* would survive it, so the merged-lane mute is dropped here
+    // entirely while selected (strokes are exempted in the cell renderers via
+    // `RowRenderCtx::merged_exempt`). Deliberately only for the merged-lane
+    // mute — muted/collapsed merges and base-update rows keep their treatment
+    // when selected, since those describe the commit's *kind*, not its lane.
+    let is_merged_lane = is_merged_lane && !flags.is_selected;
     // PR-merge commit (#52): a merge that landed a GitHub PR reads as machinery,
     // not authored work, so its message renders greyed (an explicit muted color,
     // distinct from the plain DIM used for ordinary muted merges). Detection is
@@ -340,7 +353,10 @@ pub(super) fn resolve_row_model(
     )
     .into_iter()
     .map(|mut chip| {
+        // Selected rows skip the mute (same exemption as the row text above):
+        // a chip on the row being inspected keeps its full lane hue.
         let is_merged = ctx.merged_dim
+            && !flags.is_selected
             && chip
                 .branch
                 .as_deref()

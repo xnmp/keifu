@@ -9,7 +9,6 @@ use ratatui::{
 };
 
 use crate::app::{App, FocusedPanel};
-use crate::git::signature_status_label;
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
@@ -30,22 +29,6 @@ pub fn compute_commit_detail_layout<'a>(
     commit_area: Rect,
     theme: &'a Theme,
 ) -> Vec<Line<'a>> {
-    // Preload (and memoize) the signature status for the selected commit so the
-    // detail lines can render it without shelling out on the render path.
-    if app.compare_range.is_none() {
-        let sel_oid = app
-            .graph_nav
-            .graph_list_state
-            .selected()
-            .and_then(|i| app.graph_layout.nodes.get(i))
-            .filter(|n| !n.is_uncommitted && !n.is_stash)
-            .and_then(|n| n.commit.as_ref())
-            .map(|c| c.oid);
-        if let Some(oid) = sel_oid {
-            app.load_signature_status(oid);
-        }
-    }
-
     let (commit_lines, raw_editor_offset) =
         CommitDetailWidget::build_commit_lines_with_offset(app, theme);
 
@@ -259,26 +242,6 @@ impl<'a> CommitDetailWidget<'a> {
                 ),
             ]),
         ];
-
-        // Signature status line (from the memoized %G? cache). Stashes are
-        // never signed, so skip them. Unsigned commits render subtly (muted);
-        // a real signature stands out.
-        if !node.is_stash {
-            if let Some(&code) = app.sig_status_cache.get(&commit.oid) {
-                let (color, modifier) = match code {
-                    'N' => (theme.text_muted, Modifier::empty()),
-                    'G' | 'U' => (theme.author_color, Modifier::BOLD),
-                    _ => (theme.file_deleted, Modifier::BOLD),
-                };
-                lines.push(Line::from(vec![
-                    Span::styled("Sig:    ", theme.metadata_label_style()),
-                    Span::styled(
-                        signature_status_label(code).to_string(),
-                        Style::default().fg(color).add_modifier(modifier),
-                    ),
-                ]));
-            }
-        }
 
         lines.push(Line::from(""));
 

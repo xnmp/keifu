@@ -170,8 +170,14 @@ pub fn dim_pixel_specs_window(
     // Merged-lane dim (#108), gated the same way the unicode path is: dim on and
     // hide off. `None` = feature off, so the core skips the merged-lane pass.
     let merged_oids = (app.merged.dim && !app.merged.hide).then_some(&app.merged.lane_oids);
+    // The selected commit is exempt (mirrors the unicode path's
+    // `RowRenderCtx::merged_exempt`): its dot and its own strokes stay live.
+    let merged_exempt = app
+        .selected_commit_node()
+        .and_then(|n| n.commit.as_ref())
+        .map(|c| c.oid);
     dim_specs_window_core(
-        base, &row_oids, &force_dim, lit, lane_rgb, merged_oids, win_start, win_end,
+        base, &row_oids, &force_dim, lit, lane_rgb, merged_oids, merged_exempt, win_start, win_end,
     )
 }
 
@@ -212,6 +218,7 @@ fn dim_specs_window_core(
     lit: &std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>,
     lane_rgb: &std::collections::HashMap<git2::Oid, [u8; 3]>,
     merged_oids: Option<&HashSet<git2::Oid>>,
+    merged_exempt: Option<git2::Oid>,
     win_start: usize,
     win_end: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
@@ -245,8 +252,8 @@ fn dim_specs_window_core(
         // to a merged branch's lane — exactly the strokes hide-merged removes.
         // Only ever SETS dim, so it composes on top of force-dim / trace above.
         if let (Some(m), Some(o)) = (merged_oids, row_oids.get(i)) {
-            apply_merged_lane_dim(&mut spec.cells, o.cells, m);
-            apply_merged_lane_dim(&mut spec.underlay, o.underlay, m);
+            apply_merged_lane_dim(&mut spec.cells, o.cells, m, merged_exempt);
+            apply_merged_lane_dim(&mut spec.underlay, o.underlay, m, merged_exempt);
         }
         spec
     };
@@ -605,7 +612,7 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(10);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 3, 7);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 3, 7);
 
         assert_eq!(out.len(), base.len(), "result keeps full length");
         for (i, spec) in out.iter().enumerate() {
@@ -630,8 +637,8 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(12);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let full = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 0, base.len());
-        let windowed = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 4, 9);
+        let full = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 0, base.len());
+        let windowed = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 4, 9);
         for i in 4..9 {
             assert_eq!(windowed[i], full[i], "row {i} matches the full-range dim");
         }
@@ -642,7 +649,7 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(5);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 2, 2);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 2, 2);
         assert_eq!(out.len(), 5);
         assert!(out.iter().all(|s| s.cells.is_empty()));
     }
@@ -658,7 +665,7 @@ mod tests {
         // Row 2 is a base-update merge; the rest are ordinary rows.
         let mut ff = no_force(base.len());
         ff[2] = true;
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 0, base.len());
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 0, base.len());
 
         // Row 2's connector is fully dimmed by force-dim...
         assert!(
@@ -690,6 +697,7 @@ mod tests {
             &empty_lit,
             &empty_rgb,
             Some(&merged),
+            None,
             0,
             base.len(),
         );
@@ -719,7 +727,7 @@ mod tests {
         let empty_rgb = std::collections::HashMap::new();
 
         let out = dim_specs_window_core(
-            &base, &ro, &ff, &empty_lit, &empty_rgb, None, 0, base.len(),
+            &base, &ro, &ff, &empty_lit, &empty_rgb, None, None, 0, base.len(),
         );
 
         assert!(
@@ -783,7 +791,7 @@ mod tests {
 
         // Tracing lights only the trunk: the spoke cell dims → so must the tail.
         let lit_trunk = [(trunk_edge, oid(3))].into_iter().collect();
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit_trunk, &HashMap::new(), None, 0, 2);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit_trunk, &HashMap::new(), None, None, 0, 2);
         assert!(out[0].cells[2].dim, "spoke cell dims off-lineage");
         assert!(out[1].incoming[0].dim, "tail dims with its source spoke");
 
@@ -791,7 +799,7 @@ mod tests {
         let red = [255u8, 0, 0];
         let lit_branch = [(branch_edge, oid(2))].into_iter().collect();
         let lane_rgb = [(oid(2), red)].into_iter().collect();
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit_branch, &lane_rgb, None, 0, 2);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit_branch, &lane_rgb, None, None, 0, 2);
         assert!(!out[1].incoming[0].dim, "lit tail stays bright");
         assert_eq!(out[1].incoming[0].color, red, "tail takes the spoke's traced color");
     }

@@ -973,10 +973,6 @@ pub struct App {
     pub compare_marked: Option<Oid>,
     pub compare_range: Option<(Oid, Oid)>,
 
-    // Per-OID GPG signature status cache (%G? code). Commits are immutable so
-    // this never needs invalidation; populated lazily on commit-detail render.
-    pub sig_status_cache: std::collections::HashMap<Oid, char>,
-
     // Flags
     pub should_quit: bool,
     pub pending_refresh: bool,

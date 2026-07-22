@@ -14,6 +14,13 @@
 //!    idea applied to the whole branch rather than commit-by-commit, which is
 //!    what catches a squash. See issue #60.
 //!
+//! Classification is **transitive**: a branch merged into an already-merged
+//! branch (a stacked PR, a sub-branch folded into its feature before the
+//! feature landed) is itself merged — its work reached the trunk through the
+//! chain even when no direct trunk signal exists. The classifier iterates to a
+//! fixed point, treating each classified branch's tip as an additional landed
+//! tip (see [`classify_merged_branches_with_targets`]).
+//!
 //! Pure functions over a `git2::Repository`; no UI, no caching (the caller
 //! memoises). The GitHub-PR signal (a branch whose head matches a *merged* PR)
 //! is layered on top by the caller — this module is the local-git fallback that
@@ -365,8 +372,11 @@ fn gh_key(b: &BranchInfo) -> &str {
 /// useful. Nor any tip that sits ON a trunk line's first-parent chain: that is a
 /// branch which is merely *behind*, not merged (#112, [`trunk_first_parent_line`]).
 ///
-/// `base_tips` are the trunk tips to test against (local trunk plus, when it
-/// lags, its `origin/…` counterpart — see [`base_tips`]). Merged when **any** of:
+/// `base_tips` are the tips to test against: the trunk tips (local trunk plus,
+/// when it lags, its `origin/…` counterpart — see [`base_tips`]) and, in the
+/// later rounds of [`classify_merged_branches_with_targets`]'s fixed point, the
+/// tips of branches already classified merged (transitive merges: landing in a
+/// landed branch is landing). Merged when **any** of:
 ///  - ancestry: the branch tip is contained in a base (merge / fast-forward);
 ///  - squash: the branch's cumulative diff matches a squashed commit on a base;
 ///  - GitHub says a PR with this head branch merged **and** the branch carries no
@@ -490,6 +500,10 @@ pub fn explain_classification(
     let _ = writeln!(out, "gh merged-PR heads known: {}", gh_merged.len());
 
     let base_short = base.name.split_once('/').map_or(base.name.as_str(), |(_, rest)| rest);
+    // Branches the direct (trunk-tips-only) pass below classifies, so the
+    // transitive section at the end can report exactly the ones only the fixed
+    // point catches.
+    let mut direct_merged: HashSet<&str> = HashSet::new();
     for b in branches {
         let kind = if b.is_remote { "remote" } else { "local " };
         let _ = writeln!(out, "\n{kind} {} @ {}", b.name, short(b.tip_oid));
@@ -574,7 +588,39 @@ pub fn explain_classification(
                 let _ = writeln!(out, "  gh signal present but content NOT contained (conflict-resolved landing, or novel work)");
             }
         }
+        if verdict.is_some() {
+            direct_merged.insert(&b.name);
+        }
         let _ = writeln!(out, "  => {}", verdict.unwrap_or_else(|| "visible (not classified merged)".into()));
+    }
+
+    // The real classifier iterates to a fixed point, re-testing unclassified
+    // branches against the tips of branches already classified (transitive
+    // merges). Run it and report what only that pass caught, naming a merged
+    // branch whose tip carries the landing when one is identifiable.
+    let final_merged = classify_merged_branches(repo, branches, base.tip_oid, &base.name, gh_merged);
+    let transitive: Vec<&BranchInfo> = branches
+        .iter()
+        .filter(|b| final_merged.contains(&b.name) && !direct_merged.contains(b.name.as_str()))
+        .collect();
+    if !transitive.is_empty() {
+        let _ = writeln!(out, "\ntransitive pass (merged into an already-merged branch):");
+        for b in transitive {
+            let via = branches.iter().find(|a| {
+                a.name != b.name
+                    && a.tip_oid != b.tip_oid
+                    && final_merged.contains(&a.name)
+                    && (is_ancestor_merged(repo, b.tip_oid, a.tip_oid)
+                        || squash_merge_target(repo, b.tip_oid, a.tip_oid).is_some())
+            });
+            let _ = writeln!(
+                out,
+                "  {} => MERGED transitively{}",
+                b.name,
+                via.map(|a| format!(" (landed in merged branch {} @ {})", a.name, short(a.tip_oid)))
+                    .unwrap_or_default()
+            );
+        }
     }
     out
 }
@@ -584,6 +630,8 @@ pub fn explain_classification(
 /// merged-PR signal (cross-checked locally via [`branch_content_in_base`]).
 /// Remote refs are included because a GitHub squash-merge often leaves the
 /// *remote* branch as the surviving ref (issue #100). See [`branch_is_merged`].
+/// Transitive: a branch merged into a branch in the set is in the set (see
+/// [`classify_merged_branches_with_targets`]).
 ///
 /// Intended to run **off the UI thread** (one ancestry query plus a bounded
 /// patch-id scan per candidate branch); the result is delivered back and applied
@@ -618,23 +666,51 @@ pub fn classify_merged_branches_with_targets(
 ) -> (HashSet<String>, HashMap<String, Oid>) {
     // Measure against the local trunk *and* its remote-tracking tip when the
     // local one lags (the post-fetch, pre-pull state) — see [`base_tips`].
-    let tips = base_tips(branches, base_tip, base_name);
+    let mut tips = base_tips(branches, base_tip, base_name);
     let trunk_line = trunk_first_parent_line(repo, &tips);
     let mut merged = HashSet::new();
     let mut targets = HashMap::new();
-    for b in branches {
-        if !branch_is_merged(repo, b, branches, &tips, &trunk_line, base_name, gh_merged) {
-            continue;
+    // Fixed point over "merged into a merged branch": work that landed in an
+    // already-merged branch has itself landed (a stacked PR squashed into its
+    // parent branch, a sub-branch merged into a feature before the feature was
+    // squashed to trunk). Each round tests the still-unclassified branches
+    // against the trunk tips PLUS every tip classified so far, and stops when a
+    // round classifies nothing new — chains resolve one level per round, so the
+    // round count is bounded by the deepest merge chain (≤ #branches).
+    // `trunk_line` stays trunk-only on purpose: an old pointer into a *merged*
+    // branch's own line is dead work that landed, not a live "behind" trunk
+    // state, so it classifies via ancestry instead of being refused.
+    loop {
+        let mut grew = false;
+        for b in branches {
+            if merged.contains(&b.name)
+                || !branch_is_merged(repo, b, branches, &tips, &trunk_line, base_name, gh_merged)
+            {
+                continue;
+            }
+            merged.insert(b.name.clone());
+            // Record the squash landing commit when one is nameable. Purely additive
+            // over the yes/no classification above — a branch with no squash target
+            // (ancestry merge, or a GitHub-only content match) stays out of the map.
+            if let Some(target) = tips
+                .iter()
+                .find_map(|&t| squash_merge_target(repo, b.tip_oid, t))
+            {
+                targets.insert(b.name.clone(), target);
+            }
+            grew = true;
         }
-        merged.insert(b.name.clone());
-        // Record the squash landing commit when one is nameable. Purely additive
-        // over the yes/no classification above — a branch with no squash target
-        // (ancestry merge, or a GitHub-only content match) stays out of the map.
-        if let Some(target) = tips
-            .iter()
-            .find_map(|&t| squash_merge_target(repo, b.tip_oid, t))
-        {
-            targets.insert(b.name.clone(), target);
+        if !grew {
+            break;
+        }
+        // Newly-merged tips become additional "landed" tips for the next round.
+        // Extended only BETWEEN rounds, so within a round every branch is judged
+        // against the same tip set (same-tip twins classify together before the
+        // tip-equality guard in `branch_is_merged` could refuse the second one).
+        for b in branches {
+            if merged.contains(&b.name) && !tips.contains(&b.tip_oid) {
+                tips.push(b.tip_oid);
+            }
         }
     }
     (merged, targets)
@@ -1931,5 +2007,148 @@ mod tests {
         let branches = vec![local("dev", o(7), false), remote("origin/dev", o(7))];
         assert_eq!(base_ref_tips(&branches, "dev"), vec![o(7)]);
         assert!(base_ref_tips(&[], "dev").is_empty());
+    }
+
+    // ── transitive classification: merged into a merged branch ───────
+
+    #[test]
+    fn branch_merged_into_a_squash_merged_branch_is_classified_transitively() {
+        // sub was merge-committed into feature, then feature was SQUASHED to
+        // main — so no commit of sub is an ancestor of the trunk, and sub's own
+        // cumulative diff (+sub.txt) matches no single trunk commit (the squash
+        // carries feature's whole diff). Only testing sub against the tip of
+        // the already-classified feature branch catches it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let s1 = commit(&repo, "refs/heads/sub", 2100, &[a], &[("base.txt", "base"), ("sub.txt", "s")]);
+        let f1 = commit(&repo, "refs/heads/feature", 2200, &[a], &[("base.txt", "base"), ("feat.txt", "f")]);
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2300,
+            &[f1, s1],
+            &[("base.txt", "base"), ("feat.txt", "f"), ("sub.txt", "s")],
+        );
+        let sq = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "f"), ("sub.txt", "s")],
+        );
+
+        let branches = vec![
+            local("main", sq, true),
+            local("feature", f2, false),
+            local("sub", s1, false),
+        ];
+        let merged = merged_local_branches(&repo, &branches, sq, "main");
+        assert!(merged.contains("feature"), "feature squashed to trunk");
+        assert!(merged.contains("sub"), "sub landed through feature (transitive)");
+        assert!(!merged.contains("main"));
+    }
+
+    #[test]
+    fn chain_of_squashes_is_classified_recursively() {
+        // c squashed into bb, bb squashed into aa, aa squashed into main: each
+        // level shares no commit with the level above, so every branch except
+        // aa needs the fixed point — bb resolves in round two against aa's tip,
+        // c in round three against bb's tip.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let base = ("base.txt", "base");
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[base]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[base, ("main.txt", "m")]);
+        let c1 = commit(&repo, "refs/heads/c", 2100, &[a], &[base, ("c.txt", "c")]);
+        let b1 = commit(&repo, "refs/heads/bb", 2200, &[a], &[base, ("bb.txt", "b")]);
+        let b2 = commit(&repo, "refs/heads/bb", 2300, &[b1], &[base, ("bb.txt", "b"), ("c.txt", "c")]);
+        let a1 = commit(&repo, "refs/heads/aa", 2400, &[a], &[base, ("aa.txt", "a")]);
+        let a2 = commit(
+            &repo,
+            "refs/heads/aa",
+            2500,
+            &[a1],
+            &[base, ("aa.txt", "a"), ("bb.txt", "b"), ("c.txt", "c")],
+        );
+        let sq = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[base, ("main.txt", "m"), ("aa.txt", "a"), ("bb.txt", "b"), ("c.txt", "c")],
+        );
+
+        let branches = vec![
+            local("main", sq, true),
+            local("aa", a2, false),
+            local("bb", b2, false),
+            local("c", c1, false),
+        ];
+        let merged = merged_local_branches(&repo, &branches, sq, "main");
+        assert!(merged.contains("aa"), "direct squash to trunk");
+        assert!(merged.contains("bb"), "squashed into merged aa");
+        assert!(merged.contains("c"), "squashed into transitively-merged bb");
+        assert!(!merged.contains("main"));
+    }
+
+    #[test]
+    fn branch_merged_into_an_unmerged_branch_stays_visible() {
+        // sub landed in feature, but feature itself never landed on main — no
+        // link to the trunk exists, so the fixed point must classify neither.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "m")]);
+        let s1 = commit(&repo, "refs/heads/sub", 2100, &[a], &[("base.txt", "base"), ("sub.txt", "s")]);
+        let f1 = commit(&repo, "refs/heads/feature", 2200, &[a], &[("base.txt", "base"), ("feat.txt", "f")]);
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2300,
+            &[f1, s1],
+            &[("base.txt", "base"), ("feat.txt", "f"), ("sub.txt", "s")],
+        );
+
+        let branches = vec![
+            local("main", b, true),
+            local("feature", f2, false),
+            local("sub", s1, false),
+        ];
+        let merged = merged_local_branches(&repo, &branches, b, "main");
+        assert!(merged.is_empty(), "no branch reached the trunk: {merged:?}");
+    }
+
+    #[test]
+    fn old_pointer_into_a_merged_branchs_line_is_classified() {
+        // backup points at an intermediate commit of a squash-merged branch.
+        // On the TRUNK an on-line pointer is "behind, not merged" (#112) —
+        // that guard protects live lines. A merged branch's line is dead,
+        // landed work, so an old pointer into it has landed too: classified
+        // via ancestry against the merged branch's tip in round two.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "m")]);
+        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
+        repo.reference("refs/heads/backup", f1, true, "backup").unwrap();
+        let sq = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("main.txt", "m"), ("feat.txt", "two")],
+        );
+
+        let branches = vec![
+            local("main", sq, true),
+            local("feature", f2, false),
+            local("backup", f1, false),
+        ];
+        let merged = merged_local_branches(&repo, &branches, sq, "main");
+        assert!(merged.contains("feature"));
+        assert!(merged.contains("backup"), "old state of a landed line is landed");
     }
 }

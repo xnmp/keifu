@@ -491,7 +491,7 @@ impl Theme {
             .padding(Padding::horizontal(1))
     }
 
-    /// Muted style for commit-detail field labels (Author:/Date:/Sig:) and other
+    /// Muted style for commit-detail field labels (Author:/Date:) and other
     /// metadata captions, so the label recedes and its value reads first.
     pub fn metadata_label_style(&self) -> Style {
         Style::default().fg(self.text_muted)
