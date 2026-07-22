@@ -306,6 +306,37 @@ fn base_tips(branches: &[BranchInfo], base_tip: Oid, base_name: &str) -> Vec<Oid
     tips
 }
 
+/// Upper bound on commits collected per trunk tip when building the trunk
+/// first-parent line (see [`trunk_first_parent_line`]). Cheap to walk — parent
+/// lookups only, no diffs — so the window is generous; a branch parked deeper
+/// than this behind a trunk tip falls back to the old ancestry reading.
+const TRUNK_LINE_SCAN_LIMIT: usize = 2000;
+
+/// The commits that ARE the trunk lines: the first-parent chain of every trunk
+/// tip, bounded by [`TRUNK_LINE_SCAN_LIMIT`] per tip. A branch whose tip is in
+/// this set points at an *older state of a line already in view* — it is
+/// **behind**, not merged (#112). Raw ancestry cannot tell "landed and the line
+/// moved on" apart from "never went anywhere yet", but the first-parent chain
+/// can: a genuinely merged branch's tip hangs OFF the line — reachable only
+/// through a merge commit's second parent, or (squash) not reachable at all —
+/// never on the line itself.
+fn trunk_first_parent_line(repo: &Repository, tips: &[Oid]) -> HashSet<Oid> {
+    let mut line = HashSet::new();
+    for &tip in tips {
+        let mut cur = tip;
+        for _ in 0..TRUNK_LINE_SCAN_LIMIT {
+            if !line.insert(cur) {
+                break; // chains converge; the rest is already collected
+            }
+            match repo.find_commit(cur).ok().and_then(|c| c.parent_id(0).ok()) {
+                Some(parent) => cur = parent,
+                None => break, // root
+            }
+        }
+    }
+    line
+}
+
 /// The head-branch name to test against the GitHub merged-PR set. GitHub reports
 /// a PR's `headRefName` *without* any remote prefix ("feature", "fix/x"), while a
 /// remote-tracking ref is named "origin/feature". Since a remote name never
@@ -331,7 +362,8 @@ fn gh_key(b: &BranchInfo) -> &str {
 /// checked-out HEAD, or any tip that *is* a base tip (which excludes the local
 /// trunk and its `origin/…` counterpart, added to `base_tips` by [`base_tips`]) —
 /// hiding or dimming the trunk or the branch you are on is more confusing than
-/// useful.
+/// useful. Nor any tip that sits ON a trunk line's first-parent chain: that is a
+/// branch which is merely *behind*, not merged (#112, [`trunk_first_parent_line`]).
 ///
 /// `base_tips` are the trunk tips to test against (local trunk plus, when it
 /// lags, its `origin/…` counterpart — see [`base_tips`]). Merged when **any** of:
@@ -347,6 +379,7 @@ fn branch_is_merged(
     b: &BranchInfo,
     branches: &[BranchInfo],
     base_tips: &[Oid],
+    trunk_line: &HashSet<Oid>,
     base_name: &str,
     gh_merged: &HashSet<String>,
 ) -> bool {
@@ -354,6 +387,15 @@ fn branch_is_merged(
     // always a base tip when distinct (see [`base_tips`]), so `base_tips` contains
     // its OID. The HEAD guard only applies to the local checked-out branch.
     if b.is_head || b.name == base_name || base_tips.contains(&b.tip_oid) {
+        return false;
+    }
+    // A tip ON a trunk line's own first-parent history is a branch that is
+    // simply BEHIND — an older state of a line already in view, not landed
+    // work (#112, see [`trunk_first_parent_line`]). Every signal is refused,
+    // gh included: for an on-line tip the containment cross-check is trivially
+    // true, so the PR name alone would decide, and "behind" must never read as
+    // "merged".
+    if trunk_line.contains(&b.tip_oid) {
         return false;
     }
     // A remote *mirror of the trunk on any other remote* (`upstream/main`,
@@ -433,11 +475,17 @@ pub fn explain_classification(
         return "no base branch (no local/origin main or master, no HEAD) — nothing can be classified\n".into();
     };
     let tips = base_tips(branches, base.tip_oid, &base.name);
+    let trunk_line = trunk_first_parent_line(repo, &tips);
     let _ = writeln!(out, "base: {} @ {}", base.name, short(base.tip_oid));
     let _ = writeln!(
         out,
         "trunk tips tested: {}",
         tips.iter().map(|&t| short(t)).collect::<Vec<_>>().join(", ")
+    );
+    let _ = writeln!(
+        out,
+        "trunk first-parent line: {} commits collected (cap {TRUNK_LINE_SCAN_LIMIT}/tip)",
+        trunk_line.len()
     );
     let _ = writeln!(out, "gh merged-PR heads known: {}", gh_merged.len());
 
@@ -451,6 +499,13 @@ pub fn explain_classification(
         }
         if b.name == base.name || tips.contains(&b.tip_oid) {
             let _ = writeln!(out, "  guard: trunk / trunk tip — never classified");
+            continue;
+        }
+        if trunk_line.contains(&b.tip_oid) {
+            let _ = writeln!(
+                out,
+                "  guard: tip is ON a trunk line's first-parent chain — behind, not merged (#112)"
+            );
             continue;
         }
         if b.is_remote && gh_key(b) == base_short {
@@ -564,10 +619,11 @@ pub fn classify_merged_branches_with_targets(
     // Measure against the local trunk *and* its remote-tracking tip when the
     // local one lags (the post-fetch, pre-pull state) — see [`base_tips`].
     let tips = base_tips(branches, base_tip, base_name);
+    let trunk_line = trunk_first_parent_line(repo, &tips);
     let mut merged = HashSet::new();
     let mut targets = HashMap::new();
     for b in branches {
-        if !branch_is_merged(repo, b, branches, &tips, base_name, gh_merged) {
+        if !branch_is_merged(repo, b, branches, &tips, &trunk_line, base_name, gh_merged) {
             continue;
         }
         merged.insert(b.name.clone());
@@ -799,7 +855,8 @@ mod tests {
 
     #[test]
     fn merged_local_branches_classifies_the_set() {
-        // main advances to s (squash of feature). topic is a plain ancestor.
+        // main advances to s (squash of feature). topic points at an older main
+        // commit — ON the trunk's own line, so it is behind, not merged (#112).
         // gone is unmerged. HEAD (main) and the base are never classified.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
@@ -824,11 +881,14 @@ mod tests {
             local("gone", g, false),
         ];
         let merged = merged_local_branches(&repo, &branches, s, "main");
-        assert!(merged.contains("topic"), "ancestor merge");
+        assert!(
+            !merged.contains("topic"),
+            "a tip on the trunk's own line is behind, not merged (#112): {merged:?}"
+        );
         assert!(merged.contains("feature"), "squash merge");
         assert!(!merged.contains("gone"), "never merged");
         assert!(!merged.contains("main"), "base/HEAD is never classified");
-        assert_eq!(merged.len(), 2);
+        assert_eq!(merged.len(), 1);
 
         // The targets variant reports the same set PLUS the squash landing
         // commit for the squash-merged branch only.
@@ -1167,9 +1227,83 @@ mod tests {
             !set.contains("dev"),
             "a branch strictly behind its upstream is stale, not merged: {set:?}"
         );
-        // The live remote line ancestry-merged into the checked-out branch DOES
-        // classify — hiding it is correct, its work is fully in view.
-        assert!(set.contains("origin/dev"), "the contained live remote line classifies: {set:?}");
+        // The live remote line the checked-out branch grew FROM sits on HEAD's
+        // own first-parent chain — an older state of the line in view, so it is
+        // behind, not merged (#112).
+        assert!(
+            !set.contains("origin/dev"),
+            "origin/dev is on the checked-out line — behind, not merged (#112): {set:?}"
+        );
+    }
+
+    #[test]
+    fn branch_behind_on_the_checked_out_line_is_not_merged() {
+        // #112 user repro: an upstream-less local branch pointing at an OLDER
+        // commit of the very line that is checked out. Its tip is an ancestor
+        // of the HEAD trunk tip (#103), so ancestry read it as "merged" and it
+        // was hidden/dimmed — but it is merely behind on the same line.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let d1 = commit(&repo, "refs/heads/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "one")]);
+        let d2 = commit(&repo, "refs/heads/dev", 2100, &[d1], &[("base.txt", "base"), ("d.txt", "one\ntwo")]);
+        repo.reference("refs/heads/marker", d1, true, "marker").unwrap();
+
+        let branches = vec![
+            local("main", a, false),
+            local("dev", d2, true), // checked out; marker sits on its line
+            local("marker", d1, false),
+        ];
+        let base = base_branch(&branches).unwrap();
+        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        assert!(
+            !set.contains("marker"),
+            "a branch behind on the checked-out line is not merged (#112): {set:?}"
+        );
+        // Not even a merged-PR name match may override it: for an on-line tip
+        // the containment cross-check is trivially true, so the gh name alone
+        // would decide — and behind must never read as merged.
+        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &gh(&["marker"]));
+        assert!(
+            !set.contains("marker"),
+            "the gh signal must not classify an on-line (behind) tip: {set:?}"
+        );
+    }
+
+    #[test]
+    fn branch_behind_on_the_trunk_line_is_not_merged_but_a_merge_landing_is() {
+        // #112 against the primary trunk, with a control: `old` points at an
+        // older main commit (on the first-parent line → behind, not merged),
+        // while `topic` landed via a merge commit — its tip reachable only
+        // through the merge's SECOND parent — and must keep classifying.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let t = commit(&repo, "refs/heads/topic", 2100, &[a], &[("base.txt", "base"), ("t.txt", "t")]);
+        let m = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b, t],
+            &[("base.txt", "base"), ("main.txt", "main"), ("t.txt", "t")],
+        );
+        repo.reference("refs/heads/old", b, true, "old").unwrap();
+
+        let branches = vec![
+            local("main", m, true),
+            local("old", b, false),
+            local("topic", t, false),
+        ];
+        let set = classify_merged_branches(&repo, &branches, m, "main", &HashSet::new());
+        assert!(
+            !set.contains("old"),
+            "a tip on the trunk's first-parent line is behind, not merged (#112): {set:?}"
+        );
+        assert!(
+            set.contains("topic"),
+            "a merge-commit landing (tip off the line) still classifies: {set:?}"
+        );
     }
 
     #[test]
@@ -1304,19 +1438,28 @@ mod tests {
 
     #[test]
     fn ancestor_merge_on_remote_trunk_is_classified_when_local_trunk_lags() {
-        // The same remote-tip reach must also cover a plain (non-squash) merge
-        // that has been fetched into origin/main but not pulled to local main.
+        // The remote-tip reach must also cover a plain merge-COMMIT landing that
+        // has been fetched into origin/main but not pulled to local main. The
+        // topic tip hangs off origin/main's first-parent line (reachable only
+        // via the merge's second parent), so #112's behind-guard does not fire.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         let t = commit(&repo, "refs/heads/topic", 2000, &[a], &[("base.txt", "base"), ("t.txt", "t")]);
-        // origin/main advanced to include topic and one further commit; local
-        // main lags at `a`. topic is a strict ancestor of origin/main's tip.
-        let u = commit(&repo, "refs/remotes/origin/main", 2500, &[t], &[("base.txt", "base"), ("t.txt", "t"), ("u.txt", "u")]);
+        // origin/main advanced on its own line, then merged topic in; local
+        // main lags at `a`. Parents [x (trunk, first), t (topic, second)].
+        let x = commit(&repo, "refs/remotes/origin/main", 2400, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let u = commit(
+            &repo,
+            "refs/remotes/origin/main",
+            2500,
+            &[x, t],
+            &[("base.txt", "base"), ("x.txt", "x"), ("t.txt", "t")],
+        );
         let branches = vec![local("main", a, true), remote("origin/main", u), local("topic", t, false)];
         let base = base_branch(&branches).unwrap();
         let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
-        assert!(merged.contains("topic"), "ancestor merge visible only on remote trunk must classify");
+        assert!(merged.contains("topic"), "merge landed only on the remote trunk must classify: {merged:?}");
     }
 
     #[test]

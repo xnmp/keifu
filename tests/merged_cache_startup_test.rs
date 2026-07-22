@@ -73,8 +73,26 @@ fn commit_on(
         .unwrap()
 }
 
-/// A repo whose `topic` branch sits at a `main` ancestor (unambiguously merged),
-/// plus an unmerged `gone` branch. `main` is HEAD.
+/// A merge commit on `refname`: parents `[first, second]`, tree = first's tree
+/// overlaid with second's entries — the shape of a branch landing on the trunk.
+/// A landed branch's tip must hang OFF the trunk's first-parent line to count
+/// as merged (a tip ON the line is merely behind since #112), so fixtures land
+/// their branches through this instead of pointing them at trunk ancestors.
+fn merge_on(repo: &Repository, refname: &str, first: Oid, second: Oid) -> Oid {
+    let fc = repo.find_commit(first).unwrap();
+    let sc = repo.find_commit(second).unwrap();
+    let mut builder = repo.treebuilder(Some(&fc.tree().unwrap())).unwrap();
+    for entry in sc.tree().unwrap().iter() {
+        builder.insert(entry.name().unwrap(), entry.id(), entry.filemode()).unwrap();
+    }
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let sig = Signature::now("Test User", "test@example.com").unwrap();
+    repo.commit(Some(refname), &sig, &sig, "merge", &tree, &[&fc, &sc])
+        .unwrap()
+}
+
+/// A repo whose `topic` branch landed on `main` via a merge commit
+/// (unambiguously merged), plus an unmerged `gone` branch. `main` is HEAD.
 fn repo_with_merged_topic() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
@@ -84,18 +102,19 @@ fn repo_with_merged_topic() -> TempDir {
         cfg.set_str("user.email", "test@example.com").unwrap();
     }
     let a = commit_on(&repo, "refs/heads/main", None, "base.txt", "a");
-    // topic at `a`, fully contained in main → merged.
+    // topic: one own commit, landed on main by a merge commit → merged.
     repo.reference("refs/heads/topic", a, true, "topic").unwrap();
+    let t = commit_on(&repo, "refs/heads/topic", Some(a), "t.txt", "t");
     let b = commit_on(&repo, "refs/heads/main", Some(a), "base.txt", "b");
+    merge_on(&repo, "refs/heads/main", b, t);
     // gone: novel unlanded work → never merged.
     commit_on(&repo, "refs/heads/gone", Some(a), "gone.txt", "x");
     repo.set_head("refs/heads/main").unwrap();
-    let _ = b;
     dir
 }
 
-/// A branchy repo: 30-commit `main`, `n` feature branches (2 commits each), half
-/// pointing at main ancestors (merged) and half diverging with real diffs — the
+/// A branchy repo: 30-commit `main`, `n` feature branches, half landed on main
+/// via merge commits (merged) and half diverging with real unlanded diffs — the
 /// shape whose synchronous classification is expensive. `main` is HEAD.
 fn branchy_repo(n: usize) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -114,10 +133,11 @@ fn branchy_repo(n: usize) -> TempDir {
     repo.set_head("refs/heads/main").unwrap();
     for b in 0..n {
         let name = format!("refs/heads/feature-{b}");
+        let base = line[b % line.len()];
         if b % 2 == 0 {
-            repo.reference(&name, line[b % line.len()], true, "merged").unwrap();
+            let c = commit_on(&repo, &name, Some(base), &format!("m{b}.txt"), "landed");
+            tip = merge_on(&repo, "refs/heads/main", tip, c);
         } else {
-            let base = line[b % line.len()];
             let c1 = commit_on(&repo, &name, Some(base), &format!("f{b}.txt"), "one");
             commit_on(&repo, &name, Some(c1), &format!("f{b}.txt"), "two");
         }
@@ -221,7 +241,9 @@ fn hide_mode_stale_cache_reconciles_in_background() {
     }
     let a = commit_on(&repo, "refs/heads/main", None, "base.txt", "a");
     repo.reference("refs/heads/topic", a, true, "topic").unwrap();
-    commit_on(&repo, "refs/heads/main", Some(a), "base.txt", "b");
+    let t = commit_on(&repo, "refs/heads/topic", Some(a), "t.txt", "t");
+    let b = commit_on(&repo, "refs/heads/main", Some(a), "base.txt", "b");
+    merge_on(&repo, "refs/heads/main", b, t);
     repo.set_head("refs/heads/main").unwrap();
 
     // Warm the cache with `topic` classified merged.
