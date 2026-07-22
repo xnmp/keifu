@@ -577,3 +577,6 @@ Squash-merged branches render greyed regardless of the mute/dim merged-branches 
 
 ### [DONE] #107 Remote mirror behind its local counterpart misclassified as merged
 Symmetric to #105: origin/<branch> lagging a local branch with unpushed commits (e.g. origin/chong-dev behind the checked-out chong-dev) read as ancestry-"merged into the line you're on" and got dimmed. Stale-tracking guard now covers both directions.
+
+### [DONE] #109 Working trunk's remote counterpart is a trunk tip
+The real-repo squash failure, reproduced live via PR #84 on keifu itself: a squash PR against the working trunk lands on origin/<head> while the local head lags until the next pull — and base_tips never tested origin/<head>, so the landed branch stayed visible (gh signal fired but containment had no tip containing the squash). The checked-out branch's upstream (or origin/<name>) tip is now a trunk tip; being a tip also protects it from classification.

@@ -281,8 +281,27 @@ fn base_tips(branches: &[BranchInfo], base_tip: Oid, base_name: &str) -> Vec<Oid
     // from classification by `branch_is_merged`'s `is_head` guard, and the
     // primary trunk by the `base_name`/tip guards, so adding this tip cannot
     // hide either trunk.
-    if let Some(head) = branches.iter().find(|b| b.is_head && !tips.contains(&b.tip_oid)) {
-        tips.push(head.tip_oid);
+    if let Some(head) = branches.iter().find(|b| b.is_head) {
+        if !tips.contains(&head.tip_oid) {
+            tips.push(head.tip_oid);
+        }
+        // …and so is the working trunk's REMOTE counterpart (#109): a
+        // squash-merge PR against the working trunk lands on origin/<head>
+        // first, and the local head lags until the next pull — the post-merge,
+        // pre-pull state in which the landed branch must already classify.
+        // Prefer the configured upstream name; fall back to the origin/
+        // convention (mirroring the origin/<base> reach above). Being a trunk
+        // tip also protects the counterpart itself from classification.
+        let upstream = head
+            .upstream
+            .clone()
+            .unwrap_or_else(|| format!("origin/{}", head.name));
+        if let Some(r) = branches
+            .iter()
+            .find(|b| b.is_remote && b.name == upstream && !tips.contains(&b.tip_oid))
+        {
+            tips.push(r.tip_oid);
+        }
     }
     tips
 }
@@ -1016,6 +1035,53 @@ mod tests {
             ahead: 0,
             behind: 0,
         }
+    }
+
+    #[test]
+    fn squash_on_the_working_trunks_remote_lands_before_the_local_pull() {
+        // #109, reproduced live via PR #84 on keifu itself: a squash-merge PR
+        // against the working trunk (chong-dev) lands on origin/chong-dev and
+        // GitHub deletes the PR branch; the LOCAL trunk lags until the next
+        // pull. The landed branch must classify in that window — the working
+        // trunk's remote counterpart is a trunk tip too.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let d1 = commit(&repo, "refs/heads/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "d")]);
+        // Feature off the working trunk, two commits.
+        let f1 = commit(&repo, "refs/heads/feature", 3000, &[d1], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 3100, &[f1], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one\ntwo")]);
+        // The squash lands on origin/dev only; local dev stays at d1.
+        let s = commit(&repo, "refs/remotes/origin/dev", 4000, &[d1], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one\ntwo")]);
+
+        let dev = BranchInfo {
+            name: "dev".into(),
+            is_head: true,
+            is_remote: false,
+            upstream: Some("origin/dev".into()),
+            tip_oid: d1,
+            ahead: 0,
+            behind: 1,
+        };
+        let branches = vec![
+            local("main", a, false),
+            dev,
+            remote("origin/dev", s),
+            local("feature", f2, false),
+        ];
+        let base = base_branch(&branches).unwrap();
+        assert_eq!(base.name, "main");
+        let (set, targets) = classify_merged_branches_with_targets(
+            &repo,
+            &branches,
+            base.tip_oid,
+            &base.name,
+            &HashSet::new(),
+        );
+        assert!(set.contains("feature"), "landed branch classifies pre-pull: {set:?}");
+        assert_eq!(targets.get("feature"), Some(&s), "squash target on origin/dev");
+        assert!(!set.contains("origin/dev"), "the working trunk's remote counterpart is a trunk");
+        assert!(!set.contains("dev"), "HEAD never classifies");
     }
 
     #[test]
