@@ -348,6 +348,14 @@ fn branch_is_merged(
     if b.is_remote && gh_key(b) == base_short {
         return false;
     }
+    // Trunk-by-convention names are trunks even when NOT the selected base: in
+    // a repo with both `main` and `master`, the non-selected one lagging behind
+    // the checked-out line must not read as "merged" — same reasoning as the
+    // base-name guard, extended to every name `base_branch` itself treats as a
+    // trunk candidate.
+    if !b.is_remote && (b.name == "main" || b.name == "master") {
+        return false;
+    }
     // A local branch strictly BEHIND its upstream (dev lagging origin/dev) is a
     // stale tracking ref, not landed work — its remote counterpart is the live
     // line and classifies in its own right. Being behind makes its tip an
@@ -986,6 +994,29 @@ mod tests {
             ahead: 0,
             behind: 0,
         }
+    }
+
+    #[test]
+    fn non_selected_trunk_name_behind_the_checked_out_branch_is_never_merged() {
+        // With both main and master present, main is the selected base — but
+        // master (upstream-less, fully contained in the checked-out feature)
+        // must not classify either: trunk-by-convention names are trunks.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let m = commit(&repo, "refs/heads/master", 1100, &[a], &[("base.txt", "base"), ("m.txt", "m")]);
+        let f = commit(&repo, "refs/heads/feature", 2000, &[m], &[("base.txt", "base"), ("m.txt", "m"), ("f.txt", "f")]);
+
+        let branches = vec![
+            local("main", a, false),
+            local("master", m, false),
+            local("feature", f, true),
+        ];
+        let base = base_branch(&branches).unwrap();
+        assert_eq!(base.name, "main");
+        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        assert!(!set.contains("master"), "a conventional trunk name never classifies: {set:?}");
+        assert!(!set.contains("main"));
     }
 
     #[test]
