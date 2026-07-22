@@ -171,6 +171,16 @@ impl App {
             items.push(CommitMenuItem::RenameBranch);
         }
 
+        // Hiding the checked-out branch would make the current HEAD vanish from
+        // the graph, which is confusing — omit it there, same as Rebase/Merge.
+        if has_branch {
+            if let Some(branch) = self.selected_branch() {
+                if !branch.is_head {
+                    items.push(CommitMenuItem::HideBranch);
+                }
+            }
+        }
+
         if has_branch {
             if let Some(branch) = self.selected_branch() {
                 if !branch.is_head {
@@ -481,6 +491,20 @@ impl App {
             }
             CommitMenuItem::DeleteBranch => {
                 self.open_delete_branch_picker();
+            }
+            CommitMenuItem::HideBranch => {
+                if let Some(branch) = self.selected_branch() {
+                    let name = branch.name.clone();
+                    self.hidden_branches.insert(name.clone());
+                    // Same rebuild the branch-filter toggle uses on exit, so the
+                    // branch (and its exclusive commits) drop out immediately
+                    // instead of waiting for the next periodic refresh.
+                    self.refresh(true)?;
+                    self.toast(
+                        crate::toast::ToastKind::Success,
+                        format!("Hid {name} — unhide via branch filter (Shift+B)"),
+                    );
+                }
             }
             CommitMenuItem::MergeIntoCurrent => {
                 if self.block_if_op_in_progress("merge") {

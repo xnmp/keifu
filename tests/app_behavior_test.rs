@@ -1676,6 +1676,7 @@ fn commit_menu_branch_tip_includes_branch_ops() {
                 CommitMenuItem::MergeIntoCurrent,
                 CommitMenuItem::Rebase,
                 CommitMenuItem::DeleteBranch,
+                CommitMenuItem::HideBranch,
             ] {
                 assert!(
                     items.contains(&expected),
@@ -1736,6 +1737,84 @@ fn commit_menu_non_tip_excludes_branch_ops() {
         }
         other => panic!("expected a CommitMenu, got {:?}", other),
     }
+}
+
+// ── Hide branch (#108) ──────────────────────────────────────────────
+
+#[test]
+fn commit_menu_head_branch_excludes_hide_branch() {
+    // Hiding the checked-out branch would make HEAD vanish from its own
+    // graph, which is confusing — the item must not be offered there.
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    // Selection starts on the HEAD tip.
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    match &app.mode {
+        AppMode::CommitMenu { items, .. } => assert!(
+            !items.contains(&CommitMenuItem::HideBranch),
+            "HEAD branch tip must not offer Hide branch, got {:?}",
+            items
+        ),
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    }
+}
+
+#[test]
+fn hide_branch_removes_it_from_the_graph_immediately_and_toasts() {
+    let (_td, repo) = init_repo();
+    let c1 = commit_file(repo.repo(), "a.txt", "a", "first");
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
+        .unwrap();
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    // Select the "feature" branch tip — a non-HEAD local branch.
+    let pos = app
+        .graph_nav
+        .branch_positions
+        .iter()
+        .position(|(_, n)| n == "feature")
+        .unwrap();
+    app.graph_nav.selected_branch_position = Some(pos);
+    let (node_idx, _) = app.graph_nav.branch_positions[pos];
+    app.graph_nav.graph_list_state.select(Some(node_idx));
+
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    let hide_pos = match &app.mode {
+        AppMode::CommitMenu { items, .. } => items
+            .iter()
+            .position(|i| *i == CommitMenuItem::HideBranch)
+            .expect("Hide branch is offered"),
+        other => panic!("expected a CommitMenu, got {:?}", other),
+    };
+    for _ in 0..hide_pos {
+        app.handle_action(Action::MoveDown).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert!(
+        app.hidden_branches.contains("feature"),
+        "the branch was recorded as hidden"
+    );
+    assert!(
+        !app
+            .graph_layout
+            .nodes
+            .iter()
+            .any(|n| n.branch_names.iter().any(|b| b == "feature")),
+        "the hidden branch's label no longer appears in the rebuilt graph"
+    );
+    assert!(
+        app.toasts.visible().iter().any(|t| {
+            t.kind == keifu::toast::ToastKind::Success && t.text.contains("Hid feature")
+        }),
+        "a success toast confirms the hide, got {:?}",
+        app.toasts.visible()
+    );
 }
 
 // ── File-op orchestration (stage / gitignore / archive + undo) ─────
