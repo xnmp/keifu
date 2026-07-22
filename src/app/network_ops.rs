@@ -29,11 +29,23 @@ impl App {
                     self.pending_refresh = true;
                 } else {
                     let prev_head = self.repo.head_oid();
-                    let prev_branch_count = self.branches.len();
+                    let prev_tips = Self::branch_tips(&self.branches);
                     match self.refresh(true) {
                         Ok(()) => {
+                            // Tip-level comparison, not branch *count*: a fetch
+                            // that only advances an existing tip (the common
+                            // fast-forward) must still count as a change.
                             let changed = self.repo.head_oid() != prev_head
-                                || self.branches.len() != prev_branch_count;
+                                || Self::branch_tips(&self.branches) != prev_tips;
+                            if changed {
+                                // Moved refs mean the gh-derived state is stale
+                                // too: PR head OIDs for badges (#107) and the
+                                // merged-PR set that drives hide-merged (#104).
+                                // Re-poll now instead of waiting out the 5-min
+                                // interval; an unchanged fetch stays on the slow
+                                // timer so quiet repos don't hammer gh.
+                                self.force_gh_refresh();
+                            }
                             // Only user-initiated fetches (manual `f` / F5) toast;
                             // silent auto-fetch stays quiet on success.
                             if !silent {
@@ -110,6 +122,10 @@ impl App {
                 if let Err(e) = self.refresh(true) {
                     self.report_refresh_error(e);
                 }
+                // A successful push changed the remote by definition: the PR's
+                // head OID (badges, #107) and — after a merge push — the gh
+                // merged set (#104) are stale until re-polled.
+                self.force_gh_refresh();
             }
             Err(e) => {
                 // An HTTPS auth failure opens the credential prompt and retries
@@ -133,6 +149,21 @@ impl App {
             }
         }
         true
+    }
+
+    /// Skip the gh fetchers' 5-minute intervals so the next poll re-queries
+    /// open PRs and the merged-PR set. Called when local evidence says the
+    /// remote changed (fetch moved refs, push completed) — the event-driven
+    /// complement of the slow timers (#104, #107). F5 routes through the same
+    /// forces in `full_update`.
+    fn force_gh_refresh(&mut self) {
+        self.pr_fetch.force();
+        self.merged.pr_branch_fetch.force();
+    }
+
+    /// Branch tips as (name, oid) pairs — the identity a fetch can move.
+    fn branch_tips(branches: &[crate::git::BranchInfo]) -> Vec<(String, git2::Oid)> {
+        branches.iter().map(|b| (b.name.clone(), b.tip_oid)).collect()
     }
 
     /// Poll the background pull. On success, refresh and either confirm or (on
@@ -599,6 +630,101 @@ mod tests {
                 .any(|t| t.text.contains("some unexpected failure")),
             "unrecognized failure surfaces as an error toast"
         );
+    }
+
+    /// App over a repo with one commit and a side branch — enough to move a
+    /// branch tip out from under the app and watch a fetch-completion react.
+    fn test_app_with_side_branch() -> (tempfile::TempDir, App) {
+        let tempdir = tempfile::tempdir().unwrap();
+        {
+            let repo = git2::Repository::init(tempdir.path()).unwrap();
+            let sig = git2::Signature::now("t", "t@example.com").unwrap();
+            let tree_id = repo.index().unwrap().write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("side", &head, false).unwrap();
+        }
+        let repo = GitRepository::open(tempdir.path()).unwrap();
+        let app = App::from_repo(repo).unwrap();
+        (tempdir, app)
+    }
+
+    /// Advance `side` to a new commit without touching HEAD — the shape of a
+    /// fetch that fast-forwards a remote-tracking ref in place.
+    fn advance_side_branch(path: &std::path::Path) {
+        let repo = git2::Repository::open(path).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let tree = parent.tree().unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "advance", &tree, &[&parent])
+            .unwrap();
+        let commit = repo.find_commit(oid).unwrap();
+        repo.branch("side", &commit, true).unwrap();
+    }
+
+    /// #104/#107: a fetch that moves a branch tip *in place* (same branch
+    /// count, same HEAD — the everyday fast-forward) must count as a change:
+    /// the user-facing toast says the graph updated, and the gh fetchers are
+    /// forced off their 5-minute interval so PR badges and the merged-PR set
+    /// catch up now, not minutes later.
+    #[test]
+    fn fetch_that_moves_a_tip_counts_as_changed_and_forces_gh_repoll() {
+        let (tempdir, mut app) = test_app_with_side_branch();
+        // Arm the interval gates so a force is observable as a due transition.
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+        assert!(!app.pr_fetch.is_due());
+
+        advance_side_branch(tempdir.path());
+        app.network.complete_fetch_for_test(Ok(()), false);
+        assert!(app.update_fetch_status());
+
+        assert!(
+            app.toasts.visible().iter().any(|t| t.text.contains("graph updated")),
+            "an in-place tip move must toast as a change, not 'up to date'"
+        );
+        assert!(app.pr_fetch.is_due(), "open-PR fetch must be forced (#107)");
+        assert!(
+            app.merged.pr_branch_fetch.is_due(),
+            "merged-PR fetch must be forced (#104)"
+        );
+    }
+
+    /// The complement: a fetch that moved nothing keeps the gh fetchers on
+    /// their slow interval — quiet repos must not hammer gh every auto-fetch.
+    #[test]
+    fn no_op_fetch_leaves_gh_fetchers_on_the_interval() {
+        let (_tempdir, mut app) = test_app_with_side_branch();
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        app.network.complete_fetch_for_test(Ok(()), false);
+        assert!(app.update_fetch_status());
+
+        assert!(
+            app.toasts.visible().iter().any(|t| t.text.contains("up to date")),
+            "unchanged fetch keeps the up-to-date toast"
+        );
+        assert!(!app.pr_fetch.is_due(), "no ref change → no forced gh poll");
+        assert!(!app.merged.pr_branch_fetch.is_due());
+    }
+
+    /// #104/#107: a successful push changed the remote by definition, so the
+    /// gh fetchers must re-poll immediately (new PR head OID for badges; a
+    /// merge push lands in the gh merged set).
+    #[test]
+    fn successful_push_forces_gh_repoll() {
+        let (_tempdir, mut app) = test_app_with_side_branch();
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        app.network.complete_push_for_test(Ok(()));
+        assert!(app.update_push_status());
+
+        assert!(app.pr_fetch.is_due());
+        assert!(app.merged.pr_branch_fetch.is_due());
     }
 
     /// A persistently-failing silent auto-fetch (e.g. offline) must report
