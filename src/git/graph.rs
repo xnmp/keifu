@@ -1099,14 +1099,20 @@ fn build_row_cells_with_colors(
                 if was_existing && already_shown {
                     // Parent already shown: lane ends and merges ╯ (connect upward)
                     cells[end_idx] = CellType::MergeLeft(parent_color);
+                    oids[end_idx] = (Some(edge), None);
                 } else if was_existing {
                     // Parent not yet shown but lane exists: ┤ (T-junction, line continues down)
                     cells[end_idx] = CellType::TeeLeft(parent_color);
+                    // The Tee replaces the lane's own pass-through Pipe; its
+                    // trunk through-line still belongs to that lane, so keep
+                    // the pipe's edge as the secondary — the dim/trace passes
+                    // style the trunk from it, independent of the arm (#113).
+                    oids[end_idx] = (Some(edge), oids[end_idx].0);
                 } else {
                     // New lane for parent: ╮ (branch starts here, continues down)
                     cells[end_idx] = CellType::BranchLeft(parent_color);
+                    oids[end_idx] = (Some(edge), None);
                 }
-                oids[end_idx] = (Some(edge), None);
             }
         } else {
             // Branch end: connect to the left lane (main line)
@@ -1134,14 +1140,19 @@ fn build_row_cells_with_colors(
                 if was_existing && already_shown {
                     // Parent already shown: lane ends and merges ╰ (connect upward)
                     cells[start_idx] = CellType::MergeRight(parent_color);
+                    oids[start_idx] = (Some(edge), None);
                 } else if was_existing {
                     // Parent not yet shown but lane exists: ├ (T-junction, line continues down)
                     cells[start_idx] = CellType::TeeRight(parent_color);
+                    // Keep the replaced Pipe's edge as secondary: the Tee's
+                    // trunk through-line is the lane's own stroke, styled from
+                    // its own edge rather than the connector arm's (#113).
+                    oids[start_idx] = (Some(edge), oids[start_idx].0);
                 } else {
                     // New lane for parent: ╭ (branch starts here, continues down)
                     cells[start_idx] = CellType::BranchRight(parent_color);
+                    oids[start_idx] = (Some(edge), None);
                 }
-                oids[start_idx] = (Some(edge), None);
             }
         }
     }
@@ -1599,6 +1610,72 @@ mod tests {
 
     fn oid(byte: u8) -> Oid {
         Oid::from_bytes(&[byte; 20]).unwrap()
+    }
+
+    // ── Tee markers keep the lane's own edge as secondary (#113) ─────
+
+    #[test]
+    fn tee_marker_keeps_the_replaced_pipes_edge_as_secondary() {
+        // A merge commit (lane 1) whose second parent sits on the trunk (lane
+        // 0), with the trunk's parent not yet shown: the start marker is a
+        // TeeRight replacing the trunk's pass-through Pipe. The Tee's trunk
+        // through-line still belongs to the lane, so the Pipe's own edge
+        // (lane child → awaited parent) must survive as the secondary — the
+        // dim/trace passes style the trunk from it (#113).
+        let trunk_parent = oid(1);
+        let trunk_child = oid(2);
+        let merge_commit = oid(3);
+        let active_lanes = vec![Some(trunk_parent), Some(merge_commit)];
+        let active_lane_children = vec![Some(trunk_child), None];
+        let (cells, oids) = build_row_cells_with_colors(
+            1,
+            1,
+            merge_commit,
+            &[(trunk_parent, 0, true, 0, false)],
+            &active_lanes,
+            &active_lane_children,
+            &HashMap::new(),
+            &HashMap::new(),
+            1,
+        );
+        assert_eq!(cells[0], CellType::TeeRight(0), "trunk cell is the ├ marker");
+        assert_eq!(
+            oids[0],
+            (
+                Some((merge_commit, trunk_parent)),
+                Some((trunk_child, trunk_parent))
+            ),
+            "arm edge primary, the replaced Pipe's lane edge secondary"
+        );
+    }
+
+    #[test]
+    fn merge_corner_marker_keeps_no_secondary_edge() {
+        // The ╰ corner (parent already shown) is a pure transition curve with
+        // no trunk through-line — it must NOT inherit the replaced Pipe's edge,
+        // or tracing the pass-through lane would light a foreign corner glyph.
+        let trunk_parent = oid(1);
+        let trunk_child = oid(2);
+        let merge_commit = oid(3);
+        let active_lanes = vec![Some(trunk_parent), Some(merge_commit)];
+        let active_lane_children = vec![Some(trunk_child), None];
+        let (cells, oids) = build_row_cells_with_colors(
+            1,
+            1,
+            merge_commit,
+            &[(trunk_parent, 0, true, 0, true)],
+            &active_lanes,
+            &active_lane_children,
+            &HashMap::new(),
+            &HashMap::new(),
+            1,
+        );
+        assert_eq!(cells[0], CellType::MergeRight(0), "trunk cell is the ╰ corner");
+        assert_eq!(
+            oids[0],
+            (Some((merge_commit, trunk_parent)), None),
+            "a pure corner carries only the arm edge"
+        );
     }
 
     /// A commit node carrying a specific oid, lane, and cell row.
