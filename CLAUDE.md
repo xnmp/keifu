@@ -20,16 +20,16 @@ cargo run -- /path/to   # Run against a specific repo
 
 ## Workflow
 
+Track work in GitHub Issues — `gh issue list` / `gh issue create`. (`docs/TODO.md` is a historical log; do not add new entries to it.)
+
 When implementing features or fixes:
-1. Create an entry in `docs/TODO.md`
-2. Create a new git branch
+1. Create (or reference) a GitHub issue
+2. Create a new git branch — never commit directly to `chong-dev`
 3. Write unit tests where appropriate
 4. Implement the feature
 5. Ensure `cargo test` and `cargo clippy` pass
-6. Merge the branch, mark the issue in `docs/TODO.md` as done
+6. Push and open a PR against `chong-dev` (`gh pr create`, body `Closes #N`); land it with a squash merge
 7. Document architectural decisions or gotchas in `docs/`
-
-Use GitHub Issues for tracking — `gh issue list` / `gh issue create`.
 
 ## Architecture
 
