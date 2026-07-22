@@ -633,7 +633,15 @@ fn dim_specs_window_core(
                         slice.get(c.col as usize)
                     }) {
                         c.color = cell.color;
-                        c.dim = cell.dim;
+                        // A Tee source cell's boundary-crossing curve is its
+                        // ARM (the trunk is a straight through-line that never
+                        // crosses as a curve), so the tail follows the arm's
+                        // flag (#113).
+                        c.dim = match cell.shape {
+                            crate::ui::graph_pixels::CellShape::TeeRight
+                            | crate::ui::graph_pixels::CellShape::TeeLeft => cell.dim_secondary,
+                            _ => cell.dim,
+                        };
                     }
                     c
                 })
@@ -702,6 +710,17 @@ fn apply_trace_dim(
             // Dots keep their own color (including the gold HEAD star).
             pc.dim = !(is_lit(primary) || is_lit(secondary));
             pc.dim_secondary = pc.dim;
+        } else if matches!(pc.shape, CellShape::TeeRight | CellShape::TeeLeft) {
+            // Two strokes (#113): the connector arm (primary edge, styled via
+            // `dim_secondary`) and the lane's trunk through-line (secondary
+            // edge — the Pipe the Tee replaced). A fork-connector hub carries
+            // no secondary; its trunk then follows the primary like before.
+            pc.dim_secondary = !is_lit(primary);
+            let trunk = if secondary.is_some() { secondary } else { primary };
+            pc.dim = !is_lit(trunk);
+            if let Some(rgb) = color_of(primary) {
+                pc.color = rgb;
+            }
         } else {
             // The cell's own stroke is its PRIMARY edge. A secondary edge here
             // is another branch co-routed through this column (a farther fork
@@ -722,9 +741,11 @@ fn apply_trace_dim(
 /// Set `dim` on every pixel cell whose edge touches a merged-lane commit (issue
 /// #108) — exactly the strokes hide-merged would remove. Mirrors
 /// `apply_trace_dim`'s per-edge mapping (a `HorizontalPipe` fades each stroke
-/// from its own edge, a commit dot from either edge, every other shape from its
-/// primary edge) but ONLY dims: it never clears a `dim` flag and never recolors,
-/// so it composes on top of whatever trace/force-dim already decided.
+/// from its own edge, a `Tee*` its arm from the primary and its trunk from the
+/// lane's own secondary edge (#113), a commit dot from either edge, every other
+/// shape from its primary edge) but ONLY dims: it never clears a `dim` flag and
+/// never recolors, so it composes on top of whatever trace/force-dim already
+/// decided.
 fn apply_merged_lane_dim(
     cells: &mut [crate::ui::graph_pixels::PixelCell],
     oids: &[crate::git::graph::CellOids],
@@ -747,6 +768,20 @@ fn apply_merged_lane_dim(
             if edge_touches_merged(primary, merged) || edge_touches_merged(secondary, merged) {
                 pc.dim = true;
                 pc.dim_secondary = true;
+            }
+        } else if matches!(pc.shape, CellShape::TeeRight | CellShape::TeeLeft) {
+            // Two strokes (#113): the connector arm (primary edge) fades via
+            // `dim_secondary`; the lane's trunk through-line fades only from
+            // its OWN pass-through edge (secondary), so a merge arm into a
+            // dimmed lane no longer greys the live trunk it leaves from. A
+            // fork-connector hub has no secondary edge — its trunk follows the
+            // primary as before.
+            if edge_touches_merged(primary, merged) {
+                pc.dim_secondary = true;
+            }
+            let trunk = if secondary.is_some() { secondary } else { primary };
+            if edge_touches_merged(trunk, merged) {
+                pc.dim = true;
             }
         } else if edge_touches_merged(primary, merged) {
             pc.dim = true;
@@ -1614,8 +1649,23 @@ fn render_cells_unicode(
     //   - trace dim: tracing is active and the cell is not lit by the selection.
     let is_dim = |idx: usize| -> bool {
         let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
+        // A Tee glyph (├ / ┤) is dominated by its vertical bar — the lane's own
+        // trunk through-line — so its merged-lane dim follows the trunk's edge
+        // (secondary, the Pipe the Tee replaced; #113): a merge arm into a
+        // dimmed lane must not grey the live trunk's glyph. One glyph can't
+        // split strokes, so the arm's stub inherits the trunk's style here;
+        // the pixel renderer fades each stroke independently.
+        let merged_dims = |idx: usize, oids: crate::git::graph::CellOids, m: &HashSet<git2::Oid>| {
+            match node.cells.get(idx) {
+                Some(CellType::TeeRight(_) | CellType::TeeLeft(_)) => {
+                    let trunk = if oids.1.is_some() { oids.1 } else { oids.0 };
+                    crate::git::graph::edge_touches_merged(trunk, m)
+                }
+                _ => crate::git::graph::cell_touches_merged(oids, m),
+            }
+        };
         force_dim
-            || merged_oids.is_some_and(|m| crate::git::graph::cell_touches_merged(oids, m))
+            || merged_oids.is_some_and(|m| merged_dims(idx, oids, m))
             || trace.is_some_and(|lit| !crate::git::graph::cell_is_traced(oids, lit))
     };
 
@@ -3768,6 +3818,60 @@ mod tests {
             Some(theme.author_color),
             "non-lane author keeps its own color: {author:?}"
         );
+    }
+
+    // ── Tee cells: arm dims independently of the trunk (#113) ────────
+
+    #[test]
+    fn tee_trunk_stays_bright_when_only_the_arm_touches_a_merged_lane() {
+        // The reported bug: a merge of the trunk INTO a feature branch puts a
+        // Tee on the trunk lane; the arm edge touches the merged lane's commit
+        // and the whole cell dimmed — greying a segment of the live trunk. The
+        // arm must fade via `dim_secondary` while the trunk's own edge keeps
+        // `dim` off.
+        use crate::ui::graph_pixels::CellShape;
+        let mut cells = vec![crate::ui::graph_pixels::PixelCell {
+            shape: CellShape::TeeRight,
+            color: [0, 255, 0],
+            secondary: [0, 255, 0],
+            dim: false,
+            dim_secondary: false,
+            curved_above: false,
+            curved_below: false,
+            spoke_on_dot: false,
+        }];
+        // primary = arm edge (merge commit → trunk parent); the merge commit
+        // is in the dim set. secondary = the lane's own pass-through edge.
+        let oids = vec![(
+            Some((oid(5), oid(1))),
+            Some((oid(2), oid(1))),
+        )];
+        let merged: HashSet<git2::Oid> = [oid(5)].into_iter().collect();
+        apply_merged_lane_dim(&mut cells, &oids, &merged);
+        assert!(cells[0].dim_secondary, "the arm into the dim lane fades");
+        assert!(!cells[0].dim, "the live trunk through-line stays bright");
+    }
+
+    #[test]
+    fn fork_hub_tee_without_a_lane_edge_still_dims_wholly() {
+        // A fork-connector hub Tee carries no secondary edge; its trunk then
+        // follows the primary as before — no behavior change for fork rows.
+        use crate::ui::graph_pixels::CellShape;
+        let mut cells = vec![crate::ui::graph_pixels::PixelCell {
+            shape: CellShape::TeeRight,
+            color: [0, 255, 0],
+            secondary: [0, 255, 0],
+            dim: false,
+            dim_secondary: false,
+            curved_above: false,
+            curved_below: false,
+            spoke_on_dot: false,
+        }];
+        let oids = vec![(Some((oid(5), oid(1))), None)];
+        let merged: HashSet<git2::Oid> = [oid(5)].into_iter().collect();
+        apply_merged_lane_dim(&mut cells, &oids, &merged);
+        assert!(cells[0].dim, "no lane edge: trunk follows the primary");
+        assert!(cells[0].dim_secondary, "arm dims too");
     }
 
     /// The full rendered text of a row (all spans concatenated).

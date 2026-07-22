@@ -57,9 +57,11 @@ pub enum CellShape {
 /// `dim` fades the primary stroke to a low alpha when branch
 /// tracing is active and its edge is not on the selected commit's lineage;
 /// `dim_secondary` does the same for the secondary stroke (`HorizontalPipe`'s
-/// horizontal), so a crossing can light one direction while the other fades.
-/// For every other shape `dim_secondary` mirrors `dim`. Both are part of the
-/// hash/eq, so a dimmed variant is a distinct spec and caches separately.
+/// horizontal, and a `Tee*`'s connector arm — its `dim` styles the trunk
+/// through-line, #113), so a crossing or junction can light one direction while
+/// the other fades. For every other shape `dim_secondary` mirrors `dim`. Both
+/// are part of the hash/eq, so a dimmed variant is a distinct spec and caches
+/// separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PixelCell {
     pub shape: CellShape,
@@ -827,10 +829,12 @@ fn has_horizontal(shape: CellShape) -> bool {
 /// carries its horizontal in `secondary`/`dim_secondary`; every other
 /// horizontal-family shape in its primary `color`/`dim`).
 fn run_style(cell: &PixelCell) -> ([u8; 3], bool) {
-    if cell.shape == CellShape::HorizontalPipe {
-        (cell.secondary, cell.dim_secondary)
-    } else {
-        (cell.color, cell.dim)
+    match cell.shape {
+        CellShape::HorizontalPipe => (cell.secondary, cell.dim_secondary),
+        // A Tee's horizontal arm is its secondary stroke (#113); `dim` belongs
+        // to the trunk through-line.
+        CellShape::TeeRight | CellShape::TeeLeft => (cell.color, cell.dim_secondary),
+        _ => (cell.color, cell.dim),
     }
 }
 
@@ -964,6 +968,11 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
                     // on the trunk render as a dead-horizontal line (the reported
                     // bug). With no flanking dot the Tee is a fork connector's
                     // trunk hub, which stays at mid-height so its up-arms fan out.
+                    // The ARM is the Tee's secondary stroke (#113): its dim is
+                    // `dim_secondary`, while `dim` styles the trunk through-line
+                    // drawn in `draw_cells` — so a connector arm into a merged
+                    // lane fades without greying the trunk it leaves from.
+                    let dim = cell.dim_secondary;
                     if has_dot {
                         spokes.push(Endpoint { x: cx(c), y: below_cy, color, dim, on_dot: cell.spoke_on_dot });
                     } else {
@@ -1496,6 +1505,43 @@ mod tests {
             },
             color,
         )
+    }
+
+    #[test]
+    fn tee_arm_curve_takes_the_secondary_dim_flag_not_the_trunks() {
+        // #113: a Tee composes two strokes — the lane's trunk through-line
+        // (`dim`, drawn straight in draw_cells) and the connector arm
+        // (`dim_secondary`, the transition curve). A merge arm into a dimmed
+        // lane must fade while the trunk it leaves from stays bright.
+        let mut tee = solid(CellShape::TeeRight, [0, 255, 0]);
+        tee.dim = false; // trunk bright
+        tee.dim_secondary = true; // arm dim
+        let cells = vec![
+            tee,
+            solid(CellShape::Horizontal, [0, 255, 0]),
+            commit(false, false, CommitStyle::Normal, [200, 0, 200]),
+        ];
+        let curves = transition_curves(&cells, 2.0, 2.0);
+        assert!(!curves.is_empty(), "tee + dot run produces an arm curve");
+        assert!(
+            curves.iter().all(|c| c.dim),
+            "the arm curve follows dim_secondary"
+        );
+
+        // And the reverse: trunk dim, arm bright — the curve stays bright.
+        let mut tee = solid(CellShape::TeeRight, [0, 255, 0]);
+        tee.dim = true;
+        tee.dim_secondary = false;
+        let cells = vec![
+            tee,
+            solid(CellShape::Horizontal, [0, 255, 0]),
+            commit(false, false, CommitStyle::Normal, [200, 0, 200]),
+        ];
+        let curves = transition_curves(&cells, 2.0, 2.0);
+        assert!(
+            curves.iter().all(|c| !c.dim),
+            "a dim trunk must not drag the arm curve dim"
+        );
     }
 
     #[test]
