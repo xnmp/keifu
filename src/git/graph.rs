@@ -1473,41 +1473,40 @@ pub fn cell_is_traced(oids: CellOids, lit: &HashMap<CellEdge, Oid>) -> bool {
 }
 
 /// The set of commit OIDs that would VANISH if "hide merged branches" were
-/// toggled on — every commit exclusive to a merged branch's lane. This is the
-/// selection the "dim merged branches" setting (issue #108) greys: both the
-/// commit rows and the graph strokes touching them.
+/// toggled on — this is the selection the "dim merged branches" setting (issue
+/// #108) greys: both the commit rows and the graph strokes touching them.
 ///
-/// Mirrors hide-merged's first-parent semantics (issue #91): a commit vanishes
-/// under hide-merged iff it is reachable from some merged branch tip yet lies on
-/// NO live (non-merged) ref's first-parent chain. So the returned set is
+/// Mirrors hide-merged (#91) EXACTLY, by construction rather than by analogy
+/// (#111): hide keeps precisely the first-parent chains of the live (visible,
+/// non-merged) refs — `Revwalk::simplify_first_parent` over their tips — so the
+/// dimmed set is the complement over the loaded commits:
 ///
 /// ```text
-///   reachable(merged_tips)  \  first_parent_chains(live_tips)
+///   loaded_commits  \  first_parent_chains(live_tips)
 /// ```
 ///
-/// computed purely by walking the already-loaded `commits`' parent edges — no
-/// fresh revwalk. Off-graph parents end a walk (only loaded commits can be
+/// The earlier formulation walked from *classified merged branches' tips*,
+/// which missed every side lane whose ref no longer exists — the common case
+/// for merge-commit PRs when GitHub deletes the branch on merge: hide removed
+/// those lanes (the first-parent walk needs no ref) but dim left them bright.
+/// A set difference from the live chains needs no merged tips at all.
+///
+/// Computed purely over the already-loaded `commits`' parent edges — no fresh
+/// revwalk. Off-graph parents end a chain walk (only loaded commits can be
 /// dimmed, matching what the renderer draws).
 ///
-/// - `merged_tips`: tip OIDs of the merged branches (resolve names via the
-///   branch list).
-/// - `live_tips`: tip OIDs of every non-merged ref plus HEAD; their first-parent
-///   chains are protected from dimming, so shared trunk history a merged branch
-///   also reaches (down to and past its fork point) stays lit.
-pub fn merged_lane_oids(
-    commits: &[CommitInfo],
-    merged_tips: &[Oid],
-    live_tips: &[Oid],
-) -> HashSet<Oid> {
+/// - `live_tips`: tip OIDs of every visible non-merged ref, plus HEAD and the
+///   stash entries (their nodes must never dim); their first-parent chains are
+///   protected, so trunk history — including everything past a merged branch's
+///   fork point — stays lit.
+pub fn merged_lane_oids(commits: &[CommitInfo], live_tips: &[Oid]) -> HashSet<Oid> {
     // oid -> its parent OIDs, for loaded commits only.
     let parents: HashMap<Oid, &[Oid]> = commits
         .iter()
         .map(|c| (c.oid, c.parent_oids.as_slice()))
         .collect();
 
-    // Protected: each live tip's first-parent chain, walked while loaded. A
-    // merged branch's shared trunk history lands here, so only its exclusive
-    // commits survive the difference below.
+    // Protected: each live tip's first-parent chain, walked while loaded.
     let mut live: HashSet<Oid> = HashSet::new();
     for &tip in live_tips {
         let mut cur = tip;
@@ -1519,21 +1518,14 @@ pub fn merged_lane_oids(
         }
     }
 
-    // Reachable from a merged tip via ANY parent edge (a merge's second parent
-    // included), restricted to loaded commits and stopping at any protected
-    // (live) commit — the walk into shared trunk history halts at the fork
-    // point, which is on the trunk's first-parent chain. What remains is
-    // exclusive to the merged lanes.
-    let mut merged: HashSet<Oid> = HashSet::new();
-    let mut stack: Vec<Oid> = merged_tips.to_vec();
-    while let Some(oid) = stack.pop() {
-        let Some(ps) = parents.get(&oid) else { continue };
-        if live.contains(&oid) || !merged.insert(oid) {
-            continue;
-        }
-        stack.extend(ps.iter().copied());
-    }
-    merged
+    // Everything else that is loaded would vanish under hide-merged's
+    // first-parent walk — merged branches' exclusive commits (classified or
+    // not) and the side lanes of already-deleted merged-in branches alike.
+    commits
+        .iter()
+        .map(|c| c.oid)
+        .filter(|oid| !live.contains(oid))
+        .collect()
 }
 
 /// Whether a single `(child, parent)` edge touches a dimmed (merged-lane)
@@ -2412,23 +2404,35 @@ mod tests {
     }
 
     #[test]
-    fn merged_lane_selects_only_merged_exclusive_commits() {
+    fn merged_lane_selects_everything_off_the_live_first_parent_chains() {
         let (commits, [a, b, c, f1, f2, s1, g1, _z]) = merged_lane_fixture();
-        // F is merged via a merge commit; S is squash-merged (both have live
-        // refs). Trunk A and the unmerged branch G are the live lines.
-        let merged = merged_lane_oids(&commits, &[f1, s1], &[a, g1]);
+        // Live lines: trunk A and the unmerged branch G. F (merged via merge
+        // commit) and S (squash-merged) have no live ref — #111: the dim set is
+        // the complement of the live first-parent chains, so their lanes dim
+        // WITHOUT needing their tips to be known/classified.
+        let merged = merged_lane_oids(&commits, &[a, g1]);
 
-        // The merged branches' exclusive commits dim.
         assert!(merged.contains(&f1), "merge-commit branch tip dims");
         assert!(merged.contains(&f2), "merge-commit branch interior dims");
         assert!(merged.contains(&s1), "squash-merged branch commit dims");
         // Trunk first-parent commits never dim — even C, which the merged
-        // branches also reach (their walk stops at the shared fork point).
+        // branches also reach (it sits on the live chains).
         assert!(!merged.contains(&a), "trunk tip stays lit");
         assert!(!merged.contains(&b), "trunk interior stays lit");
         assert!(!merged.contains(&c), "shared fork-point commit stays lit");
-        // An unmerged branch is not in the merged-tip walk at all.
-        assert!(!merged.contains(&g1), "unmerged branch stays lit");
+        assert!(!merged.contains(&g1), "unmerged (live) branch stays lit");
+    }
+
+    #[test]
+    fn merged_lane_dims_deleted_branch_side_history() {
+        // #111 (the user's report): a merge-commit PR whose branch ref was
+        // deleted on merge. No ref points at F1/F2, yet hide-merged removes
+        // them (the first-parent walk needs no ref) — so dim must grey them.
+        // This is exactly the fixture above with F's ref absent: same result
+        // set, asserted separately so the no-ref case can't regress.
+        let (commits, [a, _b, _c, f1, f2, _s1, g1, _z]) = merged_lane_fixture();
+        let merged = merged_lane_oids(&commits, &[a, g1]);
+        assert!(merged.contains(&f1) && merged.contains(&f2), "ref-less side lane dims");
     }
 
     #[test]
@@ -2436,17 +2440,20 @@ mod tests {
         // A branch whose commits sit on the trunk's own first-parent chain (a
         // fast-forward merge left nothing exclusive) must NOT dim: hide-merged
         // would keep those commits, so the dim mirror keeps them too.
-        let (commits, [a, b, _c, _f1, _f2, _s1, _g1, _z]) = merged_lane_fixture();
-        // Pretend B's branch is "merged" but the trunk tip A is still live and
-        // reaches B via its first parent.
-        let merged = merged_lane_oids(&commits, &[b], &[a]);
+        let (a, b, c) = (oid(1), oid(2), oid(3));
+        let commits = vec![ci(a, vec![b]), ci(b, vec![c]), ci(c, vec![])];
+        // B's branch is "merged" (ff) — trunk tip A reaches it first-parent.
+        let merged = merged_lane_oids(&commits, &[a]);
         assert!(merged.is_empty(), "no commit exclusive to a ff-merged branch");
     }
 
     #[test]
-    fn merged_lane_is_empty_without_merged_tips() {
-        let (commits, [a, _b, _c, _f1, _f2, _s1, g1, _z]) = merged_lane_fixture();
-        assert!(merged_lane_oids(&commits, &[], &[a, g1]).is_empty());
+    fn merged_lane_is_empty_when_every_ref_is_live() {
+        // All tips live → every loaded commit sits on some live first-parent
+        // chain except merge side-parents… which here means F's lane dims only
+        // if F isn't live. Make every branch live: nothing dims.
+        let (commits, [a, _b, _c, f1, _f2, s1, g1, _z]) = merged_lane_fixture();
+        assert!(merged_lane_oids(&commits, &[a, f1, s1, g1]).is_empty());
     }
 
     #[test]
