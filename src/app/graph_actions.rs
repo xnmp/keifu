@@ -521,7 +521,8 @@ impl App {
     }
 
     fn jump_to_head(&mut self) {
-        self.graph_nav.jump_to_head(self.head_name.as_deref());
+        self.graph_nav
+            .jump_to_head(self.head_name.as_deref(), &self.graph_layout);
     }
 
     /// Jump the selection to the fork point: the merge base of the selected

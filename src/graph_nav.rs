@@ -196,21 +196,36 @@ impl GraphNav {
         }
     }
 
-    /// Jump to the HEAD branch by name.
-    pub fn jump_to_head(&mut self, head_name: Option<&str>) {
-        let Some(head_name) = head_name else {
-            return;
-        };
-        let Some((branch_pos_idx, (node_idx, _))) = self
-            .branch_positions
+    /// Jump the selection to HEAD.
+    ///
+    /// Prefers a branch-name match (so the branch focus tracks HEAD's branch),
+    /// but falls back to the HEAD row located by its `is_head` flag. The
+    /// fallback is what makes `@` work for a detached HEAD, which has no branch
+    /// name to match against (issue #89).
+    pub fn jump_to_head(&mut self, head_name: Option<&str>, layout: &GraphLayout) {
+        if let Some(head_name) = head_name {
+            if let Some((branch_pos_idx, (node_idx, _))) = self
+                .branch_positions
+                .iter()
+                .enumerate()
+                .find(|(_, (_, name))| name == head_name)
+            {
+                self.selected_branch_position = Some(branch_pos_idx);
+                self.graph_list_state.select(Some(*node_idx));
+                return;
+            }
+        }
+
+        // No branch matched (detached HEAD, or HEAD's branch is filtered out):
+        // land on the HEAD commit row itself.
+        if let Some(idx) = layout
+            .nodes
             .iter()
-            .enumerate()
-            .find(|(_, (_, name))| name == head_name)
-        else {
-            return;
-        };
-        self.selected_branch_position = Some(branch_pos_idx);
-        self.graph_list_state.select(Some(*node_idx));
+            .position(|n| n.is_head && !n.is_uncommitted)
+        {
+            self.graph_list_state.select(Some(idx));
+            self.sync_branch_selection_to_node(idx);
+        }
     }
 
     /// Get the currently selected branch from the branches list.
