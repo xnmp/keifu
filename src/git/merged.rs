@@ -273,6 +273,17 @@ fn base_tips(branches: &[BranchInfo], base_tip: Oid, base_name: &str) -> Vec<Oid
             tips.push(b.tip_oid);
         }
     }
+    // The checked-out branch is a trunk too (#100): on a repo whose working
+    // trunk is a long-lived non-main branch (keifu's own chong-dev), branches
+    // land there and would otherwise never classify — the selected main/master
+    // base has no knowledge of them. "Merged" therefore means "landed in the
+    // trunk OR in the line you are on". The HEAD branch itself is protected
+    // from classification by `branch_is_merged`'s `is_head` guard, and the
+    // primary trunk by the `base_name`/tip guards, so adding this tip cannot
+    // hide either trunk.
+    if let Some(head) = branches.iter().find(|b| b.is_head && !tips.contains(&b.tip_oid)) {
+        tips.push(head.tip_oid);
+    }
     tips
 }
 
@@ -347,8 +358,102 @@ fn branch_is_merged(
                 .any(|&t| branch_content_in_base(repo, b.tip_oid, t)))
 }
 
+/// Plain-text trace of every decision [`classify_merged_branches`] makes, for
+/// `keifu --explain-merged` (#100 diagnostics): base selection, the trunk tips
+/// tested, and — per branch — each guard and signal with the OIDs involved, so
+/// a "branch should be hidden but isn't" report can name the exact gate that
+/// failed on the user's real repository instead of guessing from fixtures.
+/// Purely observational: mirrors [`branch_is_merged`] without changing it.
+pub fn explain_classification(
+    repo: &Repository,
+    branches: &[BranchInfo],
+    gh_merged: &HashSet<String>,
+) -> String {
+    use std::fmt::Write as _;
+    let short = |o: Oid| o.to_string()[..7].to_string();
+    let mut out = String::new();
+
+    let Some(base) = base_branch(branches) else {
+        return "no base branch (no local/origin main or master, no HEAD) — nothing can be classified\n".into();
+    };
+    let tips = base_tips(branches, base.tip_oid, &base.name);
+    let _ = writeln!(out, "base: {} @ {}", base.name, short(base.tip_oid));
+    let _ = writeln!(
+        out,
+        "trunk tips tested: {}",
+        tips.iter().map(|&t| short(t)).collect::<Vec<_>>().join(", ")
+    );
+    let _ = writeln!(out, "gh merged-PR heads known: {}", gh_merged.len());
+
+    let base_short = base.name.split_once('/').map_or(base.name.as_str(), |(_, rest)| rest);
+    for b in branches {
+        let kind = if b.is_remote { "remote" } else { "local " };
+        let _ = writeln!(out, "\n{kind} {} @ {}", b.name, short(b.tip_oid));
+        if b.is_head {
+            let _ = writeln!(out, "  guard: checked-out HEAD — never classified");
+            continue;
+        }
+        if b.name == base.name || tips.contains(&b.tip_oid) {
+            let _ = writeln!(out, "  guard: trunk / trunk tip — never classified");
+            continue;
+        }
+        if b.is_remote && gh_key(b) == base_short {
+            let _ = writeln!(out, "  guard: trunk mirror on another remote — never classified");
+            continue;
+        }
+        let mut verdict: Option<String> = None;
+        for &t in &tips {
+            let fork = repo.merge_base(b.tip_oid, t).ok();
+            let dist = fork.map(|f| {
+                let mut walk = match repo.revwalk() {
+                    Ok(w) => w,
+                    Err(_) => return "?".to_string(),
+                };
+                if walk.push(t).is_err() {
+                    return "?".to_string();
+                }
+                let _ = walk.hide(f);
+                let n = walk.take(SQUASH_SCAN_LIMIT + 1).count();
+                if n > SQUASH_SCAN_LIMIT { format!(">{SQUASH_SCAN_LIMIT} (CAP!)") } else { n.to_string() }
+            });
+            let ancestry = is_ancestor_merged(repo, b.tip_oid, t);
+            let squash = squash_merge_target(repo, b.tip_oid, t);
+            let contained = branch_content_in_base(repo, b.tip_oid, t);
+            let _ = writeln!(
+                out,
+                "  vs {}: fork={} dist={} ancestry={} squash={} contained={}",
+                short(t),
+                fork.map(short).unwrap_or_else(|| "none(unrelated)".into()),
+                dist.unwrap_or_else(|| "-".into()),
+                ancestry,
+                squash.map(short).unwrap_or_else(|| "miss".into()),
+                contained,
+            );
+            if verdict.is_none() {
+                if ancestry {
+                    verdict = Some(format!("MERGED (ancestry into {})", short(t)));
+                } else if let Some(s) = squash {
+                    verdict = Some(format!("MERGED (squash target {})", short(s)));
+                }
+            }
+        }
+        let key = gh_key(b);
+        let in_gh = gh_merged.contains(key);
+        let _ = writeln!(out, "  gh: key '{key}' in merged-PR set: {in_gh}");
+        if verdict.is_none() && in_gh {
+            if tips.iter().any(|&t| branch_content_in_base(repo, b.tip_oid, t)) {
+                verdict = Some("MERGED (gh signal + content contained)".into());
+            } else {
+                let _ = writeln!(out, "  gh signal present but content NOT contained (conflict-resolved landing, or novel work)");
+            }
+        }
+        let _ = writeln!(out, "  => {}", verdict.unwrap_or_else(|| "visible (not classified merged)".into()));
+    }
+    out
+}
+
 /// Names of the branches — **local or remote** — merged into the base branch,
-/// combining local git detection (ancestry + squash patch-id) with the GitHub
+/// combining local git detection (ancestry + patch-id squash detection) with the GitHub
 /// merged-PR signal (cross-checked locally via [`branch_content_in_base`]).
 /// Remote refs are included because a GitHub squash-merge often leaves the
 /// *remote* branch as the surviving ref (issue #100). See [`branch_is_merged`].
@@ -858,6 +963,94 @@ mod tests {
             ahead: 0,
             behind: 0,
         }
+    }
+
+    #[test]
+    fn branches_merged_into_the_checked_out_trunk_are_classified() {
+        // #100 (found via --explain-merged on keifu's own repo): the working
+        // trunk is a long-lived non-main branch (chong-dev style). Branches are
+        // merged INTO the checked-out branch; local main lags far behind and
+        // knows nothing about them. They must still classify — the checked-out
+        // tip is a trunk tip — while neither main nor the checked-out branch
+        // itself ever classifies.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Feature branched from main, merged into dev (real merge commit).
+        let f = commit(&repo, "refs/heads/feature", 2000, &[a], &[("base.txt", "base"), ("f.txt", "f")]);
+        let d1 = commit(&repo, "refs/heads/dev", 2100, &[a], &[("base.txt", "base"), ("d.txt", "d")]);
+        let d2 = commit(&repo, "refs/heads/dev", 2200, &[d1, f], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "f")]);
+        // A second feature squash-merged into dev.
+        let g = commit(&repo, "refs/heads/feature2", 3000, &[a], &[("base.txt", "base"), ("g.txt", "g")]);
+        let s = commit(&repo, "refs/heads/dev", 3100, &[d2], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "f"), ("g.txt", "g")]);
+        // An unlanded branch.
+        let u = commit(&repo, "refs/heads/wip", 4000, &[a], &[("base.txt", "base"), ("u.txt", "u")]);
+
+        let branches = vec![
+            local("main", a, false),
+            local("dev", s, true), // checked out; d1..s never reached main
+            local("feature", f, false),
+            local("feature2", g, false),
+            local("wip", u, false),
+        ];
+        let base = base_branch(&branches).unwrap();
+        assert_eq!(base.name, "main", "main still selected as primary base");
+        let (set, targets) = classify_merged_branches_with_targets(
+            &repo,
+            &branches,
+            base.tip_oid,
+            &base.name,
+            &HashSet::new(),
+        );
+        assert!(set.contains("feature"), "merge-commit landing on the checked-out trunk: {set:?}");
+        assert!(set.contains("feature2"), "squash landing on the checked-out trunk: {set:?}");
+        assert_eq!(targets.get("feature2"), Some(&s), "squash target on the checked-out trunk");
+        assert!(!set.contains("wip"), "unlanded work stays visible");
+        assert!(!set.contains("main"), "the lagging primary trunk is never classified");
+        assert!(!set.contains("dev"), "the checked-out branch is never classified");
+    }
+
+    #[test]
+    fn user_flow_local_survivor_remote_branch_deleted_squash_on_drifted_remote_trunk() {
+        // The exact #100 user shape: GitHub deletes the REMOTE branch after the
+        // squash-merge, the LOCAL feature ref survives; the squash exists only
+        // on origin/main (local main never pulled); origin/main also drifted
+        // (another commit landed near the feature's edit before the squash);
+        // HEAD sits on an unrelated dev branch.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a1 = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\nL4\n")]);
+        let a2 = commit(&repo, "refs/heads/main", 1100, &[a1], &[("file.txt", "L1\nL2\nL3\nL4\n"), ("readme.md", "r")]);
+        // Local feature: two commits, ref survives the merge.
+        let f1 = commit(&repo, "refs/heads/feature", 2000, &[a2], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r")]);
+        let f2 = commit(&repo, "refs/heads/feature", 2100, &[f1], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r"), ("new.txt", "n")]);
+        // origin/main: a drift commit editing a line adjacent to the feature's
+        // change, then the squash. No origin/feature ref exists (deleted).
+        let m3 = commit(&repo, "refs/remotes/origin/main", 3000, &[a2], &[("file.txt", "L1x\nL2\nL3\nL4\n"), ("readme.md", "r")]);
+        let s = commit(&repo, "refs/remotes/origin/main", 4000, &[m3], &[("file.txt", "L1x\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r"), ("new.txt", "n")]);
+        let d = commit(&repo, "refs/heads/dev", 5000, &[a2], &[("file.txt", "L1\nL2\nL3\nL4\n"), ("readme.md", "r"), ("dev.txt", "d")]);
+
+        let branches = vec![
+            local("main", a2, false),
+            local("feature", f2, false),
+            local("dev", d, true),
+            remote("origin/main", s),
+        ];
+        let base = base_branch(&branches).unwrap();
+        assert_eq!(base.name, "main", "local main preferred even though behind");
+        let (set, targets) = classify_merged_branches_with_targets(
+            &repo,
+            &branches,
+            base.tip_oid,
+            &base.name,
+            &HashSet::new(),
+        );
+        assert!(
+            set.contains("feature"),
+            "surviving local ref must classify via the drifted origin/main tip: {set:?}"
+        );
+        assert_eq!(targets.get("feature"), Some(&s), "link target is the squash on origin/main");
+        assert!(!set.contains("dev"), "unlanded work stays visible");
     }
 
     #[test]

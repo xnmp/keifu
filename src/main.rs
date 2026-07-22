@@ -33,6 +33,33 @@ struct Cli {
     /// Listen for debug commands (NDJSON over TCP, e.g. 127.0.0.1:7167)
     #[arg(long, value_name = "ADDR")]
     debug_listen: Option<String>,
+
+    /// Print a per-branch trace of merged-branch classification (base choice,
+    /// trunk tips, ancestry/squash/containment/gh signals) and exit. For
+    /// diagnosing "merged branch isn't hidden / has no link line" (#100).
+    #[arg(long)]
+    explain_merged: bool,
+}
+
+/// `--explain-merged`: classification trace to stdout, no TUI. Fetches the
+/// GitHub merged-PR signal synchronously so the trace shows the same inputs a
+/// running session would (and surfaces gh failures instead of hiding them).
+fn run_explain_merged() -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let repo = keifu::git::GitRepository::open(&cwd)?;
+    let branches = repo.get_branches()?;
+    let gh = match keifu::merged_branch_fetch::fetch_merged_branches(&cwd.to_string_lossy()) {
+        Ok(set) => {
+            println!("gh merged-PR fetch: ok ({} heads)", set.len());
+            set
+        }
+        Err(e) => {
+            println!("gh merged-PR fetch FAILED (classification runs without it): {e}");
+            Default::default()
+        }
+    };
+    print!("{}", keifu::git::merged::explain_classification(repo.repo(), &branches, &gh));
+    Ok(())
 }
 
 /// Pop the current compose buffer out into the user's `$EDITOR`. main.rs is the
@@ -118,6 +145,9 @@ fn handle_input_event(
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.explain_merged {
+        return run_explain_merged();
+    }
     if let Some(path) = &cli.log_file {
         logging::init(path)?;
     }
