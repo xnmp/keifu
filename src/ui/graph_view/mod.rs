@@ -7,16 +7,15 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget},
 };
-use chrono::{DateTime, Local};
+use chrono::Local;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::{
     app::App,
-    config::MetadataColumns,
     git::graph::{CellType, GraphNode},
-    mouse::{ChipHit, ChipTarget},
-    pr::{PrContext, PrInfo},
+    mouse::ChipHit,
+    pr::PrContext,
 };
 
 mod badges;
@@ -24,13 +23,12 @@ mod chips;
 mod geometry;
 mod metrics;
 mod pixel_dim;
+mod row;
 mod rows;
 
 pub use badges::pr_for_branch_labels;
-use badges::{merged_badge, merged_style, pr_for_row, PR_BADGE_ICON};
 
 pub use chips::REMOTE_ONLY_ICON;
-use chips::optimize_branch_display;
 
 pub use geometry::{
     avatar_overlay_x, avatars_active, effective_graph_width, next_graph_cap, AVATAR_GAP_CELLS,
@@ -39,9 +37,13 @@ pub use geometry::{
 use geometry::{ellipsis_style, graph_truncation};
 
 pub(crate) use metrics::display_width;
-use metrics::{format_date_field, truncate_to_width};
 
 pub use pixel_dim::{build_pixel_base_specs, dim_pixel_specs_window};
+
+// `is_base_update_row` lives next to `RowModel` in `row`; imported here so the
+// pixel dim pass (`super::is_base_update_row`, a descendant path) and this
+// module share one predicate.
+use row::{is_base_update_row, render_graph_line_tail, RowFlags, RowRenderCtx};
 
 pub use rows::{visible_nodes, visible_rows, RenderRow};
 use rows::visible_row_window;
@@ -251,162 +253,6 @@ impl<'a> GraphViewWidget<'a> {
 /// same nf-oct-git_merge icon, so a collapsed merge or a landed branch both
 /// read as "this is a merge" at a glance.
 const MERGE_ICON: &str = "\u{f419}"; // nf-oct-git_merge
-
-/// Style for a *merged branch name chip* (issue #90): take the chip's own
-/// unmerged style and mute its lane color toward the recessive tone (via
-/// [`Theme::merged_chip_color`]) rather than flattening it to grey, then DIM it.
-/// A landed branch's chip thus still reads as *its* lane — only faded — keeping
-/// the branch identity the old flat-grey `merged_style` erased, while staying
-/// visibly distinct from an active unmerged chip. Selection's REVERSED and any
-/// HEAD BOLD carried on `base` survive; the highlighted row's `selection_style`
-/// still subtracts DIM so a selected merged chip never renders muddy.
-fn merged_chip_style(base: Style, theme: &Theme) -> Style {
-    let muted = base
-        .fg
-        .map_or(theme.text_muted, |c| theme.merged_chip_color(c));
-    base.fg(muted).add_modifier(Modifier::DIM)
-}
-
-/// Determine which right-side elements (date, author, hash) to display based on available width.
-/// Returns (show_date, show_author, show_hash, total_right_width).
-///
-/// Only columns enabled in `cols` are eligible. Among the eligible ones, when
-/// the row is too narrow they drop by priority — hash first, then date, then
-/// author (author is kept longest). A hidden/dropped column's width is not
-/// counted, so it flows to the commit-message budget via `right_width`.
-fn compute_right_side_visibility(
-    remaining_for_content: usize,
-    cols: MetadataColumns,
-) -> (bool, bool, bool, usize) {
-    // Rendered width of each element incl. its leading separator (see the
-    // right-block rendering below): date " "+4, author "  "+8, hash "  "+7.
-    const DATE_W: usize = 5;
-    const AUTHOR_W: usize = 10;
-    const HASH_W: usize = 9;
-    const TRAILING_W: usize = 1; // single trailing space when anything shows
-
-    // Ensure minimum space for branch + commit message before showing right-side info
-    const CONTENT_MIN_WIDTH: usize = 50;
-    let available = remaining_for_content.saturating_sub(CONTENT_MIN_WIDTH);
-
-    let width = |d: bool, a: bool, h: bool| -> usize {
-        if !d && !a && !h {
-            return 0;
-        }
-        (if d { DATE_W } else { 0 })
-            + (if a { AUTHOR_W } else { 0 })
-            + (if h { HASH_W } else { 0 })
-            + TRAILING_W
-    };
-
-    // Start from the user's enabled set, then shed low-priority columns until
-    // the block fits. (With all three enabled this reproduces the original
-    // 35/26/11 breakpoints exactly.)
-    let mut show_date = cols.date;
-    let mut show_author = cols.author;
-    let mut show_hash = cols.hash;
-
-    if width(show_date, show_author, show_hash) > available {
-        show_hash = false;
-    }
-    if width(show_date, show_author, show_hash) > available {
-        show_date = false;
-    }
-    if width(show_date, show_author, show_hash) > available {
-        show_author = false;
-    }
-
-    let right_width = width(show_date, show_author, show_hash);
-    (show_date, show_author, show_hash, right_width)
-}
-
-/// Format tag labels for a node. Tags render as `<name>` in the tag color,
-/// visually distinct from `[branch]` and `{stash}` labels. Long tag names are
-/// truncated with an ellipsis so a single tag can't dominate the row.
-fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(String, Style)> {
-    // Total label width including the enclosing `<` `>` delimiters.
-    const MAX_TAG_LABEL_WIDTH: usize = 24;
-    // Restraint: the tag color alone distinguishes the chip; no bold (bold is
-    // reserved for the HEAD branch and actionable PR badges), so tags read as
-    // one quiet, consistent family alongside non-HEAD branch chips.
-    let style = Style::default().fg(theme.tag_label);
-    tag_names
-        .iter()
-        .map(|name| {
-            let label = if display_width(name) + 2 <= MAX_TAG_LABEL_WIDTH {
-                format!("<{}>", name)
-            } else {
-                // -3: two delimiters plus one ellipsis character.
-                let head = truncate_to_width(name, MAX_TAG_LABEL_WIDTH - 3);
-                format!("<{}…>", head)
-            };
-            (label, style)
-        })
-        .collect()
-}
-
-/// Whether a row is a base-update ("back-merge") merge that should render
-/// strongly muted (#55): its message greys+dims and its own graph connector is
-/// force-dimmed so the noisy back-merge line recedes. This is the single source
-/// of truth shared by BOTH renderers — the unicode path (`render_cells_unicode`
-/// force_dim) and the pixel path (`dim_pixel_specs_window` per-row force-dim) —
-/// so they agree on which rows mute. HEAD is never muted.
-pub(super) fn is_base_update_row(
-    node: &GraphNode,
-    mute_base_merges: bool,
-    base_update_merges: &HashSet<git2::Oid>,
-) -> bool {
-    mute_base_merges
-        && !node.is_head
-        && node.is_merge()
-        && node
-            .commit
-            .as_ref()
-            .is_some_and(|c| base_update_merges.contains(&c.oid))
-}
-
-/// Frame-constant render inputs, built once per frame and shared by every row.
-/// Bundles the ~13 values that used to be threaded individually through
-/// `render_graph_line` / `render_graph_line_tail`; per-row values travel
-/// separately as `node` and `RowFlags`.
-struct RowRenderCtx<'a> {
-    theme: &'a Theme,
-    now: DateTime<Local>,
-    pixel_mode: bool,
-    remotes: &'a [String],
-    open_prs: &'a HashMap<String, PrInfo>,
-    pr_ctx: &'a PrContext<'a>,
-    merged_branches: &'a HashSet<String>,
-    /// Whether a merged branch shown in the graph should render dimmed (issue
-    /// #106) — chip color + "merged" badge. Independent of whether merged
-    /// branches are hidden entirely (that's decided upstream: a hidden branch
-    /// never reaches this row at all). Applies uniformly regardless of how
-    /// `merged_branches` classified the branch (ancestry, fast-forward, or
-    /// squash all live in the same set).
-    merged_dim: bool,
-    /// Commits exclusive to a merged branch's lane (issue #108), or `None` when
-    /// merged-lane dimming is off (`dim` off or `hide` on). When `Some`, a row
-    /// whose commit is in the set greys its text like a muted merge, and its
-    /// graph strokes (any cell edge touching one of these commits) dim — the
-    /// same strokes hide-merged would remove.
-    merged_lane_oids: Option<&'a HashSet<git2::Oid>>,
-    base_update_merges: &'a HashSet<git2::Oid>,
-    metadata_columns: MetadataColumns,
-    /// Graph column width cap (glyph budget), same for every row this frame.
-    graph_width: usize,
-    /// Total drawable inner width available to a row.
-    total_width: usize,
-    selected_branch_name: Option<&'a str>,
-    /// Selected commit's lit-edge trace set; `None` when tracing is off.
-    trace: Option<&'a std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
-}
-
-/// Per-row render flags decided at the call site.
-#[derive(Clone, Copy)]
-struct RowFlags {
-    is_selected: bool,
-    is_marked: bool,
-}
 
 fn render_graph_line<'a>(
     node: &GraphNode,
@@ -635,352 +481,6 @@ fn render_cells_unicode(
     left_width
 }
 
-/// Render everything after the graph column: separator, compare marker,
-/// branch/tag/stash labels, message, and the right-aligned metadata block.
-fn render_graph_line_tail<'a>(
-    mut spans: Vec<Span<'a>>,
-    mut left_width: usize,
-    node: &GraphNode,
-    ctx: &RowRenderCtx<'_>,
-    flags: RowFlags,
-    is_base_update: bool,
-    is_merged_lane: bool,
-) -> (Line<'a>, Vec<ChipHit>) {
-    let mut chips: Vec<ChipHit> = Vec::new();
-    // Separator between graph and commit info
-    spans.push(Span::raw(" "));
-    left_width += 1;
-
-    // Compare marker: flags commits that are marked or a comparison endpoint.
-    if flags.is_marked {
-        spans.push(Span::styled(
-            "◆ ",
-            Style::default()
-                .fg(ctx.theme.search_cursor)
-                .add_modifier(Modifier::BOLD),
-        ));
-        left_width += 2;
-    }
-
-    // Handle uncommitted changes row
-    if node.is_uncommitted {
-        let text = match node.uncommitted_count {
-            Some(count) => format!("uncommitted changes ({})", count),
-            None => "uncommitted changes".to_string(),
-        };
-        let style = Style::default().fg(ctx.theme.text_primary);
-        spans.push(Span::styled(text, style));
-        return (Line::from(spans), chips);
-    }
-
-    // Early return for connector-only rows
-    let commit = match &node.commit {
-        Some(c) => c,
-        None => return (Line::from(spans), chips),
-    };
-
-    // PR-merge commit (#52): a merge that landed a GitHub PR reads as machinery,
-    // not authored work, so its message renders greyed (an explicit muted color,
-    // distinct from the plain DIM used for ordinary muted merges). Detection is
-    // data-driven (second parent is a known PR head) with the GitHub merge
-    // message format as fallback for already-merged PRs; both inputs come off
-    // this row's commit, so the check stays inside the windowed per-row path.
-    // HEAD is never greyed, matching the muted-merge rule below.
-    let is_pr_merge = !node.is_head
-        && ctx.pr_ctx.is_pr_merge(
-            node.is_merge(),
-            commit.parent_oids.get(1).copied(),
-            &commit.message,
-        );
-    // Muted merge: dim only the message text (VSCode-style) — the graph dot and
-    // lines stay full-strength. HEAD is never muted so its message stays legible.
-    let muted_merge = ctx.metadata_columns.mute_merges && node.is_merge() && !node.is_head;
-    // Collapse merges (#59): a stronger form of muting that replaces the merge
-    // commit's message with a bare merge glyph. Same detection seam as
-    // `mute_merges` (any merge, never HEAD), so the two options unify rather than
-    // duplicate. When on it implies muting even if `mute_merges` is off.
-    let collapse_merge = ctx.metadata_columns.collapse_merges && node.is_merge() && !node.is_head;
-    // PR-landed subject rewrite (#99): a commit whose raw subject is GitHub
-    // merge/squash machinery — "Merge pull request #123 from …" or "Title
-    // (#123)" — reads better as "<icon> #123 <PR title>". Qualifies via the
-    // same `is_pr_merge` detection for merge commits (so it agrees with the
-    // greying above), or the squash-subject parser for single-parent commits.
-    // `collapse_merge` is a stronger reduction (drops the message entirely),
-    // so it wins when both would otherwise apply — resolved down where the
-    // message text is actually chosen.
-    let pr_landed_subject = ctx.metadata_columns.pr_subjects.then(|| {
-        if is_pr_merge {
-            crate::pr::pr_landed_subject(&commit.message, &commit.full_message, true)
-        } else if commit.parent_oids.len() == 1 {
-            crate::pr::pr_landed_subject(&commit.message, &commit.full_message, false)
-        } else {
-            None
-        }
-    }).flatten();
-    // #92: any of the muted-merge categories above should read grey across the
-    // whole row, not just the message — DIM alone is too subtle (terminal
-    // support is inconsistent), so the hash/author/date columns get the same
-    // explicit `text_muted` foreground the message uses.
-    // A merged-lane commit (#108) reads muted too — its message, hash, author,
-    // and date all grey, matching the other muted categories (#92).
-    let row_is_muted =
-        is_base_update || is_pr_merge || muted_merge || collapse_merge || is_merged_lane;
-    let hash_style = if row_is_muted {
-        Style::default().fg(ctx.theme.text_muted)
-    } else {
-        Style::default().fg(ctx.theme.hash_color)
-    };
-    let author_style = if row_is_muted {
-        Style::default().fg(ctx.theme.text_muted)
-    } else {
-        Style::default().fg(ctx.theme.author_color)
-    };
-    let date_style = if row_is_muted {
-        Style::default().fg(ctx.theme.text_muted)
-    } else {
-        Style::default().fg(ctx.theme.date_color)
-    };
-    // Three separate style domains, decided independently and never merged here:
-    //   1. message-text precedence (this chain) — which mute wins for the message;
-    //   2. connector-cell dim (force_dim ∪ trace) — see `render_cells_unicode`
-    //      and `dim_pixel_specs_window`, applied to the graph glyphs, not text;
-    //   3. chip styling (branch/tag/merged badges) — see `optimize_branch_display`
-    //      and `merged_style`.
-    // The widget-level selection highlight (`Theme::selection_style`) then patches
-    // BOLD over the whole selected line and subtracts DIM, so BOLD wins when a row
-    // is selected without any domain going muddy (DIM+BOLD).
-    //
-    // Precedence: a base-update back-merge (#55) is the noisiest, so it wins with
-    // the strongest mute (muted color + DIM). Then a PR-landing merge (#52), then
-    // ordinary merge muting/collapse, then selection bold.
-    let msg_style = if is_base_update {
-        Style::default()
-            .fg(ctx.theme.text_muted)
-            .add_modifier(Modifier::DIM)
-    } else if is_pr_merge {
-        Style::default().fg(ctx.theme.text_muted)
-    } else if muted_merge || collapse_merge || is_merged_lane {
-        // Merged-lane commits (#108) share the ordinary muted-merge treatment:
-        // an explicit muted foreground plus DIM.
-        Style::default()
-            .fg(ctx.theme.text_muted)
-            .add_modifier(Modifier::DIM)
-    } else if flags.is_selected {
-        Style::default().add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-
-    // === Left-aligned: branch names + message ===
-
-    // Optimize branch names (compact when local matches origin/local)
-    let branch_display = optimize_branch_display(
-        &node.branch_names,
-        node.is_head,
-        node.color_index,
-        ctx.selected_branch_name,
-        ctx.theme,
-        ctx.remotes,
-    );
-
-    // Tag labels render after branch labels with a distinct color.
-    let tag_display = build_tag_labels(&node.tag_names, ctx.theme);
-
-    // Open-PR badge (#42): shown exactly once per PR, on the PR's head commit.
-    // Colored by CI status, with review/comment markers (#43).
-    let pr_badge = pr_for_row(
-        commit.oid,
-        &node.branch_names,
-        ctx.remotes,
-        ctx.pr_ctx,
-        ctx.open_prs,
-        ctx.theme,
-    );
-    // Chip plus a trailing space.
-    let pr_badge_width = pr_badge.as_ref().map_or(0, |b| display_width(&b.text) + 1);
-
-    // Merged badge: shown when one of this node's local branches has already
-    // landed on the trunk (merge commit, fast-forward, or squash) AND the
-    // dim-merged-branches setting is on (issue #106) — the branch chips are
-    // dimmed to match. Hidden merged branches never reach this row at all (the
-    // hide-merged toggle removes them from the graph entirely upstream), so
-    // `merged_dim` is the only gate a shown merged branch still needs; it
-    // applies identically regardless of classification kind.
-    let has_merged_branch = ctx.merged_dim
-        && node
-            .branch_names
-            .iter()
-            .any(|n| ctx.merged_branches.contains(n));
-    // Computed once and reused below (render section) so the badge text is
-    // built at most once per row.
-    let merged_badge_text = has_merged_branch.then(merged_badge);
-    let merged_badge_width = merged_badge_text
-        .as_deref()
-        .map_or(0, |b| display_width(b) + 1);
-
-    // === Right-aligned: date author hash (fixed width) ===
-    let date = format_date_field(commit.timestamp, ctx.now); // DATE_FIELD_WIDTH chars
-    let author = truncate_to_width(&commit.author_name, 8);
-    let author_formatted = format!("{:<8}", author); // fixed 8 chars
-    let hash = truncate_to_width(&commit.short_id, 7);
-    let hash_formatted = format!("{:<7}", hash); // fixed 7 chars
-
-    // Calculate branch width first (before rendering)
-    let branch_width: usize = branch_display
-        .iter()
-        .enumerate()
-        .map(|(i, chip)| display_width(&chip.label) + if i > 0 { 1 } else { 0 })
-        .sum::<usize>()
-        + if !branch_display.is_empty() { 1 } else { 0 };
-
-    // Each tag label carries a trailing space (see rendering below).
-    let tag_width: usize = tag_display
-        .iter()
-        .map(|(label, _)| display_width(label) + 1)
-        .sum();
-
-    // Calculate remaining space for branch + message + right info
-    let graph_width = left_width;
-    let remaining_for_content = ctx.total_width.saturating_sub(graph_width);
-
-    // Determine which right-side elements to show based on available space
-    let (show_date, show_author, show_hash, right_width) =
-        compute_right_side_visibility(remaining_for_content, ctx.metadata_columns);
-
-    // Render open-PR badge (#98: moved before the branch pill so PR context
-    // leads the row instead of trailing it). Emits nothing when absent, so
-    // there's no leading gap before the branch labels on PR-less rows.
-    if let Some(badge) = &pr_badge {
-        let style = Style::default().fg(badge.color).add_modifier(Modifier::BOLD);
-        let chip_start = left_width;
-        left_width += display_width(&badge.text) + 1;
-        chips.push(ChipHit {
-            x_start: chip_start as u16,
-            x_end: (chip_start + display_width(&badge.text)) as u16,
-            target: ChipTarget::PrBadge,
-        });
-        spans.push(Span::styled(badge.text.clone(), style));
-        spans.push(Span::raw(" "));
-    }
-
-    // Render branch labels
-    for (i, chip) in branch_display.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" "));
-            left_width += 1;
-        }
-        let chip_start = left_width;
-        left_width += display_width(&chip.label);
-        // Each chip already carries the branch a click on it resolves to (folded
-        // into chip construction, #77), so the render tail no longer re-derives it.
-        let is_merged = ctx.merged_dim
-            && chip
-                .branch
-                .as_deref()
-                .is_some_and(|n| ctx.merged_branches.contains(n));
-        if let Some(name) = &chip.branch {
-            chips.push(ChipHit {
-                x_start: chip_start as u16,
-                x_end: left_width as u16,
-                target: ChipTarget::Branch(name.clone()),
-            });
-        }
-        // A merged branch's chip keeps its lane hue, muted and dimmed (#90), so
-        // it recedes while still reading as its own branch.
-        let style = if is_merged {
-            merged_chip_style(chip.style, ctx.theme)
-        } else {
-            chip.style
-        };
-        spans.push(Span::styled(chip.label.clone(), style));
-    }
-    if !branch_display.is_empty() {
-        spans.push(Span::raw(" "));
-        left_width += 1;
-    }
-
-    // Render merged badge (after branch labels)
-    if let Some(badge) = &merged_badge_text {
-        left_width += display_width(badge) + 1;
-        spans.push(Span::styled(badge.clone(), merged_style(ctx.theme)));
-        spans.push(Span::raw(" "));
-    }
-
-    // Render tag labels (after branches, before the stash label)
-    for (label, style) in &tag_display {
-        left_width += display_width(label) + 1;
-        spans.push(Span::styled(label.clone(), *style));
-        spans.push(Span::raw(" "));
-    }
-
-    // Render stash label
-    let stash_width = if let Some(stash_label) = &node.stash_label {
-        let label = format!("{{{}}}", stash_label);
-        let stash_style = Style::default()
-            .fg(ctx.theme.text_muted)
-            .add_modifier(Modifier::ITALIC);
-        let w = display_width(&label) + 1;
-        left_width += w;
-        spans.push(Span::styled(label, stash_style));
-        spans.push(Span::raw(" "));
-        w
-    } else {
-        0
-    };
-
-    // Compute max message width (remaining space after branch, stash label, and right side)
-    let available_for_message = remaining_for_content
-        .saturating_sub(branch_width)
-        .saturating_sub(merged_badge_width)
-        .saturating_sub(pr_badge_width)
-        .saturating_sub(tag_width)
-        .saturating_sub(stash_width)
-        .saturating_sub(right_width);
-    // Collapse (#59) replaces the whole message with a single merge glyph — the
-    // strongest reduction, so it wins over a PR-subject rewrite (#99) on the
-    // same row. Otherwise a qualifying PR-landed commit shows "<icon> <title>"
-    // — no number (#101: the parsed number is sometimes an issue reference,
-    // and the title alone reads cleaner); anything else truncates the raw
-    // message as usual.
-    let message = if collapse_merge {
-        MERGE_ICON.to_string()
-    } else if let Some((_, title)) = &pr_landed_subject {
-        truncate_to_width(&format!("{PR_BADGE_ICON} {title}"), available_for_message)
-    } else {
-        truncate_to_width(&commit.message, available_for_message)
-    };
-    let message_width = display_width(&message);
-    spans.push(Span::styled(message, msg_style));
-    left_width += message_width;
-
-    // Padding so the right-aligned block starts at a fixed column
-    let padding = ctx.total_width
-        .saturating_sub(left_width)
-        .saturating_sub(right_width);
-    if padding > 0 {
-        spans.push(Span::raw(" ".repeat(padding)));
-    }
-
-    // === Append right-aligned block (display: date, author, hash) ===
-    if show_date {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(date, date_style));
-    }
-    if show_author {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(author_formatted, author_style));
-    }
-    if show_hash {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(hash_formatted, hash_style));
-    }
-    if show_date || show_author || show_hash {
-        spans.push(Span::raw(" "));
-    }
-
-    (Line::from(spans), chips)
-}
-
 impl<'a> StatefulWidget for GraphViewWidget<'a> {
     type State = ListState;
 
@@ -1016,44 +516,40 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::{CiStatus, MergeState, ReviewState};
+    use crate::config::MetadataColumns;
+    use crate::pr::{CiStatus, MergeState, PrInfo, ReviewState};
+    use std::collections::HashMap;
 
-    // ── build_tag_labels ─────────────────────────────────────────────
+    use super::badges::merged_badge;
+    use super::chips::BranchChip;
+    use super::row::{resolve_row_model, RowMessage, RowModel};
 
-    #[test]
-    fn no_tags_produces_no_labels() {
-        let theme = Theme::dark();
-        assert!(build_tag_labels(&[], &theme).is_empty());
-    }
-
-    #[test]
-    fn short_tag_is_wrapped_in_angle_brackets() {
-        let theme = Theme::dark();
-        let labels = build_tag_labels(&["v1.0".to_string()], &theme);
-        assert_eq!(labels.len(), 1);
-        assert_eq!(labels[0].0, "<v1.0>");
-        // Distinct from branch labels: rendered in the tag color.
-        assert_eq!(labels[0].1.fg, Some(theme.tag_label));
-    }
-
-    #[test]
-    fn each_tag_gets_its_own_label() {
-        let theme = Theme::dark();
-        let labels = build_tag_labels(&["v1.0".to_string(), "release".to_string()], &theme);
-        let rendered: Vec<&str> = labels.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(rendered, vec!["<v1.0>", "<release>"]);
-    }
-
-    #[test]
-    fn overlong_tag_is_truncated_within_the_width_budget() {
-        let theme = Theme::dark();
-        let long = "an-extremely-long-tag-name-that-will-not-fit-on-one-line".to_string();
-        let labels = build_tag_labels(&[long], &theme);
-        let label = &labels[0].0;
-        // Never exceeds the label budget, stays bracketed, and is elided.
-        assert!(display_width(label) <= 24, "label too wide: {label:?}");
-        assert!(label.starts_with('<') && label.ends_with('>'));
-        assert!(label.contains('…'), "expected an ellipsis: {label:?}");
+    // The pure per-row decision model, as the real render path resolves it (via
+    // `render_graph_line`'s prelude) but returned directly so decision tests can
+    // assert on `RowModel` fields instead of scanning rendered spans. Mirrors the
+    // is-base-update / is-merged-lane derivation `render_graph_line` performs.
+    fn model_with_ctx(node: &GraphNode, ctx: &RowRenderCtx) -> RowModel {
+        let commit = node.commit.as_ref().expect("commit node");
+        let is_base_update = is_base_update_row(
+            node,
+            ctx.metadata_columns.mute_base_merges,
+            ctx.base_update_merges,
+        );
+        let is_merged_lane = node
+            .commit
+            .as_ref()
+            .is_some_and(|c| ctx.merged_lane_oids.is_some_and(|s| s.contains(&c.oid)));
+        resolve_row_model(
+            node,
+            commit,
+            ctx,
+            RowFlags {
+                is_selected: false,
+                is_marked: false,
+            },
+            is_base_update,
+            is_merged_lane,
+        )
     }
 
     // ── open-PR badge matching ───────────────────────────────────────
@@ -1069,28 +565,6 @@ mod tests {
             outside_activity: false,
             head_oid: None,
         }
-    }
-
-    #[test]
-    fn merged_chip_keeps_lane_hue_muted_not_flat_grey() {
-        // A merged branch chip (#90) must derive from its own lane color, muted —
-        // NOT collapse to the flat `text_muted` grey the old style used, and NOT
-        // stay identical to the active unmerged chip.
-        let theme = Theme::dark();
-        let lane = theme.lane_color(1); // second lane, a distinct hue
-        let unmerged = Style::default().fg(lane);
-        let merged = merged_chip_style(unmerged, &theme);
-
-        let fg = merged.fg.expect("merged chip keeps an fg color");
-        // Derived from the lane hue, not the flat muted grey.
-        assert_ne!(fg, theme.text_muted, "must not be flat grey");
-        // Actually muted — moved off the raw lane color.
-        assert_ne!(fg, lane, "must be muted, not the raw lane color");
-        // Matches the theme's blend helper exactly (derivation is lane-based).
-        assert_eq!(fg, theme.merged_chip_color(lane));
-        // And it is visibly distinct from the unmerged chip's style.
-        assert_ne!(merged, unmerged, "merged chip differs from the unmerged chip");
-        assert!(merged.add_modifier.contains(Modifier::DIM), "merged chip is dimmed");
     }
 
     // ── one badge per PR, on its head commit (#42) ───────────────────
@@ -1236,34 +710,26 @@ mod tests {
         n
     }
 
-    /// The style of the span whose content is exactly `content`.
-    fn span_style(line: &Line, content: &str) -> Style {
-        line.spans
-            .iter()
-            .find(|s| s.content.as_ref() == content)
-            .unwrap_or_else(|| panic!("span {content:?} not found in {line:?}"))
-            .style
-    }
-
     #[test]
     fn pr_merge_message_is_greyed_data_driven() {
+        // Decision test: the PR-merge greying lands on the model's `msg_style`.
         let theme = Theme::dark();
         // PR #9's head is commit 5; a merge whose 2nd parent is 5 is a PR merge.
         let open = open_map(vec![("feat", pr_head(9, 5))]);
         let node = merge_node_full(20, "Merge feat", [1, 5]);
         // mute_merges OFF, so only the PR-merge rule can grey the message.
-        let line = render_row(&node, &open, false);
+        let model = model_row(&node, &open, false);
         assert_eq!(
-            span_style(&line, "Merge feat").fg,
+            model.msg_style.fg,
             Some(theme.text_muted),
             "PR merge message is greyed"
         );
         // A plain local merge (2nd parent not a PR head, non-GitHub message) is
         // left at full strength when muting is off.
         let plain = merge_node_full(21, "Merge branch 'x'", [1, 2]);
-        let plain_line = render_row(&plain, &open, false);
+        let plain_model = model_row(&plain, &open, false);
         assert_ne!(
-            span_style(&plain_line, "Merge branch 'x'").fg,
+            plain_model.msg_style.fg,
             Some(theme.text_muted),
             "a plain local merge is not greyed"
         );
@@ -1271,84 +737,14 @@ mod tests {
 
     #[test]
     fn pr_merge_message_is_greyed_by_github_format_when_pr_closed() {
+        // Decision test on `msg_style`.
         let theme = Theme::dark();
         // No open PRs (a merged PR has left `gh pr list`); the message format
         // alone identifies it as a PR merge.
         let open = HashMap::new();
         let node = merge_node_full(20, "Merge pull request #42 from o/b", [1, 2]);
-        let line = render_row(&node, &open, false);
-        assert_eq!(
-            span_style(&line, "Merge pull request #42 from o/b").fg,
-            Some(theme.text_muted),
-        );
-    }
-
-    // ── metadata column visibility / width budget ────────────────────
-
-    fn cols(author: bool, hash: bool, date: bool) -> MetadataColumns {
-        MetadataColumns {
-            author,
-            hash,
-            date,
-            mute_merges: true,
-            mute_base_merges: false,
-            collapse_merges: false,
-            avatars: false,
-            pr_subjects: true,
-        }
-    }
-
-    #[test]
-    fn all_columns_shown_when_enabled_and_wide() {
-        // Compact date (4) + separators: date 5 + author 10 + hash 9 + trailing 1 = 25.
-        assert_eq!(
-            compute_right_side_visibility(200, cols(true, true, true)),
-            (true, true, true, 25)
-        );
-    }
-
-    #[test]
-    fn disabled_column_is_never_shown_and_reclaims_its_width() {
-        // Hash off: only date+author, width drops from 25 to 16 (9 reclaimed).
-        assert_eq!(
-            compute_right_side_visibility(200, cols(true, false, true)),
-            (true, true, false, 16)
-        );
-        // Everything off: no right block at all.
-        assert_eq!(
-            compute_right_side_visibility(200, cols(false, false, false)),
-            (false, false, false, 0)
-        );
-        // Only date enabled: date " "+4 = 5, +1 trailing = 6.
-        assert_eq!(
-            compute_right_side_visibility(200, cols(false, false, true)),
-            (true, false, false, 6)
-        );
-    }
-
-    #[test]
-    fn enabled_columns_still_drop_by_priority_when_narrow() {
-        // available = remaining - 50. Hash drops first, then date, author last.
-        // all (25): avail >= 25 → remaining >= 75.
-        assert_eq!(
-            compute_right_side_visibility(75, cols(true, true, true)),
-            (true, true, true, 25)
-        );
-        // date+author (16): 16 <= avail < 25 → remaining 66..74.
-        assert_eq!(
-            compute_right_side_visibility(74, cols(true, true, true)),
-            (true, true, false, 16)
-        );
-        // author only (11): 11 <= avail < 16 → remaining 61..65.
-        assert_eq!(
-            compute_right_side_visibility(65, cols(true, true, true)),
-            (false, true, false, 11)
-        );
-        // none (0): avail < 11 → remaining < 61.
-        assert_eq!(
-            compute_right_side_visibility(60, cols(true, true, true)),
-            (false, false, false, 0)
-        );
+        let model = model_row(&node, &open, false);
+        assert_eq!(model.msg_style.fg, Some(theme.text_muted));
     }
 
     // ── unicode cell clamping ────────────────────────────────────────
@@ -1531,14 +927,61 @@ mod tests {
         line
     }
 
-    /// Render one full graph row with an explicit merged-branch classification
-    /// set and the dim-merged-branches setting (issue #106) — the real per-row
-    /// render path, so tests observe exactly what the user sees.
-    fn render_row_with_merged(
+    /// The pure [`RowModel`] the tail resolves for a row, mirroring
+    /// [`render_row`]'s columns/flags. For decision tests that assert on the
+    /// model directly rather than scanning rendered spans.
+    fn model_row(node: &GraphNode, open_prs: &HashMap<String, PrInfo>, mute_merges: bool) -> RowModel {
+        let cols = MetadataColumns {
+            author: false,
+            hash: false,
+            date: false,
+            mute_merges,
+            mute_base_merges: false,
+            collapse_merges: false,
+            avatars: false,
+            pr_subjects: true,
+        };
+        model_row_with(node, open_prs, cols, &HashSet::new())
+    }
+
+    /// The pure [`RowModel`] the tail resolves, mirroring [`render_row_with`]'s
+    /// explicit columns + base-update set. For decision tests.
+    fn model_row_with(
+        node: &GraphNode,
+        open_prs: &HashMap<String, PrInfo>,
+        cols: MetadataColumns,
+        base_update_merges: &HashSet<git2::Oid>,
+    ) -> RowModel {
+        let theme = Theme::dark();
+        let pr_ctx = PrContext::new(open_prs);
+        let ctx = RowRenderCtx {
+            theme: &theme,
+            now: Local::now(),
+            pixel_mode: false,
+            remotes: &[],
+            open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches: &HashSet::new(),
+            merged_dim: true,
+            merged_lane_oids: None,
+            base_update_merges,
+            metadata_columns: cols,
+            graph_width: 4,
+            total_width: 200,
+            selected_branch_name: None,
+            trace: None,
+        };
+        model_with_ctx(node, &ctx)
+    }
+
+    /// The pure [`RowModel`] with an explicit merged-branch classification set
+    /// and the dim-merged-branches setting (issue #106) — the tail's decision
+    /// output, so tests assert on chip styles / the merged badge directly.
+    fn model_row_with_merged(
         node: &GraphNode,
         merged_branches: &HashSet<String>,
         merged_dim: bool,
-    ) -> Line<'static> {
+    ) -> RowModel {
         let cols = MetadataColumns {
             author: false,
             hash: false,
@@ -1569,15 +1012,7 @@ mod tests {
             selected_branch_name: None,
             trace: None,
         };
-        let (line, _chips) = render_graph_line(
-            node,
-            &ctx,
-            RowFlags {
-                is_selected: false,
-                is_marked: false,
-            },
-        );
-        line
+        model_with_ctx(node, &ctx)
     }
 
     // ── merged-branch dimming respects its own setting (#106) ─────────
@@ -1616,20 +1051,14 @@ mod tests {
         }
     }
 
-    /// The branch chip span whose text contains `name`. Panics if absent.
-    fn find_chip<'a>(line: &'a Line<'static>, name: &str) -> &'a Span<'static> {
-        line.spans
+    /// The branch chip in the resolved model whose label contains `name`.
+    /// Panics if absent.
+    fn model_chip<'a>(model: &'a RowModel, name: &str) -> &'a BranchChip {
+        model
+            .branch_chips
             .iter()
-            .find(|s| s.content.as_ref().contains(name))
-            .unwrap_or_else(|| panic!("branch chip {name:?} not found in {line:?}"))
-    }
-
-    /// Whether the row carries the exact "merged" badge span (icon + "merged"),
-    /// as opposed to merely a branch name that happens to contain the substring
-    /// "merged" (e.g. `feature/ancestry-merged`).
-    fn has_merged_badge(line: &Line<'static>) -> bool {
-        let badge = merged_badge();
-        line.spans.iter().any(|s| s.content.as_ref() == badge)
+            .find(|c| c.label.contains(name))
+            .unwrap_or_else(|| panic!("branch chip {name:?} not found in {:?}", model.branch_chips))
     }
 
     #[test]
@@ -1637,14 +1066,15 @@ mod tests {
         let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
         let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
 
-        let line = render_row_with_merged(&node, &merged, true);
-        let chip = find_chip(&line, "feature/ancestry-landed");
+        let model = model_row_with_merged(&node, &merged, true);
+        let chip = model_chip(&model, "feature/ancestry-landed");
         assert!(
             chip.style.add_modifier.contains(Modifier::DIM),
             "merged chip dims when the setting is on: {chip:?}"
         );
-        assert!(
-            has_merged_badge(&line),
+        assert_eq!(
+            model.merged_badge,
+            Some(merged_badge()),
             "merged badge shown when the setting is on"
         );
     }
@@ -1654,14 +1084,14 @@ mod tests {
         let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
         let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
 
-        let line = render_row_with_merged(&node, &merged, false);
-        let chip = find_chip(&line, "feature/ancestry-landed");
+        let model = model_row_with_merged(&node, &merged, false);
+        let chip = model_chip(&model, "feature/ancestry-landed");
         assert!(
             !chip.style.add_modifier.contains(Modifier::DIM),
             "dim setting off renders the branch chip normally: {chip:?}"
         );
-        assert!(
-            !has_merged_badge(&line),
+        assert_eq!(
+            model.merged_badge, None,
             "no merged badge when the dim setting is off"
         );
     }
@@ -1675,8 +1105,8 @@ mod tests {
         let node = branch_tip_node("feature commit 2", &["feature/squash-me"]);
         let merged: HashSet<String> = ["feature/squash-me".to_string()].into_iter().collect();
 
-        let line = render_row_with_merged(&node, &merged, true);
-        let chip = find_chip(&line, "feature/squash-me");
+        let model = model_row_with_merged(&node, &merged, true);
+        let chip = model_chip(&model, "feature/squash-me");
         assert!(
             chip.style.add_modifier.contains(Modifier::DIM),
             "squash-merged chip dims when the setting is on: {chip:?}"
@@ -1692,14 +1122,14 @@ mod tests {
         let node = branch_tip_node("feature commit 2", &["feature/squash-me"]);
         let merged: HashSet<String> = ["feature/squash-me".to_string()].into_iter().collect();
 
-        let line = render_row_with_merged(&node, &merged, false);
-        let chip = find_chip(&line, "feature/squash-me");
+        let model = model_row_with_merged(&node, &merged, false);
+        let chip = model_chip(&model, "feature/squash-me");
         assert!(
             !chip.style.add_modifier.contains(Modifier::DIM),
             "squash-merged chip renders normally when the setting is off: {chip:?}"
         );
-        assert!(
-            !has_merged_badge(&line),
+        assert_eq!(
+            model.merged_badge, None,
             "no merged badge for a squash-merged branch when the dim setting is off"
         );
     }
@@ -1713,14 +1143,14 @@ mod tests {
         let empty: HashSet<String> = HashSet::new();
 
         for dim in [true, false] {
-            let line = render_row_with_merged(&node, &empty, dim);
-            let chip = find_chip(&line, "feature/still-open");
+            let model = model_row_with_merged(&node, &empty, dim);
+            let chip = model_chip(&model, "feature/still-open");
             assert!(
                 !chip.style.add_modifier.contains(Modifier::DIM),
                 "unmerged branch never dims (dim setting = {dim}): {chip:?}"
             );
-            assert!(
-                !has_merged_badge(&line),
+            assert_eq!(
+                model.merged_badge, None,
                 "unmerged branch never shows the merged badge (dim setting = {dim})"
             );
         }
@@ -1728,14 +1158,14 @@ mod tests {
 
     // ── merged-lane dimming: whole rows grey (#108) ──────────────────────
 
-    /// Render one full graph row with a set of merged-LANE commit OIDs (#108)
-    /// and every metadata column on, so tests can assert the message and the
-    /// hash/author/date columns all grey. `lane_oids = None` renders the
-    /// feature off (the settings toggle held off / hide on).
-    fn render_row_with_merged_lane(
+    /// The pure [`RowModel`] with a set of merged-LANE commit OIDs (#108) and
+    /// every metadata column on, so tests can assert the message and the
+    /// hash/author/date column styles. `lane_oids = None` resolves the feature
+    /// off (the settings toggle held off / hide on).
+    fn model_row_with_merged_lane(
         node: &GraphNode,
         lane_oids: Option<&HashSet<git2::Oid>>,
-    ) -> Line<'static> {
+    ) -> RowModel {
         let cols = MetadataColumns {
             author: true,
             hash: true,
@@ -1766,15 +1196,7 @@ mod tests {
             selected_branch_name: None,
             trace: None,
         };
-        let (line, _chips) = render_graph_line(
-            node,
-            &ctx,
-            RowFlags {
-                is_selected: false,
-                is_marked: false,
-            },
-        );
-        line
+        model_with_ctx(node, &ctx)
     }
 
     #[test]
@@ -1785,24 +1207,25 @@ mod tests {
         let node = commit_node(7, "landed feature work", &[]);
         let lane: HashSet<git2::Oid> = [oid(7)].into_iter().collect();
 
-        let line = render_row_with_merged_lane(&node, Some(&lane));
+        let model = model_row_with_merged_lane(&node, Some(&lane));
 
-        let msg = find_style(&line, "landed feature work").expect("message span");
         assert_eq!(
-            msg.fg,
+            model.msg_style.fg,
             Some(theme.text_muted),
-            "merged-lane message greyed: {msg:?}"
+            "merged-lane message greyed: {:?}",
+            model.msg_style
         );
         assert!(
-            msg.add_modifier.contains(Modifier::DIM),
-            "merged-lane message DIM: {msg:?}"
+            model.msg_style.add_modifier.contains(Modifier::DIM),
+            "merged-lane message DIM: {:?}",
+            model.msg_style
         );
-        // author_name is "a", padded to 8; author_color != text_muted in dark.
-        let author = find_style(&line, &format!("{:<8}", "a")).expect("author span");
+        // author_color != text_muted in dark, so the greying is observable.
         assert_eq!(
-            author.fg,
+            model.author_style.fg,
             Some(theme.text_muted),
-            "merged-lane author column greyed: {author:?}"
+            "merged-lane author column greyed: {:?}",
+            model.author_style
         );
     }
 
@@ -1813,19 +1236,19 @@ mod tests {
         let theme = Theme::dark();
         let node = commit_node(7, "landed feature work", &[]);
 
-        let line = render_row_with_merged_lane(&node, None);
+        let model = model_row_with_merged_lane(&node, None);
 
-        let msg = find_style(&line, "landed feature work").expect("message span");
-        assert_eq!(msg.fg, None, "feature off: message not greyed: {msg:?}");
+        assert_eq!(model.msg_style.fg, None, "feature off: message not greyed: {:?}", model.msg_style);
         assert!(
-            !msg.add_modifier.contains(Modifier::DIM),
-            "feature off: message not DIM: {msg:?}"
+            !model.msg_style.add_modifier.contains(Modifier::DIM),
+            "feature off: message not DIM: {:?}",
+            model.msg_style
         );
-        let author = find_style(&line, &format!("{:<8}", "a")).expect("author span");
         assert_eq!(
-            author.fg,
+            model.author_style.fg,
             Some(theme.author_color),
-            "feature off: author column keeps its own color: {author:?}"
+            "feature off: author column keeps its own color: {:?}",
+            model.author_style
         );
     }
 
@@ -1837,15 +1260,14 @@ mod tests {
         let trunk = commit_node(3, "trunk work", &[]);
         let lane: HashSet<git2::Oid> = [oid(7)].into_iter().collect(); // trunk is oid(3)
 
-        let line = render_row_with_merged_lane(&trunk, Some(&lane));
+        let model = model_row_with_merged_lane(&trunk, Some(&lane));
 
-        let msg = find_style(&line, "trunk work").expect("message span");
-        assert_eq!(msg.fg, None, "non-lane commit not greyed: {msg:?}");
-        let author = find_style(&line, &format!("{:<8}", "a")).expect("author span");
+        assert_eq!(model.msg_style.fg, None, "non-lane commit not greyed: {:?}", model.msg_style);
         assert_eq!(
-            author.fg,
+            model.author_style.fg,
             Some(theme.author_color),
-            "non-lane author keeps its own color: {author:?}"
+            "non-lane author keeps its own color: {:?}",
+            model.author_style
         );
     }
 
@@ -1912,25 +1334,15 @@ mod tests {
             .collect()
     }
 
-    /// The style applied to `node`'s message span when rendered with the given
-    /// mute-merges setting. Panics if the message span isn't found.
-    fn message_style(node: &GraphNode, message: &str, mute_merges: bool) -> Style {
-        let line = render_row(node, &HashMap::new(), mute_merges);
-        line.spans
-            .iter()
-            .find(|s| s.content.as_ref() == message)
-            .unwrap_or_else(|| panic!("message span not found in {:?}", line))
-            .style
-    }
-
     #[test]
     fn muted_merge_dims_message_text_not_the_graph() {
+        // Decision test: the muted-merge message style lands on `msg_style`.
         let theme = Theme::dark();
         let node = merge_node("merge-branch-into-main");
         // Toggle ON: the merge's message text is dimmed AND explicitly greyed.
         // DIM alone isn't reliable — terminal DIM support is inconsistent, so
         // muted merges must pair it with an explicit `text_muted` fg (#92).
-        let muted = message_style(&node, "merge-branch-into-main", true);
+        let muted = model_row(&node, &HashMap::new(), true).msg_style;
         assert!(
             muted.add_modifier.contains(Modifier::DIM),
             "muted merge message should be DIM: {muted:?}"
@@ -1941,7 +1353,7 @@ mod tests {
             "muted merge message should have an explicit grey fg, not rely on DIM alone: {muted:?}"
         );
         // Toggle OFF: the message renders at full strength.
-        let normal = message_style(&node, "merge-branch-into-main", false);
+        let normal = model_row(&node, &HashMap::new(), false).msg_style;
         assert!(
             !normal.add_modifier.contains(Modifier::DIM),
             "un-muted merge message must not be DIM: {normal:?}"
@@ -1953,7 +1365,7 @@ mod tests {
     fn muted_merge_greys_metadata_columns_not_normal_rows() {
         // #92: the whole row should read grey for a muted merge, not just the
         // message — hash/author/date columns get the same explicit
-        // `text_muted` foreground.
+        // `text_muted` foreground. Decided on the model's per-column styles.
         let theme = Theme::dark();
         let cols = MetadataColumns {
             author: true,
@@ -1965,22 +1377,20 @@ mod tests {
             avatars: false,
             pr_subjects: true,
         };
-        let author_text = format!("{:<8}", "a"); // author_name is "a", padded to 8
-        let hash_text = "abc1234"; // short_id, already 7 chars
 
         let merge = merge_node("merge-branch-into-main");
-        let line = render_row_with(&merge, &HashMap::new(), cols, &HashSet::new());
-        let author_style = find_style(&line, &author_text).expect("author span");
-        let hash_style = find_style(&line, hash_text).expect("hash span");
+        let model = model_row_with(&merge, &HashMap::new(), cols, &HashSet::new());
         assert_eq!(
-            author_style.fg,
+            model.author_style.fg,
             Some(theme.text_muted),
-            "muted merge author column should be greyed: {author_style:?}"
+            "muted merge author column should be greyed: {:?}",
+            model.author_style
         );
         assert_eq!(
-            hash_style.fg,
+            model.hash_style.fg,
             Some(theme.text_muted),
-            "muted merge hash column should be greyed: {hash_style:?}"
+            "muted merge hash column should be greyed: {:?}",
+            model.hash_style
         );
 
         // A normal (non-merge) row keeps its ordinary per-column metadata
@@ -1989,18 +1399,18 @@ mod tests {
         // "not muted" is asserted via the actual expected color rather than a
         // simple inequality against `text_muted`.
         let normal = commit_node(1, "normal commit", &[]);
-        let normal_line = render_row_with(&normal, &HashMap::new(), cols, &HashSet::new());
-        let normal_author = find_style(&normal_line, &author_text).expect("author span");
-        let normal_hash = find_style(&normal_line, hash_text).expect("hash span");
+        let normal_model = model_row_with(&normal, &HashMap::new(), cols, &HashSet::new());
         assert_eq!(
-            normal_author.fg,
+            normal_model.author_style.fg,
             Some(theme.author_color),
-            "normal row author column should use author_color, not be greyed: {normal_author:?}"
+            "normal row author column should use author_color, not be greyed: {:?}",
+            normal_model.author_style
         );
         assert_eq!(
-            normal_hash.fg,
+            normal_model.hash_style.fg,
             Some(theme.hash_color),
-            "normal row hash column should use hash_color: {normal_hash:?}"
+            "normal row hash column should use hash_color: {:?}",
+            normal_model.hash_style
         );
     }
 
@@ -2009,7 +1419,7 @@ mod tests {
         let mut node = merge_node("head-merge");
         node.is_head = true;
         // Even with muting on, the HEAD commit's message stays legible.
-        let style = message_style(&node, "head-merge", true);
+        let style = model_row(&node, &HashMap::new(), true).msg_style;
         assert!(!style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -2039,31 +1449,32 @@ mod tests {
 
     #[test]
     fn base_update_merge_message_is_strongly_muted_when_option_on() {
+        // Decision test: the strong base-update mute lands on `msg_style`.
         let theme = Theme::dark();
         let node = merge_node_full(30, "Merge main into feature", [1, 2]);
         let mut set = HashSet::new();
         set.insert(oid(30));
         // Option ON + this commit is in the set → strong mute (muted fg + DIM).
-        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set);
-        let style = find_style(&line, "Merge main into feature").expect("message span");
+        let style = model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set).msg_style;
         assert_eq!(style.fg, Some(theme.text_muted), "strong-muted fg");
         assert!(style.add_modifier.contains(Modifier::DIM), "strong-muted DIM");
     }
 
     #[test]
     fn base_update_merge_is_not_muted_when_option_off_or_not_in_set() {
+        // Decision test on `msg_style`.
         let node = merge_node_full(30, "Merge main into feature", [1, 2]);
         let mut set = HashSet::new();
         set.insert(oid(30));
         // Option OFF → not muted even though the commit is in the set.
-        let off = render_row_with(&node, &HashMap::new(), merge_cols(false, false, false), &set);
-        let s_off = find_style(&off, "Merge main into feature").expect("span");
+        let s_off =
+            model_row_with(&node, &HashMap::new(), merge_cols(false, false, false), &set).msg_style;
         assert_eq!(s_off.fg, None);
         assert!(!s_off.add_modifier.contains(Modifier::DIM));
         // Option ON but commit NOT in the set → not muted.
-        let on_empty =
-            render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &HashSet::new());
-        let s_empty = find_style(&on_empty, "Merge main into feature").expect("span");
+        let s_empty =
+            model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &HashSet::new())
+                .msg_style;
         assert_eq!(s_empty.fg, None);
         assert!(!s_empty.add_modifier.contains(Modifier::DIM));
     }
@@ -2171,24 +1582,28 @@ mod tests {
 
     #[test]
     fn collapse_merge_replaces_message_with_the_merge_glyph() {
+        // Decision test: a collapsed merge selects `RowMessage::Collapse` (the
+        // bare glyph, not the message text) and mutes the message style.
         let node = merge_node_full(31, "Merge branch 'topic'", [1, 2]);
-        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains(MERGE_ICON), "merge glyph shown: {text:?}");
-        assert!(!text.contains("Merge branch 'topic'"), "no message text: {text:?}");
-        // The glyph span is dimmed (collapse implies muting).
-        let style = find_style(&line, MERGE_ICON).expect("glyph span");
-        assert!(style.add_modifier.contains(Modifier::DIM));
+        let model = model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
+        assert_eq!(model.message, RowMessage::Collapse, "collapse selects the merge glyph");
+        // Collapse implies muting: the message style is dimmed.
+        assert!(model.msg_style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
     fn collapse_leaves_non_merge_commits_alone() {
-        // A non-merge commit keeps its message even with collapse on.
+        // A non-merge commit keeps its raw message even with collapse on.
         let mut node = merge_node("real message");
         node.commit.as_mut().unwrap().parent_oids = vec![git2::Oid::zero()]; // 1 parent
-        let line = render_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains("real message"), "non-merge keeps message: {text:?}");
+        let model = model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
+        assert_eq!(
+            model.message,
+            RowMessage::Raw {
+                text: "real message".to_string()
+            },
+            "non-merge keeps its message"
+        );
     }
 
     #[test]
@@ -2238,24 +1653,21 @@ mod tests {
 
     #[test]
     fn pr_merge_commit_rewritten_to_icon_and_title_when_toggle_on() {
+        // Decision test: a PR-merge subject selects `RowMessage::PrSubject` with
+        // the title only (#101: the number — sometimes an issue ref — is dropped).
         let node = merge_node_with_body(
             40,
             "Merge pull request #123 from owner/feat",
             "Add the frobnicator",
             [1, 2],
         );
-        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            text.contains(&format!("{PR_BADGE_ICON} Add the frobnicator")),
-            "rewritten subject present: {text:?}"
-        );
-        // #101: the number stays hidden — it's sometimes an issue reference,
-        // and the title alone reads cleaner.
-        assert!(!text.contains("#123"), "PR number hidden: {text:?}");
-        assert!(
-            !text.contains("Merge pull request"),
-            "raw merge subject text absent: {text:?}"
+        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        assert_eq!(
+            model.message,
+            RowMessage::PrSubject {
+                title: "Add the frobnicator".to_string()
+            },
+            "rewritten to the title only, no number, no raw merge subject"
         );
     }
 
@@ -2267,51 +1679,91 @@ mod tests {
             "Add the frobnicator",
             [1, 2],
         );
-        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            text.contains("Merge pull request #123 from owner/feat"),
-            "raw subject kept when toggle is off: {text:?}"
+        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        assert_eq!(
+            model.message,
+            RowMessage::Raw {
+                text: "Merge pull request #123 from owner/feat".to_string()
+            },
+            "raw subject kept when the toggle is off (no rewrite)"
         );
-        assert!(!text.contains(&PR_BADGE_ICON.to_string()), "no rewrite: {text:?}");
     }
 
     #[test]
     fn squash_commit_subject_rewritten_to_icon_and_title() {
         let node = commit_node(50, "Add the frobnicator (#456)", &[]);
-        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            text.contains(&format!("{PR_BADGE_ICON} Add the frobnicator")),
-            "rewritten squash subject: {text:?}"
+        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        assert_eq!(
+            model.message,
+            RowMessage::PrSubject {
+                title: "Add the frobnicator".to_string()
+            },
+            "rewritten squash subject to the title only, number (#456) hidden"
         );
-        assert!(!text.contains("#456"), "number (possibly an issue ref) hidden: {text:?}");
     }
 
     #[test]
     fn squash_commit_keeps_raw_subject_when_toggle_off() {
         let node = commit_node(51, "Add the frobnicator (#456)", &[]);
-        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            text.contains("Add the frobnicator (#456)"),
-            "raw subject kept when toggle is off: {text:?}"
+        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        assert_eq!(
+            model.message,
+            RowMessage::Raw {
+                text: "Add the frobnicator (#456)".to_string()
+            },
+            "raw subject kept when the toggle is off"
         );
     }
 
     #[test]
     fn collapse_merges_wins_over_pr_subject_rewrite_on_the_same_row() {
+        // Precedence: Collapse beats a PR-subject rewrite when both qualify.
         let node = merge_node_with_body(
             42,
             "Merge pull request #123 from owner/feat",
             "Add the frobnicator",
             [1, 2],
         );
-        let line = render_row_with(&node, &HashMap::new(), cols_pr_subjects(true, true), &HashSet::new());
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains(MERGE_ICON), "collapse glyph wins: {text:?}");
-        assert!(!text.contains("#123"), "pr-subject rewrite suppressed: {text:?}");
-        assert!(!text.contains("Merge pull request"), "raw subject also suppressed: {text:?}");
+        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, true), &HashSet::new());
+        assert_eq!(
+            model.message,
+            RowMessage::Collapse,
+            "collapse wins over the pr-subject rewrite"
+        );
+    }
+
+    #[test]
+    fn row_message_precedence_collapse_beats_pr_subject_beats_raw() {
+        // One PR-merge node under three settings exercises the full message
+        // precedence on the same row: Collapse > PrSubject > Raw.
+        let node = merge_node_with_body(
+            43,
+            "Merge pull request #123 from owner/feat",
+            "Add the frobnicator",
+            [1, 2],
+        );
+        // Collapse ON (+ pr-subjects ON): Collapse wins outright.
+        let collapse =
+            model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, true), &HashSet::new());
+        assert_eq!(collapse.message, RowMessage::Collapse);
+        // Collapse OFF, pr-subjects ON: rewrites to the title only.
+        let subject =
+            model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        assert_eq!(
+            subject.message,
+            RowMessage::PrSubject {
+                title: "Add the frobnicator".to_string()
+            }
+        );
+        // Both OFF: the raw subject.
+        let raw =
+            model_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        assert_eq!(
+            raw.message,
+            RowMessage::Raw {
+                text: "Merge pull request #123 from owner/feat".to_string()
+            }
+        );
     }
 
     // ── branch tracing: Unicode dim + fold + truncation ──────────────────
