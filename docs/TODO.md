@@ -574,3 +574,6 @@ A local branch strictly behind its own upstream (dev behind origin/dev) is a sta
 
 ### [DONE] #106 Mute-merged toggle ignored for squash-merged branches
 Squash-merged branches render greyed regardless of the mute/dim merged-branches setting.
+
+### [DONE] #107 Remote mirror behind its local counterpart misclassified as merged
+Symmetric to #105: origin/<branch> lagging a local branch with unpushed commits (e.g. origin/chong-dev behind the checked-out chong-dev) read as ancestry-"merged into the line you're on" and got dimmed. Stale-tracking guard now covers both directions.

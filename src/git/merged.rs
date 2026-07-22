@@ -326,6 +326,7 @@ fn gh_key(b: &BranchInfo) -> &str {
 fn branch_is_merged(
     repo: &Repository,
     b: &BranchInfo,
+    branches: &[BranchInfo],
     base_tips: &[Oid],
     base_name: &str,
     gh_merged: &HashSet<String>,
@@ -356,14 +357,27 @@ fn branch_is_merged(
     if !b.is_remote && (b.name == "main" || b.name == "master") {
         return false;
     }
-    // A local branch strictly BEHIND its upstream (dev lagging origin/dev) is a
-    // stale tracking ref, not landed work — its remote counterpart is the live
-    // line and classifies in its own right. Being behind makes its tip an
-    // ancestor of anything containing the upstream, so the *ancestry* signal
-    // would misread it as merged (#105); the exact signals (patch-id squash,
-    // gh + containment) stay eligible — they can only fire when the branch's
-    // content genuinely landed. `behind` is 0 when there is no upstream.
-    let stale_tracking = !b.is_remote && b.ahead == 0 && b.behind > 0;
+    // A branch that merely LAGS the live copy of its own line is stale, not
+    // landed work, and its tip being an ancestor of things makes the *ancestry*
+    // signal lie (#105). Two symmetric shapes:
+    //  - local strictly behind its upstream (dev lagging origin/dev) — the
+    //    remote is the live line; `behind` is 0 when there is no upstream;
+    //  - remote strictly behind its LOCAL counterpart (origin/chong-dev lagging
+    //    a checked-out chong-dev with unpushed commits) — the local is the live
+    //    line, and since the checked-out tip is a trunk tip (#103) the mirror
+    //    would otherwise read as "merged into the line you're on" (#107).
+    // The exact signals (patch-id squash target, gh + containment) stay
+    // eligible — they only fire when the branch's content genuinely landed.
+    let stale_tracking = if b.is_remote {
+        branches.iter().any(|l| {
+            !l.is_remote
+                && l.name == gh_key(b)
+                && l.tip_oid != b.tip_oid
+                && repo.graph_descendant_of(l.tip_oid, b.tip_oid).unwrap_or(false)
+        })
+    } else {
+        b.ahead == 0 && b.behind > 0
+    };
     let landed_in_git = base_tips.iter().any(|&t| {
         if stale_tracking {
             // Only a concrete squash landing commit counts — both the ancestry
@@ -424,12 +438,20 @@ pub fn explain_classification(
             let _ = writeln!(out, "  guard: trunk mirror on another remote — never classified");
             continue;
         }
-        let stale_tracking = !b.is_remote && b.ahead == 0 && b.behind > 0;
+        let stale_tracking = if b.is_remote {
+            branches.iter().any(|l| {
+                !l.is_remote
+                    && l.name == gh_key(b)
+                    && l.tip_oid != b.tip_oid
+                    && repo.graph_descendant_of(l.tip_oid, b.tip_oid).unwrap_or(false)
+            })
+        } else {
+            b.ahead == 0 && b.behind > 0
+        };
         if stale_tracking {
             let _ = writeln!(
                 out,
-                "  behind upstream by {} (ahead 0) — stale tracking ref, ancestry signal disabled (#105)",
-                b.behind
+                "  lags the live copy of its own line — stale tracking ref, ancestry signal disabled (#105/#107)"
             );
         }
         let mut verdict: Option<String> = None;
@@ -526,7 +548,7 @@ pub fn classify_merged_branches_with_targets(
     let mut merged = HashSet::new();
     let mut targets = HashMap::new();
     for b in branches {
-        if !branch_is_merged(repo, b, &tips, base_name, gh_merged) {
+        if !branch_is_merged(repo, b, branches, &tips, base_name, gh_merged) {
             continue;
         }
         merged.insert(b.name.clone());
@@ -994,6 +1016,32 @@ mod tests {
             ahead: 0,
             behind: 0,
         }
+    }
+
+    #[test]
+    fn remote_mirror_behind_its_local_counterpart_is_never_merged() {
+        // #107 user repro: chong-dev is checked out with unpushed commits, so
+        // origin/chong-dev lags the local tip. Since the checked-out tip is a
+        // trunk tip (#103), the mirror's tip is an ancestor of it and the
+        // ancestry signal would dim/hide the remote copy of the very line the
+        // user is working on.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let r = commit(&repo, "refs/remotes/origin/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "one")]);
+        let l = commit(&repo, "refs/heads/dev", 2100, &[r], &[("base.txt", "base"), ("d.txt", "one\ntwo")]);
+
+        let branches = vec![
+            local("main", a, false),
+            local("dev", l, true), // checked out, ahead of its remote
+            remote("origin/dev", r),
+        ];
+        let base = base_branch(&branches).unwrap();
+        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        assert!(
+            !set.contains("origin/dev"),
+            "the remote mirror of the live local line is stale, not merged: {set:?}"
+        );
     }
 
     #[test]
