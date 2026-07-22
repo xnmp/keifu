@@ -99,6 +99,14 @@ pub enum CellType {
     TeeLeft(usize),
     /// Upward T junction (fork point) ┴
     TeeUp(usize),
+    /// Downward T junction ┬: a stem (`.1`) drops out of a horizontal corridor
+    /// (`.0` keeps the corridor's color) toward the row below. Written only by
+    /// [`draw_squash_link`] when the link's natural anchor column is occupied
+    /// on the far endpoint's row by a horizontal run that flows into that
+    /// endpoint's dot (the uncommitted landing band across the HEAD row): the
+    /// link *joins* the band instead of detouring around it (issue #115). Both
+    /// strokes are overlay decorations — the cell keeps `(None, None)` edges.
+    TeeDown(usize, usize), // (horizontal_color, stem_color)
 }
 
 /// Graph layout
@@ -894,6 +902,13 @@ fn inject_squash_links(nodes: &mut [GraphNode], max_lane: &mut usize, links: &[(
 /// so the link detoured out and back — a phantom curve ending in a void column
 /// (issue #110). Anchoring on an endpoint's own column removes that detour.
 ///
+/// When even the endpoint anchors are blocked because the upper row carries a
+/// horizontal run into the upper dot (the uncommitted landing band, when HEAD
+/// sits on the squash commit with uncommitted changes), the link JOINS the run
+/// via a [`CellType::TeeDown`] junction instead of detouring (issue #115) —
+/// see `junction_ok` below. The mirror orientation (band on the *lower*
+/// endpoint's row) has no junction cell yet and keeps the old fallback.
+///
 /// See [`inject_squash_links`] for the invariants this preserves.
 fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2: usize) {
     let (u, l) = (r1.min(r2), r1.max(r2));
@@ -922,6 +937,49 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
                 == CellType::Empty
         })
     };
+    // Junction fallback (issue #115): when the lower endpoint's own lane is
+    // blocked ONLY on the upper row, and what blocks it is a horizontal run
+    // flowing into the upper dot (the uncommitted landing band across the HEAD
+    // row — exactly what happens when HEAD sits on the squash commit with
+    // uncommitted changes), the link can JOIN that run instead of detouring: a
+    // ┬ stem drops out of the band straight into the lower dot, and the band
+    // itself carries the link the rest of the way into the upper dot. Only an
+    // overlay horizontal (no trace edges) is joinable; a real merge-arm cell
+    // keeps its cell untouched and the old routing applies.
+    let junction_ok = |nodes: &[GraphNode]| -> bool {
+        if llane == ulane {
+            return false;
+        }
+        let ci = llane * 2;
+        let cell = |row: usize, col: usize| {
+            nodes[row].cells.get(col).copied().unwrap_or(CellType::Empty)
+        };
+        // Intermediate rows must be free for the stem's pipe.
+        if !((u + 1)..l).all(|i| cell(i, ci) == CellType::Empty) {
+            return false;
+        }
+        // The junction cell: an overlay horizontal, never a traceable edge.
+        if !matches!(cell(u, ci), CellType::Horizontal(_)) {
+            return false;
+        }
+        if nodes[u].cell_oids.get(ci).copied().unwrap_or((None, None)) != (None, None) {
+            return false;
+        }
+        // Corridor: every cell between the upper dot and the junction is part
+        // of one continuous horizontal run, so the band reaches the dot.
+        let (lo, hi) = if llane > ulane {
+            (ulane * 2 + 1, ci)
+        } else {
+            (ci + 1, ulane * 2)
+        };
+        (lo..hi).all(|col| {
+            matches!(
+                cell(u, col),
+                CellType::Horizontal(_) | CellType::HorizontalPipe(_, _)
+            )
+        })
+    };
+
     // Prefer the usable lane nearest both endpoints (fewest crossings, and it
     // keeps the connector between/on the endpoints rather than detouring out);
     // `max_lane + 1` is always free as a last-resort fallback.
@@ -935,6 +993,13 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
                 link_lane = cand;
             }
         }
+    }
+    // The band junction wins whenever it is tighter than the best clean
+    // column — in the colliding topology the clean fallback is a far detour
+    // lane, the #110 phantom shape this junction exists to avoid.
+    let junction = junction_ok(nodes) && llane.abs_diff(ulane) < best_dist;
+    if junction {
+        link_lane = llane;
     }
 
     if link_lane > *max_lane {
@@ -960,6 +1025,18 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
             node.cells[gcol] = CellType::Pipe(SQUASH_LINK_COLOR_INDEX);
             node.cell_oids[gcol] = (None, None);
         }
+    }
+
+    // Band junction: replace the corridor cell with a ┬ whose stem drops into
+    // the lower dot (anchored on its own lane — no lower elbow, no crossing
+    // runs on either endpoint row; the band already reaches the upper dot).
+    if junction {
+        let CellType::Horizontal(band) = nodes[u].cells[gcol] else {
+            unreachable!("junction_ok verified an overlay Horizontal at the junction cell");
+        };
+        nodes[u].cells[gcol] = CellType::TeeDown(band, SQUASH_LINK_COLOR_INDEX);
+        // cell_oids stay (None, None): both strokes are untraceable overlays.
+        return;
     }
 
     // Upper endpoint: the link leaves this commit and heads down the link lane.
@@ -2245,6 +2322,9 @@ mod tests {
             | CellType::TeeLeft(c)
             | CellType::TeeUp(c)
             | CellType::HorizontalPipe(c, _) => Some(c),
+            // The stem is the junction's own stroke; the horizontal belongs
+            // to the corridor it joined.
+            CellType::TeeDown(_, s) => Some(s),
         }
     }
 
@@ -2474,6 +2554,204 @@ mod tests {
             CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX)
                 | CellType::BranchRight(SQUASH_LINK_COLOR_INDEX)
         ));
+    }
+
+    /// #115 repro shape: HEAD sits ON the squash commit `S` with uncommitted
+    /// changes. Lanes 0 and 1 are busy above HEAD (children X, Y of S), so the
+    /// uncommitted node lands on a farther lane and its horizontal band crosses
+    /// the tip's lane column on S's row. The link must JOIN the band with a ┬
+    /// junction on the tip's own lane — not detour to a fresh far lane, not
+    /// sever the band, and not scatter grey fragments on either endpoint row.
+    #[test]
+    fn squash_link_joins_uncommitted_band_with_tee_down_junction() {
+        let (x, y, s, f, t, z) = (oid(1), oid(2), oid(3), oid(4), oid(5), oid(6));
+        let commits = vec![
+            ci(x, vec![s]), // newest child of S — keeps HEAD's own lane busy above
+            ci(y, vec![s]), // second child of S — keeps the next lane busy too
+            ci(s, vec![t]), // squash commit = HEAD, uncommitted changes present
+            ci(f, vec![t]), // squash-merged feature tip, one row below S
+            ci(t, vec![z]),
+            ci(z, vec![]),
+        ];
+        let unc = Some(Some(1));
+        let base = build_graph(&commits, &[], &[], &[], unc, Some(s), &[]);
+        let linked = build_graph(&commits, &[], &[], &[], unc, Some(s), &[(f, s)]);
+
+        let sr = row_of(&linked, s);
+        let fr = row_of(&linked, f);
+        let flane = linked.nodes[fr].lane;
+        let gcol = flane * 2;
+
+        // Fixture precondition: the uncommitted landing band crosses the tip's
+        // lane column on S's row as a plain overlay horizontal. If lane
+        // assignment ever changes and this stops holding, the test needs a new
+        // topology — fail loudly rather than silently testing nothing.
+        assert!(
+            matches!(
+                base.nodes[sr].cells[gcol],
+                CellType::Horizontal(UNCOMMITTED_COLOR_INDEX)
+            ),
+            "fixture must put the uncommitted band across the tip lane on S's row, got {:?}",
+            base.nodes[sr].cells[gcol]
+        );
+
+        // The junction replaces the band cell: corridor color preserved, stem
+        // in the link grey, edges still untraceable.
+        assert_eq!(
+            linked.nodes[sr].cells[gcol],
+            CellType::TeeDown(UNCOMMITTED_COLOR_INDEX, SQUASH_LINK_COLOR_INDEX),
+            "the link joins the band via a ┬ junction on the tip's lane"
+        );
+        assert_eq!(linked.nodes[sr].cell_oids[gcol], (None, None));
+
+        // No detour: the graph does not widen by a link lane.
+        assert_eq!(
+            linked.max_lane, base.max_lane,
+            "joining the band must not add a detour lane"
+        );
+
+        // The junction is the ONLY link-grey ink: no crossing runs, no elbows,
+        // no fragments anywhere else (S and F are adjacent rows, so not even a
+        // pipe is needed).
+        for (i, node) in linked.nodes.iter().enumerate() {
+            for (c, cell) in node.cells.iter().enumerate() {
+                if cell_color(*cell) == Some(SQUASH_LINK_COLOR_INDEX) {
+                    assert_eq!(
+                        (i, c),
+                        (sr, gcol),
+                        "the ┬ stem is the link's only stroke, found extra grey at row {i} col {c}: {cell:?}"
+                    );
+                }
+            }
+        }
+
+        // Every other cell is byte-identical to the link-off layout — the band
+        // stays whole and the tip row carries no crossing run.
+        for (i, (b, l)) in base.nodes.iter().zip(&linked.nodes).enumerate() {
+            for (c, (bc, lc)) in b.cells.iter().zip(&l.cells).enumerate() {
+                if (i, c) != (sr, gcol) {
+                    assert_eq!(bc, lc, "cell at row {i} col {c} must be untouched");
+                }
+            }
+        }
+    }
+
+    /// Multi-row variant of the junction: the tip sits more than one row below
+    /// the squash commit, so the ┬ stem continues as grey pipes through the
+    /// intermediate rows before anchoring on the tip dot.
+    #[test]
+    fn squash_link_junction_stem_spans_intermediate_rows() {
+        let (x, y, w, s, m, f, t, z) = (
+            oid(1),
+            oid(2),
+            oid(3),
+            oid(4),
+            oid(5),
+            oid(6),
+            oid(7),
+            oid(8),
+        );
+        let commits = vec![
+            ci(x, vec![s]), // children of S keep the near lanes busy above HEAD,
+            ci(y, vec![s]), // pushing the uncommitted node PAST the tip's lane so
+            ci(w, vec![s]), // its band crosses that lane as a plain horizontal
+            ci(s, vec![t]), // squash commit = HEAD
+            ci(m, vec![t]), // an unrelated branch row between S and the tip
+            ci(f, vec![t]), // squash-merged feature tip, ≥2 rows below S
+            ci(t, vec![z]),
+            ci(z, vec![]),
+        ];
+        let unc = Some(Some(1));
+        let base = build_graph(&commits, &[], &[], &[], unc, Some(s), &[]);
+        let linked = build_graph(&commits, &[], &[], &[], unc, Some(s), &[(f, s)]);
+
+        let sr = row_of(&linked, s);
+        let fr = row_of(&linked, f);
+        let flane = linked.nodes[fr].lane;
+        let gcol = flane * 2;
+
+        // Fixture preconditions: at least one intermediate row, and the band
+        // crosses the tip's lane column on S's row as a plain overlay cell.
+        assert!(fr > sr + 1, "fixture must put intermediate rows between S and F");
+        assert!(
+            matches!(
+                base.nodes[sr].cells[gcol],
+                CellType::Horizontal(UNCOMMITTED_COLOR_INDEX)
+            ),
+            "fixture must put the uncommitted band across the tip lane, got {:?}",
+            base.nodes[sr].cells[gcol]
+        );
+
+        assert_eq!(
+            linked.nodes[sr].cells[gcol],
+            CellType::TeeDown(UNCOMMITTED_COLOR_INDEX, SQUASH_LINK_COLOR_INDEX)
+        );
+        assert_eq!(linked.max_lane, base.max_lane, "no detour lane");
+        // The stem runs as a grey pipe through every intermediate row and the
+        // tip dot anchors it; that stem is the link's ONLY grey ink.
+        for i in (sr + 1)..fr {
+            assert_eq!(
+                linked.nodes[i].cells[gcol],
+                CellType::Pipe(SQUASH_LINK_COLOR_INDEX),
+                "intermediate row {i} carries the stem pipe"
+            );
+        }
+        assert!(matches!(linked.nodes[fr].cells[gcol], CellType::Commit(_)));
+        for (i, node) in linked.nodes.iter().enumerate() {
+            for (c, cell) in node.cells.iter().enumerate() {
+                if cell_color(*cell) == Some(SQUASH_LINK_COLOR_INDEX) {
+                    assert!(
+                        c == gcol && i >= sr && i < fr,
+                        "unexpected grey ink at row {i} col {c}: {cell:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// When the cell blocking the tip's lane on S's row is the uncommitted
+    /// landing CURVE (not a band horizontal), there is no corridor to join —
+    /// the junction must not fire, and the old routing applies untouched.
+    #[test]
+    fn squash_link_junction_refuses_the_landing_curve() {
+        let (x, s, f, t, z) = (oid(1), oid(2), oid(3), oid(4), oid(5));
+        let commits = vec![
+            ci(x, vec![s]), // keeps HEAD's lane busy above, nothing else —
+            ci(s, vec![t]), // so the uncommitted node lands on the NEXT lane
+            ci(f, vec![t]), // and its ╯ curve sits exactly on the tip's column
+            ci(t, vec![z]),
+            ci(z, vec![]),
+        ];
+        let unc = Some(Some(1));
+        let base = build_graph(&commits, &[], &[], &[], unc, Some(s), &[]);
+        let linked = build_graph(&commits, &[], &[], &[], unc, Some(s), &[(f, s)]);
+
+        let sr = row_of(&linked, s);
+        let fr = row_of(&linked, f);
+        let flane = linked.nodes[fr].lane;
+
+        // Fixture precondition: the landing curve occupies the tip's column.
+        assert!(
+            matches!(
+                base.nodes[sr].cells[flane * 2],
+                CellType::MergeLeft(UNCOMMITTED_COLOR_INDEX)
+            ),
+            "fixture must land the uncommitted curve on the tip lane, got {:?}",
+            base.nodes[sr].cells[flane * 2]
+        );
+
+        // No junction — a curve cannot host a stem.
+        assert!(
+            !linked.nodes.iter().any(|n| n
+                .cells
+                .iter()
+                .any(|c| matches!(c, CellType::TeeDown(_, _)))),
+            "the junction must not compose with a landing curve"
+        );
+        // The landing curve itself survives verbatim.
+        assert_eq!(base.nodes[sr].cells[flane * 2], linked.nodes[sr].cells[flane * 2]);
+        // And the link still drew, somewhere, without panicking.
+        assert!(has_squash_grey(&linked));
     }
 
     #[test]

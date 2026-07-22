@@ -43,6 +43,9 @@ pub enum CellShape {
     TeeRight,
     TeeLeft,
     TeeUp,
+    /// Band junction (#115): horizontal corridor (primary stroke) with a stem
+    /// (secondary stroke) dropping to the row below, like a `Branch*` spoke.
+    TeeDown,
     Commit {
         connect_up: bool,
         connect_down: bool,
@@ -138,6 +141,7 @@ fn cell_touches_bottom(cell: &CellType) -> bool {
             | CellType::HorizontalPipe(_, _)
             | CellType::TeeRight(_)
             | CellType::TeeLeft(_)
+            | CellType::TeeDown(_, _)
     )
 }
 
@@ -264,6 +268,19 @@ fn cell_to_pixel(
         CellType::TeeRight(ci) => solid(CellShape::TeeRight, rgb(ci)),
         CellType::TeeLeft(ci) => solid(CellShape::TeeLeft, rgb(ci)),
         CellType::TeeUp(ci) => solid(CellShape::TeeUp, rgb(ci)),
+        // Band junction (#115): corridor color is the primary stroke (it is
+        // the run body `run_style` reads), the stem is the secondary — the
+        // down-spoke `transition_curves` builds takes `secondary`.
+        CellType::TeeDown(h, s) => PixelCell {
+            shape: CellShape::TeeDown,
+            color: rgb(h),
+            secondary: rgb(s),
+            dim: false,
+            dim_secondary: false,
+            curved_above: false,
+            curved_below: false,
+            spoke_on_dot: false,
+        },
         CellType::HorizontalPipe(h, p) => PixelCell {
             shape: CellShape::HorizontalPipe,
             color: rgb(p),
@@ -313,7 +330,12 @@ fn cell_to_pixel(
         CellShape::Pipe | CellShape::HorizontalPipe | CellShape::Commit { .. }
     ) {
         px.curved_above = above.and_then(|c| c.get(col)).is_some_and(|c| {
-            matches!(c, CellType::BranchLeft(_) | CellType::BranchRight(_))
+            matches!(
+                c,
+                CellType::BranchLeft(_)
+                    | CellType::BranchRight(_)
+                    | CellType::TeeDown(_, _)
+            )
         });
         px.curved_below = below.and_then(|c| c.get(col)).is_some_and(|c| {
             matches!(
@@ -338,7 +360,8 @@ fn cell_to_pixel(
         CellShape::BranchLeft
         | CellShape::BranchRight
         | CellShape::TeeLeft
-        | CellShape::TeeRight => {
+        | CellShape::TeeRight
+        | CellShape::TeeDown => {
             px.spoke_on_dot = is_dot(below);
         }
         _ => {}
@@ -822,6 +845,7 @@ fn has_horizontal(shape: CellShape) -> bool {
             | CellShape::TeeLeft
             | CellShape::TeeRight
             | CellShape::TeeUp
+            | CellShape::TeeDown
     )
 }
 
@@ -956,6 +980,19 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
                 }
                 CellShape::TeeUp => {
                     spokes.push(Endpoint { x: cx(c), y: above_cy, color, dim, on_dot: cell.spoke_on_dot });
+                }
+                CellShape::TeeDown => {
+                    // Band junction (#115): the stem is a down-spoke out of the
+                    // corridor, carried in the SECONDARY stroke (the corridor
+                    // itself is the run body). With a dot hub flanking the run
+                    // this draws one S from that dot down into the stem's dot.
+                    spokes.push(Endpoint {
+                        x: cx(c),
+                        y: below_cy,
+                        color: cell.secondary,
+                        dim: cell.dim_secondary,
+                        on_dot: cell.spoke_on_dot,
+                    });
                 }
                 CellShape::TeeRight | CellShape::TeeLeft => {
                     // A Tee's trunk continues DOWN to a not-yet-shown parent (the
@@ -1193,7 +1230,8 @@ fn draw_cells(
             | CellShape::BranchLeft
             | CellShape::MergeRight
             | CellShape::MergeLeft
-            | CellShape::TeeUp => {}
+            | CellShape::TeeUp
+            | CellShape::TeeDown => {}
         }
     }
 }

@@ -286,14 +286,21 @@ fn dim_specs_window_core(
                         let slice = if c.from_underlay { &n.underlay } else { &n.cells };
                         slice.get(c.col as usize)
                     }) {
-                        c.color = cell.color;
+                        // A TeeDown's boundary-crossing curve is its STEM,
+                        // carried in the secondary stroke (#115).
+                        c.color = match cell.shape {
+                            crate::ui::graph_pixels::CellShape::TeeDown => cell.secondary,
+                            _ => cell.color,
+                        };
                         // A Tee source cell's boundary-crossing curve is its
                         // ARM (the trunk is a straight through-line that never
                         // crosses as a curve), so the tail follows the arm's
-                        // flag (#113).
+                        // flag (#113); a TeeDown's stem likewise styles via
+                        // `dim_secondary`.
                         c.dim = match cell.shape {
                             crate::ui::graph_pixels::CellShape::TeeRight
-                            | crate::ui::graph_pixels::CellShape::TeeLeft => cell.dim_secondary,
+                            | crate::ui::graph_pixels::CellShape::TeeLeft
+                            | crate::ui::graph_pixels::CellShape::TeeDown => cell.dim_secondary,
                             _ => cell.dim,
                         };
                     }

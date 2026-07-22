@@ -16,6 +16,7 @@ fn glyph(c: &CellType) -> String {
         CellType::TeeRight(i) => format!("TR{i}"),
         CellType::TeeLeft(i) => format!("TL{i}"),
         CellType::TeeUp(i) => format!("TU{i}"),
+        CellType::TeeDown(h, s) => format!("TD{h}/{s}"),
         CellType::HorizontalPipe(h, p) => format!("H{h}P{p}"),
         CellType::Commit(i) => format!(" @{i}"),
     }

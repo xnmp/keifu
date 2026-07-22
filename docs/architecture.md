@@ -164,10 +164,10 @@ runs in two phases:
    flanking commit dot, classified as *hubs* (row mid-height: a flanking dot,
    or a `TeeRight`/`TeeLeft` that stays on the trunk with no flanking dot — a
    fork connector's trunk, whose up-arms fan from it) or *spokes* (a row edge:
-   `Merge*`/`TeeUp` turning up to the top edge, `Branch*` turning down to the
-   bottom edge, and a `Tee{Right,Left}` that *is* flanked by a dot — that Tee is
-   the commit's parent-connector into a still-descending trunk, so it sweeps
-   down to the bottom edge like a `Branch*` rather than staying flat). One
+   `Merge*`/`TeeUp` turning up to the top edge, `Branch*` and `TeeDown` turning
+   down to the bottom edge, and a `Tee{Right,Left}` that *is* flanked by a dot —
+   that Tee is the commit's parent-connector into a still-descending trunk, so
+   it sweeps down to the bottom edge like a `Branch*` rather than staying flat). One
    cubic is drawn from the run's primary hub to each spoke (a branch/merge is
    the 2-endpoint case → one curve; a fork connector `├─┴─╯` fans several);
    with no hub the spokes are chained pairwise; a lone hub/spoke with nothing
@@ -203,6 +203,25 @@ Curve endpoints are exact lane centers on row edges (spokes) or dot centers
 the dot it belongs to. Because `transition_curves` is pure over the cells,
 drawing stays a deterministic function of the `RowSpec`, so the protocol cache
 stays correct. Unicode mode is unchanged (box glyphs can't curve).
+
+**Squash link joins the uncommitted band via `TeeDown` (2026-07-22, #115).**
+When HEAD sits on a squash-merge target with uncommitted changes, two layout
+overlays land on the same row: the uncommitted node's horizontal landing band
+and the squash link — and the band sits geometrically *between* the link's
+endpoints, so no clean column exists. The overlay writers can only cross
+`Pipe` cells (`HorizontalPipe`); anything else used to force the link onto a
+fresh far lane (the #110 phantom-detour shape) while the crossing run was
+silently severed by the band, leaving orphan curve fragments in both
+renderers. `draw_squash_link` now *joins* the band instead: a
+`CellType::TeeDown(band_color, stem_color)` junction (┬) on the tip's own lane
+lets the band carry the link into the target dot while the stem drops straight
+into the tip dot. Junction preconditions (`junction_ok`): the blocking cell is
+an overlay `Horizontal` with no trace edges, and every cell between it and the
+target dot is horizontal-family (a continuous corridor). The pixel renderer
+treats `TeeDown` as a down-spoke (its stem is the SECONDARY stroke, like a
+`Tee*` arm), so `transition_curves` draws one grey S from the target dot into
+the tip dot. The mirror orientation (band on the *lower* endpoint row) has no
+junction cell and keeps the old fallback.
 
 **Uncommitted connector survives the commit filter (2026-07-19).** The synthetic
 uncommitted-changes node always passes the commit filter, and its connector is
