@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// The seed for the startup merged-branch classification (#104): the merged set
+/// and squash targets to paint the first frame, plus `Some((signature,
+/// gh_merged))` on an exact cache hit (the caller primes rather than kicks the
+/// classifier) or `None` when the seed is stale/absent (kick to reconcile).
+type MergedSeed = (
+    std::collections::HashSet<String>,
+    std::collections::HashMap<String, git2::Oid>,
+    Option<(u64, std::collections::HashSet<String>)>,
+);
+
 impl App {
     pub(crate) fn working_tree_status_snapshot(
         repo: &GitRepository,
@@ -18,6 +28,17 @@ impl App {
         let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
         // No terminal to query in the embedded/test path.
         Self::build(repo, Config::default(), UiState::default(), fs_watcher, None, None)
+    }
+
+    /// Like [`App::from_repo`] but with an explicit [`UiState`], so tests can
+    /// build an App with e.g. `hide_merged_branches` on and exercise the
+    /// startup merged-classification cache path (#104). Gated to test builds.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn from_repo_with_ui_state(repo: GitRepository, ui_state: UiState) -> Result<Self> {
+        let repo_path = repo.path.clone();
+        let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
+        Self::build(repo, Config::default(), ui_state, fs_watcher, None, None)
     }
 
     /// Shared constructor: loads repo data and assembles the App.
@@ -62,30 +83,27 @@ impl App {
         };
         // Merged-branch classification (ancestry + patch-id squash detection) is
         // O(branches × tree diffs) — over a second of startup on branchy repos
-        // (#78). Pay it synchronously ONLY when merged branches are *hidden*:
-        // there an async fill-in would flash soon-to-vanish branches on screen.
-        // In the default dim-only mode we start unclassified and kick the
-        // background classifier below — merged branches fade to dim within a
-        // moment instead of blocking the first frame. The GitHub merged-PR
-        // signal fills in once its background fetch completes, either way.
-        let (merged_branches, squash_targets) = if ui_state.hide_merged_branches {
-            crate::git::merged::base_branch(&branches)
-                .map(|base| {
-                    crate::git::merged::classify_merged_branches_with_targets(
-                        repo.repo(),
-                        &branches,
-                        base.tip_oid,
-                        &base.name,
-                        &std::collections::HashSet::new(),
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            (
-                std::collections::HashSet::new(),
-                std::collections::HashMap::new(),
-            )
-        };
+        // (#78), and worse since remote branches became eligible (#100) and a
+        // second trunk tip was added (#103). It must NEVER be paid synchronously
+        // before the first frame. In dim-only mode we start unclassified and kick
+        // the background classifier below. In hide mode we can't start empty
+        // without flashing soon-to-vanish branches, so we seed from the
+        // persistent cache (#104): an exact-signature hit is correct and used
+        // synchronously (instant, no flash); a stale/absent entry paints its
+        // last-known (or empty) result immediately and reconciles in the
+        // background. Either way the GitHub merged-PR signal fills in once its
+        // fetch completes. `merged_cache_hit` is `Some` only on an exact hit —
+        // the signal to prime rather than kick the classifier (see below).
+        let (merged_branches, squash_targets, merged_cache_hit) =
+            if ui_state.hide_merged_branches {
+                Self::init_merged_from_cache(&repo_path, &branches)
+            } else {
+                (
+                    std::collections::HashSet::new(),
+                    std::collections::HashMap::new(),
+                    None,
+                )
+            };
         phase!("classify_merged");
         let visible_branches: Vec<BranchInfo> = branches
             .iter()
@@ -273,13 +291,67 @@ impl App {
             pixel_specs_cache: None,
             trace_cache: None,
         };
-        // Dim-only mode starts unclassified (see `merged_branches` above):
-        // hand the branch set to the background classifier right away so
-        // merged branches dim within a moment of the first frame.
-        if !app.merged.hide {
+        // Reconcile the seeded merged classification against the live repo in the
+        // background — never inline (#104). Dim-only mode always starts empty and
+        // kicks. Hide mode primed from an exact cache hit is already correct, so
+        // it only records the signature (so a later unchanged refresh skips the
+        // redundant background run); a stale/absent seed kicks to reconcile.
+        if app.merged.hide {
+            match merged_cache_hit {
+                Some((signature, gh_merged)) => {
+                    app.merged.classify.note_cached(signature, gh_merged);
+                }
+                None => app.kick_merged_classification(),
+            }
+        } else {
             app.kick_merged_classification();
         }
         Ok(app)
+    }
+
+    /// Seed the startup merged-branch classification from the persistent cache
+    /// (#104), never blocking on a fresh classification.
+    ///
+    /// Returns the merged set + squash targets to paint the first frame, plus
+    /// `Some((signature, gh_merged))` when the cached result *exactly* matches the
+    /// live inputs — the caller then treats the seed as authoritative and primes
+    /// the background classifier instead of kicking it. `None` means the seed is
+    /// stale (or there was no cache) and the caller must kick the async
+    /// classifier to reconcile; the brief flash of a few soon-to-hide branches is
+    /// the accepted tradeoff over a startup that freezes on the O(branches ×
+    /// git-scan) classification.
+    fn init_merged_from_cache(repo_path: &str, branches: &[BranchInfo]) -> MergedSeed {
+        use std::collections::{HashMap, HashSet};
+        let Some(cache) = crate::merged_cache::MergedCache::load(repo_path) else {
+            // Cold cache: empty first frame; the caller kicks the classifier.
+            return (HashSet::new(), HashMap::new(), None);
+        };
+        let Some(base) = crate::git::merged::base_branch(branches) else {
+            return (HashSet::new(), HashMap::new(), None);
+        };
+        // Reconstruct the input identity from the branches/base we have now and
+        // the gh set the cache recorded (the live gh set isn't observable until
+        // the first background fetch). Equal signatures ⇒ nothing the
+        // classification depends on has changed, so the cached result is still
+        // correct and safe to trust synchronously.
+        let input = crate::merged_branch_fetch::ClassifyInput {
+            repo_path: repo_path.to_string(),
+            branches: branches.to_vec(),
+            base_name: base.name.clone(),
+            base_tip: base.tip_oid,
+            gh_merged: cache.gh_merged.clone(),
+        };
+        if input.signature() == cache.signature {
+            (
+                cache.merged,
+                cache.squash_targets,
+                Some((cache.signature, cache.gh_merged)),
+            )
+        } else {
+            // Stale entry: serve the last-known result for an instant,
+            // non-blocking first frame; the caller reconciles asynchronously.
+            (cache.merged, cache.squash_targets, None)
+        }
     }
 
     /// Build an `App` on a throwaway, empty temp git repository, for tests.

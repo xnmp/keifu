@@ -107,7 +107,15 @@ impl ClassifyInput {
     /// A cheap fingerprint of the inputs. When it's unchanged since the last
     /// spawn, the result would be identical, so no worker is spawned — this is
     /// what keeps a frequent refresh from re-running any git diffing.
-    fn signature(&self) -> u64 {
+    ///
+    /// Also the key of the persistent classification cache
+    /// ([`crate::merged_cache`]): the on-disk result is trusted only when this
+    /// fingerprint matches, so the same notion of input identity guards both the
+    /// in-process skip and the cross-session cache. Order-independent over the
+    /// branch and gh-name sets; `repo_path` is deliberately excluded (the cache
+    /// is already keyed per-repo on disk, and a moved checkout of the same repo
+    /// classifies identically).
+    pub fn signature(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.base_name.hash(&mut h);
         self.base_tip.hash(&mut h);
@@ -148,6 +156,12 @@ pub struct MergedClassifier {
     /// Signature of the input currently in flight or last completed. A new
     /// request with the same signature is a no-op.
     last_signature: Option<u64>,
+    /// The gh-merged set of that same input, retained alongside `last_signature`
+    /// so the persistent cache can be written with the exact inputs that
+    /// produced the delivered result — even if the live gh set has since changed
+    /// (the on-disk signature must match its stored result, or a later startup
+    /// would trust a mismatched entry). See [`crate::merged_cache`].
+    last_gh_merged: Option<HashSet<String>>,
 }
 
 impl Default for MergedClassifier {
@@ -161,6 +175,7 @@ impl MergedClassifier {
         Self {
             receiver: None,
             last_signature: None,
+            last_gh_merged: None,
         }
     }
 
@@ -176,6 +191,7 @@ impl MergedClassifier {
             return;
         }
         self.last_signature = Some(sig);
+        self.last_gh_merged = Some(input.gh_merged.clone());
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let _ = tx.send(classify(&input));
@@ -198,9 +214,33 @@ impl MergedClassifier {
                 // retry by clearing the remembered signature.
                 self.receiver = None;
                 self.last_signature = None;
+                self.last_gh_merged = None;
                 None
             }
         }
+    }
+
+    /// Fingerprint of the input whose result is currently reflected (in flight or
+    /// last completed). Read straight after [`Self::poll`] returns `Some`, it is
+    /// the signature of the just-delivered result — the key to persist it under.
+    pub fn last_signature(&self) -> Option<u64> {
+        self.last_signature
+    }
+
+    /// The gh-merged set that goes with [`Self::last_signature`], for the same
+    /// use: persisting a cache entry whose signature matches its stored result.
+    pub fn last_gh_merged(&self) -> Option<&HashSet<String>> {
+        self.last_gh_merged.as_ref()
+    }
+
+    /// Record that a result with this `signature`/`gh_merged` is already applied
+    /// to app state — loaded from the persistent cache at startup rather than
+    /// computed here. A subsequent [`Self::maybe_start`] with the same inputs
+    /// then skips the redundant background run (same guard as an in-process
+    /// repeat), so an exact cache hit costs no git diffing at all.
+    pub fn note_cached(&mut self, signature: u64, gh_merged: HashSet<String>) {
+        self.last_signature = Some(signature);
+        self.last_gh_merged = Some(gh_merged);
     }
 }
 
