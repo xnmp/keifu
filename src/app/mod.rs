@@ -1608,31 +1608,46 @@ impl App {
     }
 
     /// Recompute the set of base-update ("back-merge") commits (issue #55) from
-    /// the current open PRs and base branch, storing it in `base_update_merges`.
-    /// Cheap (bounded per-PR walks on the UI thread's repo handle) and guarded by
-    /// an input signature so a frequent refresh does no work when neither the
-    /// base tip nor the open-PR head set has changed. Safe to call every refresh
+    /// the current open PRs, storing it in `base_update_merges`. Each PR is
+    /// tested against the tips of **its own base branch** (`baseRefName`, #103)
+    /// — a PR targeting `dev` back-merges `dev`, which the repo-wide trunk does
+    /// not contain; that trunk remains only the fallback for PRs whose base gh
+    /// didn't report. Cheap (bounded per-pair walks on the UI thread's repo
+    /// handle) and guarded by an input signature so a frequent refresh does no
+    /// work when no head or base tip has changed. Safe to call every refresh
     /// and whenever `open_prs` updates; the render path only *reads* the set.
     pub(crate) fn recompute_base_update_merges(&mut self) {
-        let Some(base) = crate::git::merged::base_branch(&self.branches) else {
+        let fallback = crate::git::merged::base_branch(&self.branches).map(|b| b.tip_oid);
+        let mut pairs: Vec<(git2::Oid, git2::Oid)> = self
+            .open_prs
+            .values()
+            .filter_map(|p| p.head_oid().map(|head| (head, p)))
+            .flat_map(|(head, p)| {
+                let tips = match p.base_ref.as_deref() {
+                    Some(base) => crate::git::merged::base_ref_tips(&self.branches, base),
+                    None => Vec::new(),
+                };
+                // An unresolvable base (not fetched locally) degrades to the
+                // repo-wide trunk — same result as before #103, never worse.
+                let tips = if tips.is_empty() {
+                    fallback.into_iter().collect()
+                } else {
+                    tips
+                };
+                tips.into_iter().map(move |tip| (head, tip))
+            })
+            .collect();
+        // Sorted so the signature is order-independent.
+        pairs.sort();
+        pairs.dedup();
+        if pairs.is_empty() {
             self.merged.base_update.reset(std::collections::HashSet::new());
             return;
-        };
-        // Sorted PR head OIDs so the signature is order-independent.
-        let mut pr_heads: Vec<git2::Oid> =
-            self.open_prs.values().filter_map(|p| p.head_oid()).collect();
-        pr_heads.sort();
-        // Signature: base tip + the (sorted) head set. Unchanged ⇒ result is
-        // identical, so the guard skips the ancestry walks below.
+        }
         let repo = self.repo.repo();
-        self.merged.base_update
-            .recompute_if_changed((base.tip_oid, &pr_heads), || {
-                if pr_heads.is_empty() {
-                    std::collections::HashSet::new()
-                } else {
-                    crate::git::merged::classify_base_update_merges(repo, &pr_heads, base.tip_oid)
-                }
-            });
+        self.merged.base_update.recompute_if_changed(&pairs, || {
+            crate::git::merged::classify_base_update_merges(repo, &pairs)
+        });
     }
 
     /// Toggle soft line-wrapping in the file-diff viewer (persisted). The next

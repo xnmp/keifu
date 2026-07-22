@@ -656,6 +656,32 @@ pub fn merged_local_branches(
 /// practice; this window is generous.
 const BASE_UPDATE_SCAN_LIMIT: usize = 400;
 
+/// Every locally-known tip of the branch named `base_ref` (a PR's `baseRefName`,
+/// always unqualified): the local branch of that name plus each remote's
+/// `<remote>/<base_ref>`. All tips are returned rather than picking one because
+/// local and remote may disagree (unpushed / unfetched base commits) and a
+/// back-merge's second parent need only be reachable from *some* tip of the
+/// base — testing each costs one bounded walk per tip.
+pub fn base_ref_tips(branches: &[BranchInfo], base_ref: &str) -> Vec<Oid> {
+    let mut tips: Vec<Oid> = branches
+        .iter()
+        .filter(|b| {
+            if b.is_remote {
+                // "<remote>/<branch>": the segment after the remote must equal
+                // the base name exactly — `ends_with` would also claim
+                // `origin/feature/dev` for base `dev`.
+                b.name.split_once('/').is_some_and(|(_, rest)| rest == base_ref)
+            } else {
+                b.name == base_ref
+            }
+        })
+        .map(|b| b.tip_oid)
+        .collect();
+    tips.sort();
+    tips.dedup();
+    tips
+}
+
 /// Classify **base-update ("back-merge") commits**: merge commits that sit on an
 /// open PR's branch — reachable from the PR head but *not yet on the base* — and
 /// whose **second parent** is on the base branch. That is exactly the shape of
@@ -670,17 +696,20 @@ const BASE_UPDATE_SCAN_LIMIT: usize = 400;
 /// filter (`revwalk.hide(base_tip)`) drops it before the second-parent test ever
 /// runs. Direction is thus decided structurally, not by message text.
 ///
-/// Pure over a `git2::Repository`; `pr_heads` are the open PRs' head-commit OIDs
-/// (from `PrInfo::head_oid`). Cheap: for each PR it walks only that branch's own
-/// commits (the revwalk hides `base_tip`), bounded by [`BASE_UPDATE_SCAN_LIMIT`],
-/// with one ancestry query per merge encountered.
+/// Pure over a `git2::Repository`; each pair is an open PR's head-commit OID
+/// (from `PrInfo::head_oid`) with the tip of **that PR's own base branch** — a
+/// PR targeting `dev` back-merges `dev`, and testing its merges against the
+/// repo-wide trunk instead silently matched nothing (#103). A head may appear
+/// in several pairs (one per locally-known tip of its base). Cheap: for each
+/// pair it walks only that branch's own commits (the revwalk hides `base_tip`),
+/// bounded by [`BASE_UPDATE_SCAN_LIMIT`], with one ancestry query per merge
+/// encountered.
 pub fn classify_base_update_merges(
     repo: &Repository,
-    pr_heads: &[Oid],
-    base_tip: Oid,
+    head_base_pairs: &[(Oid, Oid)],
 ) -> HashSet<Oid> {
     let mut out = HashSet::new();
-    for &head in pr_heads {
+    for &(head, base_tip) in head_base_pairs {
         // Commits reachable from the PR head but NOT already on the base: the
         // PR branch's own commits. A landing merge is on the base, so hiding
         // `base_tip` removes it here — only still-ahead back-merges survive.
@@ -1750,7 +1779,7 @@ mod tests {
             &[f, c],
             &[("base.txt", "base2"), ("feat.txt", "x")],
         );
-        let set = classify_base_update_merges(&repo, &[m], c);
+        let set = classify_base_update_merges(&repo, &[(m, c)]);
         assert!(set.contains(&m), "the back-merge commit is classified");
         assert_eq!(set.len(), 1);
     }
@@ -1775,7 +1804,7 @@ mod tests {
             &[("base.txt", "base"), ("main.txt", "m"), ("feat.txt", "x")],
         );
         // Base tip is the landing merge itself.
-        let set = classify_base_update_merges(&repo, &[t], m);
+        let set = classify_base_update_merges(&repo, &[(t, m)]);
         assert!(set.is_empty(), "a PR-landing merge is never a back-merge");
     }
 
@@ -1800,7 +1829,7 @@ mod tests {
             &[f, s],
             &[("base.txt", "base"), ("f.txt", "f"), ("s.txt", "s")],
         );
-        let set = classify_base_update_merges(&repo, &[m], c);
+        let set = classify_base_update_merges(&repo, &[(m, c)]);
         assert!(set.is_empty(), "merging a non-base sibling is not a base-update");
     }
 
@@ -1811,9 +1840,9 @@ mod tests {
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
         // No PR heads at all.
-        assert!(classify_base_update_merges(&repo, &[], a).is_empty());
+        assert!(classify_base_update_merges(&repo, &[]).is_empty());
         // A PR head whose branch has no merge commit.
-        assert!(classify_base_update_merges(&repo, &[f], a).is_empty());
+        assert!(classify_base_update_merges(&repo, &[(f, a)]).is_empty());
     }
 
     #[test]
@@ -1833,7 +1862,74 @@ mod tests {
             &[("base.txt", "base2"), ("feat.txt", "x")],
         );
         let g = commit(&repo, "refs/heads/feature", 3500, &[m], &[("base.txt", "base2"), ("feat.txt", "y")]);
-        let set = classify_base_update_merges(&repo, &[g], c);
+        let set = classify_base_update_merges(&repo, &[(g, c)]);
         assert!(set.contains(&m), "a mid-branch back-merge is still found");
+    }
+
+    #[test]
+    fn back_merge_classifies_against_the_prs_own_base_not_the_trunk() {
+        // The #103 shape: the repo's trunk is `main`, but the PR targets `dev`.
+        // main: a
+        // dev:  a <- d1 <- d2
+        // feature (off dev): d1 <- f, then back-merge m = [f, d2].
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let d1 = commit(&repo, "refs/heads/dev", 1500, &[a], &[("base.txt", "base"), ("d.txt", "1")]);
+        let f = commit(&repo, "refs/heads/feature", 2000, &[d1], &[("base.txt", "base"), ("d.txt", "1"), ("f.txt", "f")]);
+        let d2 = commit(&repo, "refs/heads/dev", 2500, &[d1], &[("base.txt", "base"), ("d.txt", "2")]);
+        let m = commit(
+            &repo,
+            "refs/heads/feature",
+            3000,
+            &[f, d2],
+            &[("base.txt", "base"), ("d.txt", "2"), ("f.txt", "f")],
+        );
+        // Paired with the PR's real base (dev), the back-merge is found.
+        let set = classify_base_update_merges(&repo, &[(m, d2)]);
+        assert!(set.contains(&m), "dev back-merge classifies against dev's tip");
+        // Paired with the repo-wide trunk (the pre-#103 behavior), it is
+        // invisible: m's second parent is on dev, not on main.
+        assert!(
+            classify_base_update_merges(&repo, &[(m, a)]).is_empty(),
+            "the trunk pairing cannot see a dev back-merge — the old bug"
+        );
+    }
+
+    // ── base_ref_tips: resolving a PR's baseRefName locally (#103) ───
+
+    #[test]
+    fn base_ref_tips_collects_local_and_every_remote_mirror() {
+        let o = |n: u32| Oid::from_str(&format!("{n:040x}")).unwrap();
+        let branches = vec![
+            local("dev", o(1), false),
+            remote("origin/dev", o(2)),
+            remote("upstream/dev", o(3)),
+            local("main", o(4), true),
+            remote("origin/main", o(5)),
+        ];
+        let tips = base_ref_tips(&branches, "dev");
+        assert_eq!(tips, vec![o(1), o(2), o(3)]);
+    }
+
+    #[test]
+    fn base_ref_tips_requires_an_exact_branch_segment_match() {
+        let o = |n: u32| Oid::from_str(&format!("{n:040x}")).unwrap();
+        // `origin/feature/dev` is the branch `feature/dev`, not `dev` — a
+        // suffix match would wrongly claim it.
+        let branches = vec![
+            remote("origin/feature/dev", o(1)),
+            local("feature/dev", o(2), false),
+        ];
+        assert!(base_ref_tips(&branches, "dev").is_empty());
+        assert_eq!(base_ref_tips(&branches, "feature/dev"), vec![o(1), o(2)]);
+    }
+
+    #[test]
+    fn base_ref_tips_dedups_agreeing_local_and_remote() {
+        let o = |n: u32| Oid::from_str(&format!("{n:040x}")).unwrap();
+        let branches = vec![local("dev", o(7), false), remote("origin/dev", o(7))];
+        assert_eq!(base_ref_tips(&branches, "dev"), vec![o(7)]);
+        assert!(base_ref_tips(&[], "dev").is_empty());
     }
 }
