@@ -572,5 +572,5 @@ In branchy repos with hide-merged on, startup ran the full patch-id classificati
 ### [DONE] #105 Branch behind its upstream misclassified as merged
 A local branch strictly behind its own upstream (dev behind origin/dev) is a stale tracking ref, not landed work — must never classify as merged.
 
-### [TODO] #106 Mute-merged toggle ignored for squash-merged branches
+### [DONE] #106 Mute-merged toggle ignored for squash-merged branches
 Squash-merged branches render greyed regardless of the mute/dim merged-branches setting.
