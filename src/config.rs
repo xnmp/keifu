@@ -21,7 +21,8 @@ pub struct UiConfig {
     /// How the commit graph lines are rendered.
     pub graph_renderer: GraphRenderer,
     /// Draw a subtle grey link line from a squash-merged branch's tip to the
-    /// commit that landed it on the trunk (issue #81). Off by default.
+    /// commit that landed it on the trunk (issue #81). On by default (#100:
+    /// users read a missing link line as "squash not detected").
     pub squash_link_lines: bool,
 }
 
@@ -30,7 +31,7 @@ impl Default for UiConfig {
         Self {
             theme: "auto".to_string(),
             graph_renderer: GraphRenderer::default(),
-            squash_link_lines: false,
+            squash_link_lines: true,
         }
     }
 }
