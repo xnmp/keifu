@@ -564,6 +564,7 @@ mod tests {
             merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: None,
+            base_ref: None,
         }
     }
 

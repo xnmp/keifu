@@ -104,6 +104,12 @@ pub struct PrInfo {
     /// `None` when `gh` didn't report it (older CLI / malformed record); the
     /// renderer then falls back to head-branch-name matching.
     pub head_oid: Option<String>,
+    /// The branch the PR is opened against (`baseRefName`). Base-update-merge
+    /// classification (issue #55) must test against *this* branch's tip — a PR
+    /// targeting `dev` back-merges `dev`, which the repo-wide trunk (`main`)
+    /// does not contain (#103). `None` when `gh` didn't report it; classification
+    /// then falls back to the repo-wide base branch.
+    pub base_ref: Option<String>,
 }
 
 impl PrInfo {
@@ -165,6 +171,8 @@ struct GhPr {
     head_ref_name: String,
     #[serde(default, rename = "headRefOid")]
     head_ref_oid: Option<String>,
+    #[serde(default, rename = "baseRefName")]
+    base_ref_name: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -282,6 +290,7 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
                     merge_state,
                     outside_activity,
                     head_oid: p.head_ref_oid.filter(|s| !s.is_empty()),
+                    base_ref: p.base_ref_name.filter(|s| !s.is_empty()),
                 },
             )
         })
@@ -497,7 +506,7 @@ fn fetch_open_prs(repo_path: &str) -> Result<HashMap<String, PrInfo>, String> {
             "pr",
             "list",
             "--json",
-            "number,url,headRefName,headRefOid,title,state,statusCheckRollup,reviewDecision,mergeStateStatus,comments,reviews,author",
+            "number,url,headRefName,headRefOid,baseRefName,title,state,statusCheckRollup,reviewDecision,mergeStateStatus,comments,reviews,author",
             "--limit",
             "100",
         ],
@@ -536,6 +545,7 @@ mod tests {
                 merge_state: MergeState::Clear,
                 outside_activity: false,
                 head_oid: None,
+                base_ref: None,
             })
         );
         assert_eq!(map.get("fix/y").map(|p| p.number), Some(7));
@@ -772,6 +782,16 @@ mod tests {
     }
 
     #[test]
+    fn base_ref_parsed_from_json() {
+        // #103: the PR's own base branch, so back-merge classification can
+        // anchor on it instead of the repo-wide trunk.
+        assert_eq!(one(r#","baseRefName":"dev""#).base_ref.as_deref(), Some("dev"));
+        assert_eq!(one("").base_ref, None);
+        assert_eq!(one(r#","baseRefName":"""#).base_ref, None);
+        assert_eq!(one(r#","baseRefName":null"#).base_ref, None);
+    }
+
+    #[test]
     fn head_oid_absent_or_empty_is_none() {
         assert_eq!(one("").head_oid, None);
         assert_eq!(one(r#","headRefOid":"""#).head_oid, None);
@@ -792,6 +812,7 @@ mod tests {
             merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: head.map(str::to_string),
+            base_ref: None,
         }
     }
 
@@ -874,6 +895,7 @@ mod tests {
             merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: None,
+            base_ref: None,
         }
     }
 

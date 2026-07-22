@@ -401,6 +401,7 @@ mod tests {
             merge_state: crate::pr::MergeState::Clear,
             outside_activity: false,
             head_oid: None,
+            base_ref: None,
         }
     }
 

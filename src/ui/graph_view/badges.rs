@@ -158,6 +158,7 @@ mod tests {
             merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: None,
+            base_ref: None,
         }
     }
 
@@ -181,6 +182,7 @@ mod tests {
             merge_state,
             outside_activity: outside,
             head_oid: None,
+            base_ref: None,
         }
     }
 
