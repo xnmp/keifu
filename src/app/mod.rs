@@ -850,6 +850,13 @@ pub struct MergedState {
     /// neither the base tip nor the open-PR head set has changed.
     pub base_update:
         crate::signature_guarded::SignatureGuarded<std::collections::HashSet<git2::Oid>>,
+    /// OIDs of commits exclusive to a merged branch's lane — the rows and graph
+    /// strokes the "dim merged branches" setting (`dim`) greys when hide is off
+    /// (issue #108). Recomputed on every graph rebuild from the loaded commits
+    /// (see `graph::merged_lane_oids`): exactly the commits that would vanish if
+    /// `hide` were toggled on. Empty when there are no merged branches or when
+    /// hide already removed them from the graph. Not persisted — derived state.
+    pub lane_oids: std::collections::HashSet<git2::Oid>,
 }
 
 /// Once-per-episode latches for periodically-retried refresh/poll errors. Each

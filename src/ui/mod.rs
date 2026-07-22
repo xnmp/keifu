@@ -391,7 +391,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // while the message muted).
         let want_base_mute = app.metadata_columns.mute_base_merges
             && !app.merged.base_update.value().is_empty();
-        pixel_frame_dim = if trace_active || want_base_mute {
+        // Merged-lane dim (#108) is a third per-frame dim source: build the
+        // overlay whenever merged branches are shown-and-dimmed, even with
+        // tracing and base-mute off.
+        let want_merged_lane_dim =
+            app.merged.dim && !app.merged.hide && !app.merged.lane_oids.is_empty();
+        pixel_frame_dim = if trace_active || want_base_mute || want_merged_lane_dim {
             let base = &app.pixel_specs_cache.as_ref().unwrap().4;
             Some(graph_view::dim_pixel_specs_window(
                 app,

@@ -271,6 +271,7 @@ impl App {
                 pr_branches: std::collections::HashSet::new(),
                 pr_branch_fetch: crate::merged_branch_fetch::merged_branch_fetch(),
                 base_update: crate::signature_guarded::SignatureGuarded::default(),
+                lane_oids: std::collections::HashSet::new(),
             },
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,

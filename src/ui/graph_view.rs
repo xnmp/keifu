@@ -513,7 +513,12 @@ pub fn dim_pixel_specs_window(
             app.merged.base_update.value(),
         );
     }
-    dim_specs_window_core(base, &row_oids, &force_dim, lit, lane_rgb, win_start, win_end)
+    // Merged-lane dim (#108), gated the same way the unicode path is: dim on and
+    // hide off. `None` = feature off, so the core skips the merged-lane pass.
+    let merged_oids = (app.merged.dim && !app.merged.hide).then_some(&app.merged.lane_oids);
+    dim_specs_window_core(
+        base, &row_oids, &force_dim, lit, lane_rgb, merged_oids, win_start, win_end,
+    )
 }
 
 /// Per-row edge identities for dimming: parallel to a row's pixel `cells` and
@@ -545,12 +550,14 @@ impl RowOids<'_> {
 /// dimming that row over the full range — dimming is per-row (`apply_trace_dim`
 /// reads only that row's cells and oids), so restricting which rows are built
 /// never changes a built row's content.
+#[allow(clippy::too_many_arguments)] // cohesive base specs + three dim sources + window bounds
 fn dim_specs_window_core(
     base: &[crate::ui::graph_pixels::RowSpec],
     row_oids: &[RowOids],
     force_dim: &[bool],
     lit: &std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>,
     lane_rgb: &std::collections::HashMap<git2::Oid, [u8; 3]>,
+    merged_oids: Option<&HashSet<git2::Oid>>,
     win_start: usize,
     win_end: usize,
 ) -> Vec<crate::ui::graph_pixels::RowSpec> {
@@ -569,9 +576,23 @@ fn dim_specs_window_core(
         } else if let Some(o) = row_oids.get(i) {
             // `spec.cells`/`spec.underlay` are (truncated) 1:1 with the node's
             // cells/underlay, so their OIDs align by index; dimming only reads
-            // the cells that survived truncation.
-            apply_trace_dim(&mut spec.cells, o.cells, lit, lane_rgb);
-            apply_trace_dim(&mut spec.underlay, o.underlay, lit, lane_rgb);
+            // the cells that survived truncation. Only run the trace pass when
+            // tracing is actually active (`lit` non-empty): with tracing off,
+            // `apply_trace_dim` would dim EVERY cell (nothing is lit), so the
+            // base specs must stay bright and let force-dim / merged-lane below
+            // be the only per-frame dim sources — matching this function's
+            // documented "no cell is dimmed by tracing when off" contract.
+            if !lit.is_empty() {
+                apply_trace_dim(&mut spec.cells, o.cells, lit, lane_rgb);
+                apply_trace_dim(&mut spec.underlay, o.underlay, lit, lane_rgb);
+            }
+        }
+        // Merged-lane dim (#108): grey the strokes touching a commit exclusive
+        // to a merged branch's lane — exactly the strokes hide-merged removes.
+        // Only ever SETS dim, so it composes on top of force-dim / trace above.
+        if let (Some(m), Some(o)) = (merged_oids, row_oids.get(i)) {
+            apply_merged_lane_dim(&mut spec.cells, o.cells, m);
+            apply_merged_lane_dim(&mut spec.underlay, o.underlay, m);
         }
         spec
     };
@@ -698,6 +719,42 @@ fn apply_trace_dim(
     }
 }
 
+/// Set `dim` on every pixel cell whose edge touches a merged-lane commit (issue
+/// #108) — exactly the strokes hide-merged would remove. Mirrors
+/// `apply_trace_dim`'s per-edge mapping (a `HorizontalPipe` fades each stroke
+/// from its own edge, a commit dot from either edge, every other shape from its
+/// primary edge) but ONLY dims: it never clears a `dim` flag and never recolors,
+/// so it composes on top of whatever trace/force-dim already decided.
+fn apply_merged_lane_dim(
+    cells: &mut [crate::ui::graph_pixels::PixelCell],
+    oids: &[crate::git::graph::CellOids],
+    merged: &HashSet<git2::Oid>,
+) {
+    use crate::git::graph::edge_touches_merged;
+    use crate::ui::graph_pixels::CellShape;
+    for (i, pc) in cells.iter_mut().enumerate() {
+        let (primary, secondary) = oids.get(i).copied().unwrap_or((None, None));
+        if pc.shape == CellShape::HorizontalPipe {
+            // Primary = the horizontal stroke (drawn in `secondary`); secondary =
+            // the vertical lane crossed underneath (drawn in `color`).
+            if edge_touches_merged(primary, merged) {
+                pc.dim_secondary = true;
+            }
+            if edge_touches_merged(secondary, merged) {
+                pc.dim = true;
+            }
+        } else if matches!(pc.shape, CellShape::Commit { .. }) {
+            if edge_touches_merged(primary, merged) || edge_touches_merged(secondary, merged) {
+                pc.dim = true;
+                pc.dim_secondary = true;
+            }
+        } else if edge_touches_merged(primary, merged) {
+            pc.dim = true;
+            pc.dim_secondary = true;
+        }
+    }
+}
+
 /// The half-open range of list rows worth building fully, given `n` total rows,
 /// the current scroll `offset`, the drawable `viewport` height, and the selected
 /// row's filtered position (if any).
@@ -746,6 +803,13 @@ impl<'a> GraphViewWidget<'a> {
         let pr_ctx = PrContext::new(open_prs);
         let merged_branches = &app.merged.branches;
         let merged_dim = app.merged.dim;
+        // Merged-lane dimming (#108): grey the rows AND graph strokes exclusive
+        // to a merged branch's lane. Gated on the dim setting with hide off
+        // (hide already removes them from the graph). `lane_oids` stays populated
+        // across the toggle, so gating here reflects a settings flip instantly
+        // without a rebuild — `None` = feature off, no row/cell is dimmed by it.
+        let merged_lane_oids = (app.merged.dim && !app.merged.hide)
+            .then_some(&app.merged.lane_oids);
         // OIDs of base-update ("back-merge") commits (#55); a per-row O(1)
         // membership test, so the check stays inside the windowed render path.
         let base_update_merges = app.merged.base_update.value();
@@ -772,6 +836,7 @@ impl<'a> GraphViewWidget<'a> {
             pr_ctx: &pr_ctx,
             merged_branches,
             merged_dim,
+            merged_lane_oids,
             base_update_merges,
             metadata_columns,
             graph_width,
@@ -1393,6 +1458,12 @@ struct RowRenderCtx<'a> {
     /// `merged_branches` classified the branch (ancestry, fast-forward, or
     /// squash all live in the same set).
     merged_dim: bool,
+    /// Commits exclusive to a merged branch's lane (issue #108), or `None` when
+    /// merged-lane dimming is off (`dim` off or `hide` on). When `Some`, a row
+    /// whose commit is in the set greys its text like a muted merge, and its
+    /// graph strokes (any cell edge touching one of these commits) dim — the
+    /// same strokes hide-merged would remove.
+    merged_lane_oids: Option<&'a HashSet<git2::Oid>>,
     base_update_merges: &'a HashSet<git2::Oid>,
     metadata_columns: MetadataColumns,
     /// Graph column width cap (glyph budget), same for every row this frame.
@@ -1429,6 +1500,15 @@ fn render_graph_line<'a>(
         ctx.base_update_merges,
     );
 
+    // Merged-lane row (#108): a commit exclusive to a merged branch's lane greys
+    // its message + metadata (like a muted merge) and dims its graph strokes.
+    // `ctx.merged_lane_oids` is `None` when the feature is off, so this is a
+    // cheap constant `false` in the common case.
+    let is_merged_lane = node
+        .commit
+        .as_ref()
+        .is_some_and(|c| ctx.merged_lane_oids.is_some_and(|s| s.contains(&c.oid)));
+
     // Graph start marker (to distinguish from borders). GRAPH_LEADING_COLUMNS
     // is the shared contract with the pixel overlay's x-offset.
     spans.push(Span::raw(" ".repeat(GRAPH_LEADING_COLUMNS as usize)));
@@ -1452,6 +1532,7 @@ fn render_graph_line<'a>(
         // Graph glyphs render bold; with tracing, non-lineage cells are dimmed.
         // A base-update back-merge (#55) force-dims its whole connector so the
         // noisy line recedes; ordinary merge muting stays in the message text.
+        // Merged-lane strokes (#108) dim per-cell, composing with the two above.
         left_width = render_cells_unicode(
             &mut spans,
             node,
@@ -1460,6 +1541,7 @@ fn render_graph_line<'a>(
             ctx.graph_width,
             ctx.trace,
             is_base_update,
+            ctx.merged_lane_oids,
         );
     }
 
@@ -1480,12 +1562,13 @@ fn render_graph_line<'a>(
         left_width += AVATAR_RESERVED_CELLS as usize;
     }
 
-    render_graph_line_tail(spans, left_width, node, ctx, flags, is_base_update)
+    render_graph_line_tail(spans, left_width, node, ctx, flags, is_base_update, is_merged_lane)
 }
 
 /// Render the Unicode box-drawing glyphs for a row's cells into `spans`, capped
 /// at `cap` graph columns, returning the updated `left_width`. When the row
 /// overflows the cap, the last column becomes a dim `…`.
+#[allow(clippy::too_many_arguments)] // cohesive per-row render + dim-source inputs
 fn render_cells_unicode(
     spans: &mut Vec<Span<'_>>,
     node: &GraphNode,
@@ -1494,20 +1577,23 @@ fn render_cells_unicode(
     cap: usize,
     trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
     force_dim: bool,
+    merged_oids: Option<&HashSet<git2::Oid>>,
 ) -> usize {
     // `budget` graph columns are available for glyphs; when truncating, one more
     // column holds the `…`.
     let (budget, ellipsis) = graph_truncation(node.cells.len(), cap);
 
-    // Whether the cell at `idx` should be dimmed: `force_dim` (a base-update
-    // back-merge row, #55) dims the entire connector; otherwise a cell dims when
-    // tracing is active and it is not lit by the selected commit's trace.
+    // Whether the cell at `idx` should be dimmed. Three independent sources
+    // compose (any one dims), mirroring the pixel path:
+    //   - `force_dim` (a base-update back-merge row, #55) dims the whole connector;
+    //   - a merged-lane stroke (#108): the cell's edge touches a commit exclusive
+    //     to a merged branch's lane — exactly a stroke hide-merged would remove;
+    //   - trace dim: tracing is active and the cell is not lit by the selection.
     let is_dim = |idx: usize| -> bool {
+        let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
         force_dim
-            || trace.is_some_and(|lit| {
-                let oids = node.cell_oids.get(idx).copied().unwrap_or((None, None));
-                !crate::git::graph::cell_is_traced(oids, lit)
-            })
+            || merged_oids.is_some_and(|m| crate::git::graph::cell_touches_merged(oids, m))
+            || trace.is_some_and(|lit| !crate::git::graph::cell_is_traced(oids, lit))
     };
 
     // Render cells.
@@ -1617,6 +1703,7 @@ fn render_graph_line_tail<'a>(
     ctx: &RowRenderCtx<'_>,
     flags: RowFlags,
     is_base_update: bool,
+    is_merged_lane: bool,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut chips: Vec<ChipHit> = Vec::new();
     // Separator between graph and commit info
@@ -1693,7 +1780,10 @@ fn render_graph_line_tail<'a>(
     // whole row, not just the message — DIM alone is too subtle (terminal
     // support is inconsistent), so the hash/author/date columns get the same
     // explicit `text_muted` foreground the message uses.
-    let row_is_muted = is_base_update || is_pr_merge || muted_merge || collapse_merge;
+    // A merged-lane commit (#108) reads muted too — its message, hash, author,
+    // and date all grey, matching the other muted categories (#92).
+    let row_is_muted =
+        is_base_update || is_pr_merge || muted_merge || collapse_merge || is_merged_lane;
     let hash_style = if row_is_muted {
         Style::default().fg(ctx.theme.text_muted)
     } else {
@@ -1728,7 +1818,9 @@ fn render_graph_line_tail<'a>(
             .add_modifier(Modifier::DIM)
     } else if is_pr_merge {
         Style::default().fg(ctx.theme.text_muted)
-    } else if muted_merge || collapse_merge {
+    } else if muted_merge || collapse_merge || is_merged_lane {
+        // Merged-lane commits (#108) share the ordinary muted-merge treatment:
+        // an explicit muted foreground plus DIM.
         Style::default()
             .fg(ctx.theme.text_muted)
             .add_modifier(Modifier::DIM)
@@ -3112,7 +3204,7 @@ mod tests {
     fn render_cells(node: &GraphNode, cap: usize) -> String {
         let theme = Theme::dark();
         let mut spans: Vec<Span> = Vec::new();
-        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, None, false);
+        let lw = render_cells_unicode(&mut spans, node, &theme, 0, cap, None, false, None);
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         // left_width is columns emitted (started at 0); it must equal the text's
         // display width.
@@ -3250,6 +3342,7 @@ mod tests {
             pr_ctx: &pr_ctx,
             merged_branches: &HashSet::new(),
             merged_dim: true,
+            merged_lane_oids: None,
             base_update_merges,
             metadata_columns: cols,
             graph_width: 4,
@@ -3298,6 +3391,7 @@ mod tests {
             pr_ctx: &pr_ctx,
             merged_branches,
             merged_dim,
+            merged_lane_oids: None,
             base_update_merges: &HashSet::new(),
             metadata_columns: cols,
             graph_width: 4,
@@ -3460,6 +3554,129 @@ mod tests {
                 "unmerged branch never shows the merged badge (dim setting = {dim})"
             );
         }
+    }
+
+    // ── merged-lane dimming: whole rows grey (#108) ──────────────────────
+
+    /// Render one full graph row with a set of merged-LANE commit OIDs (#108)
+    /// and every metadata column on, so tests can assert the message and the
+    /// hash/author/date columns all grey. `lane_oids = None` renders the
+    /// feature off (the settings toggle held off / hide on).
+    fn render_row_with_merged_lane(
+        node: &GraphNode,
+        lane_oids: Option<&HashSet<git2::Oid>>,
+    ) -> Line<'static> {
+        let cols = MetadataColumns {
+            author: true,
+            hash: true,
+            date: true,
+            mute_merges: false,
+            mute_base_merges: false,
+            collapse_merges: false,
+            avatars: false,
+            pr_subjects: true,
+        };
+        let theme = Theme::dark();
+        let open_prs = HashMap::new();
+        let pr_ctx = PrContext::new(&open_prs);
+        let ctx = RowRenderCtx {
+            theme: &theme,
+            now: Local::now(),
+            pixel_mode: false,
+            remotes: &[],
+            open_prs: &open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches: &HashSet::new(),
+            merged_dim: false,
+            merged_lane_oids: lane_oids,
+            base_update_merges: &HashSet::new(),
+            metadata_columns: cols,
+            graph_width: 4,
+            total_width: 200,
+            selected_branch_name: None,
+            trace: None,
+        };
+        let (line, _chips) = render_graph_line(
+            node,
+            &ctx,
+            RowFlags {
+                is_selected: false,
+                is_marked: false,
+            },
+        );
+        line
+    }
+
+    #[test]
+    fn merged_lane_row_greys_message_and_metadata() {
+        // A commit exclusive to a merged branch's lane reads grey across the
+        // whole row — message DIM+greyed, and the metadata columns greyed (#92).
+        let theme = Theme::dark();
+        let node = commit_node(7, "landed feature work", &[]);
+        let lane: HashSet<git2::Oid> = [oid(7)].into_iter().collect();
+
+        let line = render_row_with_merged_lane(&node, Some(&lane));
+
+        let msg = find_style(&line, "landed feature work").expect("message span");
+        assert_eq!(
+            msg.fg,
+            Some(theme.text_muted),
+            "merged-lane message greyed: {msg:?}"
+        );
+        assert!(
+            msg.add_modifier.contains(Modifier::DIM),
+            "merged-lane message DIM: {msg:?}"
+        );
+        // author_name is "a", padded to 8; author_color != text_muted in dark.
+        let author = find_style(&line, &format!("{:<8}", "a")).expect("author span");
+        assert_eq!(
+            author.fg,
+            Some(theme.text_muted),
+            "merged-lane author column greyed: {author:?}"
+        );
+    }
+
+    #[test]
+    fn merged_lane_row_renders_normally_when_feature_off() {
+        // `None` = dim setting off (or hide on): the same row renders exactly
+        // like an ordinary commit — no grey, no DIM.
+        let theme = Theme::dark();
+        let node = commit_node(7, "landed feature work", &[]);
+
+        let line = render_row_with_merged_lane(&node, None);
+
+        let msg = find_style(&line, "landed feature work").expect("message span");
+        assert_eq!(msg.fg, None, "feature off: message not greyed: {msg:?}");
+        assert!(
+            !msg.add_modifier.contains(Modifier::DIM),
+            "feature off: message not DIM: {msg:?}"
+        );
+        let author = find_style(&line, &format!("{:<8}", "a")).expect("author span");
+        assert_eq!(
+            author.fg,
+            Some(theme.author_color),
+            "feature off: author column keeps its own color: {author:?}"
+        );
+    }
+
+    #[test]
+    fn commit_outside_the_merged_lane_stays_bright_when_feature_on() {
+        // Only commits IN the lane set dim — a trunk commit rendered while the
+        // feature is on keeps full-strength styling.
+        let theme = Theme::dark();
+        let trunk = commit_node(3, "trunk work", &[]);
+        let lane: HashSet<git2::Oid> = [oid(7)].into_iter().collect(); // trunk is oid(3)
+
+        let line = render_row_with_merged_lane(&trunk, Some(&lane));
+
+        let msg = find_style(&line, "trunk work").expect("message span");
+        assert_eq!(msg.fg, None, "non-lane commit not greyed: {msg:?}");
+        let author = find_style(&line, &format!("{:<8}", "a")).expect("author span");
+        assert_eq!(
+            author.fg,
+            Some(theme.author_color),
+            "non-lane author keeps its own color: {author:?}"
+        );
     }
 
     /// The full rendered text of a row (all spans concatenated).
@@ -4045,7 +4262,7 @@ mod tests {
             [((a, a), a)].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit), false);
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit), false, None);
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
@@ -4065,10 +4282,59 @@ mod tests {
         let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
         node.cell_oids = vec![(Some((oid(1), oid(1))), None), (Some((oid(2), oid(2))), None)];
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false);
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false, None);
         assert!(spans
             .iter()
             .all(|s| !s.style.add_modifier.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn merged_lane_dims_only_merged_cells_in_unicode() {
+        // A cell whose edge touches a merged-lane commit dims; a trunk cell
+        // (no merged endpoint) stays bright — the same per-cell rule as tracing,
+        // driven off the merged-lane set instead of the trace lit set (#108).
+        let theme = Theme::dark();
+        let (m, t) = (oid(4), oid(3));
+        let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
+        // Dot self-edge belongs to the merged commit; the pipe is a trunk pipe.
+        node.cell_oids = vec![(Some((m, m)), None), (Some((t, t)), None)];
+        let merged: HashSet<git2::Oid> = [m].into_iter().collect();
+
+        let mut spans: Vec<Span> = Vec::new();
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false, Some(&merged));
+
+        let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
+        let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
+        assert!(
+            dot.style.add_modifier.contains(Modifier::DIM),
+            "merged-lane commit dot dims"
+        );
+        assert!(
+            !pipe.style.add_modifier.contains(Modifier::DIM),
+            "a trunk pipe with no merged endpoint stays bright"
+        );
+    }
+
+    #[test]
+    fn merged_lane_dim_composes_with_trace_in_unicode() {
+        // Merged-lane dim ORs with trace: a merged-lane cell dims even when the
+        // trace would light it, so a selected merged branch still recedes.
+        let theme = Theme::dark();
+        let m = oid(4);
+        let mut node = node_with_cells(vec![CellType::Commit(0)], false);
+        node.cell_oids = vec![(Some((m, m)), None)];
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [((m, m), m)].into_iter().collect();
+        let merged: HashSet<git2::Oid> = [m].into_iter().collect();
+
+        let mut spans: Vec<Span> = Vec::new();
+        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit), false, Some(&merged));
+
+        let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
+        assert!(
+            dot.style.add_modifier.contains(Modifier::DIM),
+            "merged-lane dim wins even when tracing lights the cell"
+        );
     }
 
     #[test]
@@ -4207,7 +4473,7 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(10);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 3, 7);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 3, 7);
 
         assert_eq!(out.len(), base.len(), "result keeps full length");
         for (i, spec) in out.iter().enumerate() {
@@ -4232,8 +4498,8 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(12);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let full = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 0, base.len());
-        let windowed = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 4, 9);
+        let full = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 0, base.len());
+        let windowed = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 4, 9);
         for i in 4..9 {
             assert_eq!(windowed[i], full[i], "row {i} matches the full-range dim");
         }
@@ -4244,7 +4510,7 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(5);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 2, 2);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 2, 2);
         assert_eq!(out.len(), 5);
         assert!(out.iter().all(|s| s.cells.is_empty()));
     }
@@ -4260,7 +4526,7 @@ mod tests {
         // Row 2 is a base-update merge; the rest are ordinary rows.
         let mut ff = no_force(base.len());
         ff[2] = true;
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, 0, base.len());
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, 0, base.len());
 
         // Row 2's connector is fully dimmed by force-dim...
         assert!(
@@ -4271,6 +4537,63 @@ mod tests {
         // ...even though row 2 is an EVEN row that trace dimming would leave lit —
         // force-dim wins over trace, mirroring the unicode `force_dim || trace`.
         assert!(!out[0].cells[0].dim, "non-forced even row 0 stays lit by trace");
+    }
+
+    #[test]
+    fn merged_lane_dims_touching_pixel_cells_only() {
+        // With tracing off (empty lit) and a merged-lane set supplied, only the
+        // cells whose edge touches a merged commit dim — the rest stay bright.
+        // The fixture's even rows carry edge (oid(2),oid(2)); odd rows (oid(9)…).
+        let (base, oids, _lit, _rgb) = window_dim_fixture(4);
+        let ro = row_oids_of(&oids);
+        let ff = no_force(base.len());
+        let empty_lit = std::collections::HashMap::new();
+        let empty_rgb = std::collections::HashMap::new();
+        let merged: HashSet<git2::Oid> = [oid(2)].into_iter().collect();
+
+        let out = dim_specs_window_core(
+            &base,
+            &ro,
+            &ff,
+            &empty_lit,
+            &empty_rgb,
+            Some(&merged),
+            0,
+            base.len(),
+        );
+
+        for (i, spec) in out.iter().enumerate().take(4) {
+            // Even rows touch oid(2) -> dim; odd rows have no merged endpoint and
+            // must stay bright — proving the empty-lit trace pass is skipped
+            // (otherwise it would dim every cell).
+            assert_eq!(
+                spec.cells[0].dim,
+                i % 2 == 0,
+                "row {i} merged-lane dim: {:?}",
+                spec.cells
+            );
+        }
+    }
+
+    #[test]
+    fn trace_off_leaves_pixel_specs_bright() {
+        // Regression guard for the empty-lit fix: with no trace, no force-dim,
+        // and no merged-lane set, dimming is a no-op — every base cell stays
+        // bright (the trace pass must not dim everything when nothing is lit).
+        let (base, oids, _lit, _rgb) = window_dim_fixture(4);
+        let ro = row_oids_of(&oids);
+        let ff = no_force(base.len());
+        let empty_lit = std::collections::HashMap::new();
+        let empty_rgb = std::collections::HashMap::new();
+
+        let out = dim_specs_window_core(
+            &base, &ro, &ff, &empty_lit, &empty_rgb, None, 0, base.len(),
+        );
+
+        assert!(
+            out.iter().all(|s| s.cells.iter().all(|c| !c.dim && !c.dim_secondary)),
+            "no dim source active: all cells stay bright"
+        );
     }
 
     #[test]
@@ -4328,7 +4651,7 @@ mod tests {
 
         // Tracing lights only the trunk: the spoke cell dims → so must the tail.
         let lit_trunk = [(trunk_edge, oid(3))].into_iter().collect();
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit_trunk, &HashMap::new(), 0, 2);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit_trunk, &HashMap::new(), None, 0, 2);
         assert!(out[0].cells[2].dim, "spoke cell dims off-lineage");
         assert!(out[1].incoming[0].dim, "tail dims with its source spoke");
 
@@ -4336,7 +4659,7 @@ mod tests {
         let red = [255u8, 0, 0];
         let lit_branch = [(branch_edge, oid(2))].into_iter().collect();
         let lane_rgb = [(oid(2), red)].into_iter().collect();
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit_branch, &lane_rgb, 0, 2);
+        let out = dim_specs_window_core(&base, &ro, &ff, &lit_branch, &lane_rgb, None, 0, 2);
         assert!(!out[1].incoming[0].dim, "lit tail stays bright");
         assert_eq!(out[1].incoming[0].color, red, "tail takes the spoke's traced color");
     }
@@ -4367,7 +4690,7 @@ mod tests {
 
         let mut spans: Vec<Span> = Vec::new();
         // cap = 3 leaves room for 2 glyphs plus the `…` marker.
-        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lit), false);
+        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lit), false, None);
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         assert!(!commit.style.add_modifier.contains(Modifier::DIM));
