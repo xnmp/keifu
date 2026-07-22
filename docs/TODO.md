@@ -562,3 +562,6 @@ Rewritten PR subjects show icon + title only — the parsed number is sometimes 
 
 ### [TODO] #102 graph_view.rs decomposition (tracked as GH issues #75-#81)
 Investigation confirmed the god-module drift: 4172 lines, a 318-line render_graph_line_tail reading all 13 RowRenderCtx fields, ~40 tests asserting by scanning rendered spans. Seven-item split plan filed as GitHub issues: metrics (#75), geometry (#76), BranchChip/chips (#77), PrBadge/badges (#78), row-folding (#79), pixel-dim (#80), and the capstone pure-RowModel seam (#81). Order: #75/#76/#79 → #77/#78 → #80 → #81.
+
+### [DONE] #103 Trunk-aware merged classification + --explain-merged diagnostics
+Found via the new `keifu --explain-merged` trace (added here) run on keifu's own repo: classification measured only against main/master (+origin mirror), so on a repo whose working trunk is a long-lived branch (chong-dev), nothing ever classified — 0 branches. The checked-out branch's tip is now an additional trunk tip ("merged = landed in the trunk or the line you're on"); guards keep main/HEAD themselves unclassifiable. keifu repo: 47 branches now classify. Also added the exact reported user shape (local survivor, remote branch deleted, squash on drifted origin/main) as a passing fixture — the remaining real-repo gap, if any, is diagnosable with --explain-merged output.

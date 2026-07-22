@@ -57,7 +57,7 @@ pub fn merged_branch_fetch() -> IntervalFetch<HashSet<String>> {
 /// head-branch names. `Err` (surfaced by the caller) on gh-missing, timeout, or
 /// a non-zero exit — so a transient failure is observable rather than silently
 /// emptying the merged-head set.
-fn fetch_merged_branches(repo_path: &str) -> Result<HashSet<String>, String> {
+pub fn fetch_merged_branches(repo_path: &str) -> Result<HashSet<String>, String> {
     let out = crate::gh::run(
         repo_path,
         &[
