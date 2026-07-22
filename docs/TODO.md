@@ -569,7 +569,7 @@ Found via the new `keifu --explain-merged` trace (added here) run on keifu's own
 ### [TODO] #104 Startup blocks on synchronous merged classification
 In branchy repos with hide-merged on, startup runs the full patch-id classification synchronously (now pricier post-#100/#103). Persist the last classification (keyed by branch/trunk tips) and serve it stale at startup while the async classifier revalidates.
 
-### [TODO] #105 Branch behind its upstream misclassified as merged
+### [DONE] #105 Branch behind its upstream misclassified as merged
 A local branch strictly behind its own upstream (dev behind origin/dev) is a stale tracking ref, not landed work — must never classify as merged.
 
 ### [TODO] #106 Mute-merged toggle ignored for squash-merged branches
