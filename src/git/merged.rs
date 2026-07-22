@@ -357,8 +357,14 @@ fn branch_is_merged(
     // content genuinely landed. `behind` is 0 when there is no upstream.
     let stale_tracking = !b.is_remote && b.ahead == 0 && b.behind > 0;
     let landed_in_git = base_tips.iter().any(|&t| {
-        (!stale_tracking && is_ancestor_merged(repo, b.tip_oid, t))
-            || is_squash_merged(repo, b.tip_oid, t)
+        if stale_tracking {
+            // Only a concrete squash landing commit counts — both the ancestry
+            // signal and `is_squash_merged`'s fully-contained shortcut are
+            // exactly the "tip is an ancestor" reading that staleness fakes.
+            squash_merge_target(repo, b.tip_oid, t).is_some()
+        } else {
+            is_ancestor_merged(repo, b.tip_oid, t) || is_squash_merged(repo, b.tip_oid, t)
+        }
     });
     landed_in_git
         || (gh_merged.contains(gh_key(b))
