@@ -221,9 +221,14 @@ describes what's currently true, not what just happened.
 **Toast queue** (`src/toast.rs`) is a pure state machine — `ToastQueue::push`/
 `evict(now)` take time as a parameter, so expiry is unit-testable without a
 clock. `ToastKind::{Info, Success, Error}` drive color and TTL: Info/Success
-live 4s, Error lingers 8s. `push` evicts expired toasts, then caps the queue
+live 4s, Error lingers 12s. `push` evicts expired toasts, then caps the queue
 at `MAX_VISIBLE = 3` by dropping the oldest. ~95 former one-shot
 `set_message()` call sites were converted to toasts (2026-07-20 sweep).
+Errors are toast-only (#116): `App::show_error` pushes an Error toast — the
+old input-swallowing `AppMode::Error` modal is gone, so no failure can lock
+the UI. Esc dismisses lingering error toasts first (`dismiss_errors`), then
+falls through to its usual quit/cancel meaning; info/success toasts never
+intercept Esc.
 
 **Status bar** stays reserved for state a user should be able to glance at any
 time: sticky network progress (`set_progress_message()` marks a message

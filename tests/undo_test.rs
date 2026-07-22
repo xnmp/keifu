@@ -197,8 +197,15 @@ fn undo_dropped_when_branch_was_recreated_since() {
     app.focused_panel = FocusedPanel::Graph;
     app.mode = AppMode::Normal;
     app.handle_action(Action::UndoLastOp).unwrap();
-    // Verification fails → error dialog, entry dropped, no confirm, no action.
-    assert!(matches!(app.mode, AppMode::Error { .. }));
+    // Verification fails → error toast (#116), entry dropped, no confirm, no action.
+    assert!(matches!(app.mode, AppMode::Normal), "errors never block the UI");
+    assert!(
+        app.toasts
+            .visible()
+            .iter()
+            .any(|t| t.kind == keifu::toast::ToastKind::Error),
+        "the failed undo surfaces as an error toast"
+    );
     assert!(app.undo_ledger.is_empty(), "the stale entry is discarded");
     assert!(branch_exists(&app, "feature"));
 }
@@ -221,7 +228,13 @@ fn undo_merge_blocked_by_a_dirty_tree() {
     app.focused_panel = FocusedPanel::Graph;
     app.mode = AppMode::Normal;
     app.handle_action(Action::UndoLastOp).unwrap();
-    assert!(matches!(app.mode, AppMode::Error { .. }), "dirty tree blocks undo");
+    assert!(
+        app.toasts
+            .visible()
+            .iter()
+            .any(|t| t.kind == keifu::toast::ToastKind::Error),
+        "dirty tree blocks undo with an error toast (#116)"
+    );
     assert!(app.undo_ledger.is_empty());
     assert_eq!(head(&app), b, "HEAD unchanged — no reset happened");
 }

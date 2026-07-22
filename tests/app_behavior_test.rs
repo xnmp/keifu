@@ -601,19 +601,59 @@ fn commit_detail_go_to_top_resets_scroll() {
     assert_eq!(app.commit_detail_scroll, 0);
 }
 
-// ── Error Mode ──────────────────────────────────────────────────────
+// ── Error toasts (#116) ─────────────────────────────────────────────
 
 #[test]
-fn cancel_in_error_mode_returns_to_normal() {
+fn show_error_is_a_toast_and_never_blocks_input() {
+    // An error surfaces as a red toast: the mode stays Normal, so every key
+    // keeps working — no modal to dismiss before the UI is usable again.
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    app.show_error("something failed".to_string());
+    assert!(matches!(app.mode, AppMode::Normal), "no error modal");
+    assert!(
+        app.toasts
+            .visible()
+            .iter()
+            .any(|t| t.kind == keifu::toast::ToastKind::Error && t.text == "something failed"),
+        "the error is a visible toast"
+    );
+
+    // Input still works: graph navigation is not swallowed.
+    let before = app.graph_nav.graph_list_state.selected();
+    app.handle_action(Action::MoveDown).unwrap();
+    assert_ne!(
+        app.graph_nav.graph_list_state.selected(),
+        before,
+        "navigation works with an error toast up"
+    );
+}
+
+#[test]
+fn esc_dismisses_the_error_toast_before_quitting() {
+    // First Esc (graph pane → Quit) clears the lingering error toast and does
+    // NOT quit; the next Esc quits as usual. Info toasts never intercept.
     let (_td, repo) = init_repo();
     commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
-    app.mode = AppMode::Error {
-        message: "test error".to_string(),
-    };
 
-    app.handle_action(Action::Cancel).unwrap();
-    assert!(matches!(app.mode, AppMode::Normal));
+    app.show_error("boom".to_string());
+    app.handle_action(Action::Quit).unwrap();
+    assert!(!app.should_quit, "first Esc dismisses the toast, not the app");
+    assert!(
+        !app
+            .toasts
+            .visible()
+            .iter()
+            .any(|t| t.kind == keifu::toast::ToastKind::Error),
+        "the error toast is gone"
+    );
+
+    app.handle_action(Action::Quit).unwrap();
+    assert!(app.should_quit, "second Esc quits normally");
 }
 
 // ── Commit Menu ─────────────────────────────────────────────────────

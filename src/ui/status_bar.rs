@@ -151,11 +151,6 @@ impl StatusBar {
         let op_state = app.op_state;
         let conflict_count = app.conflict_count;
 
-        let error_message = match mode {
-            AppMode::Error { message } => Some(message.as_str()),
-            _ => None,
-        };
-
         // The selected commit's open PR, if any — drives the o/c/v hints.
         let selected_pr = app.selected_commit_node().and_then(|node| {
             crate::ui::graph_view::pr_for_branch_labels(
@@ -435,18 +430,6 @@ impl StatusBar {
                     );
                 }
             }
-            AppMode::Error { .. } => {
-                // In error mode, show the message then a single close hint.
-                let error_style = Style::default()
-                    .fg(theme.status_error_fg)
-                    .bg(theme.status_error_bg)
-                    .add_modifier(Modifier::BOLD);
-                if let Some(msg) = error_message {
-                    hb.span(Span::styled(format!(" {} ", msg), error_style));
-                    hb.raw("  ");
-                    hb.hint(" Esc/Enter ", key_style, "close", desc_style, Action::Cancel);
-                }
-            }
             AppMode::FileDiff { .. } => {
                 hb.hint_static(" n/N ", key_style, "file ", desc_style);
                 hb.hint_static(" ]/[ ", key_style, "hunk ", desc_style);
@@ -569,7 +552,6 @@ impl StatusBar {
             AppMode::Help => Some(" HELP "),
             AppMode::Input { .. } => Some(" INPUT "),
             AppMode::Confirm { .. } => Some(" CONFIRM "),
-            AppMode::Error { .. } => Some(" ERROR "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
             AppMode::MetadataMenu { .. } => Some(" COLUMNS "),
             AppMode::Settings { .. } => Some(" SETTINGS "),
