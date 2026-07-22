@@ -74,7 +74,6 @@ pub fn map_key_to_action(
             }
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
-        AppMode::Error { .. } => map_error_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
         AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
         AppMode::Settings { .. } => map_settings_menu_mode(key),
@@ -935,13 +934,6 @@ fn map_confirm_mode(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('R') => Some(Action::ConfirmDeleteBranchAndRemote),
         KeyCode::Char('y') | KeyCode::Enter => Some(Action::Confirm),
         KeyCode::Char('n') | KeyCode::Esc => Some(Action::Cancel),
-        _ => None,
-    }
-}
-
-fn map_error_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Some(Action::Cancel),
         _ => None,
     }
 }

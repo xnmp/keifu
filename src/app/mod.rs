@@ -308,9 +308,6 @@ pub enum AppMode {
         message: String,
         action: ConfirmAction,
     },
-    Error {
-        message: String,
-    },
     CommitMenu {
         items: Vec<CommitMenuItem>,
         selected: usize,
@@ -1397,7 +1394,6 @@ impl App {
             AppMode::Help => self.handle_help_action(action),
             AppMode::Input { .. } => self.handle_input_action(action)?,
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
-            AppMode::Error { .. } => self.handle_error_action(action),
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
             AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
             AppMode::Settings { .. } => self.handle_settings_action(action)?,
@@ -1424,9 +1420,12 @@ impl App {
         Ok(())
     }
 
-    /// Show an error
+    /// Report a one-shot error as a red toast (#116): visible without blocking
+    /// input, long-TTL so it isn't missed, dismissible early with Esc. Never a
+    /// modal — the status bar stays reserved for sticky state (conflicts,
+    /// latched background-check errors), and no error may lock the UI.
     pub fn show_error(&mut self, message: String) {
-        self.mode = AppMode::Error { message };
+        self.toast(crate::toast::ToastKind::Error, message);
     }
 
     /// Report a failed post-op refresh with a consistent message and severity.
@@ -1999,12 +1998,6 @@ impl App {
         }
     }
 
-    fn handle_error_action(&mut self, action: Action) {
-        // Close the error on any key
-        if matches!(action, Action::Quit | Action::Cancel | Action::Confirm) {
-            self.mode = AppMode::Normal;
-        }
-    }
 }
 
 #[cfg(test)]

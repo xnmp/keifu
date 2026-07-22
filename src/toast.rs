@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 const MAX_VISIBLE: usize = 3;
 /// Time-to-live for info/success toasts.
 const DEFAULT_TTL: Duration = Duration::from_secs(4);
-/// Errors linger longer so they're not missed.
-const ERROR_TTL: Duration = Duration::from_secs(8);
+/// Errors linger much longer so they're not missed — since #116 they are the
+/// ONLY surface for one-shot errors (no blocking modal), so they must survive
+/// a glance away. Esc dismisses them early (`dismiss_errors`).
+const ERROR_TTL: Duration = Duration::from_secs(12);
 
 /// Toast severity, driving color and TTL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +78,17 @@ impl ToastQueue {
     pub fn evict(&mut self, now: Instant) -> bool {
         let before = self.toasts.len();
         self.toasts.retain(|t| t.expires_at > now);
+        self.toasts.len() != before
+    }
+
+    /// Drop every ERROR toast immediately (#116): Esc dismisses lingering
+    /// errors without waiting out their TTL. Info/success toasts are left to
+    /// expire on their own — they are short-lived, and letting them swallow an
+    /// Esc would make quit/cancel feel unreliable. Returns whether anything
+    /// was dismissed (the caller then consumes the key and redraws).
+    pub fn dismiss_errors(&mut self) -> bool {
+        let before = self.toasts.len();
+        self.toasts.retain(|t| t.kind != ToastKind::Error);
         self.toasts.len() != before
     }
 
@@ -173,6 +186,19 @@ mod tests {
         q.push(ToastKind::Info, "i", at(t0, 1)); // expires t0+5
         // Earliest of {t0+8, t0+5} is t0+5.
         assert_eq!(q.next_expiry(), Some(at(t0, 1) + DEFAULT_TTL));
+    }
+
+    #[test]
+    fn dismiss_errors_removes_only_error_toasts() {
+        let t0 = Instant::now();
+        let mut q = ToastQueue::new();
+        q.push(ToastKind::Info, "i", t0);
+        q.push(ToastKind::Error, "e1", t0);
+        q.push(ToastKind::Error, "e2", t0);
+        assert!(q.dismiss_errors(), "errors were present and dismissed");
+        let texts: Vec<&str> = q.visible().iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, vec!["i"], "info survives, errors are gone");
+        assert!(!q.dismiss_errors(), "nothing left to dismiss");
     }
 
     #[test]

@@ -214,7 +214,6 @@ fn mode_name(mode: &AppMode) -> &'static str {
         AppMode::Help => "help",
         AppMode::Input { .. } => "input",
         AppMode::Confirm { .. } => "confirm",
-        AppMode::Error { .. } => "error",
         AppMode::CommitMenu { .. } => "commit_menu",
         AppMode::MetadataMenu { .. } => "metadata_menu",
         AppMode::Settings { .. } => "settings",

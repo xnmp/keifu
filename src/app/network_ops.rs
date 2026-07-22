@@ -588,9 +588,17 @@ mod tests {
             "expected a commit-or-stash error toast"
         );
 
-        // An unrecognized pull failure still gets the error modal.
+        // An unrecognized pull failure is an error toast too (#116) — no
+        // failure of any kind may lock the UI behind a modal.
         app.handle_pull_error("some unexpected failure".to_string(), None);
-        assert!(matches!(app.mode, AppMode::Error { .. }));
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert!(
+            app.toasts
+                .visible()
+                .iter()
+                .any(|t| t.text.contains("some unexpected failure")),
+            "unrecognized failure surfaces as an error toast"
+        );
     }
 
     /// A persistently-failing silent auto-fetch (e.g. offline) must report

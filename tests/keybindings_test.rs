@@ -563,21 +563,6 @@ fn confirm_mode_yes_no() {
     assert_eq!(map(key(KeyCode::Char('x'))), None);
 }
 
-// ── Error mode ──────────────────────────────────────────────────────
-
-#[test]
-fn error_mode_dismiss() {
-    let mode = AppMode::Error {
-        message: String::new(),
-    };
-    let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
-
-    assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
-    assert_eq!(map(key(KeyCode::Enter)), Some(Action::Cancel));
-    assert_eq!(map(key(KeyCode::Char('q'))), Some(Action::Cancel));
-    assert_eq!(map(key(KeyCode::Char('x'))), None);
-}
-
 // ── File diff mode ──────────────────────────────────────────────────
 
 #[test]

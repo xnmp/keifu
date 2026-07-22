@@ -4,6 +4,14 @@ use super::*;
 
 impl App {
     pub(crate) fn handle_normal_action(&mut self, action: Action) -> Result<()> {
+        // Esc targets a lingering error toast before any other meaning (#116):
+        // a red toast is the most prominent thing on screen, so the first Esc
+        // dismisses it instead of quitting / cancelling; the next Esc proceeds
+        // as usual. Info/success toasts never intercept (they expire quickly,
+        // and swallowing an Esc for them would make quit feel unreliable).
+        if matches!(action, Action::Quit | Action::Cancel) && self.toasts.dismiss_errors() {
+            return Ok(());
+        }
         // Panel navigation works from any panel
         match action {
             Action::PanelLeft => {
