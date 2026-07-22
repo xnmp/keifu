@@ -405,27 +405,20 @@ impl App {
         Ok(())
     }
 
-    /// Recompute `merged.lane_oids` — the commits exclusive to a merged branch's
-    /// lane — from the loaded commits and the current merged classification
-    /// (issue #108). Populated whenever a merged branch exists, independent of
-    /// the `dim`/`hide` toggles: the render path gates on `dim && !hide`, so
-    /// flipping the setting reflects instantly without a rebuild (like the merged
-    /// badge does). With `hide` on the merged commits aren't loaded, so the walk
-    /// naturally yields an empty set. Pure walk over `self.commits` via
-    /// `graph::merged_lane_oids` — no fresh revwalk.
+    /// Recompute `merged.lane_oids` — the loaded commits hide-merged would
+    /// remove (issue #108, semantics #111: the complement of the live refs'
+    /// first-parent chains, exactly the #91 walk's keep-set). Includes the side
+    /// lanes of already-deleted merged-in branches, which have no classified
+    /// ref to walk from — so this runs even when the classification is empty.
+    /// Independent of the `dim`/`hide` toggles: the render path gates on
+    /// `dim && !hide`, so flipping the setting reflects instantly without a
+    /// rebuild. With `hide` on the excluded commits aren't loaded, so the
+    /// complement is naturally empty. Pure over `self.commits` — no revwalk.
     fn recompute_merged_lane_oids(&mut self) {
-        if self.merged.branches.is_empty() {
-            self.merged.lane_oids.clear();
-            return;
-        }
-        let merged_tips: Vec<git2::Oid> = self
-            .branches
-            .iter()
-            .filter(|b| self.merged.branches.contains(&b.name))
-            .map(|b| b.tip_oid)
-            .collect();
         // Live tips: every non-merged branch, plus HEAD (a detached or
-        // hidden-branch HEAD still anchors a first-parent line to protect).
+        // hidden-branch HEAD still anchors a first-parent line to protect) and
+        // the stash entries (their nodes are loaded off-chain and must never
+        // read as "merged work").
         let mut live_tips: Vec<git2::Oid> = self
             .branches
             .iter()
@@ -435,8 +428,8 @@ impl App {
         if let Some(head) = self.repo.head_oid() {
             live_tips.push(head);
         }
-        self.merged.lane_oids =
-            crate::git::graph::merged_lane_oids(&self.commits, &merged_tips, &live_tips);
+        live_tips.extend(self.repo.get_stashes().iter().map(|s| s.oid));
+        self.merged.lane_oids = crate::git::graph::merged_lane_oids(&self.commits, &live_tips);
     }
 
     /// Phase 3 — re-point the cursor onto the equivalent row in the fresh graph.
