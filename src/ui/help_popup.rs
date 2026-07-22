@@ -48,6 +48,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("↑ / ↓", "Move up/down"),
         Row("← / →", "Switch panels"),
         Row("Tab / Shift+Tab", "Switch panels (forward/back)"),
+        Row("Shift+F / Shift+C", "Show/hide the files / commit pane"),
         Row("Ctrl+d/u", "Page down/up"),
         Row("g / Home", "Go to top"),
         Row("Shift+G / End", "Go to bottom"),

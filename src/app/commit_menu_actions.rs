@@ -107,7 +107,7 @@ impl App {
 
         if node.is_uncommitted {
             // For uncommitted node, go to files panel
-            self.focused_panel = FocusedPanel::Files;
+            self.focus_files_pane();
             return;
         }
 

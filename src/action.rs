@@ -47,6 +47,10 @@ pub enum Action {
     ToggleRemoteBranches,
     /// Show/hide branches already merged into the trunk (merge/squash) in the graph.
     ToggleMergedBranches,
+    /// Show/hide the files pane (#116); the freed space goes to its neighbors.
+    ToggleFilesPane,
+    /// Show/hide the commit-detail pane (#116).
+    ToggleCommitPane,
     MenuSelect,
     SelectAll,
     SelectNone,

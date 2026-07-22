@@ -329,6 +329,11 @@ pub struct UiState {
     /// Hide stash entries (and any commits reachable only as stash parents) from
     /// the graph. Off by default (stashes shown), preserving historical behavior.
     pub hide_stashes: bool,
+    /// Hide the files pane entirely (#116); its space goes to the commit pane,
+    /// or to the graph when both detail panes are hidden. Off by default.
+    pub hide_files_pane: bool,
+    /// Hide the commit-detail pane entirely (#116). Off by default.
+    pub hide_commit_pane: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -345,6 +350,8 @@ impl Default for UiState {
             dim_merged_branches: true,
             files_group_by_folder: false,
             hide_stashes: false,
+            hide_files_pane: false,
+            hide_commit_pane: false,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -567,6 +574,8 @@ mod tests {
             dim_merged_branches: false,
             files_group_by_folder: true,
             hide_stashes: false,
+            hide_files_pane: true,
+            hide_commit_pane: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,

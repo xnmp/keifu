@@ -258,10 +258,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let status_area = vertical[1];
 
     // Split main area: graph + detail. The graph gets `graph_split_ratio`%;
-    // the divider between them is drag-resizable.
+    // the divider between them is drag-resizable. With both detail panes
+    // hidden (#116) there is no detail area at all — the graph takes the full
+    // main area and the hidden panes get zero-size rects, which also removes
+    // them from mouse hit-testing (a zero-size Rect contains no point).
     let graph_ratio = app.graph_split_ratio;
     let detail_ratio = 100u16.saturating_sub(graph_ratio);
-    let (graph_area, detail_area) = if app.side_panel_layout {
+    let show_detail = !(app.hide_files_pane && app.hide_commit_pane);
+    let (graph_area, detail_area) = if !show_detail {
+        (main_area, Rect::default())
+    } else if app.side_panel_layout {
         // Side layout: detail on LEFT, graph on RIGHT.
         let h = Layout::default()
             .direction(Direction::Horizontal)
@@ -283,18 +289,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (v[0], v[1])
     };
 
-    // Split detail area into files pane + commit detail
-    let detail_direction = if detail_area.width <= 56 {
-        Direction::Vertical
+    // Split detail area into files pane + commit detail; a hidden pane (#116)
+    // cedes the whole detail area to the other.
+    let (files_area, commit_area) = if app.hide_files_pane {
+        (Rect::default(), detail_area)
+    } else if app.hide_commit_pane {
+        (detail_area, Rect::default())
     } else {
-        Direction::Horizontal
+        let detail_direction = if detail_area.width <= 56 {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        };
+        let detail_chunks = Layout::default()
+            .direction(detail_direction)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(detail_area);
+        (detail_chunks[0], detail_chunks[1])
     };
-    let detail_chunks = Layout::default()
-        .direction(detail_direction)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(detail_area);
-    let files_area = detail_chunks[0];
-    let commit_area = detail_chunks[1];
 
     // Record panel rects for mouse hit-testing.
     app.mouse_layout = crate::app::MouseLayout {
@@ -305,8 +317,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         side_layout: app.side_panel_layout,
     };
 
-    // Pre-render pass: compute layout metrics that update App scroll state
-    let commit_lines = compute_commit_detail_layout(app, commit_area, &theme);
+    // Pre-render pass: compute layout metrics that update App scroll state.
+    // Skipped for a hidden commit pane (#116): the layout pass shells out for
+    // signature status and recomputes wrapped lines — work with no consumer.
+    let commit_lines = if commit_area.is_empty() {
+        Vec::new()
+    } else {
+        compute_commit_detail_layout(app, commit_area, &theme)
+    };
     stage!(app, "detail_layout");
 
     // Render widgets
@@ -455,18 +473,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
     stage!(app, "overlay");
-    let mut files_state = FilesPaneState {
-        selected: Some(app.file_selected_index()),
-        offset: 0,
-    };
-    frame.render_stateful_widget(FilesPaneWidget::new(app, &theme), files_area, &mut files_state);
-    // The widget windows around the selection; keep the resulting offset for
-    // mouse hit-testing.
-    app.files_view_offset = files_state.offset;
-    frame.render_widget(
-        CommitDetailWidget::new(app, commit_area, &theme, commit_lines),
-        commit_area,
-    );
+    // Hidden panes (#116) have zero-size rects — skip their widgets entirely
+    // (ratatui would draw nothing, but the widgets' constructors do real work).
+    if !files_area.is_empty() {
+        let mut files_state = FilesPaneState {
+            selected: Some(app.file_selected_index()),
+            offset: 0,
+        };
+        frame.render_stateful_widget(FilesPaneWidget::new(app, &theme), files_area, &mut files_state);
+        // The widget windows around the selection; keep the resulting offset for
+        // mouse hit-testing.
+        app.files_view_offset = files_state.offset;
+    }
+    if !commit_area.is_empty() {
+        frame.render_widget(
+            CommitDetailWidget::new(app, commit_area, &theme, commit_lines),
+            commit_area,
+        );
+    }
 
     // Scrollbars on the right border of each scrollable pane. Rendered after the
     // panes (and the pixel overlay) so the track sits on top of the border.

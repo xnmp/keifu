@@ -16,20 +16,13 @@ impl App {
         match action {
             Action::PanelLeft => {
                 self.editing_commit_message = false;
-                self.focused_panel = match self.focused_panel {
-                    FocusedPanel::Graph => FocusedPanel::CommitDetail,
-                    FocusedPanel::CommitDetail => FocusedPanel::Files,
-                    FocusedPanel::Files => FocusedPanel::Graph,
-                };
+                // Cycle only through visible panels (#116).
+                self.focused_panel = self.next_visible_panel(self.focused_panel, false);
                 return Ok(());
             }
             Action::PanelRight => {
                 self.editing_commit_message = false;
-                self.focused_panel = match self.focused_panel {
-                    FocusedPanel::Graph => FocusedPanel::Files,
-                    FocusedPanel::Files => FocusedPanel::CommitDetail,
-                    FocusedPanel::CommitDetail => FocusedPanel::Graph,
-                };
+                self.focused_panel = self.next_visible_panel(self.focused_panel, true);
                 return Ok(());
             }
             Action::FocusGraph => {
@@ -45,6 +38,16 @@ impl App {
             // The issue list opens from any panel in Normal mode.
             Action::OpenIssueList => {
                 self.open_issue_list();
+                return Ok(());
+            }
+            // Pane visibility toggles work from any panel (#116) — hiding the
+            // focused pane moves focus to the graph inside the toggle.
+            Action::ToggleFilesPane => {
+                self.toggle_files_pane();
+                return Ok(());
+            }
+            Action::ToggleCommitPane => {
+                self.toggle_commit_pane();
                 return Ok(());
             }
             // Palette shortcut: open (or reuse) the list, then the new-issue

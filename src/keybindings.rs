@@ -210,6 +210,16 @@ fn map_normal_mode(
         if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Char('I') {
             return Some(Action::OpenIssueList);
         }
+
+        // Pane visibility (#116): Shift+F / Shift+C from any panel, so a pane
+        // can be brought back while focus sits elsewhere. Both letters are
+        // unbound in every Normal-mode panel scope.
+        if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Char('F') {
+            return Some(Action::ToggleFilesPane);
+        }
+        if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Char('C') {
+            return Some(Action::ToggleCommitPane);
+        }
     }
 
     // Panel navigation with left/right arrows and Tab (from any panel)
