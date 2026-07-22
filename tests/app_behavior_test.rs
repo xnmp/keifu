@@ -1603,7 +1603,6 @@ fn commit_menu_branch_tip_includes_branch_ops() {
     match &app.mode {
         AppMode::CommitMenu { items, .. } => {
             for expected in [
-                CommitMenuItem::Push,
                 CommitMenuItem::MergeIntoCurrent,
                 CommitMenuItem::Rebase,
                 CommitMenuItem::DeleteBranch,
@@ -1615,6 +1614,14 @@ fn commit_menu_branch_tip_includes_branch_ops() {
                     items
                 );
             }
+            // Push targets HEAD, so a non-HEAD branch tip must not offer it
+            // (issue #87). Push/pull gating is covered fully in
+            // commit_menu_push_test.rs.
+            assert!(
+                !items.contains(&CommitMenuItem::Push),
+                "non-HEAD branch tip must not offer Push, got {:?}",
+                items
+            );
         }
         other => panic!("expected a CommitMenu, got {:?}", other),
     }

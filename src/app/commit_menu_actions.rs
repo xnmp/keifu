@@ -129,15 +129,19 @@ impl App {
         let selected_oid = node.commit.as_ref().map(|c| c.oid);
         let has_branch = self.selected_branch().is_some();
         let is_head_branch = self.selected_branch().map(|b| b.is_head).unwrap_or(false);
+        let can_push = self.selected_branch().map(should_offer_push).unwrap_or(false);
         let mut items = Vec::new();
 
-        // Push/pull pairing at top: push on any branch tip, pull on the HEAD
-        // branch (which is what a bare `git pull` integrates into).
-        if has_branch {
+        // Push/pull pairing at top. Push targets HEAD (`initiate_push` pushes the
+        // checked-out branch), so it's offered only when the *selected* branch is
+        // HEAD and actually has work to push — never on remote-only or non-HEAD
+        // local labels, which Push would silently ignore. Pull integrates into
+        // HEAD too, so it's gated the same way.
+        if can_push {
             items.push(CommitMenuItem::Push);
-            if is_head_branch {
-                items.push(CommitMenuItem::Pull);
-            }
+        }
+        if is_head_branch {
+            items.push(CommitMenuItem::Pull);
         }
 
         // PR actions (need the `gh` CLI + an open-PR context).
@@ -687,4 +691,16 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// Whether the commit menu should offer Push for `branch`.
+///
+/// Push acts on the checked-out HEAD branch (`initiate_push` pushes HEAD), so
+/// it's only meaningful when the selected branch *is* HEAD. It's offered only
+/// when HEAD has something to push: commits ahead of its upstream, or no
+/// upstream at all (the publish flow for an unpublished branch). A HEAD branch
+/// in sync (`ahead == 0` with an upstream) has nothing to push. Remote-tracking
+/// and non-HEAD local branches never qualify — Push would silently ignore them.
+fn should_offer_push(branch: &BranchInfo) -> bool {
+    branch.is_head && (branch.ahead > 0 || branch.upstream.is_none())
 }
