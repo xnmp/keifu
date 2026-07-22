@@ -58,6 +58,19 @@ impl<T: Send + 'static> IntervalFetch<T> {
         self.last_fetch = None;
     }
 
+    /// True when the next `maybe_start` would spawn a fetch: none in flight and
+    /// one is due (first run, interval elapsed, or a pending `force`).
+    pub fn is_due(&self) -> bool {
+        self.receiver.is_none() && self.last_fetch.is_none_or(|t| t.elapsed() >= self.interval)
+    }
+
+    /// Pretend a fetch just completed, arming the interval gate — lets tests
+    /// observe a later `force` as a transition back to due.
+    #[cfg(test)]
+    pub fn mark_fetched_for_test(&mut self) {
+        self.last_fetch = Some(Instant::now());
+    }
+
     /// Spawn a fetch when none is in flight and one is due (immediately on the
     /// first call, then on the interval).
     pub fn maybe_start(&mut self, repo_path: &str) {
