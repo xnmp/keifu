@@ -4,9 +4,9 @@
 
 **Decision:** `FocusedPanel` is a field on `App`, not a new `AppMode` variant.
 
-**Why:** The existing `FileSelect` and `FileDiff` modes work as overlays on top of the graph view. If we made panel focus a mode, we'd need to handle mode transitions between `FileSelect`, `FileDiff`, and each panel focus state — an explosion of combinations. Keeping focus as a field means modes and panel focus are orthogonal.
+**Why:** The `FileDiff` mode and the various popups work as overlays on top of the graph/files panes. If we made panel focus a mode too, we'd need to handle mode transitions between every overlay and each panel focus state — an explosion of combinations. Keeping focus as a field (`FocusedPanel::{Graph, Files, CommitDetail}`) means modes and panel focus are orthogonal.
 
-**How it works:** The keybinding router checks both `app.mode` and `app.focused_panel` to determine which key handler to use. In `AppMode::Normal`, keys are routed to `handle_graph_action`, `handle_files_action`, or `handle_commit_detail_action` based on focused panel. Other modes (Help, Input, Confirm, CommitMenu, FileSelect, FileDiff) handle their own keys regardless of focused panel.
+**How it works:** The keybinding router checks both `app.mode` and `app.focused_panel` to determine which key handler to use. In `AppMode::Normal`, keys are routed to `handle_graph_action`, `handle_files_action`, or `handle_commit_detail_action` based on focused panel. The files pane is the `Files` focused panel, not a mode. Other modes (Help, Input, Confirm, CommitMenu, FileDiff, and the menu/popup modes) handle their own keys regardless of focused panel.
 
 ## Text Editor Persistence (2026-03-25)
 
@@ -158,9 +158,9 @@ xterm-256 palette formula) so rasterization has concrete colors.
 shifts render as VSCode-style cubic Bézier S-curves rather than a straight
 horizontal run + a tight rounded corner. `draw_cells` (`src/ui/graph_pixels.rs`)
 runs in two phases:
-1. `transition_curves` (~line 606) — a pure, row-local scan of `spec.cells` —
+1. `transition_curves` (~line 908) — a pure, row-local scan of `spec.cells` —
    reconstructs each maximal horizontal-family run into cubics via
-   `cubic_between` (~line 580). A run's endpoints are its corners/Tees plus any
+   `cubic_between` (~line 863). A run's endpoints are its corners/Tees plus any
    flanking commit dot, classified as *hubs* (row mid-height: a flanking dot,
    or a `TeeRight`/`TeeLeft` that stays on the trunk with no flanking dot — a
    fork connector's trunk, whose up-arms fan from it) or *spokes* (a row edge:
@@ -175,7 +175,7 @@ runs in two phases:
    carries the spoke's own flat color/dim for its entire sweep, so a
    multi-color fork connector colors each arm correctly.
 
-   `cubic_between(a, b)` (~line 580) places **both** control points at the
+   `cubic_between(a, b)` (~line 863) places **both** control points at the
    endpoints' shared y-midpoint — `(a.x, ymid)` and `(b.x, ymid)` — rather than
    at a hand-tuned hub-tilt/fan offset. That makes every curve leave and enter
    *every* endpoint travelling vertically, so its tangent matches the straight
@@ -267,32 +267,41 @@ merged-branch set is not wiped), so a transient gh error can't blank the badges.
 
 ## Settings Registry (2026-07-20)
 
-**Decision:** `Ctrl+,` settings menu is backed by a pure descriptor layer
-(`src/settings.rs`) with **no dependency on `App`**, plus a projection to/from
-`App` state.
+**Decision:** `Ctrl+,` settings menu is backed by a descriptor registry
+(`src/settings.rs::descriptors()`) that is the single source of truth for what
+settings exist and how they behave. There is no separate `SettingsModel`
+snapshot and no `settings_model()`/`apply_settings_model()` projection — each
+descriptor carries fn-pointer accessors that read and write the live value
+**directly on `App`**, and a persistence lens, so the menu and the store share
+one definition.
 
-**Why:** Keeping the registry pure makes menu logic (cycling values, clamping
-ints, display formatting) unit-testable without a TUI or an `App`, and gives
-the widget and the action handler a single shared source of truth for what
-settings exist and how they behave.
+**Why:** One entry per setting means no hand-written projection to drift out of
+sync. The pure value operations (`cycle_value`, `clamp_int`, `format_value`,
+`filter_descriptors`) take no `App`, so the menu logic (cycling, clamping,
+display, fuzzy filtering) stays unit-testable without a TUI.
 
 **How it works:**
-- `SettingsModel` — a flat, plain-data snapshot of every editable setting.
-- `SettingDescriptor` — one menu row: a `SettingKind` (`Bool` / `Enum{options}`
-  / `Int{min,max,step,zero_label}`), typed get/set accessors, display logic,
-  grouped under a `SettingGroup` (Graph/Files/Refresh/Interface, in menu
-  order), and its persistence destination.
-- `App::settings_model()` gathers scattered `App` fields (trace state, metadata
-  columns, `config.ui`, etc.) into a `SettingsModel`; `App::apply_settings_model()`
-  writes an edited model back, including clamping (e.g. split ratio to 20-80)
-  and sentinel handling (e.g. `0` → `None` for an uncapped width).
-- **Persistence is split by destination.** State-only settings (e.g. UI
-  toggles that aren't meant to be hand-edited) go through `UiState::save()` to
-  `state.toml`, plain serde round-trip. Config-file settings go through
+- `SettingDescriptor` — one menu row: a `label`, a `SettingGroup`
+  (Graph/Files/Refresh/Interface, in menu order), a `SettingKind` (`Bool` /
+  `Enum{options}` / `Int{min,max,step,zero_label}`), an optional `note` (e.g.
+  "restart"), a `SettingStore` (persistence destination), and `get`/`set`
+  fn-pointers onto `App`. Descriptors are built by the `state_bool!` /
+  `config_bool!` / `config_int!` macros so the common shapes are declared in a
+  single line.
+- **Persistence lives in the descriptor.** `SettingStore::State { read, write }`
+  carries the lens between the `SettingValue` and its `UiState` field, so
+  state-persisted settings save to `state.toml` via `App::save_ui_state`
+  (a loop over the descriptors, `UiState::save()` underneath). `SettingStore::Config`
+  settings write `app.config.*` through the `set` accessor and persist via
   `Config::save()` (`src/config.rs`) using **`toml_edit`**, which rewrites only
   the touched keys in the existing document (`doc["refresh"]["auto_refresh"] =
-  value(...)`) rather than re-serializing the whole file — so comments and keys
-  the menu doesn't know about survive a save.
+  value(...)`) rather than re-serializing — so comments and keys the menu
+  doesn't know about survive a save. `App::settings_snapshot` is the read-side
+  loop.
+- **Clamping / sentinels are in the kind, not a projection.** `clamp_int`
+  bounds an `Int` to its `min`/`max` (e.g. graph split ratio 20-80); a
+  `zero_label` (e.g. "uncapped" for the graph width cap) shows a friendly token
+  in place of `0`, encoded once via the `cap_to_value`/`value_to_cap` helpers.
 - `graph_renderer` is **restart-only**: its descriptor carries a `note:
   Some("restart")` shown in the menu, because `PixelGraphState` (terminal
   graphics-protocol detection) is constructed once in `main.rs` before the
@@ -303,7 +312,7 @@ settings exist and how they behave.
 
 **Decision:** Whether a branch is merged is a pure domain computation
 (`src/git/merged.rs`), fed by async GitHub polling infrastructure
-(`src/merged_branches.rs`) that never blocks a frame.
+(`src/merged_branch_fetch.rs`) that never blocks a frame.
 
 **Domain logic** (`src/git/merged.rs`):
 - `is_ancestor_merged()` — the cheap case: `graph_descendant_of(base_tip,
@@ -402,13 +411,39 @@ from …"` merge-commit message (distinguishing it from a local `"Merge
 branch …"`) — covers PRs that are already closed by the time of render, so
 have no open-PR index entry.
 
+## Graph View Widget Modules
+
+**Decision:** The graph-row widget is the `src/ui/graph_view/` package (was one
+`graph_view.rs`), split by responsibility with typed seams between the passes so
+each is independently testable and the render tail carries no ad-hoc tuples:
+
+- `mod.rs` — widget entry / glue (`render_graph_line`, list-item assembly).
+- `metrics.rs` — text metrics: VS16-aware display width, width-bounded
+  truncation, compact relative-date formatting.
+- `geometry.rs` — graph-column geometry: `GRAPH_LEADING_COLUMNS`, avatar
+  reservations, effective width / cap arithmetic, the per-row truncation budget
+  shared by the unicode and pixel renderers.
+- `rows.rs` — row folding + viewport windowing (`RenderRow`,
+  `visible_row_window`).
+- `chips.rs` — branch-chip construction. `optimize_branch_display` yields typed
+  `BranchChip`s, each carrying the real click-target ref from construction (so
+  the hit-test isn't re-derived at render time).
+- `badges.rs` — pure PR/merged badge decisions; `pr_for_row` returns a typed
+  `PrBadge` the render tail draws directly.
+- `pixel_dim.rs` — pixel base-spec build (`build_pixel_base_specs`) + per-frame
+  dim windowing (`dim_pixel_specs_window`, `apply_trace_dim`).
+- `row.rs` — the message tail as a pure decision pass (`resolve_row_model` →
+  `RowModel` of styling/label/message *decisions*, no widths or spans) followed
+  by a layout pass (`layout_row`) that turns the model into the final `Line` +
+  `ChipHit`s.
+
 ## Windowed Rendering (2026-07-20)
 
 **Decision:** Both the text (Unicode) graph and the pixel-graph path avoid
 rebuilding every row on every keypress; only the visible window is rebuilt,
 and pixel caching goes further by never invalidating on trace state.
 
-**Text layer:** `visible_row_window()` (`src/ui/graph_view.rs`) computes which
+**Text layer:** `visible_row_window()` (`src/ui/graph_view/rows.rs`) computes which
 row indices actually need styled `ListItem`s built — the viewport plus an
 8-row margin, always including the selected row. Everything outside the
 window gets a cheap blank placeholder so the list's length (and therefore
