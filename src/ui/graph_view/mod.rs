@@ -451,6 +451,10 @@ fn render_cells_unicode(
             CellType::TeeRight(color_idx) => ('├', theme.lane_color(*color_idx)),
             CellType::TeeLeft(color_idx) => ('┤', theme.lane_color(*color_idx)),
             CellType::TeeUp(color_idx) => ('┴', theme.lane_color(*color_idx)),
+            // Band junction (#115): the stem is the distinguishing stroke.
+            CellType::TeeDown(_h_color_idx, s_color_idx) => {
+                ('┬', theme.lane_color(*s_color_idx))
+            }
         };
 
         // Line glyphs render bold; non-lineage cells dim while tracing.

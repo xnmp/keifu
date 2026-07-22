@@ -55,6 +55,7 @@ fn render_cells(cells: &[CellType]) -> String {
             CellType::TeeRight(_) => '├',
             CellType::TeeLeft(_) => '┤',
             CellType::TeeUp(_) => '┴',
+            CellType::TeeDown(_, _) => '┬',
         })
         .collect()
 }
