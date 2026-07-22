@@ -115,6 +115,7 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
         DebugRequest::Keys { keys } => match parse_key_sequence(&keys) {
             Ok(events) => {
                 for key in events {
+                    app.maybe_hint_capslock(&key);
                     if let Some(action) = map_key_to_action(
                         key,
                         &app.mode,

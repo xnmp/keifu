@@ -6,6 +6,11 @@ use std::time::{Duration, Instant};
 /// How long a transient status message stays on screen before it clears.
 const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Minimum spacing between CapsLock hint toasts (#106). Without this, holding
+/// a caps-locked key (or just navigating with it on) would spawn a fresh toast
+/// on every keystroke.
+const CAPSLOCK_HINT_COOLDOWN: Duration = Duration::from_secs(30);
+
 /// Pure visibility rule for a status message, so the timeout/stickiness logic is
 /// unit-testable without a clock or a live network op.
 ///
@@ -89,6 +94,38 @@ impl App {
         self.toasts.push(kind, text, std::time::Instant::now());
     }
 
+    /// Nudge the user when a keystroke looks like it was typed with CapsLock on
+    /// (#106) — case-sensitive keybindings otherwise fail silently. No-ops
+    /// while the key was consumed as free text (commit editor, Input mode,
+    /// filters, compose editors, command palette, settings query): uppercase
+    /// is expected there, not a sign of a broken binding. Rate-limited via
+    /// `last_capslock_hint` so a held or repeated key doesn't spam a toast.
+    pub fn maybe_hint_capslock(&mut self, key: &crossterm::event::KeyEvent) {
+        if !crate::keybindings::looks_like_capslock(key) {
+            return;
+        }
+        if crate::keybindings::is_text_editing_context(
+            &self.mode,
+            self.focused_panel,
+            self.editing_commit_message,
+            self.files_pane.files_filter_active,
+            self.commit_filter_active,
+        ) {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last) = self.last_capslock_hint {
+            if now.duration_since(last) < CAPSLOCK_HINT_COOLDOWN {
+                return;
+            }
+        }
+        self.last_capslock_hint = Some(now);
+        self.toast(
+            crate::toast::ToastKind::Info,
+            "CapsLock appears to be on — keys are case-sensitive",
+        );
+    }
+
     /// The next instant a toast or the status message will need a redraw.
     pub fn next_render_deadline(&self) -> Option<std::time::Instant> {
         [self.message_expiry_time(), self.toasts.next_expiry()]
@@ -134,5 +171,89 @@ mod tests {
     fn sticky_message_clears_once_op_no_longer_busy() {
         let expired = MESSAGE_TIMEOUT + Duration::from_secs(1);
         assert!(!message_visible(expired, true, false));
+    }
+}
+
+#[cfg(test)]
+mod capslock_hint_tests {
+    use crate::app::App;
+    use crate::git::repository::GitRepository;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn test_app() -> (tempfile::TempDir, App) {
+        let tempdir = tempfile::tempdir().unwrap();
+        git2::Repository::init(tempdir.path()).unwrap();
+        let repo = GitRepository::open(tempdir.path()).unwrap();
+        let app = App::from_repo(repo).unwrap();
+        (tempdir, app)
+    }
+
+    fn capslock_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn capslock_signature_key_in_normal_mode_toasts() {
+        let (_tmp, mut app) = test_app();
+        assert!(app.toasts.is_empty());
+        app.maybe_hint_capslock(&capslock_key());
+        assert_eq!(app.toasts.visible().len(), 1);
+        assert_eq!(app.toasts.visible()[0].kind, crate::toast::ToastKind::Info);
+    }
+
+    #[test]
+    fn no_toast_while_editing_commit_message() {
+        let (_tmp, mut app) = test_app();
+        app.focused_panel = crate::app::FocusedPanel::CommitDetail;
+        app.editing_commit_message = true;
+        app.maybe_hint_capslock(&capslock_key());
+        assert!(
+            app.toasts.is_empty(),
+            "typing uppercase in the commit editor is normal, not a CapsLock signal"
+        );
+    }
+
+    #[test]
+    fn no_toast_while_a_text_filter_is_active() {
+        let (_tmp, mut app) = test_app();
+        app.focused_panel = crate::app::FocusedPanel::Files;
+        app.files_pane.files_filter_active = true;
+        app.maybe_hint_capslock(&capslock_key());
+        assert!(app.toasts.is_empty());
+    }
+
+    #[test]
+    fn no_toast_while_input_mode_is_capturing_text() {
+        let (_tmp, mut app) = test_app();
+        app.mode = crate::app::AppMode::Input {
+            title: "Branch name".into(),
+            input: String::new(),
+            action: crate::app::InputAction::CreateBranch,
+        };
+        app.maybe_hint_capslock(&capslock_key());
+        assert!(app.toasts.is_empty());
+    }
+
+    #[test]
+    fn second_capslock_key_within_cooldown_does_not_toast_again() {
+        let (_tmp, mut app) = test_app();
+        app.maybe_hint_capslock(&capslock_key());
+        assert_eq!(app.toasts.visible().len(), 1);
+        // Immediately repeated (well within the 30s cooldown): must not add
+        // a second toast.
+        app.maybe_hint_capslock(&capslock_key());
+        assert_eq!(
+            app.toasts.visible().len(),
+            1,
+            "rate limit must suppress a second hint within the cooldown"
+        );
+    }
+
+    #[test]
+    fn genuine_shift_uppercase_never_toasts() {
+        let (_tmp, mut app) = test_app();
+        let shifted = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
+        app.maybe_hint_capslock(&shifted);
+        assert!(app.toasts.is_empty());
     }
 }
