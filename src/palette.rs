@@ -14,6 +14,14 @@ use crate::action::Action;
 /// Maximum results rendered; the rest are summarised as "…N more".
 pub const PALETTE_CAP: usize = 15;
 
+/// Score `text` against `query` with the skim fuzzy algorithm; `None` if it
+/// doesn't match at all. The one matcher shared by every fuzzy-filtered list
+/// in the app (command palette, settings menu, ...) so there is exactly one
+/// notion of "fuzzy match" to reason about.
+pub(crate) fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
+    SkimMatcherV2::default().fuzzy_match(text, query)
+}
+
 /// Which source a palette row came from — also the display tag and the
 /// equal-score tiebreak order (commands rank above branches above commits).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,14 +194,9 @@ pub fn rank(query: &str, candidates: Vec<Candidate>, cap: usize) -> PaletteResul
         return PaletteResults { items, more };
     }
 
-    let matcher = SkimMatcherV2::default();
     let mut scored: Vec<(i64, Candidate)> = candidates
         .into_iter()
-        .filter_map(|c| {
-            matcher
-                .fuzzy_match(&c.match_text, query)
-                .map(|score| (score, c))
-        })
+        .filter_map(|c| fuzzy_score(&c.match_text, query).map(|score| (score, c)))
         .collect();
 
     scored.sort_by(|(sa, a), (sb, b)| {

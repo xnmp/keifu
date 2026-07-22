@@ -250,6 +250,21 @@ pub fn clamp_int(kind: &SettingKind, n: u64) -> u64 {
     }
 }
 
+/// Indices into `ds` whose label fuzzy-matches `query`, in `ds`'s original
+/// (grouped) order — filtering narrows the menu, it doesn't re-rank it, so
+/// group structure survives. Uses the same matcher as the command palette
+/// ([`crate::palette::fuzzy_score`]). An empty (or whitespace-only) query
+/// matches everything, mirroring the palette's empty-query convention.
+pub fn filter_descriptors(ds: &[SettingDescriptor], query: &str) -> Vec<usize> {
+    if query.trim().is_empty() {
+        return (0..ds.len()).collect();
+    }
+    ds.iter()
+        .enumerate()
+        .filter_map(|(i, d)| crate::palette::fuzzy_score(d.label, query).map(|_| i))
+        .collect()
+}
+
 fn set_bool(v: SettingValue, target: &mut bool) {
     if let SettingValue::Bool(b) = v {
         *target = b;
@@ -724,5 +739,70 @@ mod tests {
         ] {
             assert_eq!(renderer_from_index(renderer_index(r)), r);
         }
+    }
+
+    // ── filter_descriptors ──────────────────────────────────────────
+
+    #[test]
+    fn empty_query_matches_every_descriptor_in_original_order() {
+        let ds = descriptors();
+        let visible = filter_descriptors(&ds, "");
+        assert_eq!(visible, (0..ds.len()).collect::<Vec<_>>());
+
+        // Whitespace-only is treated the same as empty (mirrors the palette).
+        let visible = filter_descriptors(&ds, "   ");
+        assert_eq!(visible, (0..ds.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn query_narrows_to_fuzzy_matching_labels_only() {
+        let ds = descriptors();
+        let visible = filter_descriptors(&ds, "dim");
+        assert!(!visible.is_empty());
+        for &i in &visible {
+            assert!(
+                crate::palette::fuzzy_score(ds[i].label, "dim").is_some(),
+                "{} should fuzzy-match 'dim'",
+                ds[i].label
+            );
+        }
+        // "Dim merged branches" is the only label containing "dim".
+        assert!(visible.iter().any(|&i| ds[i].label == "Dim merged branches"));
+        // A setting with no relationship to "dim" must be excluded.
+        assert!(!visible.iter().any(|&i| ds[i].label == "Auto-fetch"));
+    }
+
+    #[test]
+    fn query_preserves_original_group_order_not_score_order() {
+        // Filtering narrows the list; it must not re-rank it — group headers
+        // in the widget rely on this staying in `descriptors()` order.
+        let ds = descriptors();
+        let visible = filter_descriptors(&ds, "e");
+        let mut sorted = visible.clone();
+        sorted.sort_unstable();
+        assert_eq!(visible, sorted, "filtered indices must stay in ascending/original order");
+    }
+
+    #[test]
+    fn nonsense_query_matches_nothing() {
+        let ds = descriptors();
+        let visible = filter_descriptors(&ds, "zzzqqqxxx_no_such_setting");
+        assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn filter_matcher_is_the_same_one_the_command_palette_uses() {
+        // Regression guard against a second, drifting matcher implementation:
+        // filter_descriptors' matches must agree exactly with
+        // crate::palette::fuzzy_score for every descriptor label.
+        let ds = descriptors();
+        let query = "col";
+        let expected: Vec<usize> = ds
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| crate::palette::fuzzy_score(d.label, query).is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(filter_descriptors(&ds, query), expected);
     }
 }
