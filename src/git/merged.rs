@@ -348,9 +348,18 @@ fn branch_is_merged(
     if b.is_remote && gh_key(b) == base_short {
         return false;
     }
-    let landed_in_git = base_tips
-        .iter()
-        .any(|&t| is_ancestor_merged(repo, b.tip_oid, t) || is_squash_merged(repo, b.tip_oid, t));
+    // A local branch strictly BEHIND its upstream (dev lagging origin/dev) is a
+    // stale tracking ref, not landed work — its remote counterpart is the live
+    // line and classifies in its own right. Being behind makes its tip an
+    // ancestor of anything containing the upstream, so the *ancestry* signal
+    // would misread it as merged (#105); the exact signals (patch-id squash,
+    // gh + containment) stay eligible — they can only fire when the branch's
+    // content genuinely landed. `behind` is 0 when there is no upstream.
+    let stale_tracking = !b.is_remote && b.ahead == 0 && b.behind > 0;
+    let landed_in_git = base_tips.iter().any(|&t| {
+        (!stale_tracking && is_ancestor_merged(repo, b.tip_oid, t))
+            || is_squash_merged(repo, b.tip_oid, t)
+    });
     landed_in_git
         || (gh_merged.contains(gh_key(b))
             && base_tips
@@ -401,6 +410,14 @@ pub fn explain_classification(
             let _ = writeln!(out, "  guard: trunk mirror on another remote — never classified");
             continue;
         }
+        let stale_tracking = !b.is_remote && b.ahead == 0 && b.behind > 0;
+        if stale_tracking {
+            let _ = writeln!(
+                out,
+                "  behind upstream by {} (ahead 0) — stale tracking ref, ancestry signal disabled (#105)",
+                b.behind
+            );
+        }
         let mut verdict: Option<String> = None;
         for &t in &tips {
             let fork = repo.merge_base(b.tip_oid, t).ok();
@@ -430,7 +447,7 @@ pub fn explain_classification(
                 contained,
             );
             if verdict.is_none() {
-                if ancestry {
+                if ancestry && !stale_tracking {
                     verdict = Some(format!("MERGED (ancestry into {})", short(t)));
                 } else if let Some(s) = squash {
                     verdict = Some(format!("MERGED (squash target {})", short(s)));
@@ -963,6 +980,45 @@ mod tests {
             ahead: 0,
             behind: 0,
         }
+    }
+
+    #[test]
+    fn local_branch_behind_its_upstream_is_never_marked_merged() {
+        // #105 user repro: local `dev` lags `origin/dev`, and the checked-out
+        // branch forked from origin/dev — so dev's tip is an ancestor of the
+        // HEAD trunk tip. That is staleness (the remote counterpart is the live
+        // line), not landed work; the ancestry signal must not classify it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let d1 = commit(&repo, "refs/heads/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "one")]);
+        let d2 = commit(&repo, "refs/remotes/origin/dev", 2100, &[d1], &[("base.txt", "base"), ("d.txt", "one\ntwo")]);
+        let f = commit(&repo, "refs/heads/feature", 3000, &[d2], &[("base.txt", "base"), ("d.txt", "one\ntwo"), ("f.txt", "f")]);
+
+        let dev = BranchInfo {
+            name: "dev".into(),
+            is_head: false,
+            is_remote: false,
+            upstream: Some("origin/dev".into()),
+            tip_oid: d1,
+            ahead: 0,
+            behind: 1,
+        };
+        let branches = vec![
+            local("main", a, false),
+            dev,
+            remote("origin/dev", d2),
+            local("feature", f, true), // checked out — its tip contains origin/dev
+        ];
+        let base = base_branch(&branches).unwrap();
+        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        assert!(
+            !set.contains("dev"),
+            "a branch strictly behind its upstream is stale, not merged: {set:?}"
+        );
+        // The live remote line ancestry-merged into the checked-out branch DOES
+        // classify — hiding it is correct, its work is fully in view.
+        assert!(set.contains("origin/dev"), "the contained live remote line classifies: {set:?}");
     }
 
     #[test]

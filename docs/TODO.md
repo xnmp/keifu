@@ -565,3 +565,12 @@ Investigation confirmed the god-module drift: 4172 lines, a 318-line render_grap
 
 ### [DONE] #103 Trunk-aware merged classification + --explain-merged diagnostics
 Found via the new `keifu --explain-merged` trace (added here) run on keifu's own repo: classification measured only against main/master (+origin mirror), so on a repo whose working trunk is a long-lived branch (chong-dev), nothing ever classified — 0 branches. The checked-out branch's tip is now an additional trunk tip ("merged = landed in the trunk or the line you're on"); guards keep main/HEAD themselves unclassifiable. keifu repo: 47 branches now classify. Also added the exact reported user shape (local survivor, remote branch deleted, squash on drifted origin/main) as a passing fixture — the remaining real-repo gap, if any, is diagnosable with --explain-merged output.
+
+### [TODO] #104 Startup blocks on synchronous merged classification
+In branchy repos with hide-merged on, startup runs the full patch-id classification synchronously (now pricier post-#100/#103). Persist the last classification (keyed by branch/trunk tips) and serve it stale at startup while the async classifier revalidates.
+
+### [TODO] #105 Branch behind its upstream misclassified as merged
+A local branch strictly behind its own upstream (dev behind origin/dev) is a stale tracking ref, not landed work — must never classify as merged.
+
+### [TODO] #106 Mute-merged toggle ignored for squash-merged branches
+Squash-merged branches render greyed regardless of the mute/dim merged-branches setting.
