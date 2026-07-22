@@ -745,6 +745,7 @@ impl<'a> GraphViewWidget<'a> {
         // O(1) without any per-render scan, keeping the work windowed.
         let pr_ctx = PrContext::new(open_prs);
         let merged_branches = &app.merged.branches;
+        let merged_dim = app.merged.dim;
         // OIDs of base-update ("back-merge") commits (#55); a per-row O(1)
         // membership test, so the check stays inside the windowed render path.
         let base_update_merges = app.merged.base_update.value();
@@ -770,6 +771,7 @@ impl<'a> GraphViewWidget<'a> {
             open_prs,
             pr_ctx: &pr_ctx,
             merged_branches,
+            merged_dim,
             base_update_merges,
             metadata_columns,
             graph_width,
@@ -1384,6 +1386,13 @@ struct RowRenderCtx<'a> {
     open_prs: &'a HashMap<String, PrInfo>,
     pr_ctx: &'a PrContext<'a>,
     merged_branches: &'a HashSet<String>,
+    /// Whether a merged branch shown in the graph should render dimmed (issue
+    /// #106) — chip color + "merged" badge. Independent of whether merged
+    /// branches are hidden entirely (that's decided upstream: a hidden branch
+    /// never reaches this row at all). Applies uniformly regardless of how
+    /// `merged_branches` classified the branch (ancestry, fast-forward, or
+    /// squash all live in the same set).
+    merged_dim: bool,
     base_update_merges: &'a HashSet<git2::Oid>,
     metadata_columns: MetadataColumns,
     /// Graph column width cap (glyph budget), same for every row this frame.
@@ -1752,13 +1761,17 @@ fn render_graph_line_tail<'a>(
     let pr_badge_width = pr_badge.as_ref().map_or(0, |(b, _)| display_width(b) + 1);
 
     // Merged badge: shown when one of this node's local branches has already
-    // landed on the trunk (merge commit, fast-forward, or squash). The branch
-    // chips are dimmed to match. Only reachable when the hide-merged toggle is
-    // off — hidden merged branches drop out of the graph entirely.
-    let has_merged_branch = node
-        .branch_names
-        .iter()
-        .any(|n| ctx.merged_branches.contains(n));
+    // landed on the trunk (merge commit, fast-forward, or squash) AND the
+    // dim-merged-branches setting is on (issue #106) — the branch chips are
+    // dimmed to match. Hidden merged branches never reach this row at all (the
+    // hide-merged toggle removes them from the graph entirely upstream), so
+    // `merged_dim` is the only gate a shown merged branch still needs; it
+    // applies identically regardless of classification kind.
+    let has_merged_branch = ctx.merged_dim
+        && node
+            .branch_names
+            .iter()
+            .any(|n| ctx.merged_branches.contains(n));
     // Computed once and reused below (render section) so the badge text is
     // built at most once per row.
     let merged_badge_text = has_merged_branch.then(merged_badge);
@@ -1822,7 +1835,8 @@ fn render_graph_line_tail<'a>(
         // Record a clickable region resolving to the underlying branch, so a
         // click on the chip can check that branch out.
         let branch = resolve_chip_branch(label, &node.branch_names, ctx.remotes);
-        let is_merged = branch.as_deref().is_some_and(|n| ctx.merged_branches.contains(n));
+        let is_merged =
+            ctx.merged_dim && branch.as_deref().is_some_and(|n| ctx.merged_branches.contains(n));
         if let Some(name) = branch {
             chips.push(ChipHit {
                 x_start: chip_start as u16,
@@ -3235,6 +3249,7 @@ mod tests {
             open_prs,
             pr_ctx: &pr_ctx,
             merged_branches: &HashSet::new(),
+            merged_dim: true,
             base_update_merges,
             metadata_columns: cols,
             graph_width: 4,
@@ -3251,6 +3266,200 @@ mod tests {
             },
         );
         line
+    }
+
+    /// Render one full graph row with an explicit merged-branch classification
+    /// set and the dim-merged-branches setting (issue #106) — the real per-row
+    /// render path, so tests observe exactly what the user sees.
+    fn render_row_with_merged(
+        node: &GraphNode,
+        merged_branches: &HashSet<String>,
+        merged_dim: bool,
+    ) -> Line<'static> {
+        let cols = MetadataColumns {
+            author: false,
+            hash: false,
+            date: false,
+            mute_merges: true,
+            mute_base_merges: false,
+            collapse_merges: false,
+            avatars: false,
+            pr_subjects: true,
+        };
+        let theme = Theme::dark();
+        let open_prs = HashMap::new();
+        let pr_ctx = PrContext::new(&open_prs);
+        let ctx = RowRenderCtx {
+            theme: &theme,
+            now: Local::now(),
+            pixel_mode: false,
+            remotes: &[],
+            open_prs: &open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches,
+            merged_dim,
+            base_update_merges: &HashSet::new(),
+            metadata_columns: cols,
+            graph_width: 4,
+            total_width: 200,
+            selected_branch_name: None,
+            trace: None,
+        };
+        let (line, _chips) = render_graph_line(
+            node,
+            &ctx,
+            RowFlags {
+                is_selected: false,
+                is_marked: false,
+            },
+        );
+        line
+    }
+
+    // ── merged-branch dimming respects its own setting (#106) ─────────
+
+    /// A single-parent commit row carrying the given branch names — the shape
+    /// of a branch-tip row. Both ancestry/fast-forward and squash merges land
+    /// an ordinary single-parent commit on the branch itself (only the trunk
+    /// side gets a merge commit, or none at all for squash), and both
+    /// classifications flow into the same `merged_branches` set, so one
+    /// fixture shape covers either origin.
+    fn branch_tip_node(message: &str, branch_names: &[&str]) -> GraphNode {
+        use crate::git::CommitInfo;
+        let commit = CommitInfo {
+            oid: git2::Oid::zero(),
+            short_id: "abc1234".to_string(),
+            author_name: "a".to_string(),
+            author_email: "a@b".to_string(),
+            timestamp: Local::now(),
+            message: message.to_string(),
+            full_message: message.to_string(),
+            parent_oids: vec![git2::Oid::zero()],
+        };
+        GraphNode {
+            commit: Some(commit),
+            lane: 0,
+            color_index: 0,
+            branch_names: branch_names.iter().map(|s| s.to_string()).collect(),
+            tag_names: Vec::new(),
+            is_head: false,
+            is_uncommitted: false,
+            is_stash: false,
+            stash_label: None,
+            uncommitted_count: None,
+            cells: vec![CellType::Commit(0)],
+            cell_oids: Vec::new(),
+        }
+    }
+
+    /// The branch chip span whose text contains `name`. Panics if absent.
+    fn find_chip<'a>(line: &'a Line<'static>, name: &str) -> &'a Span<'static> {
+        line.spans
+            .iter()
+            .find(|s| s.content.as_ref().contains(name))
+            .unwrap_or_else(|| panic!("branch chip {name:?} not found in {line:?}"))
+    }
+
+    /// Whether the row carries the exact "merged" badge span (icon + "merged"),
+    /// as opposed to merely a branch name that happens to contain the substring
+    /// "merged" (e.g. `feature/ancestry-merged`).
+    fn has_merged_badge(line: &Line<'static>) -> bool {
+        let badge = merged_badge();
+        line.spans.iter().any(|s| s.content.as_ref() == badge)
+    }
+
+    #[test]
+    fn merged_branch_row_dims_when_dim_setting_on() {
+        let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+
+        let line = render_row_with_merged(&node, &merged, true);
+        let chip = find_chip(&line, "feature/ancestry-landed");
+        assert!(
+            chip.style.add_modifier.contains(Modifier::DIM),
+            "merged chip dims when the setting is on: {chip:?}"
+        );
+        assert!(
+            has_merged_badge(&line),
+            "merged badge shown when the setting is on"
+        );
+    }
+
+    #[test]
+    fn merged_branch_row_renders_normally_when_dim_setting_off() {
+        let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+
+        let line = render_row_with_merged(&node, &merged, false);
+        let chip = find_chip(&line, "feature/ancestry-landed");
+        assert!(
+            !chip.style.add_modifier.contains(Modifier::DIM),
+            "dim setting off renders the branch chip normally: {chip:?}"
+        );
+        assert!(
+            !has_merged_badge(&line),
+            "no merged badge when the dim setting is off"
+        );
+    }
+
+    #[test]
+    fn squash_merged_branch_dims_when_dim_setting_on() {
+        // #106: squash-classified branches flow through the same
+        // `merged_branches` set as ancestry/fast-forward ones (there is no
+        // separate squash code path in the chip-dim logic), so they must dim
+        // exactly like an ancestry-landed branch when the setting is on.
+        let node = branch_tip_node("feature commit 2", &["feature/squash-me"]);
+        let merged: HashSet<String> = ["feature/squash-me".to_string()].into_iter().collect();
+
+        let line = render_row_with_merged(&node, &merged, true);
+        let chip = find_chip(&line, "feature/squash-me");
+        assert!(
+            chip.style.add_modifier.contains(Modifier::DIM),
+            "squash-merged chip dims when the setting is on: {chip:?}"
+        );
+    }
+
+    #[test]
+    fn squash_merged_branch_renders_normally_when_dim_setting_off() {
+        // The regression in #106: toggling the dim setting off left
+        // squash-merged branches greyed regardless, because nothing gated the
+        // chip/badge styling on the setting at all. This must render exactly
+        // like an unmerged branch once the setting is off.
+        let node = branch_tip_node("feature commit 2", &["feature/squash-me"]);
+        let merged: HashSet<String> = ["feature/squash-me".to_string()].into_iter().collect();
+
+        let line = render_row_with_merged(&node, &merged, false);
+        let chip = find_chip(&line, "feature/squash-me");
+        assert!(
+            !chip.style.add_modifier.contains(Modifier::DIM),
+            "squash-merged chip renders normally when the setting is off: {chip:?}"
+        );
+        assert!(
+            !has_merged_badge(&line),
+            "no merged badge for a squash-merged branch when the dim setting is off"
+        );
+    }
+
+    #[test]
+    fn unmerged_branch_never_dims_regardless_of_dim_setting() {
+        // A branch absent from `merged_branches` must never pick up the merged
+        // styling, whatever the dim setting is — the classification set is
+        // still the primary gate.
+        let node = branch_tip_node("wip commit", &["feature/still-open"]);
+        let empty: HashSet<String> = HashSet::new();
+
+        for dim in [true, false] {
+            let line = render_row_with_merged(&node, &empty, dim);
+            let chip = find_chip(&line, "feature/still-open");
+            assert!(
+                !chip.style.add_modifier.contains(Modifier::DIM),
+                "unmerged branch never dims (dim setting = {dim}): {chip:?}"
+            );
+            assert!(
+                !has_merged_badge(&line),
+                "unmerged branch never shows the merged badge (dim setting = {dim})"
+            );
+        }
     }
 
     /// The full rendered text of a row (all spans concatenated).

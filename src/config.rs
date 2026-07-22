@@ -316,6 +316,13 @@ pub struct UiState {
     /// or squash) from the graph. Off by default: merged branches are shown but
     /// dimmed, and this toggle removes them entirely.
     pub hide_merged_branches: bool,
+    /// Dim branches already merged into the trunk (chip color + "merged" badge),
+    /// independent of `hide_merged_branches` (issue #106). On by default,
+    /// preserving the historical always-dim appearance; turning it off renders a
+    /// shown-but-merged branch exactly like an unmerged one. Applies uniformly to
+    /// every classification (ancestry, fast-forward, or squash) since they all
+    /// flow through the same `merged.branches` set.
+    pub dim_merged_branches: bool,
     /// Group the files pane by folder (`f` toggles). Off by default: files list
     /// flat with full repo-relative paths, the historical behavior.
     pub files_group_by_folder: bool,
@@ -332,6 +339,7 @@ impl Default for UiState {
             hide_remote_branches: false,
             diff_word_wrap: false,
             hide_merged_branches: false,
+            dim_merged_branches: true,
             files_group_by_folder: false,
             metadata_columns: MetadataColumns::default(),
         }
@@ -552,6 +560,7 @@ mod tests {
             hide_remote_branches: true,
             diff_word_wrap: false,
             hide_merged_branches: false,
+            dim_merged_branches: false,
             files_group_by_folder: true,
             metadata_columns: MetadataColumns {
                 author: true,
@@ -572,6 +581,7 @@ mod tests {
         assert!(!restored.trace_enabled);
         assert!(restored.hide_remote_branches);
         assert!(restored.files_group_by_folder);
+        assert!(!restored.dim_merged_branches);
         assert!(restored.metadata_columns.author);
         assert!(!restored.metadata_columns.hash);
         assert!(!restored.metadata_columns.date);
@@ -641,6 +651,23 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
         assert!(restored.hide_merged_branches);
+    }
+
+    #[test]
+    fn dim_merged_branches_defaults_on_and_round_trips() {
+        // Historical always-dim appearance (#106): default ON, including for an
+        // older state.toml that predates the key.
+        assert!(UiState::default().dim_merged_branches);
+        let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(older.dim_merged_branches, "missing key defaults to dimmed");
+
+        // Once turned off, the preference survives a save/load round-trip.
+        let undimmed = UiState {
+            dim_merged_branches: false,
+            ..UiState::default()
+        };
+        let restored: UiState = toml::from_str(&toml::to_string(&undimmed).unwrap()).unwrap();
+        assert!(!restored.dim_merged_branches);
     }
 
     #[test]

@@ -249,6 +249,7 @@ impl App {
                 squash_targets,
                 classify: crate::merged_branch_fetch::MergedClassifier::new(),
                 hide: ui_state.hide_merged_branches,
+                dim: ui_state.dim_merged_branches,
                 pr_branches: std::collections::HashSet::new(),
                 pr_branch_fetch: crate::merged_branch_fetch::merged_branch_fetch(),
                 base_update: crate::signature_guarded::SignatureGuarded::default(),

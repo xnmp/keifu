@@ -823,6 +823,13 @@ pub struct MergedState {
     /// When true, merged branches are removed from the graph entirely rather than
     /// merely dimmed. Composes with `hidden_branches`. Persisted in `UiState`.
     pub hide: bool,
+    /// When true, a merged branch shown in the graph (i.e. `hide` is false) is
+    /// dimmed: chip color + "merged" badge (issue #106). Independent of `hide` —
+    /// off renders a shown merged branch exactly like an unmerged one. Applies
+    /// uniformly to every classification in `branches` (ancestry, fast-forward,
+    /// or squash all flow through the same set, so there is nothing left for a
+    /// squash-specific bypass to hook into). Persisted in `UiState`.
+    pub dim: bool,
     /// Squash-merge detection via GitHub: head-branch names of *merged* PRs,
     /// refreshed in the background via `gh pr list --state merged`. The primary
     /// signal for catching squash-merged branches whose local ref survives (the

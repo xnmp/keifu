@@ -333,6 +333,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             hide_merged_branches
         ),
         state_bool!(
+            "Dim merged branches",
+            Graph,
+            None,
+            merged.dim,
+            dim_merged_branches
+        ),
+        state_bool!(
             "Mute merge commits",
             Graph,
             None,
@@ -574,6 +581,7 @@ mod tests {
             hide_remote_branches: true,
             diff_word_wrap: true,
             hide_merged_branches: true,
+            dim_merged_branches: false,
             files_group_by_folder: true,
             metadata_columns: MetadataColumns {
                 author: false,
