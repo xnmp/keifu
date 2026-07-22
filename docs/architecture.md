@@ -365,6 +365,28 @@ display, fuzzy filtering) stays unit-testable without a TUI.
   branch-name reuse, and against a conflict-resolved landing being over-claimed
   locally).
 
+**Transitive closure** (2026-07-22): classification iterates to a fixed point
+(`classify_merged_branches_with_targets`) — after each pass, the tips of
+newly-classified branches join the tested tip set and the still-unclassified
+branches are re-tested, until a pass classifies nothing new. This catches
+work that reached the trunk only through a chain (a stacked PR squashed into
+its parent branch, a sub-branch folded into a feature before the feature was
+squashed): no direct trunk signal exists for those, since a squash shares no
+commits. The trunk first-parent "behind" guard stays trunk-only on purpose —
+an old pointer into a *merged* branch's line is landed work and classifies
+via ancestry, unlike a pointer into a live trunk line. `--explain-merged`
+reports transitively-classified branches in a dedicated section naming the
+merged branch they landed through.
+
+**Selection exemption** (2026-07-22): the merged-lane *dim* never applies to
+the commit under the cursor — `resolve_row_model` drops the merged-lane mute
+on the selected row (chips included), and both stroke renderers exempt any
+edge touching the selected commit's oid (`edge_touches_merged`'s `exempt`
+parameter, threaded as `RowRenderCtx::merged_exempt` / the pixel dim core's
+`merged_exempt`). Rationale: the widget-level `selection_style` only
+subtracts the DIM bit, so without this the selected row kept its muted
+foreground and dimmed strokes — inspecting a merged commit read greyed-out.
+
 **Async infrastructure** (`src/merged_branch_fetch.rs`):
 - The merged-PR-branch poll (`gh pr list --state merged`, 10s timeout, 300s
   interval) is an `IntervalFetch<HashSet<String>>` (see *Async Worker Shapes*

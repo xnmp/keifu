@@ -1,7 +1,6 @@
-//! Two-commit comparison ("mark for compare") and commit signature status.
+//! Two-commit comparison ("mark for compare").
 
 use super::*;
-use crate::git::commit_signature_status;
 
 impl App {
     /// The OID of the selected graph node's commit, if it has one (excludes the
@@ -105,16 +104,5 @@ impl App {
             }
             Err(_) => (short_hash(oid), String::new()),
         }
-    }
-
-    /// Memoized GPG signature status (`%G?` code) for a commit. Commits are
-    /// immutable, so a value is cached forever once computed.
-    pub(crate) fn load_signature_status(&mut self, oid: Oid) -> char {
-        if let Some(&code) = self.sig_status_cache.get(&oid) {
-            return code;
-        }
-        let code = commit_signature_status(&self.repo_path, oid).unwrap_or('N');
-        self.sig_status_cache.insert(oid, code);
-        code
     }
 }

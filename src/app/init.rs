@@ -226,7 +226,6 @@ impl App {
             diff_cache: DiffCache::new(),
             compare_marked: None,
             compare_range: None,
-            sig_status_cache: std::collections::HashMap::new(),
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,

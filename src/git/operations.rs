@@ -1249,37 +1249,11 @@ pub fn file_history(repo_path: &str, path: &str, limit: usize) -> Result<Vec<Oid
     Ok(oids)
 }
 
-/// Query the GPG signature status of a commit via `git log -1 --format=%G?`.
-/// Returns the raw `%G?` status code (one of G/B/U/X/Y/R/E/N), defaulting to
-/// `'N'` (unsigned) when git prints nothing.
-pub fn commit_signature_status(repo_path: &str, oid: Oid) -> Result<char> {
-    let oid_str = oid.to_string();
-    let output = run_git(repo_path, &["log", "-1", "--format=%G?", &oid_str])?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text.trim().chars().next().unwrap_or('N'))
-}
-
-/// Map a `%G?` signature status code to a short human-readable label.
-/// Pure function (no I/O) — the display layer renders whatever this returns.
-pub fn signature_status_label(code: char) -> &'static str {
-    match code {
-        'G' => "signed (valid)",
-        'B' => "signed (BAD)",
-        'U' => "signed (valid, unknown trust)",
-        'X' => "signed (valid, expired)",
-        'Y' => "signed (expired key)",
-        'R' => "signed (revoked key)",
-        'E' => "signature unverifiable",
-        'N' => "unsigned",
-        _ => "unknown",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
-        is_divergent_pull_error, is_https_auth_failure, signature_status_label, url_host, AuthUrl,
+        is_divergent_pull_error, is_https_auth_failure, url_host, AuthUrl,
         OpOutcome, PullMode,
     };
 
@@ -1401,24 +1375,6 @@ mod tests {
         .contains("in progress"));
         // Unrecognized -> None (caller falls back to raw).
         assert_eq!(humanize_git_error("some unexpected failure"), None);
-    }
-
-    #[test]
-    fn signature_labels_cover_all_git_codes() {
-        assert_eq!(signature_status_label('G'), "signed (valid)");
-        assert_eq!(signature_status_label('B'), "signed (BAD)");
-        assert_eq!(signature_status_label('U'), "signed (valid, unknown trust)");
-        assert_eq!(signature_status_label('X'), "signed (valid, expired)");
-        assert_eq!(signature_status_label('Y'), "signed (expired key)");
-        assert_eq!(signature_status_label('R'), "signed (revoked key)");
-        assert_eq!(signature_status_label('E'), "signature unverifiable");
-        assert_eq!(signature_status_label('N'), "unsigned");
-    }
-
-    #[test]
-    fn signature_label_unknown_code_is_labelled_unknown() {
-        assert_eq!(signature_status_label('Z'), "unknown");
-        assert_eq!(signature_status_label(' '), "unknown");
     }
 
     use super::{fetch_all, fetch_remote};
