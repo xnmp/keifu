@@ -1932,9 +1932,23 @@ fn selection_survives_branch_hide_refresh() {
 fn startup_defers_merged_classification_to_the_background() {
     let (td, repo) = init_repo();
     let a = commit_file(repo.repo(), "a.txt", "a", "initial");
-    // `topic` at an ancestor of the base tip → unambiguously merged.
+    // `topic` carries its own commit and lands on the base via a merge COMMIT,
+    // so its tip hangs off the base's first-parent line — unambiguously merged
+    // (a tip ON the line would read as merely behind since #112).
     repo.repo().reference("refs/heads/topic", a, true, "topic").unwrap();
-    commit_file(repo.repo(), "b.txt", "b", "advance base");
+    let t = commit_to_ref(repo.repo(), "refs/heads/topic", "t.txt", "t", "topic work");
+    let b = commit_file(repo.repo(), "b.txt", "b", "advance base");
+    {
+        let g = repo.repo();
+        let (bc, tc) = (g.find_commit(b).unwrap(), g.find_commit(t).unwrap());
+        let mut builder = g.treebuilder(Some(&bc.tree().unwrap())).unwrap();
+        let blob = g.blob(b"t").unwrap();
+        builder.insert("t.txt", blob, 0o100644).unwrap();
+        let tree = g.find_tree(builder.write().unwrap()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        g.commit(Some("HEAD"), &sig, &sig, "merge topic", &tree, &[&bc, &tc])
+            .unwrap();
+    }
     // The default branch name may be master or main; either is a valid base.
     let mut app = App::from_repo(GitRepository::open(td.path()).unwrap()).unwrap();
 
