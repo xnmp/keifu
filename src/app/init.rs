@@ -284,6 +284,7 @@ impl App {
             metadata_columns: ui_state.metadata_columns,
             graph_width_cap: ui_state.graph_width_cap,
             debug_keys: false,
+            last_capslock_hint: None,
             perf,
             mouse_layout: MouseLayout::default(),
             last_click: None,

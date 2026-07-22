@@ -108,27 +108,35 @@ fn sort_for_display(branches: &mut [BranchInfo]) {
 /// toggle must actually remove from the graph (both their walk-tip
 /// contribution and their label).
 ///
-/// A remote branch is "already represented" — and so excluded from this set,
-/// kept eligible as a walk tip — only when some local branch points at the
-/// exact same commit (`local.tip_oid == remote.tip_oid`). Pushing that tip
-/// into the revwalk is then a no-op: it's the same OID the local branch tip
-/// already contributes, so no remote-exclusive commit can leak in.
+/// A remote branch is kept out of this set (i.e. stays visible / eligible as
+/// a walk tip) when either:
 ///
-/// Matching by upstream config or by short name (`origin/main` vs local
-/// `main`) is deliberately *not* sufficient here: a local branch can track a
-/// remote while sitting on a different commit (ahead/behind/diverged), and in
-/// that case the remote tip reaches commits the local tip doesn't. Treating
-/// such a ref as "tracked" and keeping its tip in the walk let those
-/// remote-only commits leak into the graph even with remotes hidden (#57).
-/// The only sound test for "this remote contributes nothing new" is exact tip
-/// equality.
+/// - some local branch points at the exact same commit
+///   (`local.tip_oid == remote.tip_oid`) — pushing that tip into the revwalk
+///   is a no-op, since it's the same OID the local tip already contributes; or
+/// - some local branch's configured upstream names this remote
+///   (`local.upstream == Some(remote.name)`) — this remote is the ref the
+///   user's local branch pushes to and pulls from, so its tip carries the
+///   user's own pushed-but-not-yet-pulled work. Hiding it would hide real
+///   divergence (#105), not redundant history.
+///
+/// Note the upstream branch is *not* excluded from the revwalk tip set the
+/// way a tip-equal remote is — its exclusive commits (e.g. a pushed update
+/// the local branch hasn't fetched/merged) are exactly what must stay visible
+/// in the graph. Short-name matching alone (`origin/main` vs local `main`
+/// with no upstream config) is still not sufficient: see
+/// `remote_sharing_short_name_but_different_tip_is_remote_only` (#57).
 pub fn remote_only_branch_names(branches: &[BranchInfo]) -> HashSet<String> {
     let locals: Vec<&BranchInfo> = branches.iter().filter(|b| !b.is_remote).collect();
 
     branches
         .iter()
         .filter(|b| b.is_remote)
-        .filter(|remote| !locals.iter().any(|local| local.tip_oid == remote.tip_oid))
+        .filter(|remote| {
+            !locals.iter().any(|local| {
+                local.tip_oid == remote.tip_oid || local.upstream.as_deref() == Some(remote.name.as_str())
+            })
+        })
         .map(|b| b.name.clone())
         .collect()
 }
@@ -273,18 +281,34 @@ mod tests {
     }
 
     #[test]
-    fn upstream_tracked_remote_ahead_of_local_is_remote_only() {
-        // Regression test for #57: local `feature` tracks
+    fn upstream_tracked_remote_with_different_tip_is_not_remote_only() {
+        // Regression test for #105: local `feature` tracks
         // `origin/renamed-on-remote` via upstream config but sits behind it
-        // (a different commit). Matching upstream config alone must NOT be
-        // enough to keep this remote's tip in the walk — its exclusive
-        // commit(s) would leak into the graph even with remotes hidden.
+        // (a different commit, e.g. a pushed update not yet fetched/merged
+        // locally). This remote is the local branch's own tracked upstream,
+        // not a stranger's branch — hiding it would hide the user's own
+        // pushed work. It must stay visible even though tips diverge.
         let branches = vec![
             local("feature", oid(1), Some("origin/renamed-on-remote")),
             remote("origin/renamed-on-remote", oid(2)),
         ];
         let names = remote_only_branch_names(&branches);
-        assert!(names.contains("origin/renamed-on-remote"));
+        assert!(!names.contains("origin/renamed-on-remote"));
+    }
+
+    #[test]
+    fn local_upstream_naming_an_absent_remote_is_harmless() {
+        // A local branch's upstream config can point at a remote ref that
+        // isn't in the current `branches` list (e.g. stale config after the
+        // remote branch was deleted). Nothing to match against — no panic,
+        // no effect on other classifications.
+        let branches = vec![local("feature", oid(1), Some("origin/deleted-branch"))];
+        assert!(remote_only_branch_names(&branches).is_empty());
+    }
+
+    #[test]
+    fn empty_input_yields_empty_set() {
+        assert!(remote_only_branch_names(&[]).is_empty());
     }
 
     #[test]

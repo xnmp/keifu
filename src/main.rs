@@ -107,6 +107,7 @@ fn handle_input_event(
                 key.code, key.modifiers
             ));
         }
+        app.maybe_hint_capslock(&key);
         if let Some(action) = map_key_to_action(
             key,
             &app.mode,
