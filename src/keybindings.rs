@@ -215,10 +215,11 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::PageUp)
         }
 
-        // Top/bottom
-        (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {
-            Some(Action::GoToTop)
-        }
+        // Top/bottom. Ctrl+Home matches Home: some terminals/muscle memory send
+        // the chord for "jump to very top".
+        (KeyModifiers::NONE, KeyCode::Char('g'))
+        | (KeyModifiers::NONE, KeyCode::Home)
+        | (KeyModifiers::CONTROL, KeyCode::Home) => Some(Action::GoToTop),
         (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
             Some(Action::GoToBottom)
         }
@@ -1007,6 +1008,14 @@ mod tests {
         // Plain 'e' (no ctrl) types a character, not an external-edit request.
         let plain = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
         assert_eq!(map_pr_compose_mode(plain), Some(Action::EditorChar('e')));
+    }
+
+    #[test]
+    fn graph_ctrl_home_goes_to_top() {
+        let plain = KeyEvent::new(KeyCode::Home, KeyModifiers::NONE);
+        let chord = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+        assert_eq!(map_normal(plain), Some(Action::GoToTop));
+        assert_eq!(map_normal(chord), Some(Action::GoToTop));
     }
 
     /// Helper: map a key in Normal mode, Graph panel, no filters/editing.
