@@ -1183,7 +1183,7 @@ fn test_single_root_commit() {
     let commits = vec![make_commit("only", vec![])];
     let branches = vec![make_branch("main", "only", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, None, &[]);
+    let layout = build_graph(&commits, &branches, &[], &[], None, Some(make_oid("only")), &[]);
 
     assert_eq!(layout.nodes.len(), 1);
     assert_eq!(layout.max_lane, 0);

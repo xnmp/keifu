@@ -295,6 +295,36 @@ fn jump_to_head_selects_head_branch() {
     assert_eq!(app.graph_nav.graph_list_state.selected(), Some(head_node));
 }
 
+#[test]
+fn jump_to_head_falls_back_to_head_row_when_detached() {
+    // Detached HEAD has no branch name to match, so `@` must fall back to the
+    // HEAD commit row located by its `is_head` flag (issue #89).
+    let (_td, repo) = init_repo();
+    let first = commit_file(repo.repo(), "a.txt", "a", "first");
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    // Detach at the older commit (bottom row) so it is distinct from the top.
+    repo.repo().set_head_detached(first).unwrap();
+    let mut app = make_app(repo);
+
+    // The detached HEAD row is flagged (this is the star row).
+    let head_node = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|n| n.is_head && !n.is_uncommitted)
+        .expect("detached HEAD commit node exists");
+
+    // No branch name matches a detached HEAD.
+    assert_eq!(app.head_name.as_deref(), Some("HEAD"));
+
+    // Move to the top (away from HEAD), then jump back via the oid fallback.
+    app.handle_action(Action::GoToTop).unwrap();
+    assert_ne!(app.graph_nav.graph_list_state.selected(), Some(head_node));
+
+    app.handle_action(Action::JumpToHead).unwrap();
+    assert_eq!(app.graph_nav.graph_list_state.selected(), Some(head_node));
+}
+
 // ── Panel Navigation ────────────────────────────────────────────────
 
 #[test]
@@ -1603,7 +1633,6 @@ fn commit_menu_branch_tip_includes_branch_ops() {
     match &app.mode {
         AppMode::CommitMenu { items, .. } => {
             for expected in [
-                CommitMenuItem::Push,
                 CommitMenuItem::MergeIntoCurrent,
                 CommitMenuItem::Rebase,
                 CommitMenuItem::DeleteBranch,
@@ -1615,6 +1644,14 @@ fn commit_menu_branch_tip_includes_branch_ops() {
                     items
                 );
             }
+            // Push targets HEAD, so a non-HEAD branch tip must not offer it
+            // (issue #87). Push/pull gating is covered fully in
+            // commit_menu_push_test.rs.
+            assert!(
+                !items.contains(&CommitMenuItem::Push),
+                "non-HEAD branch tip must not offer Push, got {:?}",
+                items
+            );
         }
         other => panic!("expected a CommitMenu, got {:?}", other),
     }

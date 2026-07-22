@@ -579,6 +579,21 @@ Squash-merged branches render greyed regardless of the mute/dim merged-branches 
 Symmetric to #105: origin/<branch> lagging a local branch with unpushed commits (e.g. origin/chong-dev behind the checked-out chong-dev) read as ancestry-"merged into the line you're on" and got dimmed. Stale-tracking guard now covers both directions.
 
 ### [DONE] #109 Working trunk's remote counterpart is a trunk tip
+
+### [DONE] #110 Push is a branch-level action, not a commit-menu option (GH #87)
+Push shouldn't appear in the commit menu (and never for remote-only branches). Make it an app-level action available when the checked-out branch is ahead of its remote.
+
+### [DONE] #111 PR badge color reflects CI status (GH #88)
+Four states: CI failed (red), CI running (orange), CI passed but merge-blocked e.g. changes requested (green-yellow), CI passed and mergeable (full green).
+
+### [DONE] #112 Detached HEAD gets no star in the graph (GH #89)
+The HEAD marker doesn't render when HEAD is detached.
+
+### [DONE] #113 Merged-branch badges keep their color, muted (GH #90)
+Lane dimming (#108) should keep colored branch chips on merged branches, just with a muted color.
+
+### [DONE] #114 Fetch-all-remotes sometimes misses remotes (GH #91)
+Observed with a remote ahead of a non-checked-out local branch. Audit remote enumeration, refspecs, and per-remote error handling.
 The real-repo squash failure, reproduced live via PR #84 on keifu itself: a squash PR against the working trunk lands on origin/<head> while the local head lags until the next pull — and base_tips never tested origin/<head>, so the landed branch stayed visible (gh signal fired but containment had no tip containing the squash). The checked-out branch's upstream (or origin/<name>) tip is now a trunk tip; being a tip also protects it from classification.
 
 ### [DONE] #110 Squash link line: phantom curves / right-side detour

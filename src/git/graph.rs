@@ -230,15 +230,11 @@ pub fn build_graph(
 
     // OID -> branch name mapping
     let mut oid_to_branches: HashMap<Oid, Vec<String>> = HashMap::new();
-    let mut head_oid: Option<Oid> = None;
     for branch in branches {
         oid_to_branches
             .entry(branch.tip_oid)
             .or_default()
             .push(branch.name.clone());
-        if branch.is_head {
-            head_oid = Some(branch.tip_oid);
-        }
     }
 
     // OID -> row index mapping
@@ -594,7 +590,10 @@ pub fn build_graph(
             .cloned()
             .unwrap_or_default();
 
-        let is_head = head_oid.map(|h| h == commit.oid).unwrap_or(false);
+        // Identify HEAD by the actual HEAD oid (`head_commit_oid`), not by
+        // branch identity: a detached HEAD carries no `is_head` branch, so
+        // keying off branches would drop the star entirely (issue #89).
+        let is_head = head_commit_oid == Some(commit.oid);
 
         // Add commit row
         let is_stash = stash_oids.contains(&commit.oid);
@@ -2048,6 +2047,49 @@ mod tests {
         assert_eq!(
             layout.nodes[row_of(&layout, f1)].color_index, MAIN_BRANCH_COLOR,
             "detached HEAD's line is still the blue main line"
+        );
+    }
+
+    /// The star renders purely on `node.is_head`. A detached HEAD carries no
+    /// branch with `is_head`, so `is_head` must be keyed off the passed HEAD oid
+    /// or the row loses its star entirely (issue #89).
+    #[test]
+    fn detached_head_off_branch_row_is_flagged_head() {
+        // Detached at a commit that is NOT any branch tip: `x` is a child of the
+        // feature tip F1, reachable from no branch. Only the HEAD oid identifies it.
+        let (m1, f1, x, z) = (oid(1), oid(3), oid(7), oid(9));
+        let commits = vec![
+            ci(x, vec![f1]),
+            ci(m1, vec![z]),
+            ci(f1, vec![z]),
+            ci(z, vec![]),
+        ];
+        let branches = [branch("main", m1, false), branch("feature", f1, false)];
+        let layout = build_graph(&commits, &branches, &[], &[], None, Some(x), &[]);
+
+        let head_rows: Vec<usize> = layout
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.is_head)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(head_rows, vec![row_of(&layout, x)], "exactly the HEAD row is flagged");
+    }
+
+    /// Detached at a commit that *is* on a branch (a branch tip). No branch is
+    /// `is_head`, but the row must still be flagged (star), keyed off the oid.
+    #[test]
+    fn detached_head_on_branch_tip_row_is_flagged_head() {
+        let (commits, [m1, _m2, f1, _z]) = diverged_fixture();
+        // Detached exactly at feature's tip F1; no branch is is_head.
+        let branches = [branch("main", m1, false), branch("feature", f1, false)];
+        let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1), &[]);
+
+        assert!(layout.nodes[row_of(&layout, f1)].is_head, "detached-on-tip row is HEAD");
+        assert!(
+            !layout.nodes[row_of(&layout, m1)].is_head,
+            "non-HEAD tip is not flagged"
         );
     }
 

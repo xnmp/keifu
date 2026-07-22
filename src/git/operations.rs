@@ -572,11 +572,46 @@ pub fn fetch_origin(repo_path: &str) -> Result<()> {
     fetch_remote(repo_path, "origin", None)
 }
 
-/// Fetch from every configured remote (`git fetch --all --prune`). Prunes stale
-/// remote-tracking refs for the same reason as [`fetch_remote`].
+/// List every configured remote's name (`git remote`), in git's own order.
+/// An empty vec means the repo has no remotes configured.
+fn list_remotes(repo_path: &str) -> Result<Vec<String>> {
+    let output = run_git(repo_path, &["remote"])?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Fetch from every configured remote, pruning stale remote-tracking refs.
+///
+/// Unlike `git fetch --all --prune` — a single process that exits non-zero if
+/// *any* remote fails, collapsing partial success into one opaque error — this
+/// fetches each remote independently and continues past failures. Every
+/// reachable remote's tracking refs are updated on disk regardless of the
+/// others, so one broken remote can no longer mask a fetch that a healthy
+/// remote already completed (issue #91).
+///
+/// Returns `Ok(())` when every remote succeeded — and when none are configured.
+/// On any failure, returns an error naming each failed remote and its trimmed
+/// stderr (e.g. `fetch failed for upstream: <err>; for foo: <err>`); the
+/// remotes that succeeded have already updated their refs on disk.
 pub fn fetch_all(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
-    run_git_creds(repo_path, &["fetch", "--all", "--prune"], creds)?;
-    Ok(())
+    let remotes = list_remotes(repo_path)?;
+    let failures: Vec<String> = remotes
+        .iter()
+        .filter_map(|remote| {
+            fetch_remote(repo_path, remote, creds)
+                .err()
+                .map(|e| format!("{remote}: {}", e.to_string().trim()))
+        })
+        .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("fetch failed for {}", failures.join("; for "));
+    }
 }
 
 /// How a pull reconciles divergent branches.
@@ -1386,10 +1421,126 @@ mod tests {
         assert_eq!(signature_status_label(' '), "unknown");
     }
 
-    use super::fetch_remote;
+    use super::{fetch_all, fetch_remote};
     use crate::test_support::git;
     use git2::{BranchType, Repository};
     use std::process::Command;
+
+    /// Init a bare remote at `path`.
+    fn init_bare(path: &std::path::Path) {
+        Command::new("git").args(["init", "-q", "--bare"]).arg(path).status().unwrap();
+    }
+
+    /// Init a working repo with an isolated identity and one commit on `master`.
+    fn init_repo_with_commit(path: &std::path::Path) {
+        Command::new("git").args(["init", "-q"]).arg(path).status().unwrap();
+        git(path, &["config", "user.email", "t@t.com"]);
+        git(path, &["config", "user.name", "t"]);
+        std::fs::write(path.join("a.txt"), "a").unwrap();
+        git(path, &["add", "a.txt"]);
+        git(path, &["commit", "-qm", "init"]);
+    }
+
+    /// Clone `remote` to `dst`, then push a fresh branch `branch` carrying a new
+    /// commit — so the *original* clone's `<remote>/<branch>` tracking ref does
+    /// not yet exist and only appears after it fetches.
+    fn push_new_branch_via_clone(remote: &std::path::Path, dst: &std::path::Path, branch: &str) {
+        Command::new("git").args(["clone", "-q"]).arg(remote).arg(dst).status().unwrap();
+        git(dst, &["config", "user.email", "t@t.com"]);
+        git(dst, &["config", "user.name", "t"]);
+        git(dst, &["checkout", "-qb", branch]);
+        std::fs::write(dst.join("b.txt"), branch).unwrap();
+        git(dst, &["add", "b.txt"]);
+        git(dst, &["commit", "-qm", "advance"]);
+        git(dst, &["push", "-q", "origin", branch]);
+    }
+
+    /// #91: `fetch_all` fetches remotes independently — a broken remote must not
+    /// prevent a *healthy* remote's tracking refs from being updated on disk, and
+    /// the returned error must name only the remote that actually failed.
+    #[test]
+    fn fetch_all_updates_good_remote_despite_failing_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = tmp.path().join("good.git");
+        let local = tmp.path().join("local");
+        init_bare(&good);
+        init_repo_with_commit(&local);
+        git(&local, &["remote", "add", "origin", good.to_str().unwrap()]);
+        git(&local, &["push", "-q", "origin", "master"]);
+        // A second remote pointing at a path that does not exist — every fetch of
+        // it fails hard.
+        let missing = tmp.path().join("nonexistent-remote.git");
+        git(&local, &["remote", "add", "broken", missing.to_str().unwrap()]);
+
+        // Publish a new branch to the good remote from another clone, so the
+        // local repo has no `origin/feature` tracking ref yet.
+        push_new_branch_via_clone(&good, &tmp.path().join("work"), "feature");
+        let repo = Repository::open(&local).unwrap();
+        assert!(
+            repo.find_branch("origin/feature", BranchType::Remote).is_err(),
+            "precondition: origin/feature absent before fetch_all"
+        );
+
+        let err = fetch_all(local.to_str().unwrap(), None).unwrap_err();
+
+        // The regression: the healthy remote's ref updated even though the call
+        // returned Err.
+        assert!(
+            repo.find_branch("origin/feature", BranchType::Remote).is_ok(),
+            "origin/feature must be updated on disk despite the broken remote"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("broken"), "error must name the failed remote: {msg}");
+        assert!(
+            !msg.contains("origin"),
+            "error must not name the remote that succeeded: {msg}"
+        );
+    }
+
+    /// All remotes healthy: `fetch_all` returns Ok and updates every remote's
+    /// tracking refs — including a branch that is not checked out locally.
+    #[test]
+    fn fetch_all_all_good_updates_every_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote_a = tmp.path().join("a.git");
+        let remote_b = tmp.path().join("b.git");
+        let local = tmp.path().join("local");
+        init_bare(&remote_a);
+        init_bare(&remote_b);
+        init_repo_with_commit(&local);
+        git(&local, &["remote", "add", "origin", remote_a.to_str().unwrap()]);
+        git(&local, &["remote", "add", "upstream", remote_b.to_str().unwrap()]);
+        git(&local, &["push", "-q", "origin", "master"]);
+        git(&local, &["push", "-q", "upstream", "master"]);
+
+        // A branch on each remote that local has never checked out or fetched.
+        push_new_branch_via_clone(&remote_a, &tmp.path().join("wa"), "feat-a");
+        push_new_branch_via_clone(&remote_b, &tmp.path().join("wb"), "feat-b");
+
+        let repo = Repository::open(&local).unwrap();
+        assert!(repo.find_branch("origin/feat-a", BranchType::Remote).is_err());
+        assert!(repo.find_branch("upstream/feat-b", BranchType::Remote).is_err());
+
+        fetch_all(local.to_str().unwrap(), None).unwrap();
+
+        assert!(
+            repo.find_branch("origin/feat-a", BranchType::Remote).is_ok(),
+            "origin/feat-a (not checked out locally) must be fetched"
+        );
+        assert!(
+            repo.find_branch("upstream/feat-b", BranchType::Remote).is_ok(),
+            "upstream/feat-b (not checked out locally) must be fetched"
+        );
+    }
+
+    /// A repo with zero configured remotes is a no-op success, not an error.
+    #[test]
+    fn fetch_all_no_remotes_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("local");
+        init_repo_with_commit(&local);
+        fetch_all(local.to_str().unwrap(), None).unwrap();
+    }
 
     #[test]
     fn fetch_remote_prunes_deleted_remote_tracking_refs() {
