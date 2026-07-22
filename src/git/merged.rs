@@ -276,10 +276,32 @@ fn base_tips(branches: &[BranchInfo], base_tip: Oid, base_name: &str) -> Vec<Oid
     tips
 }
 
-/// Whether a single branch counts as merged into the trunk. Local branches only
-/// (a surviving squash-merged ref is local); never the trunk itself or the
-/// checked-out HEAD — hiding or dimming the branch you are on is more confusing
-/// than useful.
+/// The head-branch name to test against the GitHub merged-PR set. GitHub reports
+/// a PR's `headRefName` *without* any remote prefix ("feature", "fix/x"), while a
+/// remote-tracking ref is named "origin/feature". Since a remote name never
+/// contains a '/', the segment before the first '/' of a remote ref is exactly
+/// the remote name — stripping it yields the head ref GitHub would report. Local
+/// refs are passed through unchanged.
+fn gh_key(b: &BranchInfo) -> &str {
+    if b.is_remote {
+        b.name
+            .split_once('/')
+            .map(|(_, rest)| rest)
+            .unwrap_or(&b.name)
+    } else {
+        &b.name
+    }
+}
+
+/// Whether a single branch counts as merged into the trunk. Covers **both local
+/// and remote** branches: after a GitHub squash-merge the surviving ref is often
+/// the *remote* one (`origin/feature`) — the PR branch was kept on the remote, or
+/// only ever fetched, never checked out locally — so classifying local refs alone
+/// left those visible and un-linked (issue #100). Never the trunk itself, the
+/// checked-out HEAD, or any tip that *is* a base tip (which excludes the local
+/// trunk and its `origin/…` counterpart, added to `base_tips` by [`base_tips`]) —
+/// hiding or dimming the trunk or the branch you are on is more confusing than
+/// useful.
 ///
 /// `base_tips` are the trunk tips to test against (local trunk plus, when it
 /// lags, its `origin/…` counterpart — see [`base_tips`]). Merged when **any** of:
@@ -287,7 +309,9 @@ fn base_tips(branches: &[BranchInfo], base_tip: Oid, base_name: &str) -> Vec<Oid
 ///  - squash: the branch's cumulative diff matches a squashed commit on a base;
 ///  - GitHub says a PR with this head branch merged **and** the branch carries no
 ///    content some base lacks ([`branch_content_in_base`]). The content cross-check
-///    is what makes the (name-based) GitHub signal safe against name reuse.
+///    is what makes the (name-based) GitHub signal safe against name reuse. A
+///    remote ref is matched against GitHub by its prefix-stripped name (see
+///    [`gh_key`]).
 fn branch_is_merged(
     repo: &Repository,
     b: &BranchInfo,
@@ -295,22 +319,39 @@ fn branch_is_merged(
     base_name: &str,
     gh_merged: &HashSet<String>,
 ) -> bool {
-    if b.is_remote || b.is_head || b.name == base_name || base_tips.contains(&b.tip_oid) {
+    // The trunk's own remote counterpart (`origin/<base>`) is caught here: it is
+    // always a base tip when distinct (see [`base_tips`]), so `base_tips` contains
+    // its OID. The HEAD guard only applies to the local checked-out branch.
+    if b.is_head || b.name == base_name || base_tips.contains(&b.tip_oid) {
+        return false;
+    }
+    // A remote *mirror of the trunk on any other remote* (`upstream/main`,
+    // `fork/master`, …) is itself a trunk, not a landed feature branch, and must
+    // never be classified — otherwise a mirror that merely lags the base reads as
+    // an ancestry "merge" and gets hidden/dimmed. `base_tips` only exempts the
+    // `origin/` mirror (by tip), so guard the rest here by trunk short-name: a
+    // remote ref whose branch part equals the trunk's is a trunk copy (#100
+    // review). `base_short` strips a leading remote segment from the base name
+    // (bare `main` → `main`, `origin/main` → `main`); trunk names carry no '/'.
+    let base_short = base_name.split_once('/').map_or(base_name, |(_, rest)| rest);
+    if b.is_remote && gh_key(b) == base_short {
         return false;
     }
     let landed_in_git = base_tips
         .iter()
         .any(|&t| is_ancestor_merged(repo, b.tip_oid, t) || is_squash_merged(repo, b.tip_oid, t));
     landed_in_git
-        || (gh_merged.contains(&b.name)
+        || (gh_merged.contains(gh_key(b))
             && base_tips
                 .iter()
                 .any(|&t| branch_content_in_base(repo, b.tip_oid, t)))
 }
 
-/// Names of the **local** branches merged into the base branch, combining local
-/// git detection (ancestry + squash patch-id) with the GitHub merged-PR signal
-/// (cross-checked locally via [`branch_content_in_base`]). See [`branch_is_merged`].
+/// Names of the branches — **local or remote** — merged into the base branch,
+/// combining local git detection (ancestry + squash patch-id) with the GitHub
+/// merged-PR signal (cross-checked locally via [`branch_content_in_base`]).
+/// Remote refs are included because a GitHub squash-merge often leaves the
+/// *remote* branch as the surviving ref (issue #100). See [`branch_is_merged`].
 ///
 /// Intended to run **off the UI thread** (one ancestry query plus a bounded
 /// patch-id scan per candidate branch); the result is delivered back and applied
@@ -889,6 +930,187 @@ mod tests {
         assert_eq!(base_tips(&branches, z, "origin/main"), vec![z]);
         // No remote trunk present at all → just the local tip.
         assert_eq!(base_tips(&[local("main", z, true)], z, "main"), vec![z]);
+    }
+
+    // ── Remote-branch classification (issue #100 H1) ─────────────────────────
+    //
+    // After a GitHub squash-merge the surviving ref is frequently the *remote*
+    // branch (`origin/feature`): the local copy was deleted, or the branch was
+    // only ever fetched. These must be classified (hidden + link-lined) exactly
+    // like a surviving local ref. The real-repo suite in
+    // `tests/squash_real_world_test.rs` first exposed that they were not.
+
+    #[test]
+    fn remote_only_squash_merged_branch_is_classified() {
+        // The wild-repo failure shape, minimised: `origin/feature` is the only
+        // surviving ref of a squash-merged PR (no local counterpart). It must be
+        // classified merged AND name the squash landing commit for the #81 link.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        // Feature (two commits) lives only on the remote after the merge.
+        let f1 = commit(&repo, "refs/remotes/origin/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/remotes/origin/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        // Squash lands the feature's net diff on main.
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "one\ntwo")],
+        );
+
+        let branches = vec![
+            local("main", s, true),
+            remote("origin/feature", f2),
+        ];
+        let (merged, targets) =
+            classify_merged_branches_with_targets(&repo, &branches, s, "main", &HashSet::new());
+        assert!(
+            merged.contains("origin/feature"),
+            "a squash-merged remote-only branch must be classified (issue #100)"
+        );
+        assert_eq!(
+            targets.get("origin/feature"),
+            Some(&s),
+            "the remote squash branch links to the squash commit"
+        );
+    }
+
+    #[test]
+    fn remote_trunk_ref_is_never_classified_even_though_remotes_are_eligible() {
+        // Precision guard for the #100 remote extension: `origin/main` (the trunk's
+        // own remote counterpart) must never be classified as merged into itself,
+        // whether it is equal to, ahead of, or behind the local trunk. It is always
+        // a base tip, so the base-tip guard drops it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // origin/main ahead of local main by one commit.
+        let u = commit(&repo, "refs/remotes/origin/main", 2000, &[a], &[("base.txt", "base"), ("u.txt", "u")]);
+        let branches = vec![local("main", a, true), remote("origin/main", u)];
+        let base = base_branch(&branches).unwrap();
+        let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
+        assert!(!merged.contains("origin/main"), "the remote trunk is never classified as merged");
+        assert!(merged.is_empty(), "no branch to classify here");
+    }
+
+    #[test]
+    fn second_remote_trunk_mirror_that_lags_the_base_is_not_classified() {
+        // Review guard (#100): a *second* remote's trunk mirror (`upstream/main`)
+        // that lags the base is an ANCESTOR of it, so without a trunk-name guard it
+        // would read as a landed feature branch and be hidden/dimmed. It is a trunk,
+        // not a feature — it must stay visible. (`base_tips` only exempts the
+        // `origin/` mirror, so this needs the short-name guard.)
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Local main advances past `a`.
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        // upstream/main lags at `a` — a strict ancestor of local main's tip.
+        repo.reference("refs/remotes/upstream/main", a, true, "upstream/main").unwrap();
+        // A genuinely-merged feature to prove the guard didn't over-suppress.
+        let f = commit(&repo, "refs/remotes/origin/feature", 2100, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+
+        let branches = vec![
+            local("main", b, true),
+            remote("upstream/main", a),
+            remote("origin/feature", f),
+        ];
+        let merged = merged_local_branches(&repo, &branches, b, "main");
+        assert!(
+            !merged.contains("upstream/main"),
+            "a second remote's trunk mirror must not be classified as a merged feature"
+        );
+        assert!(
+            merged.contains("origin/feature"),
+            "the guard is targeted: a genuinely-landed remote feature still classifies"
+        );
+    }
+
+    #[test]
+    fn gh_signal_classifies_a_remote_branch_by_prefix_stripped_name() {
+        // GitHub reports `headRefName` without a remote prefix ("feature"), but the
+        // surviving ref is `origin/feature`. The gh cross-check must strip the
+        // remote segment so the name matches — and the content check must still
+        // guard it (name reuse safety carries over to remotes).
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Branch content lands across two base commits (no single squash matches),
+        // so only the gh signal + content check can classify it.
+        let f1 = commit(&repo, "refs/remotes/origin/feature", 1100, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let f2 = commit(&repo, "refs/remotes/origin/feature", 1200, &[f1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+        let b1 = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let b2 = commit(&repo, "refs/heads/main", 2100, &[b1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+
+        let branches = vec![local("main", b2, true), remote("origin/feature", f2)];
+        assert!(!is_squash_merged(&repo, f2, b2), "no single squash commit matches");
+        // Without gh: content match alone is not trusted → stays visible.
+        assert!(!classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new()).contains("origin/feature"));
+        // With gh reporting head "feature" (no prefix): the remote ref classifies.
+        assert!(classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"])).contains("origin/feature"));
+    }
+
+    #[test]
+    fn remote_name_reuse_with_novel_content_is_not_classified() {
+        // Name-reuse safety, remote edition: gh says a PR with head "feature"
+        // merged, but the surviving `origin/feature` carries novel content the base
+        // lacks (a new branch reused the name upstream). It must stay visible.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let f = commit(&repo, "refs/remotes/origin/feature", 2100, &[a], &[("base.txt", "base"), ("novel.txt", "new work")]);
+        let branches = vec![local("main", b, true), remote("origin/feature", f)];
+        assert!(
+            !classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"])).contains("origin/feature"),
+            "remote name reuse with novel content must not be classified"
+        );
+    }
+
+    // ── Update-merge / back-merge PR branches (issue #100 H2) ─────────────────
+
+    #[test]
+    fn squash_detected_after_advanced_base_was_back_merged_into_the_branch() {
+        // A real PR often has the advanced base merged INTO it ("Update branch")
+        // before it squash-lands. The merge_base then advances to that sync point;
+        // the branch's cumulative diff from there must still equal the squash's
+        // diff. Verifies classification survives the back-merge (issue #100 H2).
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
+        // Feature: two commits building feat.txt.
+        let f1 = commit(&repo, "refs/heads/feature", 1100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
+        let f2 = commit(&repo, "refs/heads/feature", 1200, &[f1], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        // Base advances (adds main.txt) while the PR is open.
+        let adv = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        // "Update branch": merge the advanced base INTO the feature branch. First
+        // parent = feature (f2), second = base (adv). Tree carries both sides.
+        let m = commit(
+            &repo,
+            "refs/heads/feature",
+            2500,
+            &[f2, adv],
+            &[("base.txt", "base"), ("feat.txt", "one\ntwo"), ("main.txt", "main")],
+        );
+        // Squash lands the feature's net diff on top of the advanced base.
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[adv],
+            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "one\ntwo")],
+        );
+
+        assert_eq!(repo.merge_base(m, s).unwrap(), adv, "merge_base is the back-merge sync point");
+        assert!(!is_ancestor_merged(&repo, m, s), "no shared commit after the squash");
+        assert!(
+            is_squash_merged(&repo, m, s),
+            "a squash must still be detected after the base was back-merged into the branch"
+        );
+        assert_eq!(squash_merge_target(&repo, m, s), Some(s), "link target is the squash commit");
     }
 
     fn gh(names: &[&str]) -> HashSet<String> {
