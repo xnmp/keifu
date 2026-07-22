@@ -369,4 +369,22 @@ mod tests {
             badge.text
         );
     }
+
+    #[test]
+    fn pr_for_row_with_no_labels_is_none() {
+        // No branch labels AND a commit OID that is no PR's head → no badge.
+        let theme = Theme::dark();
+        let mut p = pr(1);
+        p.head_oid = Some(oid(5).to_string());
+        let open: HashMap<String, PrInfo> = [("feat".to_string(), p)].into_iter().collect();
+        let pr_ctx = PrContext::new(&open);
+        // oid(9) is not the PR's head (5), and there is no branch label to fall
+        // back on, so nothing resolves.
+        assert!(pr_for_row(oid(9), &[], &[], &pr_ctx, &open, &theme).is_none());
+
+        // An empty open-PR map with empty labels is likewise None.
+        let empty: HashMap<String, PrInfo> = HashMap::new();
+        let empty_ctx = PrContext::new(&empty);
+        assert!(pr_for_row(oid(9), &[], &[], &empty_ctx, &empty, &theme).is_none());
+    }
 }

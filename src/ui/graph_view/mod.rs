@@ -1895,4 +1895,193 @@ mod tests {
         // The `…` marker means the row was truncated within the cap.
         assert!(spans.iter().any(|s| s.content.contains('…')));
     }
+
+    // ── mute matrix: every muted category greys the whole row (#92) ──────
+
+    #[test]
+    fn mute_matrix_greys_all_metadata_uniformly() {
+        // Each mute category must set `row_is_muted` and grey the hash, author,
+        // and date column styles to `text_muted` — one uniform treatment.
+        let theme = Theme::dark();
+
+        let base_update = {
+            let node = merge_node_full(60, "Merge main into feature", [1, 2]);
+            let set: HashSet<git2::Oid> = [oid(60)].into_iter().collect();
+            model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set)
+        };
+        let pr_merge = {
+            let node = merge_node_full(61, "Merge pull request #42 from o/b", [1, 2]);
+            model_row(&node, &HashMap::new(), false)
+        };
+        let muted_merge = {
+            let node = merge_node("merge branch into main");
+            model_row(&node, &HashMap::new(), true)
+        };
+        let collapse_merge = {
+            let node = merge_node_full(62, "Merge branch 'topic'", [1, 2]);
+            model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new())
+        };
+        let merged_lane = {
+            let node = commit_node(63, "landed feature work", &[]);
+            let set: HashSet<git2::Oid> = [oid(63)].into_iter().collect();
+            model_row_with_merged_lane(&node, Some(&set))
+        };
+
+        for (name, model) in [
+            ("base-update", base_update),
+            ("pr-merge", pr_merge),
+            ("muted-merge", muted_merge),
+            ("collapse-merge", collapse_merge),
+            ("merged-lane", merged_lane),
+        ] {
+            assert!(model.row_is_muted, "{name}: row_is_muted");
+            assert_eq!(model.hash_style.fg, Some(theme.text_muted), "{name}: hash greyed");
+            assert_eq!(model.author_style.fg, Some(theme.text_muted), "{name}: author greyed");
+            assert_eq!(model.date_style.fg, Some(theme.text_muted), "{name}: date greyed");
+        }
+    }
+
+    #[test]
+    fn mute_precedence_msg_style() {
+        // A row that is BOTH a base-update back-merge AND a PR-merge (its subject
+        // is a GitHub merge message). Base-update is the stronger mute, so it
+        // wins the message style: muted fg + DIM.
+        let theme = Theme::dark();
+        let node = merge_node_full(64, "Merge pull request #42 from o/b", [1, 2]);
+        let set: HashSet<git2::Oid> = [oid(64)].into_iter().collect();
+        let both =
+            model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set).msg_style;
+        assert_eq!(both.fg, Some(theme.text_muted), "base-update greys the fg");
+        assert!(both.add_modifier.contains(Modifier::DIM), "base-update adds DIM");
+
+        // The same PR-merge subject WITHOUT the base-update classification: greyed
+        // fg but NO DIM (PR-merge is the weaker mute).
+        let pr_only = model_row(&node, &HashMap::new(), false).msg_style;
+        assert_eq!(pr_only.fg, Some(theme.text_muted), "pr-merge greys the fg");
+        assert!(
+            !pr_only.add_modifier.contains(Modifier::DIM),
+            "pr-merge alone carries no DIM: {pr_only:?}"
+        );
+    }
+
+    #[test]
+    fn head_is_immune_to_every_mute_category() {
+        // Four categories exclude HEAD in their own definitions, so a HEAD row
+        // that otherwise qualifies is never muted.
+        let base_update = {
+            let mut node = merge_node_full(70, "Merge main into feature", [1, 2]);
+            node.is_head = true;
+            let set: HashSet<git2::Oid> = [oid(70)].into_iter().collect();
+            model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set)
+        };
+        let pr_merge = {
+            let mut node = merge_node_full(71, "Merge pull request #42 from o/b", [1, 2]);
+            node.is_head = true;
+            model_row(&node, &HashMap::new(), false)
+        };
+        let muted_merge = {
+            let mut node = merge_node("merge into main");
+            node.is_head = true;
+            model_row(&node, &HashMap::new(), true)
+        };
+        let collapse_merge = {
+            let mut node = merge_node_full(72, "Merge branch 'topic'", [1, 2]);
+            node.is_head = true;
+            model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new())
+        };
+        for (name, model) in [
+            ("base-update", base_update),
+            ("pr-merge", pr_merge),
+            ("muted-merge", muted_merge),
+            ("collapse-merge", collapse_merge),
+        ] {
+            assert!(!model.row_is_muted, "{name}: HEAD is never muted");
+        }
+
+        // FINDING (item 8): the merged-lane category does NOT exclude HEAD in its
+        // `is_merged_lane` derivation, so a HEAD commit that lands in the
+        // merged-lane set IS muted — unlike the four categories above. Pinning
+        // actual behavior rather than the "HEAD immune" expectation.
+        let mut head_lane = commit_node(73, "landed feature work", &[]);
+        head_lane.is_head = true;
+        let set: HashSet<git2::Oid> = [oid(73)].into_iter().collect();
+        let lane_model = model_row_with_merged_lane(&head_lane, Some(&set));
+        assert!(
+            lane_model.row_is_muted,
+            "merged-lane mutes even a HEAD row (current behavior)"
+        );
+    }
+
+    /// The resolved model for `node` with the given columns and an explicit
+    /// selection flag — the only decision helper that exercises `is_selected`
+    /// (the `model_*` family hardwires it false).
+    fn model_row_selected(node: &GraphNode, cols: MetadataColumns, is_selected: bool) -> RowModel {
+        let theme = Theme::dark();
+        let open_prs = HashMap::new();
+        let pr_ctx = PrContext::new(&open_prs);
+        let ctx = RowRenderCtx {
+            theme: &theme,
+            now: Local::now(),
+            pixel_mode: false,
+            remotes: &[],
+            open_prs: &open_prs,
+            pr_ctx: &pr_ctx,
+            merged_branches: &HashSet::new(),
+            merged_dim: true,
+            merged_lane_oids: None,
+            base_update_merges: &HashSet::new(),
+            metadata_columns: cols,
+            graph_width: 4,
+            total_width: 200,
+            selected_branch_name: None,
+            trace: None,
+        };
+        let commit = node.commit.as_ref().expect("commit node");
+        let is_base_update = is_base_update_row(node, cols.mute_base_merges, ctx.base_update_merges);
+        resolve_row_model(
+            node,
+            commit,
+            &ctx,
+            RowFlags {
+                is_selected,
+                is_marked: false,
+            },
+            is_base_update,
+            false,
+        )
+    }
+
+    #[test]
+    fn selection_bold_only_when_unmuted() {
+        let theme = Theme::dark();
+
+        // An ordinary (unmuted) row: selection adds BOLD to the message style.
+        let normal = commit_node(80, "ordinary work", &[]);
+        let selected = model_row_selected(&normal, merge_cols(false, false, false), true).msg_style;
+        assert!(
+            selected.add_modifier.contains(Modifier::BOLD),
+            "selected unmuted row is BOLD: {selected:?}"
+        );
+        let unselected =
+            model_row_selected(&normal, merge_cols(false, false, false), false).msg_style;
+        assert!(
+            !unselected.add_modifier.contains(Modifier::BOLD),
+            "unselected unmuted row is not BOLD: {unselected:?}"
+        );
+
+        // A muted merge row: the mute wins at the model level — selecting it does
+        // NOT add BOLD to `msg_style` (the widget layer promotes BOLD later; the
+        // model keeps the mute style).
+        let merge = merge_node("merge into main");
+        let muted = model_row_selected(&merge, merge_cols(true, false, false), true).msg_style;
+        assert!(
+            !muted.add_modifier.contains(Modifier::BOLD),
+            "selected muted row keeps the mute style, no model-level BOLD: {muted:?}"
+        );
+        assert_eq!(muted.fg, Some(theme.text_muted), "muted fg retained under selection");
+        assert!(
+            muted.add_modifier.contains(Modifier::DIM),
+            "muted DIM retained under selection: {muted:?}"
+        );
+    }
 }

@@ -874,6 +874,151 @@ mod tests {
 
     // ── badge color matches lane color (issue #53) ────────────────────
 
+    // ── chip click resolution: edge cases (decomposition seam #77) ────────
+
+    #[test]
+    fn overflow_marker_chip_resolves_to_first_branch() {
+        // FINDING (item 1): three+ branches collapse into ONE combined chip that
+        // carries a "+N" overflow marker — there is no separate "+N" chip (see
+        // the `optimize_branch_display` doc: it returns zero or one chip). That
+        // single chip resolves via its FIRST bracket group, so a click anywhere
+        // on it — including the "+N" region — checks out the first branch, NOT
+        // nothing. Pinning actual behavior; the intent ("+N resolves to None")
+        // does not hold because +N is not an independent chip.
+        let theme = Theme::dark();
+        let names = ["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+        let out = optimize_branch_display(&names, false, 0, None, &theme, &[]);
+        assert_eq!(out.len(), 1, "multi-branch collapses to a single combined chip");
+        assert!(
+            out[0].label.contains('+'),
+            "the +N overflow marker is present: {:?}",
+            out[0].label
+        );
+        assert_eq!(
+            out[0].branch.as_deref(),
+            Some("alpha"),
+            "the combined/overflow chip resolves to the first branch, not None: {:?}",
+            out[0]
+        );
+    }
+
+    #[test]
+    fn remote_only_chip_resolution() {
+        let theme = Theme::dark();
+
+        // Multi-remote repo: the remote-only chip keeps its "<remote>/" prefix in
+        // the label AND resolves to the full remote ref.
+        let multi = optimize_branch_display(
+            &["origin/feat".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string(), "upstream".to_string()],
+        );
+        assert_eq!(multi.len(), 1);
+        assert!(
+            multi[0].label.contains("origin/feat"),
+            "multi-remote keeps the prefix: {:?}",
+            multi[0].label
+        );
+        assert_eq!(multi[0].branch.as_deref(), Some("origin/feat"));
+
+        // Single-remote repo: the prefix is dropped from the label, but the chip
+        // still resolves back to the full remote ref.
+        let single = optimize_branch_display(
+            &["origin/feat".to_string()],
+            false,
+            0,
+            None,
+            &theme,
+            &["origin".to_string()],
+        );
+        assert_eq!(single.len(), 1);
+        assert!(
+            !single[0].label.contains("origin/"),
+            "single-remote drops the prefix: {:?}",
+            single[0].label
+        );
+        assert_eq!(single[0].branch.as_deref(), Some("origin/feat"));
+    }
+
+    #[test]
+    fn abbreviated_label_resolution() {
+        // A branch name long enough to blow the 40-column label budget
+        // (MAX_LABEL_WIDTH) is abbreviated with an ellipsis ("...").
+        let theme = Theme::dark();
+        let long = format!("feature/{}", "a".repeat(50));
+        let out = optimize_branch_display(&[long], false, 0, None, &theme, &[]);
+        assert_eq!(out.len(), 1);
+        assert!(
+            display_width(&out[0].label) <= 40,
+            "label stays within the width budget: {:?}",
+            out[0].label
+        );
+        assert!(
+            out[0].label.contains("..."),
+            "the abbreviation ellipsis is present: {:?}",
+            out[0].label
+        );
+        // FINDING (item 4): the ellipsized label no longer contains the full
+        // branch name, so `resolve_chip_branch` cannot match it and the chip
+        // resolves to None — a click on a truncated branch chip checks out
+        // nothing. Pinning actual behavior (the intent was Some(<full name>)).
+        assert_eq!(
+            out[0].branch, None,
+            "an abbreviated chip does not resolve back to its branch: {:?}",
+            out[0]
+        );
+    }
+
+    #[test]
+    fn edge_input_branch_names_are_well_formed() {
+        let theme = Theme::dark();
+
+        // A name containing bracket delimiters (not a valid git ref, but the
+        // builder must not panic and must still emit a non-empty label).
+        let bracketed =
+            optimize_branch_display(&["wip[1]".to_string()], false, 0, None, &theme, &[]);
+        assert_eq!(bracketed.len(), 1);
+        assert!(
+            !bracketed[0].label.is_empty(),
+            "bracketed name still yields a non-empty label: {:?}",
+            bracketed[0].label
+        );
+        assert!(bracketed[0].label.contains("wip"), "{:?}", bracketed[0].label);
+        // FINDING (item 5): the ']' inside the name collides with the chip's own
+        // ']' delimiter, so resolution stops early and the chip resolves to None.
+        assert_eq!(
+            bracketed[0].branch, None,
+            "a ']' inside the name breaks resolution: {:?}",
+            bracketed[0]
+        );
+
+        // A wide-emoji name resolves cleanly and keeps a non-empty label.
+        let emoji =
+            optimize_branch_display(&["🎉feature".to_string()], false, 0, None, &theme, &[]);
+        assert_eq!(emoji.len(), 1);
+        assert!(
+            !emoji[0].label.is_empty(),
+            "emoji name yields a non-empty label: {:?}",
+            emoji[0].label
+        );
+        assert_eq!(
+            emoji[0].branch.as_deref(),
+            Some("🎉feature"),
+            "emoji branch name resolves to itself: {:?}",
+            emoji[0]
+        );
+    }
+
+    #[test]
+    fn empty_branch_names_yield_no_chips() {
+        let theme = Theme::dark();
+        let out = optimize_branch_display(&[], false, 0, None, &theme, &[]);
+        assert!(out.is_empty(), "no branch names → no chips: {out:?}");
+    }
+
     #[test]
     fn head_badge_color_matches_lane_color_not_a_fixed_head_color() {
         // Regression: the checked-out HEAD branch's badge used to be forced
