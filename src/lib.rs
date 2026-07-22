@@ -6,6 +6,7 @@ pub mod avatar;
 pub mod avatar_fetch;
 pub mod merge_base;
 pub mod merged_branch_fetch;
+pub mod merged_cache;
 pub mod palette;
 pub mod undo;
 pub mod config;

@@ -315,11 +315,20 @@ impl App {
         let Some((set, targets)) = self.merged.classify.poll() else {
             return false;
         };
-        if set == self.merged.branches && targets == self.merged.squash_targets {
-            return false;
-        }
+        let unchanged = set == self.merged.branches && targets == self.merged.squash_targets;
         self.merged.branches = set;
         self.merged.squash_targets = targets;
+        // Persist the freshly-computed result to the cross-session cache (#104)
+        // so the next startup can serve it instantly. Written on every delivery
+        // — even an unchanged/empty result — so a repo with no merged branches
+        // still gets a warm cache. Keyed by the *just-completed* input's
+        // signature (read from the classifier, not the live inputs, which may
+        // have moved on) so the entry's signature always matches its result.
+        self.persist_merged_cache();
+        if unchanged {
+            // Nothing visible changed — skip the graph rebuild.
+            return false;
+        }
         // Only the merged filter/dimming changed — the refs on disk are
         // unchanged — so run just the graph rebuild + selection restore +
         // cache reconcile, skipping the expensive `reload_refs` (repo reopen +
@@ -327,6 +336,27 @@ impl App {
         // Best-effort: a rebuild failure just leaves the prior graph.
         let _ = self.rebuild_and_restore(false);
         true
+    }
+
+    /// Write the current merged classification to the persistent cache (#104),
+    /// tagged with the signature and gh set of the input that produced it (read
+    /// from the classifier, which retains them alongside the delivered result).
+    /// Best-effort: a missing base branch or any IO error is silently skipped —
+    /// the cache is an optimization, never load-bearing.
+    fn persist_merged_cache(&self) {
+        let (Some(signature), Some(gh_merged)) = (
+            self.merged.classify.last_signature(),
+            self.merged.classify.last_gh_merged(),
+        ) else {
+            return;
+        };
+        crate::merged_cache::MergedCache {
+            signature,
+            gh_merged: gh_merged.clone(),
+            merged: self.merged.branches.clone(),
+            squash_targets: self.merged.squash_targets.clone(),
+        }
+        .save(&self.repo_path);
     }
 
     pub fn poll_fs_watcher(&mut self) -> bool {
