@@ -1446,6 +1446,85 @@ pub fn cell_is_traced(oids: CellOids, lit: &HashMap<CellEdge, Oid>) -> bool {
     edge_is_traced(oids.0, lit) || edge_is_traced(oids.1, lit)
 }
 
+/// The set of commit OIDs that would VANISH if "hide merged branches" were
+/// toggled on — every commit exclusive to a merged branch's lane. This is the
+/// selection the "dim merged branches" setting (issue #108) greys: both the
+/// commit rows and the graph strokes touching them.
+///
+/// Mirrors hide-merged's first-parent semantics (issue #91): a commit vanishes
+/// under hide-merged iff it is reachable from some merged branch tip yet lies on
+/// NO live (non-merged) ref's first-parent chain. So the returned set is
+///
+/// ```text
+///   reachable(merged_tips)  \  first_parent_chains(live_tips)
+/// ```
+///
+/// computed purely by walking the already-loaded `commits`' parent edges — no
+/// fresh revwalk. Off-graph parents end a walk (only loaded commits can be
+/// dimmed, matching what the renderer draws).
+///
+/// - `merged_tips`: tip OIDs of the merged branches (resolve names via the
+///   branch list).
+/// - `live_tips`: tip OIDs of every non-merged ref plus HEAD; their first-parent
+///   chains are protected from dimming, so shared trunk history a merged branch
+///   also reaches (down to and past its fork point) stays lit.
+pub fn merged_lane_oids(
+    commits: &[CommitInfo],
+    merged_tips: &[Oid],
+    live_tips: &[Oid],
+) -> HashSet<Oid> {
+    // oid -> its parent OIDs, for loaded commits only.
+    let parents: HashMap<Oid, &[Oid]> = commits
+        .iter()
+        .map(|c| (c.oid, c.parent_oids.as_slice()))
+        .collect();
+
+    // Protected: each live tip's first-parent chain, walked while loaded. A
+    // merged branch's shared trunk history lands here, so only its exclusive
+    // commits survive the difference below.
+    let mut live: HashSet<Oid> = HashSet::new();
+    for &tip in live_tips {
+        let mut cur = tip;
+        while parents.contains_key(&cur) && live.insert(cur) {
+            match parents[&cur].first().copied() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+    }
+
+    // Reachable from a merged tip via ANY parent edge (a merge's second parent
+    // included), restricted to loaded commits and stopping at any protected
+    // (live) commit — the walk into shared trunk history halts at the fork
+    // point, which is on the trunk's first-parent chain. What remains is
+    // exclusive to the merged lanes.
+    let mut merged: HashSet<Oid> = HashSet::new();
+    let mut stack: Vec<Oid> = merged_tips.to_vec();
+    while let Some(oid) = stack.pop() {
+        let Some(ps) = parents.get(&oid) else { continue };
+        if live.contains(&oid) || !merged.insert(oid) {
+            continue;
+        }
+        stack.extend(ps.iter().copied());
+    }
+    merged
+}
+
+/// Whether a single `(child, parent)` edge touches a dimmed (merged-lane)
+/// commit: either endpoint is in `merged`. An edge to/from a vanishing commit
+/// is exactly a stroke hide-merged would remove, so this is what the merged-lane
+/// dim (issue #108) fades. `None` (no edge) never touches.
+pub fn edge_touches_merged(edge: Option<CellEdge>, merged: &HashSet<Oid>) -> bool {
+    edge.is_some_and(|(child, parent)| merged.contains(&child) || merged.contains(&parent))
+}
+
+/// Whether a cell (by its `(primary, secondary)` edges) touches a merged-lane
+/// commit. Either edge counts — the Unicode text path dims the whole glyph;
+/// the pixel path fades each edge independently (see `apply_merged_lane_dim`).
+pub fn cell_touches_merged(oids: CellOids, merged: &HashSet<Oid>) -> bool {
+    edge_touches_merged(oids.0, merged) || edge_touches_merged(oids.1, merged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2151,5 +2230,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── merged_lane_oids: which commits the dim-merged setting greys (#108) ──
+
+    /// Trunk A—B—C (A newest, C the loaded base whose parent Z is off-graph),
+    /// with three branches off C:
+    ///
+    /// - F1—F2: merged into A via a merge commit (A's 2nd parent is F1);
+    /// - S1: a squash-merged branch (its local ref survives but it is NOT an
+    ///   ancestor of the trunk);
+    /// - G1: an ordinary UNMERGED branch.
+    ///
+    /// Returns the commit list and the OIDs `[A, B, C, F1, F2, S1, G1, Z]`.
+    fn merged_lane_fixture() -> (Vec<CommitInfo>, [Oid; 8]) {
+        let (a, b, c, f1, f2, s1, g1, z) = (
+            oid(1),
+            oid(2),
+            oid(3),
+            oid(4),
+            oid(5),
+            oid(6),
+            oid(7),
+            oid(9),
+        );
+        let commits = vec![
+            ci(a, vec![b, f1]), // trunk merge: first parent B, 2nd parent F1
+            ci(b, vec![c]),
+            ci(f1, vec![f2]),
+            ci(f2, vec![c]),
+            ci(s1, vec![c]),
+            ci(g1, vec![c]),
+            ci(c, vec![z]), // trunk base; Z is off-graph (not loaded)
+        ];
+        (commits, [a, b, c, f1, f2, s1, g1, z])
+    }
+
+    #[test]
+    fn merged_lane_selects_only_merged_exclusive_commits() {
+        let (commits, [a, b, c, f1, f2, s1, g1, _z]) = merged_lane_fixture();
+        // F is merged via a merge commit; S is squash-merged (both have live
+        // refs). Trunk A and the unmerged branch G are the live lines.
+        let merged = merged_lane_oids(&commits, &[f1, s1], &[a, g1]);
+
+        // The merged branches' exclusive commits dim.
+        assert!(merged.contains(&f1), "merge-commit branch tip dims");
+        assert!(merged.contains(&f2), "merge-commit branch interior dims");
+        assert!(merged.contains(&s1), "squash-merged branch commit dims");
+        // Trunk first-parent commits never dim — even C, which the merged
+        // branches also reach (their walk stops at the shared fork point).
+        assert!(!merged.contains(&a), "trunk tip stays lit");
+        assert!(!merged.contains(&b), "trunk interior stays lit");
+        assert!(!merged.contains(&c), "shared fork-point commit stays lit");
+        // An unmerged branch is not in the merged-tip walk at all.
+        assert!(!merged.contains(&g1), "unmerged branch stays lit");
+    }
+
+    #[test]
+    fn merged_lane_spares_a_fast_forwarded_branch_on_the_trunk_line() {
+        // A branch whose commits sit on the trunk's own first-parent chain (a
+        // fast-forward merge left nothing exclusive) must NOT dim: hide-merged
+        // would keep those commits, so the dim mirror keeps them too.
+        let (commits, [a, b, _c, _f1, _f2, _s1, _g1, _z]) = merged_lane_fixture();
+        // Pretend B's branch is "merged" but the trunk tip A is still live and
+        // reaches B via its first parent.
+        let merged = merged_lane_oids(&commits, &[b], &[a]);
+        assert!(merged.is_empty(), "no commit exclusive to a ff-merged branch");
+    }
+
+    #[test]
+    fn merged_lane_is_empty_without_merged_tips() {
+        let (commits, [a, _b, _c, _f1, _f2, _s1, g1, _z]) = merged_lane_fixture();
+        assert!(merged_lane_oids(&commits, &[], &[a, g1]).is_empty());
+    }
+
+    #[test]
+    fn edge_and_cell_touch_merged_on_either_endpoint() {
+        let merged: HashSet<Oid> = [oid(4)].into_iter().collect();
+        // Either endpoint in the set makes the edge touch.
+        assert!(edge_touches_merged(Some((oid(4), oid(3))), &merged));
+        assert!(edge_touches_merged(Some((oid(1), oid(4))), &merged));
+        assert!(!edge_touches_merged(Some((oid(1), oid(3))), &merged));
+        assert!(!edge_touches_merged(None, &merged));
+        // A cell touches when either of its two edges does.
+        assert!(cell_touches_merged((None, Some((oid(4), oid(3)))), &merged));
+        assert!(!cell_touches_merged((Some((oid(1), oid(2))), None), &merged));
     }
 }
