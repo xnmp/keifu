@@ -559,3 +559,6 @@ User repro persists after #97: squash-merged branches not hidden, no link lines.
 
 ### [DONE] #101 PR subjects: drop the number
 Rewritten PR subjects show icon + title only — the parsed number is sometimes an issue reference, and the number adds noise anyway.
+
+### [TODO] #102 graph_view.rs decomposition (tracked as GH issues #75-#81)
+Investigation confirmed the god-module drift: 4172 lines, a 318-line render_graph_line_tail reading all 13 RowRenderCtx fields, ~40 tests asserting by scanning rendered spans. Seven-item split plan filed as GitHub issues: metrics (#75), geometry (#76), BranchChip/chips (#77), PrBadge/badges (#78), row-folding (#79), pixel-dim (#80), and the capstone pure-RowModel seam (#81). Order: #75/#76/#79 → #77/#78 → #80 → #81.
