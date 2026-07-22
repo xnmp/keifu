@@ -603,6 +603,9 @@ Bug: the #81 grey squash-link connector rendered as two curves aimed at a phanto
 ### [DONE] #108 Dim merged branches dims the whole lane
 "Dim merged branches" dims everything a merged branch contributes — its exclusive commits' rows (message + metadata) and the graph dots/lines — in both renderers, gated on the existing setting; instant toggle, composes with trace dim. Landed via PR #86. Also fixed latent pixel bug: the trace pass dimmed every cell when tracing was off.
 
+### [DONE] #118 Hide-stashes toggle (GH #100)
+New "Hide stashes" setting (Graph group, state-only, default off — stashes stay visible). Mirrors "Hide remote branches" end-to-end: descriptor, `UiState` field, App field, init/refresh projection. Filters at the App layer by passing an empty stash slice into `get_commits` + `build_graph`, so the stash node and any commit reachable only as a stash parent vanish together; when off the graph is byte-identical. Settings-panel-only (no new keybinding).
+
 ### [DONE] #117 Branch-chip click targets recorded at construction (GH #98)
 Found by the #102 seam-pinning tests: `resolve_chip_branch` recovered the click target by parsing the rendered label, so an abbreviated (`...`) label — or one whose name collides with the chip's own delimiters — resolved to `None` and the click silently did nothing. Now each `BranchChip` records the source ref at its construction site (`optimize_branch_display` builds chips directly; the parsing helper is deleted): abbreviation and decoration are presentation-only and can never break hit-testing. Combined multi-branch chips keep their pre-existing target (first shown branch).
 

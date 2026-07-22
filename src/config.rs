@@ -326,6 +326,9 @@ pub struct UiState {
     /// Group the files pane by folder (`f` toggles). Off by default: files list
     /// flat with full repo-relative paths, the historical behavior.
     pub files_group_by_folder: bool,
+    /// Hide stash entries (and any commits reachable only as stash parents) from
+    /// the graph. Off by default (stashes shown), preserving historical behavior.
+    pub hide_stashes: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -341,6 +344,7 @@ impl Default for UiState {
             hide_merged_branches: false,
             dim_merged_branches: true,
             files_group_by_folder: false,
+            hide_stashes: false,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -562,6 +566,7 @@ mod tests {
             hide_merged_branches: false,
             dim_merged_branches: false,
             files_group_by_folder: true,
+            hide_stashes: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -683,6 +688,23 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&wrapped).unwrap()).unwrap();
         assert!(restored.diff_word_wrap);
+    }
+
+    #[test]
+    fn hide_stashes_defaults_off_and_round_trips() {
+        // Stashes are shown by default, including for an older state.toml that
+        // predates the key.
+        assert!(!UiState::default().hide_stashes);
+        let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(!older.hide_stashes, "missing key defaults to shown");
+
+        // Once set, the preference survives a save/load round-trip.
+        let hidden = UiState {
+            hide_stashes: true,
+            ..UiState::default()
+        };
+        let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
+        assert!(restored.hide_stashes);
     }
 
     #[test]
