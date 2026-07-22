@@ -1126,6 +1126,10 @@ pub struct App {
     // Debug mode
     pub debug_keys: bool,
 
+    /// When the CapsLock hint toast last fired (#106), for rate-limiting —
+    /// not persisted, purely a within-session cooldown.
+    pub last_capslock_hint: Option<std::time::Instant>,
+
     // Performance counters. Recorded on the render/refresh paths; a summary is
     // logged on exit (only visible with --log-file).
     pub perf: crate::perf::PerfStats,

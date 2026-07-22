@@ -103,6 +103,55 @@ pub fn map_key_to_action(
     }
 }
 
+/// True when a keystroke matches the CapsLock signature: an uppercase letter
+/// arriving WITHOUT the SHIFT modifier (#106). With the keyboard-enhancement
+/// flags active (`DISAMBIGUATE_ESCAPE_CODES`, see `tui::init`) a genuine
+/// Shift+letter always carries the SHIFT modifier, so it never matches here —
+/// only CapsLock (or a terminal reporting caps state as the bare letter)
+/// produces an uppercase char with no modifier. On legacy terminals that infer
+/// SHIFT from the uppercase byte itself, this simply never fires; that silent
+/// degradation is acceptable, not a case to special-case around.
+pub fn looks_like_capslock(key: &KeyEvent) -> bool {
+    if key.kind == KeyEventKind::Release {
+        return false;
+    }
+    match key.code {
+        KeyCode::Char(c) => c.is_uppercase() && !key.modifiers.contains(KeyModifiers::SHIFT),
+        _ => false,
+    }
+}
+
+/// Whether the current mode/flags route character keys into a free-text
+/// buffer rather than single-key commands — the commit-message editor, Input
+/// mode (branch/tag/search), the graph/files text filters, PR/issue compose,
+/// the command palette, and the settings query. Mirrors the same
+/// mode/flag checks `map_key_to_action` uses to route into those handlers, so
+/// callers that only need "is the user typing text right now" (e.g. the
+/// CapsLock hint, which must never fire on legitimate uppercase text) don't
+/// have to run a key through the full dispatcher to find out.
+pub fn is_text_editing_context(
+    mode: &AppMode,
+    panel: FocusedPanel,
+    editing_commit: bool,
+    files_filter_active: bool,
+    commit_filter_active: bool,
+) -> bool {
+    match mode {
+        AppMode::Normal => {
+            (editing_commit && panel == FocusedPanel::CommitDetail)
+                || (panel == FocusedPanel::Graph && commit_filter_active)
+                || (panel == FocusedPanel::Files && files_filter_active)
+        }
+        AppMode::Input { .. }
+        | AppMode::PrCompose { .. }
+        | AppMode::IssueCompose { .. }
+        | AppMode::BranchFilter { .. }
+        | AppMode::CommandPalette { .. }
+        | AppMode::Settings { .. } => true,
+        _ => false,
+    }
+}
+
 /// Command palette: type to filter, ↑↓ to navigate, Enter to run, Esc to close.
 /// Reuses the shared single-line text-editing shortcuts for the query.
 fn map_command_palette_mode(key: KeyEvent) -> Option<Action> {
@@ -1178,5 +1227,149 @@ mod tests {
             map_confirm_mode(r),
             Some(Action::ConfirmDeleteBranchAndRemote)
         );
+    }
+
+    #[test]
+    fn capslock_signature_is_uppercase_letter_without_shift() {
+        let key = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE);
+        assert!(looks_like_capslock(&key));
+    }
+
+    #[test]
+    fn genuine_shift_uppercase_is_not_capslock() {
+        let key = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
+        assert!(!looks_like_capslock(&key));
+    }
+
+    #[test]
+    fn lowercase_is_never_capslock() {
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert!(!looks_like_capslock(&key));
+    }
+
+    #[test]
+    fn non_alphabetic_chars_are_never_capslock() {
+        // '?' and ':' arrive shifted on most layouts but aren't letters, so
+        // `is_uppercase()` is false for them regardless of the modifier.
+        let question = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        let colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::SHIFT);
+        assert!(!looks_like_capslock(&question));
+        assert!(!looks_like_capslock(&colon));
+    }
+
+    #[test]
+    fn release_events_are_never_capslock() {
+        let key = KeyEvent::new_with_kind(
+            KeyCode::Char('K'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert!(!looks_like_capslock(&key));
+    }
+
+    #[test]
+    fn repeat_events_can_be_capslock() {
+        // A held caps-locked key repeats; the hint should still be eligible.
+        let key = KeyEvent::new_with_kind(
+            KeyCode::Char('K'),
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        );
+        assert!(looks_like_capslock(&key));
+    }
+
+    #[test]
+    fn non_char_keys_are_never_capslock() {
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!looks_like_capslock(&key));
+    }
+
+    #[test]
+    fn commit_editor_is_a_text_editing_context() {
+        assert!(is_text_editing_context(
+            &AppMode::Normal,
+            FocusedPanel::CommitDetail,
+            true,
+            false,
+            false,
+        ));
+        // Editing flag only applies while focus is actually on CommitDetail.
+        assert!(!is_text_editing_context(
+            &AppMode::Normal,
+            FocusedPanel::Graph,
+            true,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn active_filters_are_text_editing_contexts() {
+        assert!(is_text_editing_context(
+            &AppMode::Normal,
+            FocusedPanel::Graph,
+            false,
+            false,
+            true,
+        ));
+        assert!(is_text_editing_context(
+            &AppMode::Normal,
+            FocusedPanel::Files,
+            false,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn text_capturing_modes_are_editing_contexts() {
+        let input = AppMode::Input {
+            title: String::new(),
+            input: String::new(),
+            action: crate::app::InputAction::CreateBranch,
+        };
+        let palette = AppMode::CommandPalette {
+            query: String::new(),
+            selected: 0,
+        };
+        assert!(is_text_editing_context(
+            &input,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false
+        ));
+        assert!(is_text_editing_context(
+            &palette,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn plain_navigation_modes_are_not_editing_contexts() {
+        assert!(!is_text_editing_context(
+            &AppMode::Normal,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false,
+        ));
+        assert!(!is_text_editing_context(
+            &AppMode::Help,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false,
+        ));
+        assert!(!is_text_editing_context(
+            &AppMode::CiChecks,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false,
+        ));
     }
 }
