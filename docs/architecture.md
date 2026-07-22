@@ -373,8 +373,13 @@ work that reached the trunk only through a chain (a stacked PR squashed into
 its parent branch, a sub-branch folded into a feature before the feature was
 squashed): no direct trunk signal exists for those, since a squash shares no
 commits. The trunk first-parent "behind" guard stays trunk-only on purpose —
-an old pointer into a *merged* branch's line is landed work and classifies
-via ancestry, unlike a pointer into a live trunk line. `--explain-merged`
+an old pointer into a *merged* branch's line is a dead pointer into an
+abandoned line and classifies via ancestry, unlike a pointer into a live
+trunk line. (Caveat: if a later commit on the merged branch superseded the
+pointed-at tree, that intermediate tree never literally landed on trunk —
+the pointer still classifies. Accepted: such pointers are stale leftovers,
+and the classification self-heals the moment the branch gets a new commit.)
+`--explain-merged`
 reports transitively-classified branches in a dedicated section naming the
 merged branch they landed through.
 
