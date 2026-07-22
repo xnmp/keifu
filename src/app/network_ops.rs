@@ -54,6 +54,19 @@ impl App {
             // user-initiated fetch keeps the full error dialog. An HTTPS auth
             // failure on a user-initiated fetch opens the credential prompt.
             Err(e) => {
+                // Even on failure, a fetch-all may have *partially* succeeded:
+                // healthy remotes updated their tracking refs on disk while a
+                // broken remote produced the error (issue #91). Refresh first so
+                // those updates surface in the graph — refresh does not touch any
+                // of the fetch-error surfaces below (on success it clears only its
+                // own wt_status latch), so the credential prompt / silent latch /
+                // error modal still win. Mirror the Ok path's FileDiff deferral so
+                // the diff viewer isn't disrupted mid-view.
+                if matches!(self.mode, AppMode::FileDiff { .. }) {
+                    self.pending_refresh = true;
+                } else if let Err(re) = self.refresh(true) {
+                    tracing::warn!(error = %re, "refresh after failed fetch");
+                }
                 if self.try_prompt_credentials(&e, flight) {
                     // Prompt opened.
                 } else if silent {
