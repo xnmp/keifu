@@ -880,23 +880,41 @@ fn inject_squash_links(nodes: &mut [GraphNode], max_lane: &mut usize, links: &[(
     }
 }
 
-/// Draw one squash link between the commit rows `r1` and `r2` on a dedicated
-/// grey lane. Picks a lane whose column is free across the whole span, grows the
-/// graph width only if none is, then leaves the upper commit with a branch-down
-/// curve, runs a grey pipe down the lane, and lands on the lower commit with a
-/// merge curve. See [`inject_squash_links`] for the invariants this preserves.
+/// Draw one squash link between the commit rows `r1` and `r2` on a grey lane.
+///
+/// Picks the connector column nearest both endpoints, runs a grey pipe down it
+/// through the intermediate rows, and joins each endpoint with an elbow curve.
+///
+/// The connector column may be an **endpoint's own lane**: routing the pipe
+/// straight up (or down) the endpoint's column and elbowing into the *other*
+/// endpoint hugs the real lane geometry — exactly how a merge/fork connector
+/// routes. Only if no such column is free does the link fall back to a distinct
+/// lane, and only past `max_lane` if even that is unavailable. A previous version
+/// always demanded a third lane distinct from *both* endpoints; when the lanes
+/// between were busy, the nearest free column landed to the *right* of the tip,
+/// so the link detoured out and back — a phantom curve ending in a void column
+/// (issue #110). Anchoring on an endpoint's own column removes that detour.
+///
+/// See [`inject_squash_links`] for the invariants this preserves.
 fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2: usize) {
     let (u, l) = (r1.min(r2), r1.max(r2));
     let ulane = nodes[u].lane;
     let llane = nodes[l].lane;
 
-    // A lane is usable when its column is Empty across the ENTIRE span [u, l],
-    // so the grey pipe never severs a real lane. The endpoints' own lanes fail
-    // this (their commit dots occupy the column), so the chosen lane is always
-    // distinct from both — the curves are never degenerate.
-    let column_free = |nodes: &[GraphNode], lane: usize| -> bool {
+    // A lane is usable as the connector column when its column is Empty across
+    // the span, EXCEPT at an endpoint row whose own lane this is: there the dot
+    // sits in the column and anchors the connector (the elbow lands on the far
+    // endpoint, this end just runs straight out of the dot). So a candidate must
+    // be free at every intermediate row, and at each endpoint row unless it is
+    // that endpoint's lane. This never severs a real lane — an endpoint's lane is
+    // only accepted when its column is otherwise clear, and the dot already owns
+    // that cell.
+    let column_ok = |nodes: &[GraphNode], lane: usize| -> bool {
         let ci = lane * 2;
         (u..=l).all(|i| {
+            if (i == u && lane == ulane) || (i == l && lane == llane) {
+                return true; // the endpoint dot's own column
+            }
             nodes[i]
                 .cells
                 .get(ci)
@@ -905,12 +923,13 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
                 == CellType::Empty
         })
     };
-    // Prefer the free lane nearest both endpoints (fewest crossings); `max_lane
-    // + 1` is always free as a fallback.
+    // Prefer the usable lane nearest both endpoints (fewest crossings, and it
+    // keeps the connector between/on the endpoints rather than detouring out);
+    // `max_lane + 1` is always free as a last-resort fallback.
     let mut link_lane = *max_lane + 1;
     let mut best_dist = usize::MAX;
     for cand in 0..=*max_lane + 1 {
-        if column_free(nodes, cand) {
+        if column_ok(nodes, cand) {
             let dist = cand.abs_diff(ulane) + cand.abs_diff(llane);
             if dist < best_dist {
                 best_dist = dist;
@@ -945,22 +964,29 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
     }
 
     // Upper endpoint: the link leaves this commit and heads down the link lane.
-    squash_cross_row(nodes, u, ulane, link_lane);
-    nodes[u].cells[gcol] = if link_lane > ulane {
-        CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX) // ╮
-    } else {
-        CellType::BranchRight(SQUASH_LINK_COLOR_INDEX) // ╭
-    };
-    nodes[u].cell_oids[gcol] = (None, None);
+    // When the link lane IS this endpoint's lane, the dot already sits in the
+    // column and connects down into the pipe below — no elbow, no crossing run.
+    if link_lane != ulane {
+        squash_cross_row(nodes, u, ulane, link_lane);
+        nodes[u].cells[gcol] = if link_lane > ulane {
+            CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX) // ╮
+        } else {
+            CellType::BranchRight(SQUASH_LINK_COLOR_INDEX) // ╭
+        };
+        nodes[u].cell_oids[gcol] = (None, None);
+    }
 
-    // Lower endpoint: the link lands on the older commit, ending the lane.
-    squash_cross_row(nodes, l, llane, link_lane);
-    nodes[l].cells[gcol] = if link_lane > llane {
-        CellType::MergeLeft(SQUASH_LINK_COLOR_INDEX) // ╯
-    } else {
-        CellType::MergeRight(SQUASH_LINK_COLOR_INDEX) // ╰
-    };
-    nodes[l].cell_oids[gcol] = (None, None);
+    // Lower endpoint: the link lands on the older commit, ending the lane. Same
+    // dot-anchored shortcut when the link lane is this endpoint's own lane.
+    if link_lane != llane {
+        squash_cross_row(nodes, l, llane, link_lane);
+        nodes[l].cells[gcol] = if link_lane > llane {
+            CellType::MergeLeft(SQUASH_LINK_COLOR_INDEX) // ╯
+        } else {
+            CellType::MergeRight(SQUASH_LINK_COLOR_INDEX) // ╰
+        };
+        nodes[l].cell_oids[gcol] = (None, None);
+    }
 }
 
 /// Draw the grey horizontal run on `row` between a commit's lane and the link
@@ -2183,35 +2209,6 @@ mod tests {
     }
 
     #[test]
-    fn squash_link_curves_land_on_both_endpoint_rows() {
-        let (commits, [s, f1, _t, _z]) = squash_link_fixture();
-        let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
-
-        // Each endpoint row carries a grey link curve (branch-out or merge-in).
-        for endpoint in [s, f1] {
-            let row = &layout.nodes[row_of(&layout, endpoint)];
-            assert!(
-                row.cells.iter().any(|c| matches!(
-                    c,
-                    CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX)
-                        | CellType::BranchRight(SQUASH_LINK_COLOR_INDEX)
-                        | CellType::MergeLeft(SQUASH_LINK_COLOR_INDEX)
-                        | CellType::MergeRight(SQUASH_LINK_COLOR_INDEX)
-                )),
-                "endpoint row for {endpoint} carries a grey link curve"
-            );
-        }
-
-        // A link whose target isn't loaded draws nothing (both-endpoints guard).
-        let bogus = oid(200);
-        let missing = build_graph(&commits, &[], &[], &[], None, None, &[(f1, bogus)]);
-        assert!(
-            !has_squash_grey(&missing),
-            "no link is drawn when an endpoint isn't loaded"
-        );
-    }
-
-    #[test]
     fn squash_link_cells_are_never_traced() {
         let (commits, [s, f1, _t, _z]) = squash_link_fixture();
         let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
@@ -2230,6 +2227,154 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The single column carrying the grey connector's vertical / elbow cells
+    /// (`Pipe`/`Branch*`/`Merge*` — not the horizontal crossing run). Asserts they
+    /// all share one column (no dangling half in a second column, #110) and
+    /// returns it.
+    fn squash_connector_col(layout: &GraphLayout) -> usize {
+        let mut col: Option<usize> = None;
+        for node in &layout.nodes {
+            for (c, cell) in node.cells.iter().enumerate() {
+                let is_link_spine = cell_color(*cell) == Some(SQUASH_LINK_COLOR_INDEX)
+                    && matches!(
+                        cell,
+                        CellType::Pipe(_)
+                            | CellType::BranchLeft(_)
+                            | CellType::BranchRight(_)
+                            | CellType::MergeLeft(_)
+                            | CellType::MergeRight(_)
+                    );
+                if is_link_spine {
+                    match col {
+                        None => col = Some(c),
+                        Some(x) => assert_eq!(
+                            x, c,
+                            "the squash connector must occupy a single column, not a split/dangling second one (#110)"
+                        ),
+                    }
+                }
+            }
+        }
+        col.expect("a squash connector spine cell is present")
+    }
+
+    /// #110 repro shape: squash commit S on the trunk (lane 0, upper), feature tip
+    /// F two lanes right (lane 2), a live branch H keeping the middle lane busy at
+    /// the intermediate row. The connector must hug F's own lane, NOT detour out
+    /// to a fresh lane right of the tip (the old "phantom curve into a void").
+    #[test]
+    fn squash_link_hugs_tip_lane_without_right_detour() {
+        let (s, h, f, t, b) = (oid(1), oid(2), oid(3), oid(4), oid(5));
+        let commits = vec![
+            ci(s, vec![t]), // squash commit, trunk (lane 0)
+            ci(h, vec![b]), // a live branch — keeps the middle lane busy
+            ci(f, vec![b]), // squash-merged feature tip (lane 2)
+            ci(t, vec![b]), // trunk continues
+            ci(b, vec![]),  // shared base
+        ];
+        let base = build_graph(&commits, &[], &[], &[], None, None, &[]);
+        let linked = build_graph(&commits, &[], &[], &[], None, None, &[(f, s)]);
+
+        let sr = row_of(&linked, s);
+        let fr = row_of(&linked, f);
+        let flane = linked.nodes[fr].lane;
+        let gcol = squash_connector_col(&linked);
+
+        // The connector rides the tip's OWN column — no lane was added to detour
+        // right of the tip (the #110 regression widened the graph by one lane).
+        assert_eq!(
+            linked.max_lane, base.max_lane,
+            "the link must not widen the graph into a right-side detour lane"
+        );
+        assert_eq!(gcol, flane * 2, "connector rides the tip's own lane column");
+
+        // No grey cell of ANY kind sits right of the tip's column — that column
+        // was the phantom void the old geometry ended a half-curve in.
+        for node in &linked.nodes {
+            for (col, cell) in node.cells.iter().enumerate() {
+                if cell_color(*cell) == Some(SQUASH_LINK_COLOR_INDEX) {
+                    assert!(
+                        col <= gcol,
+                        "no squash-link cell may sit right of the tip column (was the #110 void)"
+                    );
+                }
+            }
+        }
+
+        // Tip is dot-anchored: its own cell is the commit dot and the grey pipe
+        // runs straight down the same column into it (a continuous connector, no
+        // separate up-and-right elbow leaving the tip).
+        assert!(matches!(linked.nodes[fr].cells[gcol], CellType::Commit(_)));
+        assert!(
+            matches!(linked.nodes[fr - 1].cells[gcol], CellType::Pipe(SQUASH_LINK_COLOR_INDEX)),
+            "grey connector runs straight down into the tip dot"
+        );
+
+        // The squash commit is joined by a single grey elbow in that same column.
+        assert!(
+            matches!(
+                linked.nodes[sr].cells[gcol],
+                CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX)
+                    | CellType::BranchRight(SQUASH_LINK_COLOR_INDEX)
+            ),
+            "squash commit joins the connector with a grey elbow"
+        );
+
+        // Continuity: every intermediate row carries the grey pipe in that column.
+        for i in (sr + 1)..fr {
+            assert!(
+                matches!(linked.nodes[i].cells[gcol], CellType::Pipe(SQUASH_LINK_COLOR_INDEX)),
+                "intermediate row {i} carries the grey connector pipe"
+            );
+        }
+    }
+
+    #[test]
+    fn squash_link_is_one_continuous_connector_between_endpoints() {
+        // Adjacent-row case (original fixture): tip F1 on lane 1, squash S on lane
+        // 0 one row above. The connector hugs F1's lane — S elbows in, F1 is
+        // dot-anchored — forming ONE join between the two rows.
+        //
+        // (This replaces the pre-#110 expectation that BOTH endpoint rows carry a
+        // curve cell: that assumed the connector always used a third lane distinct
+        // from both endpoints, the very assumption that produced the right-side
+        // detour. When the connector rides an endpoint's own lane, that endpoint
+        // is anchored by its dot and carries no separate curve.)
+        let (commits, [s, f1, _t, _z]) = squash_link_fixture();
+        let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+
+        let sr = row_of(&layout, s);
+        let fr = row_of(&layout, f1);
+        let flane = layout.nodes[fr].lane;
+        let ulane = layout.nodes[sr].lane;
+        let gcol = squash_connector_col(&layout);
+
+        assert_eq!(gcol, flane * 2, "connector rides the tip's own lane");
+        // Neither endpoint sits right of the other — no detour.
+        assert!(gcol <= ulane.max(flane) * 2);
+
+        // Tip dot-anchored; squash commit joined by a grey elbow directly above it
+        // (`Branch*` touches the bottom edge, so the tip dot below connects up).
+        assert!(matches!(layout.nodes[fr].cells[gcol], CellType::Commit(_)));
+        assert!(matches!(
+            layout.nodes[sr].cells[gcol],
+            CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX)
+                | CellType::BranchRight(SQUASH_LINK_COLOR_INDEX)
+        ));
+    }
+
+    #[test]
+    fn squash_link_absent_when_an_endpoint_is_unloaded() {
+        // A link whose target isn't loaded draws nothing (both-endpoints guard).
+        let (commits, [_s, f1, _t, _z]) = squash_link_fixture();
+        let bogus = oid(200);
+        let missing = build_graph(&commits, &[], &[], &[], None, None, &[(f1, bogus)]);
+        assert!(
+            !has_squash_grey(&missing),
+            "no link is drawn when an endpoint isn't loaded"
+        );
     }
 
     // ── merged_lane_oids: which commits the dim-merged setting greys (#108) ──
