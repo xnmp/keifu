@@ -62,6 +62,29 @@ impl ReviewState {
     }
 }
 
+/// PR merge readiness, from GitHub's `mergeStateStatus`. Only the "does this
+/// block the merge" distinction matters for the badge, so the many raw states
+/// collapse to two. `UNSTABLE` (failing/pending checks) is deliberately *not*
+/// blocking here: that condition is already carried by [`CiStatus`], so letting
+/// it also block would double-count it; likewise `UNKNOWN` must never turn a
+/// mergeable PR's badge yellow while GitHub is still computing the state (#88).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeState {
+    /// The merge is blocked: `BLOCKED`, `DIRTY` (conflicts), `DRAFT`, `BEHIND`.
+    Blocked,
+    /// Not blocking: `CLEAN`, `HAS_HOOKS`, `UNSTABLE`, `UNKNOWN`, or missing.
+    Clear,
+}
+
+impl MergeState {
+    fn from_status(status: &str) -> Self {
+        match status.to_ascii_uppercase().as_str() {
+            "BLOCKED" | "DIRTY" | "DRAFT" | "BEHIND" => Self::Blocked,
+            _ => Self::Clear,
+        }
+    }
+}
+
 /// An open pull request associated with a head branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrInfo {
@@ -70,6 +93,9 @@ pub struct PrInfo {
     pub title: String,
     pub ci: CiStatus,
     pub review: ReviewState,
+    /// Merge readiness from `mergeStateStatus`. Combined with `review` to decide
+    /// whether a green PR still reads as "blocked" (see [`PrInfo::is_merge_blocked`]).
+    pub merge_state: MergeState,
     /// Any comment or review authored by someone other than the PR author.
     pub outside_activity: bool,
     /// The PR's head-branch tip commit SHA (`headRefOid`), when known. This
@@ -84,6 +110,14 @@ impl PrInfo {
     /// The head commit SHA parsed into a git `Oid`, when present and valid.
     pub fn head_oid(&self) -> Option<Oid> {
         self.head_oid.as_deref().and_then(|s| Oid::from_str(s).ok())
+    }
+
+    /// Whether the PR's merge is blocked — GitHub reports a blocking merge state,
+    /// *or* a reviewer requested changes. This is the predicate behind the
+    /// "passing checks but not actually mergeable" badge tone (#88); it is
+    /// independent of CI (a failing/pending PR is coloured by its check status).
+    pub fn is_merge_blocked(&self) -> bool {
+        self.merge_state == MergeState::Blocked || self.review == ReviewState::ChangesRequested
     }
 }
 
@@ -139,6 +173,8 @@ struct GhPr {
     status_check_rollup: Option<Vec<RollupEntry>>,
     #[serde(default, rename = "reviewDecision")]
     review_decision: Option<String>,
+    #[serde(default, rename = "mergeStateStatus")]
+    merge_state_status: Option<String>,
     #[serde(default)]
     comments: Option<Vec<Comment>>,
     #[serde(default)]
@@ -228,6 +264,7 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
         .map(|p| {
             let ci = aggregate_ci(p.status_check_rollup.as_deref().unwrap_or_default());
             let review = ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
+            let merge_state = MergeState::from_status(p.merge_state_status.as_deref().unwrap_or_default());
             let pr_author = p.author.as_ref().map(|a| a.login.as_str()).unwrap_or_default();
             let outside_activity = has_outside_activity(
                 pr_author,
@@ -242,6 +279,7 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
                     title: p.title,
                     ci,
                     review,
+                    merge_state,
                     outside_activity,
                     head_oid: p.head_ref_oid.filter(|s| !s.is_empty()),
                 },
@@ -459,7 +497,7 @@ fn fetch_open_prs(repo_path: &str) -> Result<HashMap<String, PrInfo>, String> {
             "pr",
             "list",
             "--json",
-            "number,url,headRefName,headRefOid,title,state,statusCheckRollup,reviewDecision,comments,reviews,author",
+            "number,url,headRefName,headRefOid,title,state,statusCheckRollup,reviewDecision,mergeStateStatus,comments,reviews,author",
             "--limit",
             "100",
         ],
@@ -495,6 +533,7 @@ mod tests {
                 title: "Add X".to_string(),
                 ci: CiStatus::None,
                 review: ReviewState::None,
+                merge_state: MergeState::Clear,
                 outside_activity: false,
                 head_oid: None,
             })
@@ -631,6 +670,46 @@ mod tests {
         assert_eq!(one("").review, ReviewState::None);
     }
 
+    // ── merge state ──────────────────────────────────────────────────
+
+    #[test]
+    fn merge_state_blocking_statuses_map_to_blocked() {
+        for s in ["BLOCKED", "DIRTY", "DRAFT", "BEHIND"] {
+            let pr = one(&format!(r#","mergeStateStatus":"{s}""#));
+            assert_eq!(pr.merge_state, MergeState::Blocked, "{s} should block");
+            assert!(pr.is_merge_blocked(), "{s} is_merge_blocked");
+        }
+    }
+
+    #[test]
+    fn merge_state_non_blocking_statuses_map_to_clear() {
+        // UNSTABLE (failing/pending checks) and UNKNOWN (still computing) must not
+        // block — CI status already expresses UNSTABLE, and UNKNOWN must never turn
+        // a mergeable PR yellow.
+        for s in ["CLEAN", "HAS_HOOKS", "UNSTABLE", "UNKNOWN"] {
+            let pr = one(&format!(r#","mergeStateStatus":"{s}""#));
+            assert_eq!(pr.merge_state, MergeState::Clear, "{s} should be clear");
+            assert!(!pr.is_merge_blocked(), "{s} not blocked");
+        }
+    }
+
+    #[test]
+    fn merge_state_missing_or_empty_is_clear() {
+        assert_eq!(one("").merge_state, MergeState::Clear); // field absent
+        assert_eq!(one(r#","mergeStateStatus":"""#).merge_state, MergeState::Clear);
+        assert_eq!(one(r#","mergeStateStatus":null"#).merge_state, MergeState::Clear);
+    }
+
+    #[test]
+    fn changes_requested_is_blocked_even_with_clean_merge_state() {
+        // A clean mergeable state but changes requested still counts as blocked,
+        // so the review verdict alone can down-tone a green badge (#88).
+        let pr = one(r#","mergeStateStatus":"CLEAN","reviewDecision":"CHANGES_REQUESTED""#);
+        assert_eq!(pr.merge_state, MergeState::Clear);
+        assert_eq!(pr.review, ReviewState::ChangesRequested);
+        assert!(pr.is_merge_blocked(), "changes-requested blocks regardless of merge state");
+    }
+
     // ── outside activity ─────────────────────────────────────────────
 
     #[test]
@@ -710,6 +789,7 @@ mod tests {
             title: String::new(),
             ci: CiStatus::None,
             review: ReviewState::None,
+            merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: head.map(str::to_string),
         }
@@ -791,6 +871,7 @@ mod tests {
             title: String::new(),
             ci,
             review: ReviewState::None,
+            merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: None,
         }

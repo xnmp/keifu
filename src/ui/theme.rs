@@ -80,6 +80,10 @@ pub struct Theme {
     // the default (no CI); the `pr_ci_*` set colors the badge by check status.
     pub pr_badge: Color,
     pub pr_ci_pass: Color,
+    /// Checks pass but the merge is blocked (review changes requested, conflicts,
+    /// draft, behind base) — a green-yellow/chartreuse tone between "green: good
+    /// to go" and "not yet" (issue #88).
+    pub pr_ci_pass_blocked: Color,
     pub pr_ci_pending: Color,
     pub pr_ci_fail: Color,
     // Closed-issue accent (GitHub's purple ✓), distinct from the green open ●.
@@ -189,7 +193,12 @@ impl Theme {
             // Open-PR badge — GitHub link blue, distinct from green/gold labels.
             pr_badge: Color::Rgb(88, 166, 255),
             pr_ci_pass: Color::Rgb(63, 185, 80),
-            pr_ci_pending: Color::Rgb(210, 153, 34),
+            // Chartreuse: green enough to read "checks green", yellow enough to
+            // warn "not actually mergeable". Sits between pass-green and pending.
+            pr_ci_pass_blocked: Color::Rgb(154, 194, 48),
+            // A clear orange (distinct from the chartreuse above and the gold tag
+            // label), so "checks still running" reads as caution, not go.
+            pr_ci_pending: Color::Rgb(236, 128, 36),
             pr_ci_fail: Color::Rgb(248, 81, 73),
             issue_closed: Color::Rgb(163, 113, 247),
             head_star: Color::Rgb(255, 200, 50),
@@ -302,7 +311,11 @@ impl Theme {
             // Open-PR badge — GitHub link blue, darkened for light backgrounds.
             pr_badge: Color::Rgb(9, 105, 218),
             pr_ci_pass: Color::Rgb(26, 127, 55),
-            pr_ci_pending: Color::Rgb(154, 103, 0),
+            // Dark chartreuse/olive: the green-yellow "passing but blocked" tone,
+            // darkened to stay legible on a light background.
+            pr_ci_pass_blocked: Color::Rgb(101, 128, 20),
+            // A darker orange, legible on light backgrounds, for "checks running".
+            pr_ci_pending: Color::Rgb(183, 78, 8),
             pr_ci_fail: Color::Rgb(207, 34, 46),
             issue_closed: Color::Rgb(130, 80, 223),
             head_star: Color::Rgb(184, 134, 11),
@@ -506,6 +519,20 @@ impl Theme {
     /// every scrollable pane at once regardless of which one is focused.
     pub fn scrollbar_thumb_style(&self) -> Style {
         Style::default().fg(self.text_secondary)
+    }
+
+    /// Mute a lane color toward the recessive `text_muted` tone, preserving its
+    /// hue (issue #90). A merged branch's name chip is styled with this so it
+    /// still reads as *its* lane — only faded — instead of collapsing to a flat
+    /// grey that erases which branch landed. `text_muted` is the
+    /// background-adapted recessive tone, so the blend pulls the lane color
+    /// toward the terminal background while keeping it distinguishable.
+    pub fn merged_chip_color(&self, base: Color) -> Color {
+        let [br, bg, bb] = crate::ui::graph_pixels::color_to_rgb(base);
+        let [mr, mg, mb] = crate::ui::graph_pixels::color_to_rgb(self.text_muted);
+        // Just past halfway toward the muted tone: clearly faded from an active
+        // chip, yet retaining enough of the lane hue to identify the branch.
+        mix((br, bg, bb), (mr, mg, mb), 0.55)
     }
 
     /// Get a lane color by index (replaces graph::colors::get_color_by_index).

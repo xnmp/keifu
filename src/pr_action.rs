@@ -398,6 +398,7 @@ mod tests {
             title: String::new(),
             ci: CiStatus::None,
             review: ReviewState::None,
+            merge_state: crate::pr::MergeState::Clear,
             outside_activity: false,
             head_oid: None,
         }

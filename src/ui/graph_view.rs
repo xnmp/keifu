@@ -962,12 +962,29 @@ fn merged_badge() -> String {
     format!("{MERGE_ICON} merged")
 }
 
-/// Style for merged-branch decorations: muted and dimmed, so a landed branch
-/// recedes without disappearing (the hide-merged toggle removes it entirely).
+/// Style for merged-branch *decorations* (the "⚡ merged" pill): flat muted grey
+/// and dimmed, so a landed branch's badge recedes without disappearing (the
+/// hide-merged toggle removes it entirely). Name chips use [`merged_chip_style`]
+/// instead, so they keep their lane hue.
 fn merged_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.text_muted)
         .add_modifier(Modifier::DIM)
+}
+
+/// Style for a *merged branch name chip* (issue #90): take the chip's own
+/// unmerged style and mute its lane color toward the recessive tone (via
+/// [`Theme::merged_chip_color`]) rather than flattening it to grey, then DIM it.
+/// A landed branch's chip thus still reads as *its* lane — only faded — keeping
+/// the branch identity the old flat-grey `merged_style` erased, while staying
+/// visibly distinct from an active unmerged chip. Selection's REVERSED and any
+/// HEAD BOLD carried on `base` survive; the highlighted row's `selection_style`
+/// still subtracts DIM so a selected merged chip never renders muddy.
+fn merged_chip_style(base: Style, theme: &Theme) -> Style {
+    let muted = base
+        .fg
+        .map_or(theme.text_muted, |c| theme.merged_chip_color(c));
+    base.fg(muted).add_modifier(Modifier::DIM)
 }
 
 /// The first open PR (in branch-label order) whose head branch matches one of
@@ -1031,13 +1048,19 @@ fn pr_badge_text(pr: &PrInfo) -> String {
     s
 }
 
-/// Badge chip color: by CI status, falling back to the neutral badge blue.
+/// Badge chip color across four states (#88): failing checks (red) and running
+/// checks (orange) take precedence over merge readiness — a red/pending PR isn't
+/// mergeable anyway. Only once checks are green does merge readiness split the
+/// tone: full green when clear to merge, chartreuse when passing-but-blocked
+/// (changes requested, conflicts, draft, behind base). No checks → neutral blue.
+/// Pure and frame-free so the decision can be unit-tested directly.
 fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
     match pr.ci {
         CiStatus::None => theme.pr_badge,
-        CiStatus::Pass => theme.pr_ci_pass,
-        CiStatus::Pending => theme.pr_ci_pending,
         CiStatus::Fail => theme.pr_ci_fail,
+        CiStatus::Pending => theme.pr_ci_pending,
+        CiStatus::Pass if pr.is_merge_blocked() => theme.pr_ci_pass_blocked,
+        CiStatus::Pass => theme.pr_ci_pass,
     }
 }
 
@@ -1936,8 +1959,13 @@ fn render_graph_line_tail<'a>(
                 target: ChipTarget::Branch(name),
             });
         }
-        // A merged branch's chip is dimmed (line color included) so it recedes.
-        let style = if is_merged { merged_style(ctx.theme) } else { *style };
+        // A merged branch's chip keeps its lane hue, muted and dimmed (#90), so
+        // it recedes while still reading as its own branch.
+        let style = if is_merged {
+            merged_chip_style(*style, ctx.theme)
+        } else {
+            *style
+        };
         spans.push(Span::styled(label.clone(), style));
     }
     if !branch_display.is_empty() {
@@ -2093,6 +2121,7 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pr::MergeState;
     use chrono::Duration;
 
     // ── visible_row_window (viewport slice for lazy row building) ─────
@@ -2474,18 +2503,30 @@ mod tests {
             title: "t".to_string(),
             ci: CiStatus::None,
             review: ReviewState::None,
+            merge_state: MergeState::Clear,
             outside_activity: false,
             head_oid: None,
         }
     }
 
     fn pr_with(number: u64, ci: CiStatus, review: ReviewState, outside: bool) -> PrInfo {
+        pr_full(number, ci, review, MergeState::Clear, outside)
+    }
+
+    fn pr_full(
+        number: u64,
+        ci: CiStatus,
+        review: ReviewState,
+        merge_state: MergeState,
+        outside: bool,
+    ) -> PrInfo {
         PrInfo {
             number,
             url: "u".to_string(),
             title: "t".to_string(),
             ci,
             review,
+            merge_state,
             outside_activity: outside,
             head_oid: None,
         }
@@ -2579,6 +2620,56 @@ mod tests {
         assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pass, ReviewState::None, false), &theme), theme.pr_ci_pass);
         assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Pending, ReviewState::None, false), &theme), theme.pr_ci_pending);
         assert_eq!(pr_badge_color(&pr_with(1, CiStatus::Fail, ReviewState::None, false), &theme), theme.pr_ci_fail);
+    }
+
+    #[test]
+    fn pr_badge_color_splits_passing_by_merge_readiness() {
+        let theme = Theme::dark();
+        // Green checks + clear to merge → full green.
+        let clear = pr_full(1, CiStatus::Pass, ReviewState::None, MergeState::Clear, false);
+        assert_eq!(pr_badge_color(&clear, &theme), theme.pr_ci_pass);
+        // Green checks but a blocking merge state → chartreuse "passing-but-blocked".
+        let blocked = pr_full(1, CiStatus::Pass, ReviewState::None, MergeState::Blocked, false);
+        assert_eq!(pr_badge_color(&blocked, &theme), theme.pr_ci_pass_blocked);
+        // Green checks but changes requested → also chartreuse, via the review path.
+        let changes = pr_full(1, CiStatus::Pass, ReviewState::ChangesRequested, MergeState::Clear, false);
+        assert_eq!(pr_badge_color(&changes, &theme), theme.pr_ci_pass_blocked);
+        // The blocked tone is distinct from both full-green and pending.
+        assert_ne!(theme.pr_ci_pass_blocked, theme.pr_ci_pass);
+        assert_ne!(theme.pr_ci_pass_blocked, theme.pr_ci_pending);
+    }
+
+    #[test]
+    fn merged_chip_keeps_lane_hue_muted_not_flat_grey() {
+        // A merged branch chip (#90) must derive from its own lane color, muted —
+        // NOT collapse to the flat `text_muted` grey the old style used, and NOT
+        // stay identical to the active unmerged chip.
+        let theme = Theme::dark();
+        let lane = theme.lane_color(1); // second lane, a distinct hue
+        let unmerged = Style::default().fg(lane);
+        let merged = merged_chip_style(unmerged, &theme);
+
+        let fg = merged.fg.expect("merged chip keeps an fg color");
+        // Derived from the lane hue, not the flat muted grey.
+        assert_ne!(fg, theme.text_muted, "must not be flat grey");
+        // Actually muted — moved off the raw lane color.
+        assert_ne!(fg, lane, "must be muted, not the raw lane color");
+        // Matches the theme's blend helper exactly (derivation is lane-based).
+        assert_eq!(fg, theme.merged_chip_color(lane));
+        // And it is visibly distinct from the unmerged chip's style.
+        assert_ne!(merged, unmerged, "merged chip differs from the unmerged chip");
+        assert!(merged.add_modifier.contains(Modifier::DIM), "merged chip is dimmed");
+    }
+
+    #[test]
+    fn pr_badge_color_ci_precedes_merge_state() {
+        // A blocked merge state must not override failing/pending CI: those states
+        // aren't mergeable regardless, so red/orange still win.
+        let theme = Theme::dark();
+        let fail_blocked = pr_full(1, CiStatus::Fail, ReviewState::ChangesRequested, MergeState::Blocked, false);
+        assert_eq!(pr_badge_color(&fail_blocked, &theme), theme.pr_ci_fail);
+        let pending_blocked = pr_full(1, CiStatus::Pending, ReviewState::ChangesRequested, MergeState::Blocked, false);
+        assert_eq!(pr_badge_color(&pending_blocked, &theme), theme.pr_ci_pending);
     }
 
     // ── one badge per PR, on its head commit (#42) ───────────────────
