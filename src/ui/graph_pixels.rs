@@ -500,7 +500,42 @@ pub fn build_row_spec(
         .cells
         .iter()
         .enumerate()
-        .map(|(col, cell)| cell_to_pixel(cell, col, above, below, style, theme, head_rgb))
+        .map(|(col, cell)| {
+            let mut px = cell_to_pixel(cell, col, above, below, style, theme, head_rgb);
+            // The merged adjacent views can mask a neighbour's corner behind a
+            // folded connector's vertical (the connector Pipe wins the merge),
+            // but the corner's transition cubic still spans to THIS row's
+            // mid-height — so the curve-fed flags must also look through to
+            // the neighbour row's raw cells, or the straight half pokes out of
+            // the cubic's belly as an orphan stub (#86 round 4: the
+            // uncommitted band landing under a folded connector).
+            if matches!(
+                px.shape,
+                CellShape::Pipe | CellShape::HorizontalPipe | CellShape::Commit { .. }
+            ) {
+                px.curved_above |= above_row
+                    .as_ref()
+                    .and_then(|n| n.cells.get(col))
+                    .is_some_and(|c| {
+                        matches!(
+                            c,
+                            CellType::BranchLeft(_)
+                                | CellType::BranchRight(_)
+                                | CellType::TeeDown(_, _)
+                        )
+                    });
+                px.curved_below |= below_row
+                    .as_ref()
+                    .and_then(|n| n.cells.get(col))
+                    .is_some_and(|c| {
+                        matches!(
+                            c,
+                            CellType::MergeLeft(_) | CellType::MergeRight(_) | CellType::TeeUp(_)
+                        )
+                    });
+            }
+            px
+        })
         .collect();
     // This row's merged self-view (folded underlay preferred over own cells,
     // mirroring graph_view's `adjacent_cells`): the view our below-neighbour
@@ -538,6 +573,22 @@ pub fn build_row_spec(
                         CellType::MergeLeft(_) | CellType::MergeRight(_) | CellType::TeeUp(_)
                     )
                 });
+                // When the HOST row's own cell at this column is the lane's
+                // terminating corner (Merge*/TeeUp — e.g. the uncommitted
+                // band's landing), the transition cubic already spans from the
+                // row above's mid-height into the corner. The corner's curve
+                // departs the column well above mid-height, so even a
+                // mid-clipped shadow pokes out of the cubic's belly as an
+                // orphan stub — the whole shadow is superseded (#86 round 4).
+                if node.cells.get(col).is_some_and(|c| {
+                    matches!(
+                        c,
+                        CellType::MergeLeft(_) | CellType::MergeRight(_) | CellType::TeeUp(_)
+                    )
+                }) {
+                    px.curved_above = true;
+                    px.curved_below = true;
+                }
             }
             px
         })
@@ -1171,17 +1222,24 @@ fn draw_cells(
             // A `curved_above`/`curved_below` half is covered by a neighbour's
             // incoming curve landing at mid-height, so the straight vertical
             // only spans the remaining half.
+            // Both halves curve-fed leaves no straight remainder at all —
+            // skip instead of drawing a degenerate zero-length segment,
+            // which would still paint a stroke-radius blob at mid-height.
             CellShape::HorizontalPipe => {
-                let v = if cell.dim { &mut *dim } else { &mut *bright };
-                let y0 = if cell.curved_above { cy } else { 0.0 };
-                let y1 = if cell.curved_below { cy } else { ch };
-                draw_segment(v, cx, y0, cx, y1, half, color);
+                if !(cell.curved_above && cell.curved_below) {
+                    let v = if cell.dim { &mut *dim } else { &mut *bright };
+                    let y0 = if cell.curved_above { cy } else { 0.0 };
+                    let y1 = if cell.curved_below { cy } else { ch };
+                    draw_segment(v, cx, y0, cx, y1, half, color);
+                }
             }
             CellShape::Pipe => {
-                let canvas = if cell.dim { &mut *dim } else { &mut *bright };
-                let y0 = if cell.curved_above { cy } else { 0.0 };
-                let y1 = if cell.curved_below { cy } else { ch };
-                draw_segment(canvas, cx, y0, cx, y1, half, color);
+                if !(cell.curved_above && cell.curved_below) {
+                    let canvas = if cell.dim { &mut *dim } else { &mut *bright };
+                    let y0 = if cell.curved_above { cy } else { 0.0 };
+                    let y1 = if cell.curved_below { cy } else { ch };
+                    draw_segment(canvas, cx, y0, cx, y1, half, color);
+                }
             }
             // A Tee's trunk is the straight through-line; its arm is a curve.
             CellShape::TeeRight | CellShape::TeeLeft => {
@@ -2772,6 +2830,111 @@ mod tests {
                 0,
                 "orphan stub below the join at y={y}"
             );
+        }
+    }
+
+    /// #86 round 4 (the `/|` stub at an uncommitted-band landing): a folded
+    /// connector's Pipe shadows the column where the HOST row's own cell is
+    /// the band's terminating corner (`MergeLeft`), and the same connector
+    /// masks that corner from the row above's merged below-view. Two halves of
+    /// one artifact:
+    /// - the shadow itself must not draw at all (the corner's cubic spans from
+    ///   the row above's mid-height into the run — any straight remainder
+    ///   pokes out of the cubic's belly), and
+    /// - the row above's pipe must still learn its bottom half is curve-fed by
+    ///   looking through the connector to the host row's raw cells.
+    ///
+    /// Layout mirrors the real repro (detached HEAD + uncommitted band):
+    ///   row P: pipes on lanes 0 and 4
+    ///   row S: star dot col 0, band run cols 1–3, MergeLeft col 4; folded
+    ///          connector `TeeRight(0) ─ MergeLeft(1) … Pipe` underneath
+    ///   row T: dot col 0 (trunk continues)
+    #[test]
+    fn band_landing_under_folded_connector_leaves_no_stub() {
+        let theme = Theme::dark();
+        let e = CellType::Empty;
+        let cells_p: Vec<CellType> = vec![CellType::Pipe(0), e, e, e, CellType::Pipe(3)];
+        let under_s: Vec<CellType> = vec![
+            CellType::TeeRight(0),
+            CellType::Horizontal(1),
+            CellType::MergeLeft(1),
+            e,
+            CellType::Pipe(3),
+        ];
+        let cells_s: Vec<CellType> = vec![
+            CellType::Commit(0),
+            CellType::Horizontal(3),
+            CellType::Horizontal(3),
+            CellType::Horizontal(3),
+            CellType::MergeLeft(3),
+        ];
+        let cells_t: Vec<CellType> = vec![CellType::Commit(0), e, e, e, e];
+
+        let merge_over = |under: &[CellType], cells: &[CellType]| -> Vec<CellType> {
+            (0..under.len().max(cells.len()))
+                .map(|i| match under.get(i) {
+                    Some(u) if *u != e => *u,
+                    _ => cells.get(i).copied().unwrap_or(e),
+                })
+                .collect()
+        };
+        let lane_cx = PAD_X + 4 * CW + CW / 2;
+
+        // Row S: the shadow over the corner is fully curve-fed → not drawn.
+        let mut node_s = commit_node();
+        node_s.cells = cells_s.clone();
+        let above_view = merge_over(&under_s, &cells_p);
+        let spec_s = build_row_spec(
+            Some(&above_view),
+            &node_s,
+            Some(&cells_t),
+            &under_s,
+            Some(NeighborRow { underlay: &[], cells: &cells_p }),
+            Some(NeighborRow { underlay: &[], cells: &cells_t }),
+            &theme,
+        );
+        assert!(
+            spec_s.underlay[4].curved_above && spec_s.underlay[4].curved_below,
+            "shadow over the host row's own corner is fully superseded"
+        );
+        let img_s = rasterize_row(&spec_s, CW, CH);
+        // The corner's cubic leaves the column upward; from mid-height down
+        // the landing column must be empty (the old shadow painted 0..mid).
+        for y in (CH / 2)..CH {
+            assert_eq!(alpha(&img_s, lane_cx, y), 0, "shadow stub in row S at y={y}");
+        }
+        // Targeted, not blanket: the connector's TeeRight trunk on lane 0
+        // still draws through (the star's lane continues below).
+        assert!(
+            alpha(&img_s, PAD_X + CW / 2, CH - 2) > 0,
+            "unrelated connector trunk still drawn"
+        );
+
+        // Row P: its below-view shows the connector's Pipe, but the corner
+        // behind it still spokes to P's mid-height — look through the shadow.
+        let mut node_p = commit_node();
+        node_p.cells = cells_p.clone();
+        let below_view = merge_over(&under_s, &cells_s);
+        let spec_p = build_row_spec(
+            None,
+            &node_p,
+            Some(&below_view),
+            &[],
+            None,
+            Some(NeighborRow { underlay: &under_s, cells: &cells_s }),
+            &theme,
+        );
+        assert!(
+            spec_p.cells[4].curved_below,
+            "pipe above the landing learns the join through the connector shadow"
+        );
+        let img_p = rasterize_row(&spec_p, CW, CH);
+        assert!(alpha(&img_p, lane_cx, 5) > 0, "lane above the join still drawn");
+        // The incoming S-tail hugs the lane center just below the join, but by
+        // y = cy + 7 it has peeled well clear; the old full-height pipe
+        // painted all the way to the row edge.
+        for y in (CH / 2 + 7)..CH {
+            assert_eq!(alpha(&img_p, lane_cx, y), 0, "orphan stub in row P at y={y}");
         }
     }
 

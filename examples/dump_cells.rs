@@ -33,15 +33,19 @@ fn main() {
     let stashes = repo.get_stashes();
     let tags = repo.get_tags();
     let commits = repo.get_commits(300, &branches, &stashes, false).unwrap();
-    let head = commits
-        .iter()
-        .find(|c| branches.iter().any(|b| b.is_head && b.tip_oid == c.oid));
+    let head_oid = repo.head_oid();
+    let head = commits.iter().find(|c| Some(c.oid) == head_oid);
+    // KEIFU_UNCOMMITTED=<n> simulates n uncommitted files at HEAD.
+    let uncommitted = std::env::var("KEIFU_UNCOMMITTED")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(Some);
     let layout = build_graph(
         &commits,
         &branches,
         &tags,
         &stashes,
-        None,
+        uncommitted,
         head.map(|c| c.oid),
         &[],
     );
