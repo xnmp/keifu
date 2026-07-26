@@ -109,7 +109,10 @@ fn main() {
     };
 
     let theme = Theme::dark();
-    let (cw, ch) = (20u32, 40u32);
+    let (cw, ch) = (
+        std::env::var("CW").ok().and_then(|v| v.parse().ok()).unwrap_or(20u32),
+        std::env::var("CH").ok().and_then(|v| v.parse().ok()).unwrap_or(40u32),
+    );
     let end = end.min(rows.len());
     let max_cells = (start..end).map(|i| rows[i].0.cells.len()).max().unwrap_or(1);
     let mut canvas = RgbaImage::from_pixel(
