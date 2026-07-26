@@ -119,9 +119,24 @@ pub struct RowSpec {
 /// the landing lane's cell index and `from_above`/`from_underlay` locate the
 /// source cell so the per-frame dim pass can restyle the tail exactly like the
 /// neighbour restyles its half.
+///
+/// Only the two **endpoints** are stored. The control points are deliberately
+/// *not*: they are a pure function of the endpoints and their `on_dot` flags
+/// (`cubic_between`), and they are the one part of the cubic that is not an
+/// exact half-cell quantity. Storing them meant (a) computing the wide-arm
+/// shape against square 2×2 cells, losing the real cell aspect that sets
+/// `ratio = |dx|/h`, and (b) rounding the handle extension `e ∈ [0, 0.6·h]` to
+/// a whole half-row — i.e. to `e = h`, precisely the degeneracy the 0.6 cap
+/// exists to avoid, which left the tail grazing the seam almost horizontally
+/// and painted a stray horizontal splinter beside the curve. Rebuilding the
+/// cubic at raster time from the endpoints makes the tail bit-identical to the
+/// half the owning row draws, at any cell size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellCurve {
-    pub pts: [(i16, i16); 4],
+    /// The cubic's endpoints, in half-cell units, translated into this row's frame.
+    pub ends: [(i16, i16); 2],
+    /// Each endpoint's `on_dot` flag (see [`Endpoint`]), parallel to `ends`.
+    pub on_dot: [bool; 2],
     pub color: [u8; 3],
     pub dim: bool,
     pub col: u16,
@@ -443,22 +458,25 @@ fn incoming_curves(
             .collect();
         let dy = if from_above { -2.0 } else { 2.0 };
         for c in transition_curves(&px, 2.0, 2.0) {
-            let pts = [c.p0, c.p1, c.p2, c.p3]
-                .map(|(x, y)| (x.round() as i16, (y + dy).round() as i16));
+            // Endpoints only — every one is an exact half-cell integer here.
+            // The control points are rebuilt at raster time (see `CellCurve`);
+            // rounding them into this grid is what broke the seam.
+            let ends = [c.p0, c.p3].map(|(x, y)| (x.round() as i16, (y + dy).round() as i16));
             // Skip curves that stay inside the neighbour's own frame.
-            let min_y = pts.iter().map(|p| p.1).min().unwrap_or(0);
-            let max_y = pts.iter().map(|p| p.1).max().unwrap_or(0);
+            let min_y = ends.iter().map(|p| p.1).min().unwrap_or(0);
+            let max_y = ends.iter().map(|p| p.1).max().unwrap_or(0);
             if min_y >= 2 || max_y <= 0 {
                 continue;
             }
             // The landing endpoint sits at this row's mid-height (y = 1); its x
             // is a lane center, `x = (col + PAD) * 2 + 1`.
-            let Some(land) = [pts[0], pts[3]].into_iter().find(|p| p.1 == 1) else {
+            let Some(land) = ends.into_iter().find(|p| p.1 == 1) else {
                 continue;
             };
             let col = ((land.0 - 1) / 2 - PIXEL_LEFT_PAD_CELLS as i16).max(0) as u16;
             out.push(CellCurve {
-                pts,
+                ends,
+                on_dot: c.ends_on_dot,
                 color: c.color,
                 dim: c.dim,
                 col,
@@ -792,21 +810,20 @@ fn rasterize_row_with(spec: &RowSpec, cell_w: u32, cell_h: u32, curve_fn: CurveF
     let half = stroke_half(ch);
     for c in &spec.incoming {
         let canvas: &mut Canvas = if c.dim { &mut dim } else { &mut bright };
-        // Half-cell units → pixels; the parts outside this row clip away.
-        let p = |i: usize| {
-            (
-                f32::from(c.pts[i].0) * cw / 2.0,
-                f32::from(c.pts[i].1) * ch / 2.0,
-            )
-        };
-        let curve = Curve {
-            p0: p(0),
-            p1: p(1),
-            p2: p(2),
-            p3: p(3),
+        // Half-cell units → pixels, then re-derive the control points at THIS
+        // cell size. `cubic_between` depends on y only through the endpoints'
+        // midpoint and separation, so the result is the neighbour's own cubic
+        // translated — the two clipped halves are the same curve. The parts
+        // outside this row clip away.
+        let end = |i: usize| Endpoint {
+            x: f32::from(c.ends[i].0) * cw / 2.0,
+            y: f32::from(c.ends[i].1) * ch / 2.0,
             color: c.color,
             dim: c.dim,
+            on_dot: c.on_dot[i],
         };
+        let [p0, p1, p2, p3] = cubic_between(end(0), end(1));
+        let curve = Curve { p0, p1, p2, p3, color: c.color, dim: c.dim, ends_on_dot: c.on_dot };
         draw_cubic(canvas, &curve, half);
     }
     draw_cells(&mut bright, &mut dim, &spec.cells, cw, ch, &mut stars, curve_fn);
@@ -876,6 +893,9 @@ struct Curve {
     p3: (f32, f32),
     color: [u8; 3],
     dim: bool,
+    /// `on_dot` for `p0`/`p3`. Carried so a neighbour row can rebuild this exact
+    /// cubic from its endpoints alone (see [`CellCurve`]); unused when drawing.
+    ends_on_dot: [bool; 2],
 }
 
 /// Builds a row's transition curves from its cells (given cell width/height).
@@ -1075,7 +1095,7 @@ fn transition_curves(cells: &[PixelCell], cw: f32, ch: f32) -> Vec<Curve> {
 
         let push = |curves: &mut Vec<Curve>, a: Endpoint, b: Endpoint, color: [u8; 3], dim: bool| {
             let [p0, p1, p2, p3] = cubic_between(a, b);
-            curves.push(Curve { p0, p1, p2, p3, color, dim });
+            curves.push(Curve { p0, p1, p2, p3, color, dim, ends_on_dot: [a.on_dot, b.on_dot] });
         };
 
         if let Some(&primary) = hubs.first() {
@@ -2759,6 +2779,102 @@ mod tests {
         assert_eq!(alpha(&img_b, lane_cx, 1), 0, "no straight stub at the lane center");
     }
 
+    /// A neighbour's incoming tail must be the *same cubic* the owning row
+    /// draws, not an approximation of it. `CellCurve` stores only the
+    /// endpoints for exactly this reason: it used to store all four control
+    /// points quantized to half-cells, which (a) shaped the curve against
+    /// square 2x2 cells instead of the real aspect and (b) rounded the wide-arm
+    /// handle extension `e <= 0.6*h` to a whole half-row, i.e. `e = h` — the
+    /// degeneracy the 0.6 cap exists to prevent. The tail then grazed the seam
+    /// almost horizontally, painting a stray horizontal splinter alongside the
+    /// curve. Non-square cells with a >=3-cell arm are what expose it: the
+    /// half-cell `ratio` there is 8 against a true 3.5.
+    #[test]
+    fn incoming_tail_is_the_neighbours_own_cubic_at_the_real_cell_size() {
+        let theme = Theme::dark();
+        const W: u32 = 11; // deliberately not CH/2: the bug needs cw != ch.
+        const H: u32 = 25;
+        // Row B's dot on col 0 merges UP four cells into row A's dot on col 4.
+        let e = CellType::Empty;
+        let cells_a = vec![e, e, e, e, CellType::Commit(1)];
+        let cells_b = vec![
+            CellType::Commit(0),
+            CellType::Horizontal(1),
+            CellType::Horizontal(1),
+            CellType::Horizontal(1),
+            CellType::MergeRight(1),
+        ];
+        let mut node_a = commit_node();
+        node_a.cells = cells_a.clone();
+        let mut node_b = commit_node();
+        node_b.cells = cells_b.clone();
+        let spec_a = build_row_spec(
+            None,
+            &node_a,
+            Some(&cells_b),
+            &[],
+            None,
+            Some(NeighborRow { underlay: &[], cells: &cells_b }),
+            &theme,
+        );
+        let spec_b = build_row_spec(
+            Some(&cells_a),
+            &node_b,
+            None,
+            &[],
+            Some(NeighborRow { underlay: &[], cells: &cells_a }),
+            None,
+            &theme,
+        );
+
+        // Row B's own half of the crossing, in its own frame.
+        let own = transition_curves(&spec_b.cells, W as f32, H as f32);
+        assert_eq!(own.len(), 1, "one merge arm");
+        let own = own[0];
+        // Row A's tail, rebuilt the way `rasterize_row` does.
+        assert_eq!(spec_a.incoming.len(), 1, "row A carries that arm's tail");
+        let c = spec_a.incoming[0];
+        let end = |i: usize| Endpoint {
+            x: f32::from(c.ends[i].0) * W as f32 / 2.0,
+            y: f32::from(c.ends[i].1) * H as f32 / 2.0,
+            color: c.color,
+            dim: c.dim,
+            on_dot: c.on_dot[i],
+        };
+        let tail = cubic_between(end(0), end(1));
+        // Same cubic, translated one row down into A's frame (and possibly
+        // traversed in the opposite direction — `cubic_between` is symmetric).
+        let shifted = [own.p0, own.p1, own.p2, own.p3].map(|(x, y)| (x, y + H as f32));
+        let matches = |t: [(f32, f32); 4]| {
+            t.iter()
+                .zip(shifted.iter())
+                .all(|(a, b)| approx(a.0, b.0) && approx(a.1, b.1))
+        };
+        let mut rev = tail;
+        rev.reverse();
+        assert!(
+            matches(tail) || matches(rev),
+            "tail {tail:?} must be row B's cubic {shifted:?} translated"
+        );
+
+        // And the seam therefore paints one continuous band, not a curve plus a
+        // horizontal sliver skimming the row edge. Before the fix row A's last
+        // pixel row spanned ~30px left of the crossing.
+        let img_a = rasterize_row(&spec_a, W, H);
+        let img_b = rasterize_row(&spec_b, W, H);
+        let band = |img: &RgbaImage, y: u32| -> (u32, u32) {
+            let xs: Vec<u32> = (0..img.width()).filter(|&x| alpha(img, x, y) > 0).collect();
+            assert!(!xs.is_empty(), "seam row y={y} must be painted");
+            (*xs.iter().min().unwrap(), *xs.iter().max().unwrap())
+        };
+        let (a_min, a_max) = band(&img_a, H - 1);
+        let (b_min, b_max) = band(&img_b, 0);
+        assert!(
+            a_min.abs_diff(b_min) <= 5 && a_max.abs_diff(b_max) <= 5,
+            "seam bands must track the same cubic: A=[{a_min},{a_max}] vs B=[{b_min},{b_max}]"
+        );
+    }
+
     /// #86 round 3: a folded connector's vertical (here the pipe half of a
     /// HorizontalPipe) shadows the host cell's lane segment. When the row below
     /// curve-feeds the host's bottom half — a wide arm merges in at mid-height,
@@ -3030,7 +3146,8 @@ mod tests {
             }
             let push = |curves: &mut Vec<Curve>, a: LegacyEndpoint, b: LegacyEndpoint, color: [u8; 3], dim: bool, lift: f32| {
                 let [p0, p1, p2, p3] = legacy_cubic(a, b, lift);
-                curves.push(Curve { p0, p1, p2, p3, color, dim });
+                // Legacy harness: never fed back through `CellCurve`.
+                curves.push(Curve { p0, p1, p2, p3, color, dim, ends_on_dot: [false, false] });
             };
             if let Some(&primary) = hubs.first() {
                 let side_max = |sign: bool| {
