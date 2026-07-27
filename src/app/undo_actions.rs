@@ -60,7 +60,10 @@ impl App {
         match self.execute_undo_plan(&plan) {
             Ok(()) => {
                 self.refresh(true)?;
-                self.toast(crate::toast::ToastKind::Success, format!("Undone: {description}"));
+                self.toast(
+                    crate::toast::ToastKind::Success,
+                    format!("Undone: {description}"),
+                );
             }
             Err(e) => self.show_error(format!("Undo failed: {e}")),
         }
@@ -78,10 +81,7 @@ impl App {
                 }
             }
             UndoCheck::TagAbsent(name) => {
-                if repo
-                    .find_reference(&format!("refs/tags/{name}"))
-                    .is_ok()
-                {
+                if repo.find_reference(&format!("refs/tags/{name}")).is_ok() {
                     return Err(format!("tag '{name}' exists again"));
                 }
             }
@@ -108,16 +108,12 @@ impl App {
     /// Execute the inverse operation via the existing git ops.
     fn execute_undo_plan(&mut self, plan: &UndoPlan) -> Result<()> {
         match plan {
-            UndoPlan::RecreateBranch { name, oid } => {
-                create_branch(self.repo.repo(), name, *oid)
-            }
+            UndoPlan::RecreateBranch { name, oid } => create_branch(self.repo.repo(), name, *oid),
             UndoPlan::RecreateTag { name, oid, .. } => {
                 create_lightweight_tag(self.repo.repo(), name, *oid)
             }
             UndoPlan::ResetHard { to } => reset_hard_checked(self.repo.repo(), *to),
-            UndoPlan::RenameBranch { from, to } => {
-                rename_branch(&self.repo_path, from, to)
-            }
+            UndoPlan::RenameBranch { from, to } => rename_branch(&self.repo_path, from, to),
         }
     }
 }

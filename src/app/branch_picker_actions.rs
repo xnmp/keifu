@@ -13,11 +13,17 @@ impl App {
         match action {
             Action::MoveUp => {
                 let new = cyclic_prev(selected, branches.len());
-                self.mode = AppMode::BranchPicker { branches, selected: new };
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: new,
+                };
             }
             Action::MoveDown => {
                 let new = cyclic_next(selected, branches.len());
-                self.mode = AppMode::BranchPicker { branches, selected: new };
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: new,
+                };
             }
             Action::MenuSelect | Action::Confirm => {
                 if let Some(branch_name) = branches.get(selected) {

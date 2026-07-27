@@ -189,8 +189,7 @@ impl GitRepository {
 
         // Collect stash OIDs and their internal commits (index, untracked)
         // that should be excluded from the graph.
-        let stash_oids: std::collections::HashSet<Oid> =
-            stashes.iter().map(|s| s.oid).collect();
+        let stash_oids: std::collections::HashSet<Oid> = stashes.iter().map(|s| s.oid).collect();
         let mut stash_internal_oids: std::collections::HashSet<Oid> =
             std::collections::HashSet::new();
         for stash in stashes {
@@ -476,11 +475,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
-        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -489,7 +499,11 @@ mod tests {
         // Long-lived handle opened BEFORE the push.
         let mut repo = GitRepository::open(&local).unwrap();
         assert!(
-            !repo.get_branches().unwrap().iter().any(|b| b.name == "origin/feature"),
+            !repo
+                .get_branches()
+                .unwrap()
+                .iter()
+                .any(|b| b.name == "origin/feature"),
             "origin/feature must not exist before the push"
         );
 
@@ -497,7 +511,10 @@ mod tests {
 
         repo.reopen().unwrap();
         assert!(
-            repo.get_branches().unwrap().iter().any(|b| b.name == "origin/feature"),
+            repo.get_branches()
+                .unwrap()
+                .iter()
+                .any(|b| b.name == "origin/feature"),
             "reopened handle must see origin/feature created by the push"
         );
     }
@@ -517,7 +534,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
         Command::new("git")
             .args(["init", "-q", "-b", "main"])
             .arg(&local)
@@ -525,7 +546,10 @@ mod tests {
             .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "c1"]);
@@ -547,16 +571,24 @@ mod tests {
             .iter()
             .find(|b| b.name == "main" && !b.is_remote)
             .expect("local main branch");
-        assert_eq!(local_main.behind, 1, "local main must be exactly one commit behind origin/main");
+        assert_eq!(
+            local_main.behind, 1,
+            "local main must be exactly one commit behind origin/main"
+        );
 
         // Simulate the app's hide-remote-branches filtering (app/refresh.rs,
         // app/init.rs): remote-only branches are dropped before the walk.
         // origin/main is `main`'s configured upstream, so it must not be
         // classified remote-only despite the tip mismatch.
         let remote_only = remote_only_branch_names(&branches);
-        assert!(!remote_only.contains("origin/main"), "tracked upstream must not be remote-only");
-        let visible: Vec<BranchInfo> =
-            branches.into_iter().filter(|b| !remote_only.contains(&b.name)).collect();
+        assert!(
+            !remote_only.contains("origin/main"),
+            "tracked upstream must not be remote-only"
+        );
+        let visible: Vec<BranchInfo> = branches
+            .into_iter()
+            .filter(|b| !remote_only.contains(&b.name))
+            .collect();
 
         let commits = repo.get_commits(50, &visible, &[], false).unwrap();
         assert!(
@@ -575,7 +607,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "-b", "main"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
         std::fs::write(local.join("a.txt"), "a").unwrap();
@@ -601,7 +637,9 @@ mod tests {
         // Stashes shown: the stash node and the stash-only base commit appear.
         let commits = repo.get_commits(50, &branches, &stashes, false).unwrap();
         assert!(
-            commits.iter().any(|c| c.message.contains("STASH-BASE-COMMIT")),
+            commits
+                .iter()
+                .any(|c| c.message.contains("STASH-BASE-COMMIT")),
             "stash-only base commit must be walked when stashes are shown"
         );
         let shown = build_graph(&commits, &branches, &tags, &stashes, None, head, &[]);
@@ -614,7 +652,9 @@ mod tests {
         // stash-only commit is gone since nothing else reaches it.
         let commits_hidden = repo.get_commits(50, &branches, &[], false).unwrap();
         assert!(
-            !commits_hidden.iter().any(|c| c.message.contains("STASH-BASE-COMMIT")),
+            !commits_hidden
+                .iter()
+                .any(|c| c.message.contains("STASH-BASE-COMMIT")),
             "stash-only commit must vanish when stashes are hidden"
         );
         let hidden = build_graph(&commits_hidden, &branches, &tags, &[], None, head, &[]);
@@ -628,7 +668,11 @@ mod tests {
     /// a real (non-fast-forward) merge commit, plus a second, unmerged
     /// `other-feature` branch. Returns the working dir path.
     fn repo_with_merge_commit(local: &std::path::Path) {
-        Command::new("git").args(["init", "-q", "-b", "main"]).arg(local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .arg(local)
+            .status()
+            .unwrap();
         git(local, &["config", "user.email", "t@t.com"]);
         git(local, &["config", "user.name", "t"]);
         std::fs::write(local.join("a.txt"), "a").unwrap();
@@ -646,7 +690,17 @@ mod tests {
         git(local, &["add", "c.txt"]);
         git(local, &["commit", "-qm", "main-side-commit"]);
 
-        git(local, &["merge", "--no-ff", "-q", "-m", "merge feature into main", "feature"]);
+        git(
+            local,
+            &[
+                "merge",
+                "--no-ff",
+                "-q",
+                "-m",
+                "merge feature into main",
+                "feature",
+            ],
+        );
 
         // An unmerged branch, never landed on main.
         git(local, &["checkout", "-qb", "other-feature"]);
@@ -669,16 +723,24 @@ mod tests {
         let branches = repo.get_branches().unwrap();
         // Simulate hide-merged: drop the merged "feature" ref (its commits stay
         // reachable from main regardless).
-        let visible: Vec<_> = branches.iter().filter(|b| b.name != "feature").cloned().collect();
+        let visible: Vec<_> = branches
+            .iter()
+            .filter(|b| b.name != "feature")
+            .cloned()
+            .collect();
 
         let commits = repo.get_commits(50, &visible, &[], false).unwrap();
         assert!(
-            commits.iter().any(|c| c.message.contains("FEATURE-ONLY-COMMIT")),
+            commits
+                .iter()
+                .any(|c| c.message.contains("FEATURE-ONLY-COMMIT")),
             "without first-parent simplification, the merged branch's unique commit \
              must still be reachable from main's tip"
         );
         assert!(
-            commits.iter().any(|c| c.message.contains("merge feature into main")),
+            commits
+                .iter()
+                .any(|c| c.message.contains("merge feature into main")),
             "merge commit must be present"
         );
     }
@@ -695,19 +757,29 @@ mod tests {
 
         let repo = GitRepository::open(&local).unwrap();
         let branches = repo.get_branches().unwrap();
-        let visible: Vec<_> = branches.iter().filter(|b| b.name != "feature").cloned().collect();
+        let visible: Vec<_> = branches
+            .iter()
+            .filter(|b| b.name != "feature")
+            .cloned()
+            .collect();
 
         let commits = repo.get_commits(50, &visible, &[], true).unwrap();
         assert!(
-            !commits.iter().any(|c| c.message.contains("FEATURE-ONLY-COMMIT")),
+            !commits
+                .iter()
+                .any(|c| c.message.contains("FEATURE-ONLY-COMMIT")),
             "first-parent simplification must exclude the merged branch's exclusive commit"
         );
         assert!(
-            commits.iter().any(|c| c.message.contains("merge feature into main")),
+            commits
+                .iter()
+                .any(|c| c.message.contains("merge feature into main")),
             "the merge commit itself (on the first-parent line) must remain"
         );
         assert!(
-            commits.iter().any(|c| c.message.contains("main-side-commit")),
+            commits
+                .iter()
+                .any(|c| c.message.contains("main-side-commit")),
             "main's own first-parent history must remain intact"
         );
     }
@@ -724,11 +796,17 @@ mod tests {
         let repo = GitRepository::open(&local).unwrap();
         let branches = repo.get_branches().unwrap();
         // "feature" is merged and hidden; "other-feature" is not merged and stays visible.
-        let visible: Vec<_> = branches.iter().filter(|b| b.name != "feature").cloned().collect();
+        let visible: Vec<_> = branches
+            .iter()
+            .filter(|b| b.name != "feature")
+            .cloned()
+            .collect();
 
         let commits = repo.get_commits(50, &visible, &[], true).unwrap();
         assert!(
-            commits.iter().any(|c| c.message.contains("OTHERBRANCH-ONLY-COMMIT")),
+            commits
+                .iter()
+                .any(|c| c.message.contains("OTHERBRANCH-ONLY-COMMIT")),
             "an unmerged branch's exclusive commit must remain visible when hide-merged is on"
         );
     }

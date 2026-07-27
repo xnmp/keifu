@@ -70,10 +70,7 @@ impl<'a> Widget for CommandPaletteWidget<'a> {
         // when there are more matches than fit.
         let footer = self.more > 0;
         let list_top = inner.y + 1;
-        let list_rows = inner
-            .height
-            .saturating_sub(1)
-            .saturating_sub(footer as u16) as usize;
+        let list_rows = inner.height.saturating_sub(1).saturating_sub(footer as u16) as usize;
 
         for (i, item) in self.items.iter().take(list_rows).enumerate() {
             let y = list_top + i as u16;
@@ -115,7 +112,12 @@ impl<'a> Widget for CommandPaletteWidget<'a> {
         if footer {
             let y = inner.y + inner.height - 1;
             let text = format!("…{} more", self.more);
-            buf.set_line(inner.x, y, &Line::from(Span::styled(text, dim)), inner.width);
+            buf.set_line(
+                inner.x,
+                y,
+                &Line::from(Span::styled(text, dim)),
+                inner.width,
+            );
         }
     }
 }

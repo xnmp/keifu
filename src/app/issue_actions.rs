@@ -59,7 +59,10 @@ impl App {
 
     /// The blocked-issue set from the session cache (empty when not yet known).
     fn blocked_set(&self) -> HashSet<u64> {
-        self.issue_fetch.cached_blocked().cloned().unwrap_or_default()
+        self.issue_fetch
+            .cached_blocked()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Move the list selection by `delta` over the *visible* (filtered) rows.
@@ -299,8 +302,7 @@ impl App {
             }
             Action::SubmitCompose => self.submit_issue_compose(),
             Action::ExternalEdit => {
-                self.pending_external_edit =
-                    Some(crate::external_edit::ExternalEditTarget::Issue);
+                self.pending_external_edit = Some(crate::external_edit::ExternalEditTarget::Issue);
             }
             other => {
                 super::commit_editor_actions::apply_editor_edit(&mut self.issue_editor, &other);
@@ -322,7 +324,8 @@ impl App {
                 }
                 // Only discard the buffer + leave compose once the action is
                 // actually accepted; a busy runner keeps the typed text intact.
-                if self.start_issue_action(IssueAction::Create { title, body }, "Creating issue…") {
+                if self.start_issue_action(IssueAction::Create { title, body }, "Creating issue…")
+                {
                     self.issue_editor = crate::text_editor::TextEditor::new();
                     self.mode = AppMode::IssueList;
                 }
@@ -333,7 +336,8 @@ impl App {
                     self.toast(ToastKind::Error, "Comment can't be empty");
                     return;
                 }
-                if self.start_issue_action(IssueAction::Comment { number, body }, "Adding comment…") {
+                if self.start_issue_action(IssueAction::Comment { number, body }, "Adding comment…")
+                {
                     self.issue_editor = crate::text_editor::TextEditor::new();
                     self.mode = AppMode::IssueDetail;
                 }
@@ -646,8 +650,7 @@ impl App {
                     if let IssueListState::Ready(issues) = &v.state {
                         let visible =
                             crate::issue::visible_issues(issues, &v.view_filter, &blocked);
-                        v.selected =
-                            relocate_visible_selection(issues, &visible, want, v.selected);
+                        v.selected = relocate_visible_selection(issues, &visible, want, v.selected);
                     } else {
                         v.selected = 0;
                     }
@@ -782,7 +785,11 @@ fn parse_logins(input: &str) -> Vec<String> {
 
 /// The add/remove label sets from the picker's original vs chosen bitsets.
 /// `add` = newly checked; `remove` = newly unchecked. Order follows `labels`.
-fn label_diff(labels: &[IssueLabel], original: &[bool], chosen: &[bool]) -> (Vec<String>, Vec<String>) {
+fn label_diff(
+    labels: &[IssueLabel],
+    original: &[bool],
+    chosen: &[bool],
+) -> (Vec<String>, Vec<String>) {
     let mut add = Vec::new();
     let mut remove = Vec::new();
     for (i, label) in labels.iter().enumerate() {
@@ -923,7 +930,10 @@ mod tests {
     fn compose_splits_title_and_body() {
         assert_eq!(
             compose_title_body("Title here\n\nBody line 1\nBody line 2"),
-            ("Title here".to_string(), "Body line 1\nBody line 2".to_string())
+            (
+                "Title here".to_string(),
+                "Body line 1\nBody line 2".to_string()
+            )
         );
         // Title only → empty body.
         assert_eq!(
@@ -933,7 +943,10 @@ mod tests {
         // Fully empty.
         assert_eq!(compose_title_body(""), (String::new(), String::new()));
         // Whitespace-only first line → empty title.
-        assert_eq!(compose_title_body("   \nbody"), (String::new(), "body".to_string()));
+        assert_eq!(
+            compose_title_body("   \nbody"),
+            (String::new(), "body".to_string())
+        );
         // Unicode survives the split.
         assert_eq!(
             compose_title_body("修复崩溃 🐛\n\n日本語 body"),
@@ -1017,7 +1030,10 @@ mod tests {
             }),
             None
         );
-        assert_eq!(issue_action_number(&IssueAction::Close { number: 5 }), Some(5));
+        assert_eq!(
+            issue_action_number(&IssueAction::Close { number: 5 }),
+            Some(5)
+        );
         assert_eq!(
             issue_action_number(&IssueAction::EditLabels {
                 number: 9,
@@ -1089,9 +1105,15 @@ mod tests {
         // All rows visible (identity map).
         let visible = vec![0usize, 1, 2];
         // #20 remembered → its visible position.
-        assert_eq!(relocate_visible_selection(&issues, &visible, Some(20), 0), 1);
+        assert_eq!(
+            relocate_visible_selection(&issues, &visible, Some(20), 0),
+            1
+        );
         // #30 remembered → last visible position.
-        assert_eq!(relocate_visible_selection(&issues, &visible, Some(30), 0), 2);
+        assert_eq!(
+            relocate_visible_selection(&issues, &visible, Some(30), 0),
+            2
+        );
     }
 
     #[test]
@@ -1100,16 +1122,25 @@ mod tests {
         // Only #10 and #30 pass the filter (indices 0 and 2 into `issues`).
         let visible = vec![0usize, 2];
         // #30 is the 2nd *visible* row → position 1.
-        assert_eq!(relocate_visible_selection(&issues, &visible, Some(30), 0), 1);
+        assert_eq!(
+            relocate_visible_selection(&issues, &visible, Some(30), 0),
+            1
+        );
         // A remembered issue filtered out → clamp the previous visible index.
-        assert_eq!(relocate_visible_selection(&issues, &visible, Some(20), 5), 1);
+        assert_eq!(
+            relocate_visible_selection(&issues, &visible, Some(20), 5),
+            1
+        );
     }
 
     #[test]
     fn relocate_visible_clamps_when_gone_or_unremembered() {
         let issues = vec![sample_issue(10), sample_issue(20)];
         let visible = vec![0usize, 1];
-        assert_eq!(relocate_visible_selection(&issues, &visible, Some(99), 5), 1);
+        assert_eq!(
+            relocate_visible_selection(&issues, &visible, Some(99), 5),
+            1
+        );
         assert_eq!(relocate_visible_selection(&issues, &visible, None, 0), 0);
         assert_eq!(relocate_visible_selection(&issues, &visible, None, 7), 1);
         // Empty visible set → 0, never panics.

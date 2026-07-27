@@ -531,8 +531,8 @@ impl PrThreadFetch {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
         thread::spawn(move || {
-            let result = fetch_graphql(&path, pr_number)
-                .or_else(|_| fetch_fallback(&path, pr_number));
+            let result =
+                fetch_graphql(&path, pr_number).or_else(|_| fetch_fallback(&path, pr_number));
             let _ = tx.send((pr_number, result));
         });
         self.rx = Some(rx);
@@ -688,7 +688,10 @@ mod tests {
 
     #[test]
     fn review_state_mapping_and_meaningfulness() {
-        assert_eq!(ReviewItemState::from_str("APPROVED"), ReviewItemState::Approved);
+        assert_eq!(
+            ReviewItemState::from_str("APPROVED"),
+            ReviewItemState::Approved
+        );
         assert_eq!(
             ReviewItemState::from_str("changes_requested"),
             ReviewItemState::ChangesRequested

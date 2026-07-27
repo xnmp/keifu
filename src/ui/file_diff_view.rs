@@ -181,7 +181,11 @@ fn syntect_fg(style: &SyntectStyle, use_dark: bool) -> Color {
     // Achromatic (grays / whites)
     if sat < 0.15 {
         return if use_dark {
-            if max > 160 { Color::DarkGray } else { Color::Black }
+            if max > 160 {
+                Color::DarkGray
+            } else {
+                Color::Black
+            }
         } else if max < 90 {
             Color::DarkGray
         } else {
@@ -204,9 +208,9 @@ fn syntect_fg(style: &SyntectStyle, use_dark: bool) -> Color {
         // Dark ANSI colors for light terminal backgrounds
         match hue as u16 {
             0..=20 | 346..=360 => Color::Red,
-            21..=65 => Color::Rgb(160, 120, 0),  // dark yellow (ANSI yellow is often too bright)
-            66..=155 => Color::Rgb(0, 130, 0),    // dark green
-            156..=195 => Color::Rgb(0, 130, 130),  // dark cyan
+            21..=65 => Color::Rgb(160, 120, 0), // dark yellow (ANSI yellow is often too bright)
+            66..=155 => Color::Rgb(0, 130, 0),  // dark green
+            156..=195 => Color::Rgb(0, 130, 130), // dark cyan
             196..=265 => Color::Blue,
             _ => Color::Magenta,
         }
@@ -329,7 +333,9 @@ fn merge_syntax_and_emphasis(
         if !text.is_empty() {
             result.push(Span::styled(
                 text.to_string(),
-                Style::default().fg(syntect_fg(syn_style, use_dark_fg)).bg(base_bg),
+                Style::default()
+                    .fg(syntect_fg(syn_style, use_dark_fg))
+                    .bg(base_bg),
             ));
         }
         syn_idx += 1;
@@ -470,11 +476,7 @@ pub fn wrap_offsets(text: &str, width: usize) -> Vec<usize> {
 /// Slice `spans` to the concatenated-text byte range `[start, end)`, preserving
 /// each source span's style. `start`/`end` must fall on char boundaries (they
 /// come from [`wrap_offsets`], which only ever splits at `char_indices`).
-fn spans_in_byte_range(
-    spans: &[Span<'static>],
-    start: usize,
-    end: usize,
-) -> Vec<Span<'static>> {
+fn spans_in_byte_range(spans: &[Span<'static>], start: usize, end: usize) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     let mut pos = 0usize;
     for sp in spans {
@@ -485,7 +487,10 @@ fn spans_in_byte_range(
         let a = start.max(sp_start);
         let b = end.min(sp_end);
         if a < b {
-            out.push(Span::styled(s[a - sp_start..b - sp_start].to_string(), sp.style));
+            out.push(Span::styled(
+                s[a - sp_start..b - sp_start].to_string(),
+                sp.style,
+            ));
         }
     }
     out
@@ -542,11 +547,18 @@ pub fn layout_diff_rows(
 /// error-bar span, keeping the normal gutter (line numbers + change prefix) so
 /// it aligns with surrounding rows.
 fn make_conflict_marker_line(dl: &DiffLineContent, theme: &Theme) -> DiffRow {
-    let spans = vec![Span::styled(dl.content.clone(), theme.conflict_marker_style())];
+    let spans = vec![Span::styled(
+        dl.content.clone(),
+        theme.conflict_marker_style(),
+    )];
     make_diff_line(dl, spans, theme)
 }
 
-fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme: &Theme) -> DiffRow {
+fn make_diff_line(
+    dl: &DiffLineContent,
+    content_spans: Vec<Span<'static>>,
+    theme: &Theme,
+) -> DiffRow {
     let lineno_style = Style::default().fg(theme.text_muted);
 
     let old_no = dl
@@ -565,7 +577,9 @@ fn make_diff_line(dl: &DiffLineContent, content_spans: Vec<Span<'static>>, theme
     };
     let prefix_style = match dl.origin {
         DiffLineOrigin::Addition => Style::default().fg(theme.file_added).bg(theme.diff_add_bg),
-        DiffLineOrigin::Deletion => Style::default().fg(theme.file_deleted).bg(theme.diff_del_bg),
+        DiffLineOrigin::Deletion => Style::default()
+            .fg(theme.file_deleted)
+            .bg(theme.diff_del_bg),
         _ => Style::default(),
     };
 
@@ -619,7 +633,10 @@ fn determine_syntax(path: &std::path::Path) -> &'static SyntaxReference {
 /// marker chars) is rendered with [`Theme::conflict_marker_style`] so a diff
 /// that surfaces marker text — e.g. a commit that left `<<<<<<<`/`=======`/
 /// `>>>>>>>` lines in a file — reads as a conflict at a glance.
-pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (Vec<DiffRow>, Vec<usize>) {
+pub fn build_highlighted_lines(
+    content: &FileDiffContent,
+    ui_theme: &Theme,
+) -> (Vec<DiffRow>, Vec<usize>) {
     if content.is_binary {
         return (
             vec![DiffRow::plain(vec![Span::styled(
@@ -697,9 +714,23 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                         let row = if crate::conflict::is_conflict_marker(&dl.content) {
                             make_conflict_marker_line(dl, ui_theme)
                         } else if let Some(emp_spans) = emp.old_spans.get(i) {
-                            make_diff_line(dl, merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_del_bg, ui_theme.diff_del_emph_bg, dark_fg), ui_theme)
+                            make_diff_line(
+                                dl,
+                                merge_syntax_and_emphasis(
+                                    &syn,
+                                    emp_spans,
+                                    ui_theme.diff_del_bg,
+                                    ui_theme.diff_del_emph_bg,
+                                    dark_fg,
+                                ),
+                                ui_theme,
+                            )
                         } else {
-                            make_diff_line(dl, syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg), dark_fg), ui_theme)
+                            make_diff_line(
+                                dl,
+                                syntax_to_ratatui(&syn, Some(ui_theme.diff_del_bg), dark_fg),
+                                ui_theme,
+                            )
                         };
                         rows.push(row);
                     }
@@ -709,9 +740,23 @@ pub fn build_highlighted_lines(content: &FileDiffContent, ui_theme: &Theme) -> (
                         let row = if crate::conflict::is_conflict_marker(&dl.content) {
                             make_conflict_marker_line(dl, ui_theme)
                         } else if let Some(emp_spans) = emp.new_spans.get(i) {
-                            make_diff_line(dl, merge_syntax_and_emphasis(&syn, emp_spans, ui_theme.diff_add_bg, ui_theme.diff_add_emph_bg, dark_fg), ui_theme)
+                            make_diff_line(
+                                dl,
+                                merge_syntax_and_emphasis(
+                                    &syn,
+                                    emp_spans,
+                                    ui_theme.diff_add_bg,
+                                    ui_theme.diff_add_emph_bg,
+                                    dark_fg,
+                                ),
+                                ui_theme,
+                            )
                         } else {
-                            make_diff_line(dl, syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg), dark_fg), ui_theme)
+                            make_diff_line(
+                                dl,
+                                syntax_to_ratatui(&syn, Some(ui_theme.diff_add_bg), dark_fg),
+                                ui_theme,
+                            )
                         };
                         rows.push(row);
                     }
@@ -893,7 +938,11 @@ mod tests {
             DiffRow::plain(vec![Span::raw("yy")]),       // 1 display row (hunk header)
         ];
         let (lines, hunks) = layout_diff_rows(&rows, &[2], true, 4);
-        assert_eq!(lines.len(), 4, "one row wraps into two -> four display rows");
+        assert_eq!(
+            lines.len(),
+            4,
+            "one row wraps into two -> four display rows"
+        );
         assert_eq!(hunks, vec![3], "hunk header remapped to wrapped-row index");
     }
 
@@ -934,10 +983,7 @@ mod tests {
         let blue = Style::default().fg(Color::Blue);
         let row = DiffRow {
             gutter: Vec::new(),
-            content: vec![
-                Span::styled("aaaa", red),
-                Span::styled("bbbb", blue),
-            ],
+            content: vec![Span::styled("aaaa", red), Span::styled("bbbb", blue)],
             gutter_cols: 0,
         };
         let lines = row.wrap(4);

@@ -27,7 +27,14 @@ impl App {
         let repo_path = repo.path.clone();
         let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
         // No terminal to query in the embedded/test path.
-        Self::build(repo, Config::default(), UiState::default(), fs_watcher, None, None)
+        Self::build(
+            repo,
+            Config::default(),
+            UiState::default(),
+            fs_watcher,
+            None,
+            None,
+        )
     }
 
     /// Like [`App::from_repo`] but with an explicit [`UiState`], so tests can
@@ -101,16 +108,15 @@ impl App {
         // background. Either way the GitHub merged-PR signal fills in once its
         // fetch completes. `merged_cache_hit` is `Some` only on an exact hit —
         // the signal to prime rather than kick the classifier (see below).
-        let (merged_branches, squash_targets, merged_cache_hit) =
-            if ui_state.hide_merged_branches {
-                Self::init_merged_from_cache(&repo_path, &branches)
-            } else {
-                (
-                    std::collections::HashSet::new(),
-                    std::collections::HashMap::new(),
-                    None,
-                )
-            };
+        let (merged_branches, squash_targets, merged_cache_hit) = if ui_state.hide_merged_branches {
+            Self::init_merged_from_cache(&repo_path, &branches)
+        } else {
+            (
+                std::collections::HashSet::new(),
+                std::collections::HashMap::new(),
+                None,
+            )
+        };
         phase!("classify_merged");
         let visible_branches: Vec<BranchInfo> = branches
             .iter()

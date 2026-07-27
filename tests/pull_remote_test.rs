@@ -8,8 +8,8 @@
 use std::path::Path;
 
 use keifu::git::operations::{
-    create_branch, fetch_remote, is_divergent_pull_error, prune_remote, pull,
-    push_current, push_delete, push_set_upstream, OpOutcome, PullMode,
+    create_branch, fetch_remote, is_divergent_pull_error, prune_remote, pull, push_current,
+    push_delete, push_set_upstream, OpOutcome, PullMode,
 };
 use keifu::git::{GitRepository, OperationState};
 
@@ -50,7 +50,13 @@ fn pull_fast_forward_advances_head_and_worktree() {
     let (_td, git_repo, origin, branch) = repo_with_tracked_origin();
     let path = git_repo.path.clone();
 
-    advance_origin(origin.path(), &branch, "remote.txt", "from remote\n", "remote change");
+    advance_origin(
+        origin.path(),
+        &branch,
+        "remote.txt",
+        "from remote\n",
+        "remote change",
+    );
 
     // A fast-forward succeeds even under the strict --ff-only default.
     let outcome = pull(&path, None, None, PullMode::FfOnly, None).unwrap();
@@ -61,7 +67,10 @@ fn pull_fast_forward_advances_head_and_worktree() {
         std::fs::read_to_string(Path::new(&path).join("remote.txt")).unwrap(),
         "from remote\n"
     );
-    assert_eq!(git_cli(&path, &["log", "-1", "--format=%s"]).trim(), "remote change");
+    assert_eq!(
+        git_cli(&path, &["log", "-1", "--format=%s"]).trim(),
+        "remote change"
+    );
     assert_eq!(git_repo.operation_state(), OperationState::Clean);
 }
 
@@ -82,7 +91,10 @@ fn pull_divergent_remote_creates_merge_commit() {
     // HEAD is a fresh merge commit (two parents) with both sides' files.
     let parents = git_cli(&path, &["rev-list", "--parents", "-n", "1", "HEAD"]);
     let parent_count = parents.split_whitespace().count() - 1;
-    assert_eq!(parent_count, 2, "pull should create a merge commit: {parents:?}");
+    assert_eq!(
+        parent_count, 2,
+        "pull should create a merge commit: {parents:?}"
+    );
     assert_ne!(head_oid(git_repo.repo()), before);
     assert!(Path::new(&path).join("fileR.txt").exists());
     assert!(Path::new(&path).join("fileL.txt").exists());
@@ -95,9 +107,20 @@ fn pull_conflict_leaves_repo_in_merge_state() {
     let path = git_repo.path.clone();
 
     // Shared base line both sides edit differently.
-    commit_file(git_repo.repo(), "conflict.txt", "base\n", "add conflict base");
+    commit_file(
+        git_repo.repo(),
+        "conflict.txt",
+        "base\n",
+        "add conflict base",
+    );
     git_cli(&path, &["push", "origin", &branch]);
-    advance_origin(origin.path(), &branch, "conflict.txt", "remote\n", "remote edit");
+    advance_origin(
+        origin.path(),
+        &branch,
+        "conflict.txt",
+        "remote\n",
+        "remote edit",
+    );
 
     // Local edits the same line the other way and commits.
     std::fs::write(Path::new(&path).join("conflict.txt"), "local\n").unwrap();
@@ -124,7 +147,9 @@ fn pull_ff_only_fails_on_divergence_with_a_recognized_error() {
 
     // The default --ff-only pull fails loudly, and the failure is classified as
     // divergence (which drives the merge/rebase prompt) rather than a hard error.
-    let err = pull(&path, None, None, PullMode::FfOnly, None).unwrap_err().to_string();
+    let err = pull(&path, None, None, PullMode::FfOnly, None)
+        .unwrap_err()
+        .to_string();
     assert!(
         is_divergent_pull_error(&err),
         "expected a divergence error, got: {err}"
@@ -153,7 +178,10 @@ fn push_sets_upstream_when_absent() {
     push_set_upstream(&path, "origin", &branch, None).unwrap();
 
     // @{u} now resolves to origin/<branch>.
-    let up = git_cli(&path, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")]);
+    let up = git_cli(
+        &path,
+        &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")],
+    );
     assert_eq!(up.trim(), format!("origin/{branch}"));
 }
 
@@ -182,7 +210,10 @@ fn push_publishes_to_explicit_second_remote() {
     push_set_upstream(&path, "backup", &branch, None).unwrap();
 
     // Upstream points at backup, and backup received the branch tip.
-    let up = git_cli(&path, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")]);
+    let up = git_cli(
+        &path,
+        &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")],
+    );
     assert_eq!(up.trim(), format!("backup/{branch}"));
     let head = git_cli(&path, &["rev-parse", "HEAD"]);
     let backup_ref = git_cli(&path, &["rev-parse", &format!("backup/{branch}")]);
@@ -218,12 +249,18 @@ fn delete_remote_branch_removes_it_from_remote() {
 
     create_branch(git_repo.repo(), "feature", c0).unwrap();
     git_cli(&path, &["push", "origin", "feature"]);
-    assert!(!git_cli(&path, &["ls-remote", "--heads", "origin", "feature"]).trim().is_empty());
+    assert!(
+        !git_cli(&path, &["ls-remote", "--heads", "origin", "feature"])
+            .trim()
+            .is_empty()
+    );
 
     push_delete(&path, "origin", "feature", None).unwrap();
 
     assert!(
-        git_cli(&path, &["ls-remote", "--heads", "origin", "feature"]).trim().is_empty(),
+        git_cli(&path, &["ls-remote", "--heads", "origin", "feature"])
+            .trim()
+            .is_empty(),
         "feature should be gone from origin"
     );
 }

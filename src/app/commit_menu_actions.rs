@@ -10,11 +10,7 @@ impl App {
         let deletable: Vec<String> = self
             .selected_node_branches()
             .iter()
-            .filter(|name| {
-                self.branches
-                    .iter()
-                    .any(|b| b.name == **name && !b.is_head)
-            })
+            .filter(|name| self.branches.iter().any(|b| b.name == **name && !b.is_head))
             .map(|s| s.to_string())
             .collect();
 
@@ -35,10 +31,7 @@ impl App {
     /// ref, a local+remote delete offer when a local branch also exists on a
     /// remote, or a plain local branch delete otherwise.
     pub(crate) fn confirm_delete_branch(&mut self, name: String) {
-        let is_remote = self
-            .branches
-            .iter()
-            .any(|b| b.name == name && b.is_remote);
+        let is_remote = self.branches.iter().any(|b| b.name == name && b.is_remote);
         if is_remote {
             if let Some((remote, branch)) = self.split_remote_ref(&name) {
                 self.mode = AppMode::Confirm {
@@ -88,13 +81,10 @@ impl App {
             }
         }
         // Fallback: a remote-tracking ref whose short name matches.
-        self.branches
-            .iter()
-            .filter(|b| b.is_remote)
-            .find_map(|b| {
-                self.split_remote_ref(&b.name)
-                    .filter(|(_, branch)| branch == local_name)
-            })
+        self.branches.iter().filter(|b| b.is_remote).find_map(|b| {
+            self.split_remote_ref(&b.name)
+                .filter(|(_, branch)| branch == local_name)
+        })
     }
 
     pub(crate) fn open_commit_menu(&mut self) {
@@ -129,7 +119,10 @@ impl App {
         let selected_oid = node.commit.as_ref().map(|c| c.oid);
         let has_branch = self.selected_branch().is_some();
         let is_head_branch = self.selected_branch().map(|b| b.is_head).unwrap_or(false);
-        let can_push = self.selected_branch().map(should_offer_push).unwrap_or(false);
+        let can_push = self
+            .selected_branch()
+            .map(should_offer_push)
+            .unwrap_or(false);
         let mut items = Vec::new();
 
         // Push/pull pairing at top. Push targets HEAD (`initiate_push` pushes the
@@ -157,11 +150,10 @@ impl App {
 
         // Deletable = any branch on this node bar the current HEAD; remote
         // branches are always deletable (on their remote).
-        let has_deletable_branch = self.selected_node_branches().iter().any(|name| {
-            self.branches
-                .iter()
-                .any(|b| b.name == *name && !b.is_head)
-        });
+        let has_deletable_branch = self
+            .selected_node_branches()
+            .iter()
+            .any(|name| self.branches.iter().any(|b| b.name == *name && !b.is_head));
         if has_deletable_branch {
             items.push(CommitMenuItem::DeleteBranch);
         }
@@ -208,9 +200,7 @@ impl App {
             items.push(CommitMenuItem::PushTag);
         }
 
-        items.extend([
-            CommitMenuItem::Revert,
-        ]);
+        items.extend([CommitMenuItem::Revert]);
 
         // Compare: offer "compare with marked" once a different commit is
         // already marked, otherwise "mark for compare".
@@ -229,7 +219,6 @@ impl App {
 
         items.push(CommitMenuItem::CopyHash);
         items.push(CommitMenuItem::CopyMessage);
-
 
         self.mode = AppMode::CommitMenu {
             items,
@@ -275,8 +264,14 @@ impl App {
         self.mode = AppMode::Normal;
         match self.default_push_remote() {
             Some(remote) => match push_tag(&self.repo_path, &remote, tag) {
-                Ok(()) => self.toast(crate::toast::ToastKind::Success, format!("Pushed tag '{}' to {}", tag, remote)),
-                Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Push failed: {}", e)),
+                Ok(()) => self.toast(
+                    crate::toast::ToastKind::Success,
+                    format!("Pushed tag '{}' to {}", tag, remote),
+                ),
+                Err(e) => self.toast(
+                    crate::toast::ToastKind::Error,
+                    format!("Push failed: {}", e),
+                ),
             },
             None => self.toast(crate::toast::ToastKind::Info, "No remote configured"),
         }
@@ -430,11 +425,7 @@ impl App {
         Ok(())
     }
 
-    fn commit_menu_ordered(
-        &self,
-        items: &[CommitMenuItem],
-        filter: &str,
-    ) -> Vec<CommitMenuItem> {
+    fn commit_menu_ordered(&self, items: &[CommitMenuItem], filter: &str) -> Vec<CommitMenuItem> {
         if filter.is_empty() {
             return items.to_vec();
         }
@@ -457,7 +448,11 @@ impl App {
         scored.into_iter().map(|(item, _)| item).collect()
     }
 
-    pub(crate) fn commit_menu_visible_count(&self, items: &[CommitMenuItem], filter: &str) -> usize {
+    pub(crate) fn commit_menu_visible_count(
+        &self,
+        items: &[CommitMenuItem],
+        filter: &str,
+    ) -> usize {
         if filter.is_empty() {
             return items.len();
         }
@@ -633,9 +628,14 @@ impl App {
                 if let Some(oid) = commit_oid {
                     let hash = oid.to_string();
                     match copy_to_clipboard(&hash) {
-                        Ok(outcome) => self
-                            .toast(crate::toast::ToastKind::Success, format!("Copied {}{}", short_hash(oid), outcome.suffix())),
-                        Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
+                        Ok(outcome) => self.toast(
+                            crate::toast::ToastKind::Success,
+                            format!("Copied {}{}", short_hash(oid), outcome.suffix()),
+                        ),
+                        Err(e) => self.toast(
+                            crate::toast::ToastKind::Error,
+                            format!("Clipboard error: {}", e),
+                        ),
                     }
                 }
             }
@@ -646,11 +646,14 @@ impl App {
                     .map(|c| c.full_message.clone())
                 {
                     match copy_to_clipboard(&msg) {
-                        Ok(outcome) => self.toast(crate::toast::ToastKind::Success, format!(
-                            "Copied commit message{}",
-                            outcome.suffix()
-                        )),
-                        Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
+                        Ok(outcome) => self.toast(
+                            crate::toast::ToastKind::Success,
+                            format!("Copied commit message{}", outcome.suffix()),
+                        ),
+                        Err(e) => self.toast(
+                            crate::toast::ToastKind::Error,
+                            format!("Clipboard error: {}", e),
+                        ),
                     }
                 }
             }

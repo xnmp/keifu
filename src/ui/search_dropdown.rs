@@ -91,10 +91,7 @@ impl<'a> SearchDropdown<'a> {
         }
 
         if !current_segment.is_empty() {
-            spans.push(Span::styled(
-                current_segment,
-                highlight(current_is_matched),
-            ));
+            spans.push(Span::styled(current_segment, highlight(current_is_matched)));
         }
 
         spans
@@ -139,7 +136,12 @@ impl<'a> Widget for SearchDropdown<'a> {
         if has_results && y < inner.y + inner.height {
             // Draw separator line
             let separator = "─".repeat(inner.width as usize);
-            buf.set_string(inner.x, y, &separator, Style::default().fg(self.theme.text_muted));
+            buf.set_string(
+                inner.x,
+                y,
+                &separator,
+                Style::default().fg(self.theme.text_muted),
+            );
             y += 1;
 
             // Calculate scroll offset to keep selected item visible
@@ -223,7 +225,12 @@ impl<'a> Widget for SearchDropdown<'a> {
             let hint = select_hint_text(inner.width as usize, has_results, self.input.is_empty());
             if !hint.is_empty() {
                 let hint_y = inner.y + inner.height - 1;
-                buf.set_string(inner.x, hint_y, hint, Style::default().fg(self.theme.text_muted));
+                buf.set_string(
+                    inner.x,
+                    hint_y,
+                    hint,
+                    Style::default().fg(self.theme.text_muted),
+                );
             }
         }
     }

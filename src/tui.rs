@@ -54,7 +54,12 @@ pub fn init() -> Result<Tui> {
     // EnableBracketedPaste lets the terminal deliver a paste as one
     // `Event::Paste(String)` instead of a burst of keystrokes, so a pasted
     // token arrives atomically. Terminals without it fall back to keystrokes.
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     // Enable keyboard enhancement after the alternate screen so Ctrl+punctuation
     // (e.g. Ctrl+,) reaches crossterm. Log the outcome so the user can confirm in
     // the --log-file whether their terminal supports it.
@@ -152,7 +157,10 @@ fn build_osc52_sequence(text: &str) -> Osc52Payload {
 /// size limit.
 pub fn copy_to_clipboard_osc52(text: &str) -> Result<bool> {
     use std::io::Write;
-    let Osc52Payload { sequence, truncated } = build_osc52_sequence(text);
+    let Osc52Payload {
+        sequence,
+        truncated,
+    } = build_osc52_sequence(text);
     let mut stdout = io::stdout();
     write!(stdout, "{sequence}")?;
     stdout.flush()?;

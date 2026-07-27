@@ -12,7 +12,7 @@ use git2::{Oid, Repository, Signature};
 use keifu::action::Action;
 use keifu::app::{App, AppMode, FocusedPanel};
 use keifu::diff_cache::{DiffResult, DiffTarget, DIFF_LOAD_DEBOUNCE};
-use keifu::files_pane_state::{FileSelection, FilesPaneItem, section_of};
+use keifu::files_pane_state::{section_of, FileSelection, FilesPaneItem};
 use keifu::git::graph::{CellType, GraphLayout, GraphNode};
 use keifu::git::operations::{stage_file, unstage_file};
 use keifu::git::{
@@ -234,10 +234,8 @@ fn refresh_reuses_uncommitted_cache_for_nested_untracked_directories() {
 
     let git_repo = GitRepository::open(tempdir.path()).unwrap();
     let mut app = App::from_repo(git_repo).unwrap();
-    app.diff_cache
-        .uncommitted_diff_cache = Some(CommitDiffInfo::default());
-    app.diff_cache
-        .uncommitted_cache_key = app.working_tree_status.clone();
+    app.diff_cache.uncommitted_diff_cache = Some(CommitDiffInfo::default());
+    app.diff_cache.uncommitted_cache_key = app.working_tree_status.clone();
 
     app.refresh(false).unwrap();
 
@@ -312,10 +310,7 @@ fn integration_stage_modified_with_untracked_selects_untracked() {
     stage_file(&app.repo_path, "tracked.txt").unwrap();
     app.refresh_after_file_op().unwrap();
 
-    assert_eq!(
-        selected_section(&app).as_deref(),
-        Some("Unstaged Changes"),
-    );
+    assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"),);
     assert_eq!(selected_file_path(&app), "untracked.txt");
 }
 
@@ -424,10 +419,7 @@ fn integration_stage_with_existing_staged_selects_next_unstaged() {
     stage_file(&app.repo_path, "b.txt").unwrap();
     app.refresh_after_file_op().unwrap();
 
-    assert_eq!(
-        selected_section(&app).as_deref(),
-        Some("Unstaged Changes"),
-    );
+    assert_eq!(selected_section(&app).as_deref(), Some("Unstaged Changes"),);
     assert_eq!(selected_file_path(&app), "untracked.txt");
 }
 
@@ -666,10 +658,19 @@ fn prev_file_in_diff_viewer_survives_partially_staged_files() {
     app.focused_panel = FocusedPanel::Files;
 
     app.handle_action(Action::OpenFileDiff).unwrap();
-    let AppMode::FileDiff { file_index, ref file_list, .. } = app.mode else {
+    let AppMode::FileDiff {
+        file_index,
+        ref file_list,
+        ..
+    } = app.mode
+    else {
         panic!("expected FileDiff mode, got {:?}", app.mode);
     };
-    assert_eq!(file_list.len(), 4, "viewer must cycle the displayed entries");
+    assert_eq!(
+        file_list.len(),
+        4,
+        "viewer must cycle the displayed entries"
+    );
     assert_eq!(file_index, 3);
 
     app.handle_action(Action::PrevFile).unwrap();
@@ -719,7 +720,9 @@ fn detached_orphan_head_commit_appears_in_history() {
     // The branch still points at `first`; `orphan` is reachable only via HEAD.
     let branches = git_repo.get_branches().unwrap();
     let stashes = git_repo.get_stashes();
-    let commits = git_repo.get_commits(500, &branches, &stashes, false).unwrap();
+    let commits = git_repo
+        .get_commits(500, &branches, &stashes, false)
+        .unwrap();
     assert!(
         commits.iter().any(|c| c.oid == orphan),
         "detached HEAD commit missing from history"
@@ -766,7 +769,10 @@ fn open_two_hunk_diff(tempdir: &Path) -> App {
     };
     app.sync_file_list_cache();
     app.handle_action(Action::OpenFileDiff).unwrap();
-    assert!(matches!(app.mode, AppMode::FileDiff { .. }), "diff should open");
+    assert!(
+        matches!(app.mode, AppMode::FileDiff { .. }),
+        "diff should open"
+    );
     app
 }
 
@@ -794,8 +800,14 @@ fn stage_hunk_action_stages_only_the_hunk_under_cursor() {
     app.handle_action(Action::StageHunk).unwrap();
 
     let staged = git_out(&rp, &["diff", "--cached"]);
-    assert!(staged.contains("+BOTTOM"), "BOTTOM should be staged:\n{staged}");
-    assert!(!staged.contains("+TOP"), "TOP must stay unstaged:\n{staged}");
+    assert!(
+        staged.contains("+BOTTOM"),
+        "BOTTOM should be staged:\n{staged}"
+    );
+    assert!(
+        !staged.contains("+TOP"),
+        "TOP must stay unstaged:\n{staged}"
+    );
     // Viewer stays open on the same (still-changed) file.
     assert!(matches!(app.mode, AppMode::FileDiff { .. }));
 }
@@ -812,7 +824,10 @@ fn unstage_hunk_action_removes_that_hunk_from_the_index() {
     app.handle_action(Action::UnstageHunk).unwrap();
 
     let staged = git_out(&rp, &["diff", "--cached"]);
-    assert!(!staged.contains("+TOP"), "TOP should be unstaged:\n{staged}");
+    assert!(
+        !staged.contains("+TOP"),
+        "TOP should be unstaged:\n{staged}"
+    );
     assert!(staged.contains("+BOTTOM"), "BOTTOM stays staged:\n{staged}");
 }
 
@@ -850,7 +865,10 @@ fn cancelling_discard_hunk_returns_to_the_diff_viewer() {
     // Cancelling must reopen the viewer, not drop to Normal, and leave the
     // working tree untouched.
     app.handle_action(Action::Cancel).unwrap();
-    assert!(matches!(app.mode, AppMode::FileDiff { .. }), "should reopen diff");
+    assert!(
+        matches!(app.mode, AppMode::FileDiff { .. }),
+        "should reopen diff"
+    );
     let contents = fs::read_to_string(tempdir.path().join("f.txt")).unwrap();
     assert!(contents.contains("TOP") && contents.contains("BOTTOM"));
 }
@@ -870,10 +888,15 @@ fn stage_all_action_stages_tracked_and_untracked_from_files_pane() {
     app.handle_action(Action::StageAll).unwrap();
 
     let staged = git_out(&rp, &["diff", "--cached", "--name-only"]);
-    assert!(staged.contains("tracked.txt") && staged.contains("untracked.txt"), "{staged}");
+    assert!(
+        staged.contains("tracked.txt") && staged.contains("untracked.txt"),
+        "{staged}"
+    );
 
     app.handle_action(Action::UnstageAll).unwrap();
-    assert!(git_out(&rp, &["diff", "--cached", "--name-only"]).trim().is_empty());
+    assert!(git_out(&rp, &["diff", "--cached", "--name-only"])
+        .trim()
+        .is_empty());
 }
 
 // ── Clickable status-bar hints ──────────────────────────────────────
@@ -921,5 +944,8 @@ fn clicking_a_status_bar_hint_opens_help() {
         row: status_area.y,
     })
     .unwrap();
-    assert!(matches!(app.mode, AppMode::Help), "an empty-cell click dispatched nothing");
+    assert!(
+        matches!(app.mode, AppMode::Help),
+        "an empty-cell click dispatched nothing"
+    );
 }

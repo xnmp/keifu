@@ -50,7 +50,10 @@ pub fn visible_rows(app: &App, fold_connectors: bool) -> Vec<RenderRow<'_>> {
 /// Pure core of [`visible_rows`]: fold (or not) a list of `(full_idx, node)`
 /// pairs into rendered rows. Extracted so the folding is unit-testable without
 /// constructing an `App`.
-pub(super) fn fold_rows(base: Vec<(usize, &GraphNode)>, fold_connectors: bool) -> Vec<RenderRow<'_>> {
+pub(super) fn fold_rows(
+    base: Vec<(usize, &GraphNode)>,
+    fold_connectors: bool,
+) -> Vec<RenderRow<'_>> {
     if !fold_connectors {
         return base
             .into_iter()
@@ -130,7 +133,11 @@ pub(super) fn fold_rows_windowed<'a>(
 fn merge_connector_cells(
     pending: &[(usize, &GraphNode)],
 ) -> (Vec<CellType>, Vec<crate::git::graph::CellOids>) {
-    let width = pending.iter().map(|(_, n)| n.cells.len()).max().unwrap_or(0);
+    let width = pending
+        .iter()
+        .map(|(_, n)| n.cells.len())
+        .max()
+        .unwrap_or(0);
     let mut out = vec![CellType::Empty; width];
     let mut out_oids = vec![(None, None); width];
     for (_, node) in pending {
@@ -167,9 +174,7 @@ pub(super) fn adjacent_cells(rows: &[RenderRow], i: usize, above: bool) -> Optio
     if underlay.is_empty() && neighbour.is_none() {
         return None;
     }
-    let width = underlay
-        .len()
-        .max(neighbour.map_or(0, |c| c.len()));
+    let width = underlay.len().max(neighbour.map_or(0, |c| c.len()));
     let mut out = vec![CellType::Empty; width];
     for (col, slot) in out.iter_mut().enumerate() {
         let u = underlay.get(col).copied().unwrap_or(CellType::Empty);
@@ -342,7 +347,10 @@ mod tests {
         // All three nodes remain, each with an empty underlay.
         assert_eq!(rows.len(), 3);
         assert!(rows.iter().all(|r| r.underlay.is_empty()));
-        assert_eq!(rows.iter().map(|r| r.full_idx).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(
+            rows.iter().map(|r| r.full_idx).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
     }
 
     #[test]
@@ -360,7 +368,10 @@ mod tests {
         assert_eq!(rows[1].full_idx, 2);
         // Row 0 has no preceding connector; row 1 carries the folded connector.
         assert!(rows[0].underlay.is_empty());
-        assert_eq!(rows[1].underlay, vec![CellType::TeeRight(0), CellType::MergeLeft(1)]);
+        assert_eq!(
+            rows[1].underlay,
+            vec![CellType::TeeRight(0), CellType::MergeLeft(1)]
+        );
     }
 
     #[test]
@@ -373,7 +384,11 @@ mod tests {
         let rows = fold_rows(base, true);
         let selected_full = 2;
         let filtered_pos = rows.iter().position(|r| r.full_idx == selected_full);
-        assert_eq!(filtered_pos, Some(1), "selected commit maps to folded row 1");
+        assert_eq!(
+            filtered_pos,
+            Some(1),
+            "selected commit maps to folded row 1"
+        );
     }
 
     #[test]
@@ -422,9 +437,8 @@ mod tests {
         // Folded rows: a(0), b(2), d(4), e(5), then trailing c3 standalone.
         assert_eq!(full.len(), 5);
 
-        let same = |r: &RenderRow, s: &RenderRow| {
-            r.full_idx == s.full_idx && r.underlay == s.underlay
-        };
+        let same =
+            |r: &RenderRow, s: &RenderRow| r.full_idx == s.full_idx && r.underlay == s.underlay;
         for win_start in 0..=full.len() {
             for win_end in win_start..=full.len() {
                 let win = fold_rows_windowed(base.clone().into_iter(), win_start, win_end);
@@ -462,7 +476,12 @@ mod tests {
         let a = commit_row(vec![CellType::Empty]);
         let b = commit_row(vec![CellType::Commit(0)]);
         let rows = vec![
-            RenderRow { full_idx: 0, node: &a, underlay: Vec::new(), underlay_oids: Vec::new() },
+            RenderRow {
+                full_idx: 0,
+                node: &a,
+                underlay: Vec::new(),
+                underlay_oids: Vec::new(),
+            },
             RenderRow {
                 full_idx: 2,
                 node: &b,
@@ -471,6 +490,10 @@ mod tests {
             },
         ];
         let above = adjacent_cells(&rows, 1, true).unwrap();
-        assert_eq!(above[0], CellType::TeeRight(0), "underlay wins over neighbour");
+        assert_eq!(
+            above[0],
+            CellType::TeeRight(0),
+            "underlay wins over neighbour"
+        );
     }
 }

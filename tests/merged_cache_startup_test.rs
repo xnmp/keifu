@@ -41,7 +41,8 @@ static CACHE_ENV: Once = Once::new();
 /// cache files never collide.
 fn isolate_cache_dir() {
     CACHE_ENV.call_once(|| {
-        let dir = std::env::temp_dir().join(format!("keifu-merged-cache-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("keifu-merged-cache-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         std::env::set_var("XDG_CONFIG_HOME", &dir);
     });
@@ -67,7 +68,10 @@ fn commit_on(
     let blob = repo.blob(contents.as_bytes()).unwrap();
     builder.insert(path, blob, 0o100644).unwrap();
     let tree = repo.find_tree(builder.write().unwrap()).unwrap();
-    let parents: Vec<git2::Commit> = parent.map(|p| repo.find_commit(p).unwrap()).into_iter().collect();
+    let parents: Vec<git2::Commit> = parent
+        .map(|p| repo.find_commit(p).unwrap())
+        .into_iter()
+        .collect();
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
     repo.commit(Some(refname), &sig, &sig, path, &tree, &parent_refs)
         .unwrap()
@@ -83,7 +87,9 @@ fn merge_on(repo: &Repository, refname: &str, first: Oid, second: Oid) -> Oid {
     let sc = repo.find_commit(second).unwrap();
     let mut builder = repo.treebuilder(Some(&fc.tree().unwrap())).unwrap();
     for entry in sc.tree().unwrap().iter() {
-        builder.insert(entry.name().unwrap(), entry.id(), entry.filemode()).unwrap();
+        builder
+            .insert(entry.name().unwrap(), entry.id(), entry.filemode())
+            .unwrap();
     }
     let tree = repo.find_tree(builder.write().unwrap()).unwrap();
     let sig = Signature::now("Test User", "test@example.com").unwrap();
@@ -103,7 +109,8 @@ fn repo_with_merged_topic() -> TempDir {
     }
     let a = commit_on(&repo, "refs/heads/main", None, "base.txt", "a");
     // topic: one own commit, landed on main by a merge commit → merged.
-    repo.reference("refs/heads/topic", a, true, "topic").unwrap();
+    repo.reference("refs/heads/topic", a, true, "topic")
+        .unwrap();
     let t = commit_on(&repo, "refs/heads/topic", Some(a), "t.txt", "t");
     let b = commit_on(&repo, "refs/heads/main", Some(a), "base.txt", "b");
     merge_on(&repo, "refs/heads/main", b, t);
@@ -127,7 +134,13 @@ fn branchy_repo(n: usize) -> TempDir {
     let mut tip = commit_on(&repo, "refs/heads/main", None, "base.txt", "0");
     let mut line = vec![tip];
     for i in 1..30 {
-        tip = commit_on(&repo, "refs/heads/main", Some(tip), "base.txt", &format!("{i}"));
+        tip = commit_on(
+            &repo,
+            "refs/heads/main",
+            Some(tip),
+            "base.txt",
+            &format!("{i}"),
+        );
         line.push(tip);
     }
     repo.set_head("refs/heads/main").unwrap();
@@ -164,7 +177,10 @@ fn poll_until_classified(app: &mut App) {
         if app.update_merged_classification() {
             return;
         }
-        assert!(Instant::now() < deadline, "background classification never delivered");
+        assert!(
+            Instant::now() < deadline,
+            "background classification never delivered"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -179,7 +195,7 @@ fn poll_until_classified(app: &mut App) {
 fn hide_mode_cold_cache_defers_classification() {
     isolate_cache_dir();
     let dir = branchy_repo(20); // a repo whose sync classification would be costly
-    // Ensure no warm cache from a prior run of this exact temp path.
+                                // Ensure no warm cache from a prior run of this exact temp path.
     let mut app = build_hide_app(&dir);
     assert!(
         app.merged.branches.is_empty(),
@@ -208,7 +224,10 @@ fn hide_mode_matching_cache_applied_synchronously() {
         let mut app = build_hide_app(&dir);
         assert!(app.merged.branches.is_empty(), "run 1 starts unclassified");
         poll_until_classified(&mut app);
-        assert!(app.merged.branches.contains("topic"), "run 1 classifies topic as merged");
+        assert!(
+            app.merged.branches.contains("topic"),
+            "run 1 classifies topic as merged"
+        );
     }
 
     // Run 2: unchanged repo → the cache signature matches → applied at init.
@@ -240,7 +259,8 @@ fn hide_mode_stale_cache_reconciles_in_background() {
         cfg.set_str("user.email", "test@example.com").unwrap();
     }
     let a = commit_on(&repo, "refs/heads/main", None, "base.txt", "a");
-    repo.reference("refs/heads/topic", a, true, "topic").unwrap();
+    repo.reference("refs/heads/topic", a, true, "topic")
+        .unwrap();
     let t = commit_on(&repo, "refs/heads/topic", Some(a), "t.txt", "t");
     let b = commit_on(&repo, "refs/heads/main", Some(a), "base.txt", "b");
     merge_on(&repo, "refs/heads/main", b, t);
@@ -254,7 +274,11 @@ fn hide_mode_stale_cache_reconciles_in_background() {
     }
 
     // Now move `topic` forward with novel, unlanded work → no longer merged.
-    let topic_tip = repo.find_reference("refs/heads/topic").unwrap().target().unwrap();
+    let topic_tip = repo
+        .find_reference("refs/heads/topic")
+        .unwrap()
+        .target()
+        .unwrap();
     commit_on(&repo, "refs/heads/topic", Some(topic_tip), "novel.txt", "z");
 
     // Init on the changed repo: the signature no longer matches, so the seed is

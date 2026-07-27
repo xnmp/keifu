@@ -58,7 +58,10 @@ fn run_explain_merged() -> Result<()> {
             Default::default()
         }
     };
-    print!("{}", keifu::git::merged::explain_classification(repo.repo(), &branches, &gh));
+    print!(
+        "{}",
+        keifu::git::merged::explain_classification(repo.repo(), &branches, &gh)
+    );
     Ok(())
 }
 
@@ -102,10 +105,7 @@ fn handle_input_event(
 ) -> Result<bool> {
     if let Some(key) = get_key_event(&event) {
         if app.debug_keys {
-            app.set_message(format!(
-                "KEY: code={:?} mod={:?}",
-                key.code, key.modifiers
-            ));
+            app.set_message(format!("KEY: code={:?} mod={:?}", key.code, key.modifiers));
         }
         app.maybe_hint_capslock(&key);
         if let Some(action) = map_key_to_action(

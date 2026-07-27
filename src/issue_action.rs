@@ -19,11 +19,21 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueAction {
     /// Create a new issue. `body` may be empty.
-    Create { title: String, body: String },
+    Create {
+        title: String,
+        body: String,
+    },
     /// Add a comment to an existing issue.
-    Comment { number: u64, body: String },
-    Close { number: u64 },
-    Reopen { number: u64 },
+    Comment {
+        number: u64,
+        body: String,
+    },
+    Close {
+        number: u64,
+    },
+    Reopen {
+        number: u64,
+    },
     /// Add and/or remove labels in one edit.
     EditLabels {
         number: u64,
@@ -72,12 +82,16 @@ impl IssueAction {
             }
             Self::Close { number } => vec![s("issue"), s("close"), number.to_string()],
             Self::Reopen { number } => vec![s("issue"), s("reopen"), number.to_string()],
-            Self::EditLabels { number, add, remove } => {
-                edit_args(*number, add, "--add-label", remove, "--remove-label")
-            }
-            Self::EditAssignees { number, add, remove } => {
-                edit_args(*number, add, "--add-assignee", remove, "--remove-assignee")
-            }
+            Self::EditLabels {
+                number,
+                add,
+                remove,
+            } => edit_args(*number, add, "--add-label", remove, "--remove-label"),
+            Self::EditAssignees {
+                number,
+                add,
+                remove,
+            } => edit_args(*number, add, "--add-assignee", remove, "--remove-assignee"),
         }
     }
 
@@ -382,12 +396,22 @@ mod tests {
 
     #[test]
     fn describe_gives_imperative_confirm_text() {
-        assert_eq!(IssueAction::Close { number: 5 }.describe(), "Close issue #5");
+        assert_eq!(
+            IssueAction::Close { number: 5 }.describe(),
+            "Close issue #5"
+        );
         assert_eq!(
             IssueAction::Reopen { number: 5 }.describe(),
             "Reopen issue #5"
         );
-        assert_eq!(IssueAction::Create { title: "t".into(), body: String::new() }.describe(), "Create issue");
+        assert_eq!(
+            IssueAction::Create {
+                title: "t".into(),
+                body: String::new()
+            }
+            .describe(),
+            "Create issue"
+        );
     }
 
     #[test]
@@ -403,7 +427,10 @@ mod tests {
     fn success_messages_are_specific() {
         assert_eq!(
             success_message(
-                &IssueAction::Create { title: "t".into(), body: String::new() },
+                &IssueAction::Create {
+                    title: "t".into(),
+                    body: String::new()
+                },
                 "https://github.com/o/r/issues/50\n"
             ),
             "Created issue #50"
@@ -418,14 +445,21 @@ mod tests {
         );
         assert_eq!(
             success_message(
-                &IssueAction::Comment { number: 8, body: "hi".into() },
+                &IssueAction::Comment {
+                    number: 8,
+                    body: "hi".into()
+                },
                 ""
             ),
             "Commented on issue #8"
         );
         assert_eq!(
             success_message(
-                &IssueAction::EditLabels { number: 8, add: vec![], remove: vec![] },
+                &IssueAction::EditLabels {
+                    number: 8,
+                    add: vec![],
+                    remove: vec![]
+                },
                 ""
             ),
             "Updated labels on issue #8"

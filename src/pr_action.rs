@@ -82,8 +82,14 @@ impl ReviewDecision {
 pub enum PrAction {
     /// Create a PR from the current branch. `body` may be empty; the base is
     /// left to gh (the repo's default branch).
-    Create { title: String, body: String },
-    Merge { number: u64, method: MergeMethod },
+    Create {
+        title: String,
+        body: String,
+    },
+    Merge {
+        number: u64,
+        method: MergeMethod,
+    },
     Review {
         number: u64,
         decision: ReviewDecision,
@@ -115,17 +121,13 @@ impl PrAction {
                 }
                 args
             }
-            Self::Merge { number, method } => vec![
-                s("pr"),
-                s("merge"),
-                number.to_string(),
-                s(method.flag()),
-            ],
+            Self::Merge { number, method } => {
+                vec![s("pr"), s("merge"), number.to_string(), s(method.flag())]
+            }
             Self::Review {
                 number, decision, ..
             } => {
-                let mut args =
-                    vec![s("pr"), s("review"), number.to_string(), s(decision.flag())];
+                let mut args = vec![s("pr"), s("review"), number.to_string(), s(decision.flag())];
                 if decision.needs_body() {
                     if let Some(path) = body_file {
                         args.push(s("--body-file"));
@@ -160,11 +162,7 @@ pub fn parse_created_pr_number(stdout: &str) -> Option<u64> {
 
 /// Whether a "create PR" action should be offered: the branch is publishable
 /// (has a remote to push to) and no open PR already exists for it.
-pub fn can_create_pr(
-    open_prs: &HashMap<String, PrInfo>,
-    branch: &str,
-    publishable: bool,
-) -> bool {
+pub fn can_create_pr(open_prs: &HashMap<String, PrInfo>, branch: &str, publishable: bool) -> bool {
     publishable && !branch.is_empty() && !open_prs.contains_key(branch)
 }
 
@@ -326,7 +324,10 @@ mod tests {
 
     #[test]
     fn merge_args_map_method_to_flag() {
-        let mk = |m| PrAction::Merge { number: 42, method: m };
+        let mk = |m| PrAction::Merge {
+            number: 42,
+            method: m,
+        };
         assert_eq!(
             mk(MergeMethod::Merge).build_args(None),
             vec!["pr", "merge", "42", "--merge"]
@@ -345,7 +346,10 @@ mod tests {
         };
         // Approve takes no body-file even if a path is offered.
         assert_eq!(approve.body(), None);
-        assert_eq!(approve.build_args(Some("/p")), vec!["pr", "review", "7", "--approve"]);
+        assert_eq!(
+            approve.build_args(Some("/p")),
+            vec!["pr", "review", "7", "--approve"]
+        );
 
         let changes = PrAction::Review {
             number: 7,
@@ -355,7 +359,14 @@ mod tests {
         assert_eq!(changes.body(), Some("please fix"));
         assert_eq!(
             changes.build_args(Some("/p")),
-            vec!["pr", "review", "7", "--request-changes", "--body-file", "/p"]
+            vec![
+                "pr",
+                "review",
+                "7",
+                "--request-changes",
+                "--body-file",
+                "/p"
+            ]
         );
 
         let comment = PrAction::Review {

@@ -143,8 +143,7 @@ impl App {
     // ── Remote picker ───────────────────────────────────────────────────
 
     fn open_remote_picker(&mut self, remotes: Vec<String>, op: RemoteOp) {
-        let selected =
-            remote_picker_default(&remotes, self.repo.head_upstream_remote().as_deref());
+        let selected = remote_picker_default(&remotes, self.repo.head_upstream_remote().as_deref());
         self.mode = AppMode::RemotePicker {
             remotes,
             selected,
@@ -168,11 +167,19 @@ impl App {
         match action {
             Action::MoveUp => {
                 let new = cyclic_prev(selected, remotes.len());
-                self.mode = AppMode::RemotePicker { remotes, selected: new, op };
+                self.mode = AppMode::RemotePicker {
+                    remotes,
+                    selected: new,
+                    op,
+                };
             }
             Action::MoveDown => {
                 let new = cyclic_next(selected, remotes.len());
-                self.mode = AppMode::RemotePicker { remotes, selected: new, op };
+                self.mode = AppMode::RemotePicker {
+                    remotes,
+                    selected: new,
+                    op,
+                };
             }
             Action::MenuSelect | Action::Confirm => {
                 if let Some(remote) = remotes.get(selected).cloned() {
@@ -270,7 +277,11 @@ mod tests {
     use super::remote_picker_default;
 
     fn remotes() -> Vec<String> {
-        vec!["origin".to_string(), "upstream".to_string(), "fork".to_string()]
+        vec![
+            "origin".to_string(),
+            "upstream".to_string(),
+            "fork".to_string(),
+        ]
     }
 
     #[test]

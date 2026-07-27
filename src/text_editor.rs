@@ -240,8 +240,7 @@ impl TextEditor {
     // ── Selection ────────────────────────────────────────────────────
 
     pub fn has_selection(&self) -> bool {
-        self.selection
-            .is_some_and(|s| s.anchor != s.cursor)
+        self.selection.is_some_and(|s| s.anchor != s.cursor)
     }
 
     pub fn selected_text(&self) -> Option<&str> {
@@ -488,7 +487,10 @@ mod tests {
     #[test]
     fn insert_replaces_selection() {
         let mut ed = editor_at("hello", 1);
-        ed.selection = Some(Selection { anchor: 1, cursor: 4 });
+        ed.selection = Some(Selection {
+            anchor: 1,
+            cursor: 4,
+        });
         ed.insert_char('X');
         assert_eq!(ed.text, "hXo");
         assert!(ed.selection.is_none());
@@ -529,7 +531,10 @@ mod tests {
     #[test]
     fn backspace_deletes_selection() {
         let mut ed = editor_at("abcde", 1);
-        ed.selection = Some(Selection { anchor: 1, cursor: 3 });
+        ed.selection = Some(Selection {
+            anchor: 1,
+            cursor: 3,
+        });
         ed.backspace();
         assert_eq!(ed.text, "ade");
         assert_eq!(ed.cursor, 1);
@@ -652,7 +657,13 @@ mod tests {
         ed.move_right(true);
         assert!(ed.has_selection());
         assert_eq!(ed.selected_text(), Some("hel"));
-        assert_eq!(ed.selection, Some(Selection { anchor: 0, cursor: 3 }));
+        assert_eq!(
+            ed.selection,
+            Some(Selection {
+                anchor: 0,
+                cursor: 3
+            })
+        );
     }
 
     #[test]
@@ -669,7 +680,10 @@ mod tests {
     #[test]
     fn move_left_collapses_selection_to_start() {
         let mut ed = editor_at("hello", 1);
-        ed.selection = Some(Selection { anchor: 1, cursor: 4 });
+        ed.selection = Some(Selection {
+            anchor: 1,
+            cursor: 4,
+        });
         ed.move_left(false);
         assert_eq!(ed.cursor, 1);
         assert!(!ed.has_selection());
@@ -677,21 +691,30 @@ mod tests {
 
     #[test]
     fn selection_ordered_reversed() {
-        let sel = Selection { anchor: 5, cursor: 2 };
+        let sel = Selection {
+            anchor: 5,
+            cursor: 2,
+        };
         assert_eq!(sel.ordered(), (2, 5));
     }
 
     #[test]
     fn selected_text_reversed_direction() {
         let mut ed = editor_at("hello world", 5);
-        ed.selection = Some(Selection { anchor: 5, cursor: 0 });
+        ed.selection = Some(Selection {
+            anchor: 5,
+            cursor: 0,
+        });
         assert_eq!(ed.selected_text(), Some("hello"));
     }
 
     #[test]
     fn collapsed_selection_is_not_active() {
         let mut ed = editor_at("abc", 1);
-        ed.selection = Some(Selection { anchor: 1, cursor: 1 });
+        ed.selection = Some(Selection {
+            anchor: 1,
+            cursor: 1,
+        });
         assert!(!ed.has_selection());
         assert_eq!(ed.selected_text(), None);
     }
@@ -705,7 +728,10 @@ mod tests {
     #[test]
     fn delete_selection_removes_range() {
         let mut ed = editor_at("abcdef", 0);
-        ed.selection = Some(Selection { anchor: 1, cursor: 4 });
+        ed.selection = Some(Selection {
+            anchor: 1,
+            cursor: 4,
+        });
         assert!(ed.delete_selection());
         assert_eq!(ed.text, "aef");
         assert_eq!(ed.cursor, 1);

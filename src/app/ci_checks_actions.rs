@@ -148,7 +148,10 @@ impl App {
                     });
                 }
             }
-            _ => self.toast(crate::toast::ToastKind::Info, "No failure log for this check (press o to open)"),
+            _ => self.toast(
+                crate::toast::ToastKind::Info,
+                "No failure log for this check (press o to open)",
+            ),
         }
     }
 

@@ -14,8 +14,8 @@ use crate::app::App;
 
 use super::geometry::pixel_row_cells;
 use super::rows::{adjacent_cells, fold_rows_windowed, visible_rows};
-use crate::ui::theme::Theme;
 use super::{apply_merged_lane_dim, is_base_update_row};
+use crate::ui::theme::Theme;
 
 /// Build one `RowSpec` per list item (respecting the active commit filter), in
 /// the same order the graph widget lists them, so the overlay can index into it
@@ -177,7 +177,15 @@ pub fn dim_pixel_specs_window(
         .and_then(|n| n.commit.as_ref())
         .map(|c| c.oid);
     dim_specs_window_core(
-        base, &row_oids, &force_dim, lit, lane_rgb, merged_oids, merged_exempt, win_start, win_end,
+        base,
+        &row_oids,
+        &force_dim,
+        lit,
+        lane_rgb,
+        merged_oids,
+        merged_exempt,
+        win_start,
+        win_end,
     )
 }
 
@@ -290,7 +298,11 @@ fn dim_specs_window_core(
                     };
                     let mut c = *c;
                     if let Some(cell) = neighbor.and_then(|n| {
-                        let slice = if c.from_underlay { &n.underlay } else { &n.cells };
+                        let slice = if c.from_underlay {
+                            &n.underlay
+                        } else {
+                            &n.cells
+                        };
                         slice.get(c.col as usize)
                     }) {
                         // A TeeDown's boundary-crossing curve is its STEM,
@@ -384,7 +396,11 @@ fn apply_trace_dim(
             // edge — the Pipe the Tee replaced). A fork-connector hub carries
             // no secondary; its trunk then follows the primary like before.
             pc.dim_secondary = !is_lit(primary);
-            let trunk = if secondary.is_some() { secondary } else { primary };
+            let trunk = if secondary.is_some() {
+                secondary
+            } else {
+                primary
+            };
             pc.dim = !is_lit(trunk);
             if let Some(rgb) = color_of(primary) {
                 pc.color = rgb;
@@ -408,8 +424,8 @@ fn apply_trace_dim(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::rows::fold_rows;
+    use super::*;
     use crate::git::graph::{CellType, GraphNode};
     use chrono::Local;
     use std::collections::HashMap;
@@ -540,14 +556,23 @@ mod tests {
 
         apply_trace_dim(&mut cells, &oids, &lit, &lane_rgb);
 
-        assert!(cells[2].dim, "sibling ┴ riser must dim: its own edge is unlit");
+        assert!(
+            cells[2].dim,
+            "sibling ┴ riser must dim: its own edge is unlit"
+        );
         assert_eq!(
             cells[2].color, yellow,
             "sibling ┴ riser keeps its own color, not the traced branch's"
         );
         assert!(!cells[4].dim, "the traced branch's own turn stays lit");
-        assert_eq!(cells[4].color, red, "lit stroke takes the traced lane color");
-        assert!(!cells[1].dim, "shared run cell: primary (traced) edge lights it");
+        assert_eq!(
+            cells[4].color, red,
+            "lit stroke takes the traced lane color"
+        );
+        assert!(
+            !cells[1].dim,
+            "shared run cell: primary (traced) edge lights it"
+        );
         assert!(cells[0].dim, "the trunk tee is off-lineage here and dims");
     }
 
@@ -637,7 +662,8 @@ mod tests {
         let (base, oids, lit, lane_rgb) = window_dim_fixture(12);
         let ro = row_oids_of(&oids);
         let ff = no_force(base.len());
-        let full = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 0, base.len());
+        let full =
+            dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 0, base.len());
         let windowed = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 4, 9);
         for i in 4..9 {
             assert_eq!(windowed[i], full[i], "row {i} matches the full-range dim");
@@ -665,7 +691,8 @@ mod tests {
         // Row 2 is a base-update merge; the rest are ordinary rows.
         let mut ff = no_force(base.len());
         ff[2] = true;
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 0, base.len());
+        let out =
+            dim_specs_window_core(&base, &ro, &ff, &lit, &lane_rgb, None, None, 0, base.len());
 
         // Row 2's connector is fully dimmed by force-dim...
         assert!(
@@ -675,7 +702,10 @@ mod tests {
         );
         // ...even though row 2 is an EVEN row that trace dimming would leave lit —
         // force-dim wins over trace, mirroring the unicode `force_dim || trace`.
-        assert!(!out[0].cells[0].dim, "non-forced even row 0 stays lit by trace");
+        assert!(
+            !out[0].cells[0].dim,
+            "non-forced even row 0 stays lit by trace"
+        );
     }
 
     #[test]
@@ -727,11 +757,20 @@ mod tests {
         let empty_rgb = std::collections::HashMap::new();
 
         let out = dim_specs_window_core(
-            &base, &ro, &ff, &empty_lit, &empty_rgb, None, None, 0, base.len(),
+            &base,
+            &ro,
+            &ff,
+            &empty_lit,
+            &empty_rgb,
+            None,
+            None,
+            0,
+            base.len(),
         );
 
         assert!(
-            out.iter().all(|s| s.cells.iter().all(|c| !c.dim && !c.dim_secondary)),
+            out.iter()
+                .all(|s| s.cells.iter().all(|c| !c.dim && !c.dim_secondary)),
             "no dim source active: all cells stay bright"
         );
     }
@@ -760,7 +799,10 @@ mod tests {
                 Some(&cells_b),
                 &[],
                 None,
-                Some(NeighborRow { underlay: &[], cells: &cells_b }),
+                Some(NeighborRow {
+                    underlay: &[],
+                    cells: &cells_b,
+                }),
                 &theme,
             ),
             build_row_spec(
@@ -768,7 +810,10 @@ mod tests {
                 &node_b,
                 None,
                 &[],
-                Some(NeighborRow { underlay: &[], cells: &cells_a }),
+                Some(NeighborRow {
+                    underlay: &[],
+                    cells: &cells_a,
+                }),
                 None,
                 &theme,
             ),
@@ -791,7 +836,17 @@ mod tests {
 
         // Tracing lights only the trunk: the spoke cell dims → so must the tail.
         let lit_trunk = [(trunk_edge, oid(3))].into_iter().collect();
-        let out = dim_specs_window_core(&base, &ro, &ff, &lit_trunk, &HashMap::new(), None, None, 0, 2);
+        let out = dim_specs_window_core(
+            &base,
+            &ro,
+            &ff,
+            &lit_trunk,
+            &HashMap::new(),
+            None,
+            None,
+            0,
+            2,
+        );
         assert!(out[0].cells[2].dim, "spoke cell dims off-lineage");
         assert!(out[1].incoming[0].dim, "tail dims with its source spoke");
 
@@ -801,6 +856,9 @@ mod tests {
         let lane_rgb = [(oid(2), red)].into_iter().collect();
         let out = dim_specs_window_core(&base, &ro, &ff, &lit_branch, &lane_rgb, None, None, 0, 2);
         assert!(!out[1].incoming[0].dim, "lit tail stays bright");
-        assert_eq!(out[1].incoming[0].color, red, "tail takes the spoke's traced color");
+        assert_eq!(
+            out[1].incoming[0].color, red,
+            "tail takes the spoke's traced color"
+        );
     }
 }

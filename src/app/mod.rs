@@ -10,58 +10,57 @@ use crate::{
     action::Action,
     config::{Config, UiState},
     diff_cache::{DiffCache, DiffTarget},
-    files_pane_state::{FilesPaneState, section_of},
-    graph_nav::GraphNav,
-    network::{NetworkManager, PushSpec},
+    files_pane_state::{section_of, FilesPaneState},
     git::{
-        build_graph,
+        build_graph, extract_hunk_from_working_tree,
         graph::GraphLayout,
         operations::{
             abort_operation, accept_ours, accept_theirs, add_tag, apply_patch_cached,
-            apply_patch_cached_reverse, apply_patch_worktree_reverse, cherry_pick,
-            checkout_branch, checkout_commit, checkout_remote_branch, commit_amend,
+            apply_patch_cached_reverse, apply_patch_worktree_reverse, checkout_branch,
+            checkout_commit, checkout_remote_branch, cherry_pick, commit_amend,
             commit_amend_no_edit, commit_with_message, continue_operation, create_branch,
-            create_lightweight_tag, delete_branch, delete_tag,
-            extract_auth_url, get_last_commit_message, is_annotated_tag, is_https_auth_failure,
-            reset_hard_checked, url_host,
-            humanize_git_error, is_dirty_worktree_pull_error, is_divergent_pull_error,
-            merge_branch, prune_remote, push_tag,
-            rebase_branch, rename_branch, reset_to_commit, restore_files, revert_commit, stage_all,
-            stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
-            unstage_all, unstage_file, OpOutcome, PullMode, ResetMode,
+            create_lightweight_tag, delete_branch, delete_tag, extract_auth_url,
+            get_last_commit_message, humanize_git_error, is_annotated_tag,
+            is_dirty_worktree_pull_error, is_divergent_pull_error, is_https_auth_failure,
+            merge_branch, prune_remote, push_tag, rebase_branch, rename_branch, reset_hard_checked,
+            reset_to_commit, restore_files, revert_commit, stage_all, stage_file, stash_all,
+            stash_apply, stash_branch, stash_drop, stash_pop, stash_staged, unstage_all,
+            unstage_file, url_host, OpOutcome, PullMode, ResetMode,
         },
-        extract_hunk_from_working_tree, remote_only_branch_names, render_hunk_patch, short_hash,
-        BranchInfo, CommitDiffInfo, CommitInfo, Credentials, FileChangeKind, FileDiffContent,
-        FileDiffInfo, GitRepository, OperationState, StageStatus, WorkingTreeStatus,
+        remote_only_branch_names, render_hunk_patch, short_hash, BranchInfo, CommitDiffInfo,
+        CommitInfo, Credentials, FileChangeKind, FileDiffContent, FileDiffInfo, GitRepository,
+        OperationState, StageStatus, WorkingTreeStatus,
     },
+    graph_nav::GraphNav,
+    network::{NetworkManager, PushSpec},
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
 };
 
-mod init;
-mod refresh;
-mod conflict_actions;
-mod network_ops;
-mod remote_ops;
-mod status_message;
-mod search_ops;
-mod graph_actions;
+mod branch_picker_actions;
 mod ci_checks_actions;
-mod pr_thread_actions;
-mod pr_action_actions;
-mod issue_actions;
-mod mouse_actions;
-mod file_ops;
 mod commit_editor_actions;
 mod commit_menu_actions;
-mod branch_picker_actions;
-mod file_diff_actions;
-mod input_actions;
-mod credentials;
-mod confirm_actions;
 mod compare_actions;
+mod confirm_actions;
+mod conflict_actions;
+mod credentials;
+mod file_diff_actions;
 mod file_history_actions;
+mod file_ops;
+mod graph_actions;
+mod init;
+mod input_actions;
+mod issue_actions;
+mod mouse_actions;
+mod network_ops;
 mod palette_actions;
+mod pr_action_actions;
+mod pr_thread_actions;
+mod refresh;
+mod remote_ops;
+mod search_ops;
+mod status_message;
 mod undo_actions;
 
 /// Which mechanism handled a successful clipboard copy, and whether the
@@ -624,15 +623,23 @@ pub enum InputAction {
     AddTag,
     Search,
     /// Rename the local branch `old_name` to the typed name.
-    RenameBranch { old_name: String },
+    RenameBranch {
+        old_name: String,
+    },
     /// Create a branch from `stash@{index}` with the typed name.
-    BranchFromStash { index: usize },
+    BranchFromStash {
+        index: usize,
+    },
     /// Stash the working tree with the typed (optional) message.
-    StashPush { scope: StashScope },
+    StashPush {
+        scope: StashScope,
+    },
     /// Edit an issue's assignees: the typed comma-separated logins become the
     /// desired final set; the handler diffs it against the issue's current
     /// assignees to compute add/remove.
-    EditIssueAssignees { number: u64 },
+    EditIssueAssignees {
+        number: u64,
+    },
     /// First step of the HTTPS credential prompt: enter the username. The
     /// pending op + host live on `App.pending_auth`.
     AuthUsername,
@@ -645,10 +652,18 @@ pub enum InputAction {
 /// prompt. Captures everything needed to rerun the exact same command.
 #[derive(Debug, Clone)]
 pub enum RetryableOp {
-    Fetch { remote: String, show_message: bool, silent: bool },
+    Fetch {
+        remote: String,
+        show_message: bool,
+        silent: bool,
+    },
     FetchAll,
     Push(PushSpec),
-    Pull { remote: Option<String>, branch: Option<String>, mode: PullMode },
+    Pull {
+        remote: Option<String>,
+        branch: Option<String>,
+        mode: PullMode,
+    },
 }
 
 /// A network op currently in flight, kept so its completion handler can drive
@@ -686,7 +701,10 @@ pub enum ConfirmAction {
     /// remote/local status, threaded through so the checkout creates/tracks a
     /// local branch off a remote-tracking ref instead of guessing from an
     /// "origin/" prefix (mirrors [`ConfirmAction::Merge`]'s `is_remote`).
-    Checkout { name: String, is_remote: bool },
+    Checkout {
+        name: String,
+        is_remote: bool,
+    },
     /// Load the entire commit history (may be a large walk).
     LoadAllCommits,
     /// Apply the newest undo-ledger entry (branch/tag delete, merge, pull, rename).
@@ -705,10 +723,16 @@ pub enum ConfirmAction {
     /// branch's `BranchInfo::is_remote` at selection time, threaded through
     /// explicitly so the merge resolves `refs/remotes/<name>` for a
     /// remote-tracking branch instead of guessing from the name alone.
-    Merge { name: String, is_remote: bool },
+    Merge {
+        name: String,
+        is_remote: bool,
+    },
     /// Rebase the current branch onto `name`. Same `is_remote` threading as
     /// [`ConfirmAction::Merge`].
-    Rebase { name: String, is_remote: bool },
+    Rebase {
+        name: String,
+        is_remote: bool,
+    },
     CherryPick(Oid),
     Revert(Oid),
     ResetSoft(Oid),
@@ -716,7 +740,10 @@ pub enum ConfirmAction {
     ResetHard(Oid),
     Push,
     /// Delete a branch on a remote (`git push <remote> --delete <branch>`).
-    DeleteRemoteBranch { remote: String, branch: String },
+    DeleteRemoteBranch {
+        remote: String,
+        branch: String,
+    },
     TrashFile(Vec<String>),
     RestoreFile(Vec<String>),
     StashDrop(usize),
@@ -837,8 +864,7 @@ pub struct MergedState {
     /// signal for catching squash-merged branches whose local ref survives (the
     /// remote copy having been deleted on merge). Empty when gh is unavailable.
     pub pr_branches: std::collections::HashSet<String>,
-    pub pr_branch_fetch:
-        crate::interval_fetch::IntervalFetch<std::collections::HashSet<String>>,
+    pub pr_branch_fetch: crate::interval_fetch::IntervalFetch<std::collections::HashSet<String>>,
     /// OIDs of base-update ("back-merge") commits: merges on an open PR's branch
     /// that pulled the updated base branch in (issue #55). Derived from
     /// `open_prs` + the base branch via `classify_base_update_merges`; drives the
@@ -1022,9 +1048,8 @@ pub struct App {
     // Open GitHub PRs by head branch name, refreshed in the background via the
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
-    pub pr_fetch: crate::interval_fetch::IntervalFetch<
-        std::collections::HashMap<String, crate::pr::PrInfo>,
-    >,
+    pub pr_fetch:
+        crate::interval_fetch::IntervalFetch<std::collections::HashMap<String, crate::pr::PrInfo>>,
 
     // Merged-branch classification subsystem (see `MergedState`): the async
     // GitHub/local merged signals, the hide-merged toggle, and the base-update
@@ -1225,16 +1250,9 @@ impl TraceCache {
 
 /// Cached undimmed pixel base row specs plus the key they were built for:
 /// `(graph_generation, commit_filter, panel_available, graph_width, specs)`.
-pub type PixelSpecsCache = (
-    u64,
-    String,
-    u16,
-    u16,
-    Vec<crate::ui::graph_pixels::RowSpec>,
-);
+pub type PixelSpecsCache = (u64, String, u16, u16, Vec<crate::ui::graph_pixels::RowSpec>);
 
 impl App {
-
     /// Check if the currently selected node is the uncommitted changes node
     /// Return the active theme based on config.
     pub fn theme(&self) -> crate::ui::theme::Theme {
@@ -1278,9 +1296,12 @@ impl App {
 
     /// Sync the file list cache and display items from the current diff.
     pub fn sync_file_list_cache(&mut self) {
-        let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
+        let diff = self
+            .diff_cache
+            .cached_diff_or_quick(self.current_diff_target());
         let is_uncommitted = self.diff_target_is_uncommitted();
-        self.files_pane.sync_file_list_cache(diff, is_uncommitted, &self.repo_path);
+        self.files_pane
+            .sync_file_list_cache(diff, is_uncommitted, &self.repo_path);
     }
 
     /// Resolve the current selection to an index in display_items_cache.
@@ -1295,9 +1316,12 @@ impl App {
 
     /// Build a fresh set of files pane items (not cached).
     pub fn files_pane_items(&self) -> Vec<FilesPaneItem> {
-        let diff = self.diff_cache.cached_diff_or_quick(self.current_diff_target());
+        let diff = self
+            .diff_cache
+            .cached_diff_or_quick(self.current_diff_target());
         let is_uncommitted = self.diff_target_is_uncommitted();
-        self.files_pane.build_files_pane_items(diff, is_uncommitted, &self.repo_path)
+        self.files_pane
+            .build_files_pane_items(diff, is_uncommitted, &self.repo_path)
     }
 
     fn select_file_at(&mut self, idx: usize) {
@@ -1368,11 +1392,14 @@ impl App {
         }
         if matches!(action, Action::ToggleDebugKeys) {
             self.debug_keys = !self.debug_keys;
-            self.toast(crate::toast::ToastKind::Info, if self.debug_keys {
-                "Debug keys ON"
-            } else {
-                "Debug keys OFF"
-            });
+            self.toast(
+                crate::toast::ToastKind::Info,
+                if self.debug_keys {
+                    "Debug keys ON"
+                } else {
+                    "Debug keys OFF"
+                },
+            );
             return Ok(());
         }
         // F5 full update works from any panel/sub-state; the keybinding layer
@@ -1424,7 +1451,9 @@ impl App {
             AppMode::IssueLabelPicker { .. } => self.handle_issue_label_picker_action(action),
             AppMode::IssueLabelFilter { .. } => self.handle_issue_label_filter_action(action),
             AppMode::BranchPicker { .. } => self.handle_branch_picker_action(action)?,
-            AppMode::BranchDeletePicker { .. } => self.handle_branch_delete_picker_action(action)?,
+            AppMode::BranchDeletePicker { .. } => {
+                self.handle_branch_delete_picker_action(action)?
+            }
             AppMode::TagPicker { .. } => self.handle_tag_picker_action(action)?,
             AppMode::RemotePicker { .. } => self.handle_remote_picker_action(action)?,
             AppMode::BranchFilter { .. } => self.handle_branch_filter_action(action)?,
@@ -1514,9 +1543,8 @@ impl App {
                     .as_ref()
                     .filter(|c| lineage.contains(&c.oid))
                     .map(|c| {
-                        let rgb = crate::ui::graph_pixels::color_to_rgb(
-                            theme.lane_color(n.color_index),
-                        );
+                        let rgb =
+                            crate::ui::graph_pixels::color_to_rgb(theme.lane_color(n.color_index));
                         (c.oid, rgb)
                     })
             })
@@ -1543,7 +1571,10 @@ impl App {
         self.trace_enabled = !self.trace_enabled;
         self.save_ui_state();
         let state = if self.trace_enabled { "on" } else { "off" };
-        self.toast(crate::toast::ToastKind::Info, format!("Branch tracing {state}"));
+        self.toast(
+            crate::toast::ToastKind::Info,
+            format!("Branch tracing {state}"),
+        );
     }
 
     /// Toggle whether remote-only branches are shown in the graph (persisted).
@@ -1602,7 +1633,11 @@ impl App {
             self.focused_panel = FocusedPanel::Graph;
         }
         self.save_ui_state();
-        let state = if self.hide_files_pane { "hidden" } else { "shown" };
+        let state = if self.hide_files_pane {
+            "hidden"
+        } else {
+            "shown"
+        };
         self.toast(crate::toast::ToastKind::Info, format!("Files pane {state}"));
     }
 
@@ -1615,8 +1650,15 @@ impl App {
             self.focused_panel = FocusedPanel::Graph;
         }
         self.save_ui_state();
-        let state = if self.hide_commit_pane { "hidden" } else { "shown" };
-        self.toast(crate::toast::ToastKind::Info, format!("Commit pane {state}"));
+        let state = if self.hide_commit_pane {
+            "hidden"
+        } else {
+            "shown"
+        };
+        self.toast(
+            crate::toast::ToastKind::Info,
+            format!("Commit pane {state}"),
+        );
     }
 
     pub(crate) fn toggle_remote_branches(&mut self) -> Result<()> {
@@ -1628,7 +1670,10 @@ impl App {
         } else {
             "shown"
         };
-        self.toast(crate::toast::ToastKind::Info, format!("Remote branches {state}"));
+        self.toast(
+            crate::toast::ToastKind::Info,
+            format!("Remote branches {state}"),
+        );
         Ok(())
     }
 
@@ -1639,11 +1684,7 @@ impl App {
         self.merged.hide = !self.merged.hide;
         self.save_ui_state();
         self.refresh(true)?;
-        let state = if self.merged.hide {
-            "hidden"
-        } else {
-            "dimmed"
-        };
+        let state = if self.merged.hide { "hidden" } else { "dimmed" };
         self.set_message(format!("Merged branches {state}"));
         Ok(())
     }
@@ -1722,7 +1763,9 @@ impl App {
         pairs.sort();
         pairs.dedup();
         if pairs.is_empty() {
-            self.merged.base_update.reset(std::collections::HashSet::new());
+            self.merged
+                .base_update
+                .reset(std::collections::HashSet::new());
             return;
         }
         let repo = self.repo.repo();
@@ -2100,7 +2143,6 @@ impl App {
             self.mode = AppMode::Normal;
         }
     }
-
 }
 
 #[cfg(test)]
@@ -2149,7 +2191,10 @@ mod settings_menu_filter_tests {
         assert_eq!(settings_query(&app), "dim");
         let ds = crate::settings::descriptors();
         let visible = crate::settings::filter_descriptors(&ds, "dim");
-        assert!(!visible.is_empty(), "test fixture: 'dim' must match something");
+        assert!(
+            !visible.is_empty(),
+            "test fixture: 'dim' must match something"
+        );
         assert!(
             visible.contains(&settings_selected(&app)),
             "selection must land inside the filtered subset"
@@ -2182,7 +2227,11 @@ mod settings_menu_filter_tests {
         let before = settings_selected(&app);
         app.handle_action(Action::MoveDown).unwrap();
         app.handle_action(Action::MoveUp).unwrap();
-        assert_eq!(settings_selected(&app), before, "no visible rows to move between");
+        assert_eq!(
+            settings_selected(&app),
+            before,
+            "no visible rows to move between"
+        );
     }
 
     #[test]
@@ -2194,7 +2243,10 @@ mod settings_menu_filter_tests {
         type_str(&mut app, "e");
         let ds = crate::settings::descriptors();
         let visible = crate::settings::filter_descriptors(&ds, "e");
-        assert!(visible.len() > 1, "test fixture needs >1 match to prove clamping");
+        assert!(
+            visible.len() > 1,
+            "test fixture needs >1 match to prove clamping"
+        );
         for _ in 0..(visible.len() * 2 + 1) {
             app.handle_action(Action::MoveDown).unwrap();
             assert!(visible.contains(&settings_selected(&app)));
@@ -2216,7 +2268,10 @@ mod settings_menu_filter_tests {
             "Dim merged branches"
         );
         app.handle_action(Action::MenuSelect).unwrap();
-        assert_eq!(app.merged.dim, !before, "MenuSelect must act on the filtered selection");
+        assert_eq!(
+            app.merged.dim, !before,
+            "MenuSelect must act on the filtered selection"
+        );
     }
 
     #[test]
@@ -2291,7 +2346,10 @@ mod settings_menu_filter_tests {
         app.handle_action(Action::InputChar('x')).unwrap();
         match &app.mode {
             AppMode::Settings { editing, query, .. } => {
-                assert_eq!(*editing, None, "typing a letter must cancel the numeric edit");
+                assert_eq!(
+                    *editing, None,
+                    "typing a letter must cancel the numeric edit"
+                );
                 assert_eq!(query, "x");
             }
             other => panic!("expected Settings mode, got {other:?}"),
@@ -2306,7 +2364,10 @@ mod settings_menu_filter_tests {
         app.handle_action(Action::InputChar('5')).unwrap();
         match &app.mode {
             AppMode::Settings { editing, query, .. } => {
-                assert_eq!(*editing, None, "digit must not start a numeric edit mid-filter");
+                assert_eq!(
+                    *editing, None,
+                    "digit must not start a numeric edit mid-filter"
+                );
                 assert_eq!(query, "e5");
             }
             other => panic!("expected Settings mode, got {other:?}"),

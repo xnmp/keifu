@@ -234,18 +234,38 @@ fn test_multiple_merges() {
 
     // c4 and c1 are fork points (2 children each), so each is preceded by a
     // connector row that merges lane 1 back into lane 0.
-    let c4_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, c4)).unwrap();
-    let c1_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, c1)).unwrap();
+    let c4_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, c4))
+        .unwrap();
+    let c1_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, c1))
+        .unwrap();
     assert!(c4_idx > 0, "expected a connector row before c4");
     assert!(c1_idx > 0, "expected a connector row before c1");
     let connector_before_c4 = &layout.nodes[c4_idx - 1];
     let connector_before_c1 = &layout.nodes[c1_idx - 1];
     assert!(connector_before_c4.commit.is_none());
     assert!(connector_before_c1.commit.is_none());
-    assert!(matches!(connector_before_c4.cells[0], CellType::TeeRight(_)));
-    assert!(matches!(connector_before_c4.cells[2], CellType::MergeLeft(_)));
-    assert!(matches!(connector_before_c1.cells[0], CellType::TeeRight(_)));
-    assert!(matches!(connector_before_c1.cells[2], CellType::MergeLeft(_)));
+    assert!(matches!(
+        connector_before_c4.cells[0],
+        CellType::TeeRight(_)
+    ));
+    assert!(matches!(
+        connector_before_c4.cells[2],
+        CellType::MergeLeft(_)
+    ));
+    assert!(matches!(
+        connector_before_c1.cells[0],
+        CellType::TeeRight(_)
+    ));
+    assert!(matches!(
+        connector_before_c1.cells[2],
+        CellType::MergeLeft(_)
+    ));
 
     // c1 is the root: no parents, no outgoing connectors
     assert_eq!(c1.lane, 0);
@@ -378,7 +398,11 @@ fn test_octopus_merge() {
 
     // R is a fork point (A, B, C all point to it) so a connector row precedes it,
     // fanning all three lanes back into lane 0.
-    let r_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, r)).unwrap();
+    let r_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, r))
+        .unwrap();
     assert!(r_idx > 0, "expected a connector row before R");
     let connector = &layout.nodes[r_idx - 1];
     assert!(connector.commit.is_none());
@@ -480,8 +504,16 @@ fn test_parallel_branches() {
     // Both chains are continuous: the lane holding the "other" branch shows
     // an unbroken line (Pipe, or the branch's own Commit row) between the two
     // visible commits on the A-chain - no gaps (Empty).
-    let a2_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, a2)).unwrap();
-    let a1_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, a1)).unwrap();
+    let a2_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, a2))
+        .unwrap();
+    let a1_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, a1))
+        .unwrap();
     let b_cell_idx = b2.lane * 2;
     for node in &layout.nodes[(a2_idx + 1)..a1_idx] {
         assert!(
@@ -496,7 +528,11 @@ fn test_parallel_branches() {
 
     // M1 is a fork point (A1 and B1 both point to it), so a connector row
     // merges B1's lane back into the main lane right before M1.
-    let m1_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, m1)).unwrap();
+    let m1_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, m1))
+        .unwrap();
     assert!(m1_idx > 0);
     let connector1 = &layout.nodes[m1_idx - 1];
     assert!(connector1.commit.is_none());
@@ -515,7 +551,11 @@ fn test_parallel_branches() {
 
     // R is a fork point (M1, X both point to it): another connector row merges
     // X's lane back into the main lane before R, which terminates the graph.
-    let r_idx = layout.nodes.iter().position(|n| std::ptr::eq(n, r)).unwrap();
+    let r_idx = layout
+        .nodes
+        .iter()
+        .position(|n| std::ptr::eq(n, r))
+        .unwrap();
     assert!(r_idx > 0);
     let connector2 = &layout.nodes[r_idx - 1];
     assert!(connector2.commit.is_none());
@@ -820,16 +860,13 @@ fn test_stash_node_renders_with_base_connection() {
         1
     );
     assert!(
-        !stash_node
-            .cells
-            .iter()
-            .any(|c| matches!(
-                c,
-                CellType::BranchLeft(_)
-                    | CellType::BranchRight(_)
-                    | CellType::MergeLeft(_)
-                    | CellType::MergeRight(_)
-            )),
+        !stash_node.cells.iter().any(|c| matches!(
+            c,
+            CellType::BranchLeft(_)
+                | CellType::BranchRight(_)
+                | CellType::MergeLeft(_)
+                | CellType::MergeRight(_)
+        )),
         "stash's own row should have no branch/merge glyphs: {:?}",
         stash_node.cells
     );
@@ -867,7 +904,10 @@ fn test_stash_node_renders_with_base_connection() {
         connector.commit.is_none(),
         "expected a connector row merging the stash lane into base's lane"
     );
-    assert!(matches!(connector.cells[base_node.lane * 2], CellType::TeeRight(_)));
+    assert!(matches!(
+        connector.cells[base_node.lane * 2],
+        CellType::TeeRight(_)
+    ));
     assert!(matches!(
         connector.cells[stash_node.lane * 2],
         CellType::MergeLeft(_)
@@ -882,7 +922,15 @@ fn test_uncommitted_node_connects_to_head_on_lane_zero() {
     let commits = vec![make_commit("c2", vec!["c1"]), make_commit("c1", vec![])];
     let branches = vec![make_branch("main", "c2", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], Some(Some(3)), Some(make_oid("c2")), &[]);
+    let layout = build_graph(
+        &commits,
+        &branches,
+        &[],
+        &[],
+        Some(Some(3)),
+        Some(make_oid("c2")),
+        &[],
+    );
 
     println!("\nUncommitted, HEAD on lane 0:");
     for node in &layout.nodes {
@@ -1161,17 +1209,14 @@ fn test_orphan_disconnected_roots() {
         let own_cell_idx = root.lane * 2;
         assert!(matches!(root.cells[own_cell_idx], CellType::Commit(_)));
         assert!(
-            !root
-                .cells
-                .iter()
-                .any(|c| matches!(
-                    c,
-                    CellType::BranchLeft(_)
-                        | CellType::BranchRight(_)
-                        | CellType::MergeLeft(_)
-                        | CellType::MergeRight(_)
-                        | CellType::TeeUp(_)
-                )),
+            !root.cells.iter().any(|c| matches!(
+                c,
+                CellType::BranchLeft(_)
+                    | CellType::BranchRight(_)
+                    | CellType::MergeLeft(_)
+                    | CellType::MergeRight(_)
+                    | CellType::TeeUp(_)
+            )),
             "root commit should have no outgoing parent connectors: {:?}",
             root.cells
         );
@@ -1184,7 +1229,15 @@ fn test_single_root_commit() {
     let commits = vec![make_commit("only", vec![])];
     let branches = vec![make_branch("main", "only", true)];
 
-    let layout = build_graph(&commits, &branches, &[], &[], None, Some(make_oid("only")), &[]);
+    let layout = build_graph(
+        &commits,
+        &branches,
+        &[],
+        &[],
+        None,
+        Some(make_oid("only")),
+        &[],
+    );
 
     assert_eq!(layout.nodes.len(), 1);
     assert_eq!(layout.max_lane, 0);
@@ -1329,12 +1382,12 @@ fn trace_does_not_leak_onto_a_reused_lane() {
     // The second reuses the lane the first freed. Selecting one must never
     // trace the other, even where they share a lane column.
     let commits = vec![
-        make_commit("m2", vec!["m1", "g1"]), // merge feature G
-        make_commit("g1", vec!["mid"]),      // feature G
-        make_commit("m1", vec!["mid"]),      // main between the two merges
-        make_commit("mid", vec!["b0", "f1"]),// merge feature F
-        make_commit("f1", vec!["b0"]),       // feature F
-        make_commit("b0", vec![]),           // base
+        make_commit("m2", vec!["m1", "g1"]),  // merge feature G
+        make_commit("g1", vec!["mid"]),       // feature G
+        make_commit("m1", vec!["mid"]),       // main between the two merges
+        make_commit("mid", vec!["b0", "f1"]), // merge feature F
+        make_commit("f1", vec!["b0"]),        // feature F
+        make_commit("b0", vec![]),            // base
     ];
     let branches = vec![make_branch("main", "m2", true)];
     let layout = build_graph(&commits, &branches, &[], &[], None, None, &[]);
@@ -1362,9 +1415,15 @@ fn trace_does_not_leak_onto_a_reused_lane() {
     let g_dot = layout.nodes[row_of(&layout, "g1")].cell_oids[g_lane * 2];
     let f_lit = trace_lit_edges(&layout, &feat_f);
     let g_lit = trace_lit_edges(&layout, &feat_g);
-    assert!(!cell_is_traced(g_dot, &f_lit), "F must not light G's reused lane");
+    assert!(
+        !cell_is_traced(g_dot, &f_lit),
+        "F must not light G's reused lane"
+    );
     let f_dot = layout.nodes[row_of(&layout, "f1")].cell_oids[f_lane * 2];
-    assert!(!cell_is_traced(f_dot, &g_lit), "G must not light F's reused lane");
+    assert!(
+        !cell_is_traced(f_dot, &g_lit),
+        "G must not light F's reused lane"
+    );
 }
 
 #[test]
@@ -1374,9 +1433,9 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
     // merge edge (C1); its secondary is the crossed branch-B pipe (b1).
     let commits = vec![
         make_commit("A3", vec!["A2"]),
-        make_commit("B2", vec!["B1"]),       // branch B tip (keeps lane in flight)
+        make_commit("B2", vec!["B1"]), // branch B tip (keeps lane in flight)
         make_commit("A2", vec!["A1", "C1"]), // merge crosses B's lane
-        make_commit("C1", vec!["R"]),        // feature merged into A2
+        make_commit("C1", vec!["R"]),  // feature merged into A2
         make_commit("A1", vec!["R"]),
         make_commit("B1", vec!["R"]),
         make_commit("R", vec![]),
@@ -1409,7 +1468,10 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
     // The secondary edge — the crossed vertical pipe — lights under branch B's
     // selection, since both its endpoints B2, B1 are on branch B. The primary
     // merge sweep does not.
-    assert!(edge_is_traced(secondary, &branch_b), "crossed pipe (secondary) lit by branch B");
+    assert!(
+        edge_is_traced(secondary, &branch_b),
+        "crossed pipe (secondary) lit by branch B"
+    );
     assert!(!edge_is_traced(primary, &branch_b));
     assert!(
         cell_is_traced(cross_oids, &branch_b),
@@ -1419,7 +1481,10 @@ fn trace_horizontal_pipe_crossing_uses_both_oids() {
     // The merge sweep (A2 → C1) is C1's merge arc: it lights when tracing the
     // FEATURE (C1 is A2's non-first parent), colored by the feature side —
     // but never from the main line (C1 ∉ main line; the lead-in fix).
-    assert!(edge_is_traced(primary, &feat_c), "merge sweep lights from the feature side");
+    assert!(
+        edge_is_traced(primary, &feat_c),
+        "merge sweep lights from the feature side"
+    );
     assert_eq!(
         feat_c.get(&(make_oid("A2"), make_oid("C1"))),
         Some(&make_oid("C1")),
@@ -1445,11 +1510,25 @@ fn trace_lit_edges_classifies_line_merge_and_lead_in_edges() {
     // merge arc (A → F) lights colored by the on-line parent F, and nothing
     // lights the trunk-only edges.
     let f_lit = trace_lit_edges(&layout, &lineage_of(&layout, "F"));
-    assert_eq!(f_lit.get(&(f, b)), Some(&f), "on-line edge colored by its child");
+    assert_eq!(
+        f_lit.get(&(f, b)),
+        Some(&f),
+        "on-line edge colored by its child"
+    );
     assert_eq!(f_lit.get(&(f, f)), Some(&f), "dot self-edge");
-    assert_eq!(f_lit.get(&(a, f)), Some(&f), "merge arc colored by the branch side");
-    assert!(!f_lit.contains_key(&(a, b)), "trunk edge A→B not lit by the feature");
-    assert!(!f_lit.contains_key(&(a, a)), "A's dot not lit by the feature");
+    assert_eq!(
+        f_lit.get(&(a, f)),
+        Some(&f),
+        "merge arc colored by the branch side"
+    );
+    assert!(
+        !f_lit.contains_key(&(a, b)),
+        "trunk edge A→B not lit by the feature"
+    );
+    assert!(
+        !f_lit.contains_key(&(a, a)),
+        "A's dot not lit by the feature"
+    );
     assert!(!edge_is_traced(None, &f_lit), "no edge is never lit");
     assert!(!cell_is_traced((None, None), &f_lit));
 
@@ -1458,8 +1537,14 @@ fn trace_lit_edges_classifies_line_merge_and_lead_in_edges() {
     // merge arc), and neither does the merge arc (F ∉ trunk line).
     let trunk_lit = trace_lit_edges(&layout, &lineage_of(&layout, "B"));
     assert!(trunk_lit.contains_key(&(a, b)), "trunk edge lit");
-    assert!(!trunk_lit.contains_key(&(f, b)), "feature lead-in not lit by the trunk");
-    assert!(!trunk_lit.contains_key(&(a, f)), "merge arc not lit by the trunk");
+    assert!(
+        !trunk_lit.contains_key(&(f, b)),
+        "feature lead-in not lit by the trunk"
+    );
+    assert!(
+        !trunk_lit.contains_key(&(a, f)),
+        "merge arc not lit by the trunk"
+    );
 }
 
 #[test]

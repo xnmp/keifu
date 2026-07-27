@@ -2,9 +2,7 @@
 //! editor, the pickers, confirmation, and async execution.
 
 use super::*;
-use crate::pr_action::{
-    can_create_pr, success_message, MergeMethod, PrAction, ReviewDecision,
-};
+use crate::pr_action::{can_create_pr, success_message, MergeMethod, PrAction, ReviewDecision};
 use crate::toast::ToastKind;
 
 impl App {
@@ -167,9 +165,8 @@ impl App {
                         },
                     ),
                     // The other two need a body → compose first.
-                    ReviewDecision::RequestChanges => self.open_review_compose(
-                        ComposePurpose::ReviewRequestChanges { pr: number },
-                    ),
+                    ReviewDecision::RequestChanges => self
+                        .open_review_compose(ComposePurpose::ReviewRequestChanges { pr: number }),
                     ReviewDecision::Comment => {
                         self.open_review_compose(ComposePurpose::ReviewComment { pr: number })
                     }
@@ -195,8 +192,7 @@ impl App {
             }
             Action::SubmitCompose => self.submit_pr_compose(),
             Action::ExternalEdit => {
-                self.pending_external_edit =
-                    Some(crate::external_edit::ExternalEditTarget::Pr);
+                self.pending_external_edit = Some(crate::external_edit::ExternalEditTarget::Pr);
             }
             other => {
                 super::commit_editor_actions::apply_editor_edit(&mut self.pr_editor, &other);
@@ -344,7 +340,10 @@ mod tests {
     fn title_body_split() {
         assert_eq!(
             compose_title_body("My title\n\nBody line 1\nBody line 2"),
-            ("My title".to_string(), "Body line 1\nBody line 2".to_string())
+            (
+                "My title".to_string(),
+                "Body line 1\nBody line 2".to_string()
+            )
         );
         // Title only.
         assert_eq!(

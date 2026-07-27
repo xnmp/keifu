@@ -76,8 +76,15 @@ pub fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str)
     let signature = Signature::now("Test User", "test@example.com").unwrap();
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();
-    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-        .unwrap()
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+    )
+    .unwrap()
 }
 
 /// Working-directory path of the repository, as the operations layer expects.

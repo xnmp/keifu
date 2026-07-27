@@ -143,8 +143,13 @@ impl App {
                 if !file_list_snapshot.is_empty() {
                     let new_index = (file_index + 1) % file_list_snapshot.len();
                     let path = file_list_snapshot[new_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
-                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
+                    if let Err(e) =
+                        self.enter_file_diff(target, new_index, file_list_snapshot, &path)
+                    {
+                        self.toast(
+                            crate::toast::ToastKind::Error,
+                            format!("Cannot open diff: {e}"),
+                        );
                     }
                 }
             }
@@ -169,8 +174,13 @@ impl App {
                         file_index - 1
                     };
                     let path = file_list_snapshot[new_index].path.clone();
-                    if let Err(e) = self.enter_file_diff(target, new_index, file_list_snapshot, &path) {
-                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
+                    if let Err(e) =
+                        self.enter_file_diff(target, new_index, file_list_snapshot, &path)
+                    {
+                        self.toast(
+                            crate::toast::ToastKind::Error,
+                            format!("Cannot open diff: {e}"),
+                        );
                     }
                 }
             }
@@ -217,8 +227,8 @@ impl App {
             .iter()
             .rposition(|&pos| pos <= *scroll_offset)
             .unwrap_or(0);
-        let is_untracked = file_list.get(*file_index).and_then(|f| f.stage_status)
-            == Some(StageStatus::Untracked);
+        let is_untracked =
+            file_list.get(*file_index).and_then(|f| f.stage_status) == Some(StageStatus::Untracked);
         Some(HunkOpTarget {
             path: content.path.clone(),
             is_binary: content.is_binary,
@@ -234,11 +244,17 @@ impl App {
     fn resolve_hunk_op(&mut self) -> Option<HunkOpTarget> {
         let target = self.hunk_op_target()?;
         if self.current_diff_target() != Some(DiffTarget::Uncommitted) {
-            self.toast(crate::toast::ToastKind::Info, "Hunk staging is only available for uncommitted changes");
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Hunk staging is only available for uncommitted changes",
+            );
             return None;
         }
         if target.is_binary {
-            self.toast(crate::toast::ToastKind::Info, "Cannot stage a hunk of a binary file");
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Cannot stage a hunk of a binary file",
+            );
             return None;
         }
         if !target.has_hunks {
@@ -258,7 +274,10 @@ impl App {
         if target.is_untracked {
             let path_str = target.path.to_string_lossy().to_string();
             stage_file(&self.repo_path, &path_str)?;
-            self.toast(crate::toast::ToastKind::Success, format!("Staged '{}'", target.path.display()));
+            self.toast(
+                crate::toast::ToastKind::Success,
+                format!("Staged '{}'", target.path.display()),
+            );
             return self.reload_file_diff_for_path(&target.path, target.scroll_offset);
         }
         let Some(hunk) =
@@ -274,7 +293,10 @@ impl App {
                 self.toast(crate::toast::ToastKind::Success, "Staged hunk");
                 self.reload_file_diff_for_path(&target.path, target.scroll_offset)?;
             }
-            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Stage hunk failed: {e}")),
+            Err(e) => self.toast(
+                crate::toast::ToastKind::Error,
+                format!("Stage hunk failed: {e}"),
+            ),
         }
         Ok(())
     }
@@ -284,7 +306,10 @@ impl App {
             return Ok(());
         };
         if target.is_untracked {
-            self.toast(crate::toast::ToastKind::Info, "Untracked file has nothing staged to unstage");
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Untracked file has nothing staged to unstage",
+            );
             return Ok(());
         }
         let Some(hunk) =
@@ -300,7 +325,10 @@ impl App {
                 self.toast(crate::toast::ToastKind::Success, "Unstaged hunk");
                 self.reload_file_diff_for_path(&target.path, target.scroll_offset)?;
             }
-            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Unstage hunk failed: {e}")),
+            Err(e) => self.toast(
+                crate::toast::ToastKind::Error,
+                format!("Unstage hunk failed: {e}"),
+            ),
         }
         Ok(())
     }
@@ -310,7 +338,10 @@ impl App {
             return Ok(());
         };
         if target.is_untracked {
-            self.toast(crate::toast::ToastKind::Info, "Untracked file — use the files pane (Delete) to remove it");
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Untracked file — use the files pane (Delete) to remove it",
+            );
             return Ok(());
         }
         let Some(hunk) =
@@ -501,7 +532,11 @@ impl App {
     }
 
     /// Open a file with the default system application.
-    pub(crate) fn open_with_default(&mut self, full_path: &std::path::Path, display_path: &std::path::Path) {
+    pub(crate) fn open_with_default(
+        &mut self,
+        full_path: &std::path::Path,
+        display_path: &std::path::Path,
+    ) {
         use std::process::{Command, Stdio};
         let result = if cfg!(target_os = "macos") {
             Command::new("open")
@@ -527,8 +562,14 @@ impl App {
                 .spawn()
         };
         match result {
-            Ok(_) => self.toast(crate::toast::ToastKind::Success, format!("Opening {}", display_path.display())),
-            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Cannot open file: {e}")),
+            Ok(_) => self.toast(
+                crate::toast::ToastKind::Success,
+                format!("Opening {}", display_path.display()),
+            ),
+            Err(e) => self.toast(
+                crate::toast::ToastKind::Error,
+                format!("Cannot open file: {e}"),
+            ),
         }
     }
 
@@ -552,7 +593,10 @@ impl App {
             if matches!(self.mode, AppMode::FileDiff { .. }) {
                 self.diff_source = None;
                 self.mode = AppMode::Normal;
-                self.toast(crate::toast::ToastKind::Info, "No changed files in this diff");
+                self.toast(
+                    crate::toast::ToastKind::Info,
+                    "No changed files in this diff",
+                );
             }
             return;
         }

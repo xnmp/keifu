@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use keifu::files_pane_state::{FileSelection, FilesPaneItem, section_of};
+use keifu::files_pane_state::{section_of, FileSelection, FilesPaneItem};
 use keifu::git::{FileChangeKind, FileDiffInfo};
 
 fn h(name: &str) -> FilesPaneItem {
@@ -62,9 +62,9 @@ fn compute_next_selection(
         .iter()
         .chain(prev_in_section.iter())
         .find_map(|path| {
-            let i = new_items.iter().position(
-                |item| matches!(item, FilesPaneItem::File(fi) if fi.path == *path),
-            )?;
+            let i = new_items
+                .iter()
+                .position(|item| matches!(item, FilesPaneItem::File(fi) if fi.path == *path))?;
             if section_of(new_items, i) == old_section {
                 Some((path.clone(), old_section.map(|s| s.to_string())))
             } else {
@@ -101,8 +101,11 @@ fn selected_path_after(
 fn stage_first_unstaged_selects_next_unstaged() {
     let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
     let new = vec![
-        h("Staged Changes"), f("a.txt"),
-        h("Unstaged Changes"), f("b.txt"), f("c.txt"),
+        h("Staged Changes"),
+        f("a.txt"),
+        h("Unstaged Changes"),
+        f("b.txt"),
+        f("c.txt"),
     ];
     assert_eq!(selected_path_after(&old, 1, &new), "b.txt");
 }
@@ -111,8 +114,11 @@ fn stage_first_unstaged_selects_next_unstaged() {
 fn stage_last_unstaged_selects_prev_unstaged() {
     let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
     let new = vec![
-        h("Staged Changes"), f("c.txt"),
-        h("Unstaged Changes"), f("a.txt"), f("b.txt"),
+        h("Staged Changes"),
+        f("c.txt"),
+        h("Unstaged Changes"),
+        f("a.txt"),
+        f("b.txt"),
     ];
     assert_eq!(selected_path_after(&old, 3, &new), "b.txt");
 }
@@ -121,8 +127,11 @@ fn stage_last_unstaged_selects_prev_unstaged() {
 fn stage_middle_unstaged_selects_next_unstaged() {
     let old = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt"), f("c.txt")];
     let new = vec![
-        h("Staged Changes"), f("b.txt"),
-        h("Unstaged Changes"), f("a.txt"), f("c.txt"),
+        h("Staged Changes"),
+        f("b.txt"),
+        h("Unstaged Changes"),
+        f("a.txt"),
+        f("c.txt"),
     ];
     assert_eq!(selected_path_after(&old, 2, &new), "c.txt");
 }
@@ -137,12 +146,20 @@ fn stage_only_unstaged_falls_back() {
 #[test]
 fn stage_with_existing_staged_selects_next_unstaged() {
     let old = vec![
-        h("Staged Changes"), f("x.txt"),
-        h("Unstaged Changes"), f("app.rs"), f("fdsklt"), f("gshifdg"),
+        h("Staged Changes"),
+        f("x.txt"),
+        h("Unstaged Changes"),
+        f("app.rs"),
+        f("fdsklt"),
+        f("gshifdg"),
     ];
     let new = vec![
-        h("Staged Changes"), f("app.rs"), f("x.txt"),
-        h("Unstaged Changes"), f("fdsklt"), f("gshifdg"),
+        h("Staged Changes"),
+        f("app.rs"),
+        f("x.txt"),
+        h("Unstaged Changes"),
+        f("fdsklt"),
+        f("gshifdg"),
     ];
     assert_eq!(selected_path_after(&old, 3, &new), "fdsklt");
 }
@@ -150,12 +167,18 @@ fn stage_with_existing_staged_selects_next_unstaged() {
 #[test]
 fn unstage_first_staged_selects_next_staged() {
     let old = vec![
-        h("Staged Changes"), f("a.txt"), f("b.txt"),
-        h("Unstaged Changes"), f("c.txt"),
+        h("Staged Changes"),
+        f("a.txt"),
+        f("b.txt"),
+        h("Unstaged Changes"),
+        f("c.txt"),
     ];
     let new = vec![
-        h("Staged Changes"), f("b.txt"),
-        h("Unstaged Changes"), f("a.txt"), f("c.txt"),
+        h("Staged Changes"),
+        f("b.txt"),
+        h("Unstaged Changes"),
+        f("a.txt"),
+        f("c.txt"),
     ];
     assert_eq!(selected_path_after(&old, 1, &new), "b.txt");
 }
@@ -163,8 +186,10 @@ fn unstage_first_staged_selects_next_staged() {
 #[test]
 fn unstage_only_staged_falls_back() {
     let old = vec![
-        h("Staged Changes"), f("a.txt"),
-        h("Unstaged Changes"), f("b.txt"),
+        h("Staged Changes"),
+        f("a.txt"),
+        h("Unstaged Changes"),
+        f("b.txt"),
     ];
     let new = vec![h("Unstaged Changes"), f("a.txt"), f("b.txt")];
     assert_eq!(selected_path_after(&old, 1, &new), "a.txt");
@@ -187,12 +212,18 @@ fn last_file_removed_selects_prev_in_section() {
 #[test]
 fn archived_section_stays_in_archived() {
     let old = vec![
-        h("Unstaged Changes"), f("a.txt"),
-        h("Archived Files"), f("old.txt"), f("stale.txt"),
+        h("Unstaged Changes"),
+        f("a.txt"),
+        h("Archived Files"),
+        f("old.txt"),
+        f("stale.txt"),
     ];
     let new = vec![
-        h("Unstaged Changes"), f("a.txt"), f("old.txt"),
-        h("Archived Files"), f("stale.txt"),
+        h("Unstaged Changes"),
+        f("a.txt"),
+        f("old.txt"),
+        h("Archived Files"),
+        f("stale.txt"),
     ];
     assert_eq!(selected_path_after(&old, 3, &new), "stale.txt");
 }

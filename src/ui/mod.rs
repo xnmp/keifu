@@ -1,9 +1,9 @@
 //! UI components
 
 pub mod branch_filter;
+pub mod ci_checks;
 pub mod command_palette;
 pub mod commit_detail;
-pub mod ci_checks;
 pub mod commit_menu;
 pub mod dialog;
 pub mod file_diff_view;
@@ -230,7 +230,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             ),
             vertical[0],
         );
-        render_scrollbar(frame, &theme, vertical[0], diff_total, diff_viewport, diff_pos);
+        render_scrollbar(
+            frame,
+            &theme,
+            vertical[0],
+            diff_total,
+            diff_viewport,
+            diff_pos,
+        );
 
         let status_bar = StatusBar::new(app, &theme);
         app.status_hints = status_bar.hint_regions(vertical[1]);
@@ -358,7 +365,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let panel_available = graph_area
             .width
             .saturating_sub(2)
-            .saturating_sub(graph_view::GRAPH_LEADING_COLUMNS) as usize;
+            .saturating_sub(graph_view::GRAPH_LEADING_COLUMNS)
+            as usize;
         // The user's resize cap: specs (and thus cached protocols) depend on it,
         // so it's part of the cache key alongside the panel width.
         let needed = (app.graph_layout.max_lane + 1) * 2;
@@ -407,8 +415,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // latter must dim the back-merge connector even with tracing off, which
         // the old trace-only guard skipped (the pixel connector stayed bright
         // while the message muted).
-        let want_base_mute = app.metadata_columns.mute_base_merges
-            && !app.merged.base_update.value().is_empty();
+        let want_base_mute =
+            app.metadata_columns.mute_base_merges && !app.merged.base_update.value().is_empty();
         // Merged-lane dim (#108) is a third per-frame dim source: build the
         // overlay whenever merged branches are shown-and-dimmed, even with
         // tracing and base-mute off.
@@ -480,7 +488,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             selected: Some(app.file_selected_index()),
             offset: 0,
         };
-        frame.render_stateful_widget(FilesPaneWidget::new(app, &theme), files_area, &mut files_state);
+        frame.render_stateful_widget(
+            FilesPaneWidget::new(app, &theme),
+            files_area,
+            &mut files_state,
+        );
         // The widget windows around the selection; keep the resulting offset for
         // mouse hit-testing.
         app.files_view_offset = files_state.offset;
@@ -536,8 +548,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let editor_start_line = app.commit_editor_line_offset;
         let absolute_row = editor_start_line + cursor_row as u16;
         let cursor_x = commit_inner_x + cursor_col as u16;
-        let cursor_y =
-            commit_inner_y + absolute_row.saturating_sub(app.commit_detail_scroll);
+        let cursor_y = commit_inner_y + absolute_row.saturating_sub(app.commit_detail_scroll);
         if cursor_y < commit_area.y + commit_area.height - 1
             && cursor_y >= commit_inner_y
             && cursor_x < commit_area.x + commit_area.width - 2
@@ -597,7 +608,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
         }
-        AppMode::Input { title, input, action } => {
+        AppMode::Input {
+            title,
+            input,
+            action,
+        } => {
             let popup_area = centered_rect(50, 20, area);
             let widget = if matches!(action, InputAction::AuthPassword) {
                 InputDialog::masked(title, input, &theme)
@@ -714,7 +729,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 .collect();
             let popup_area = centered_rect_fixed(40, 9, area);
             frame.render_widget(
-                OptionsDialog::new("Merge Pull Request", "Merge method:", &labels, *selected, &theme),
+                OptionsDialog::new(
+                    "Merge Pull Request",
+                    "Merge method:",
+                    &labels,
+                    *selected,
+                    &theme,
+                ),
                 popup_area,
             );
             rendered_popup = Some(popup_area);
@@ -774,7 +795,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             );
             rendered_popup = Some(popup_area);
         }
-        AppMode::RemotePicker { remotes, selected, op } => {
+        AppMode::RemotePicker {
+            remotes,
+            selected,
+            op,
+        } => {
             let title = match op {
                 crate::app::RemoteOp::Fetch => " Fetch From Remote ",
                 crate::app::RemoteOp::Pull => " Pull From Remote ",
@@ -796,17 +821,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             selected,
             all_branches,
         } => {
-            let author_of = |b: &String| {
-                app.branch_authors
-                    .get(b)
-                    .map(String::as_str)
-                    .unwrap_or("")
-            };
+            let author_of =
+                |b: &String| app.branch_authors.get(b).map(String::as_str).unwrap_or("");
             let filtered_count = all_branches
                 .iter()
-                .filter(|b| {
-                    branch_filter::matches_branch_filter(b, author_of(b), filter)
-                })
+                .filter(|b| branch_filter::matches_branch_filter(b, author_of(b), filter))
                 .count();
             // +3 for borders and footer; keep at least one body row so the
             // empty-state ("no matching branches") placeholder has room.
@@ -852,18 +871,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             // A tall, wide centered popup: query line + up to PALETTE_CAP rows +
             // borders (+ a footer line when capped).
             let footer = usize::from(results.more > 0);
-            let popup_height =
-                (results.items.len() + 3 + footer).clamp(6, 22) as u16;
+            let popup_height = (results.items.len() + 3 + footer).clamp(6, 22) as u16;
             let popup_width = area.width.saturating_sub(6).clamp(40, 90);
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
-                CommandPaletteWidget::new(
-                    query,
-                    &results.items,
-                    results.more,
-                    *selected,
-                    &theme,
-                ),
+                CommandPaletteWidget::new(query, &results.items, results.more, *selected, &theme),
                 popup_area,
             );
             rendered_popup = Some(popup_area);
@@ -1094,12 +1106,7 @@ pub(crate) fn truncate_str(s: &str, max: usize) -> String {
 /// the leading-space column so it lines up with the spaces emitted by
 /// `render_graph_line` in pixel mode. Images are transparent, so the list's
 /// selection highlight shows through.
-fn overlay_pixel_graph(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    specs: &[graph_pixels::RowSpec],
-) {
+fn overlay_pixel_graph(frame: &mut Frame, app: &App, area: Rect, specs: &[graph_pixels::RowSpec]) {
     use ratatui_image::Image;
     if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
         return;
@@ -1116,8 +1123,7 @@ fn overlay_pixel_graph(
     // from the rect and blank the row on iTerm2/Sixel). The image carries a
     // transparent pad column on its left (HEAD-star spill room), so the rect
     // starts that many cells before the graph column, over the leading spaces.
-    let x = inner_x + graph_view::GRAPH_LEADING_COLUMNS
-        - graph_pixels::PIXEL_LEFT_PAD_CELLS;
+    let x = inner_x + graph_view::GRAPH_LEADING_COLUMNS - graph_pixels::PIXEL_LEFT_PAD_CELLS;
     let offset = app.graph_nav.graph_list_state.offset();
     for row in 0..inner_h {
         let idx = offset + row as usize;
@@ -1154,7 +1160,9 @@ fn build_avatar_reqs(app: &App) -> Vec<graph_pixels::AvatarReq> {
         }
         let source = match app.avatar_fetch.state_of(email) {
             Some(AvatarState::Ready) => match &dir {
-                Some(d) => graph_pixels::AvatarSource::Ready(crate::avatar::cache_png_path(d, email)),
+                Some(d) => {
+                    graph_pixels::AvatarSource::Ready(crate::avatar::cache_png_path(d, email))
+                }
                 None => continue,
             },
             Some(AvatarState::Missing) => graph_pixels::AvatarSource::Fallback,
@@ -1266,7 +1274,10 @@ mod tests {
             .unwrap();
         let buf = term.backend().buffer();
         let painted = (1..7).any(|y| buf[(9, y)].symbol() != " ");
-        assert!(painted, "an overflowing pane draws a scrollbar on its right column");
+        assert!(
+            painted,
+            "an overflowing pane draws a scrollbar on its right column"
+        );
 
         // Content that fits draws nothing at all.
         let mut term = Terminal::new(TestBackend::new(10, 8)).unwrap();
@@ -1285,7 +1296,10 @@ mod tests {
         assert_eq!(truncate_str("hello", 10), "hello");
         assert_eq!(truncate_str("hello", 5), "hello");
         assert_eq!(truncate_str("hello world", 5), "hell…");
-        assert_eq!(UnicodeWidthStr::width(truncate_str("hello world", 5).as_str()), 5);
+        assert_eq!(
+            UnicodeWidthStr::width(truncate_str("hello world", 5).as_str()),
+            5
+        );
 
         // CJK glyphs are 2 columns each: 3 chars = 6 columns.
         assert_eq!(truncate_str("日本語", 6), "日本語");
@@ -1357,8 +1371,14 @@ mod tests {
         let oldest = toast_slot_rect(area, 2).unwrap();
 
         // Each older toast sits strictly above the one nearer the corner.
-        assert!(older.y + older.height <= newest.y, "slot 1 must sit above slot 0");
-        assert!(oldest.y + oldest.height <= older.y, "slot 2 must sit above slot 1");
+        assert!(
+            older.y + older.height <= newest.y,
+            "slot 1 must sit above slot 0"
+        );
+        assert!(
+            oldest.y + oldest.height <= older.y,
+            "slot 2 must sit above slot 1"
+        );
         // All slots share the same right-aligned column and width.
         assert_eq!(older.x, newest.x);
         assert_eq!(oldest.x, newest.x);
@@ -1385,7 +1405,10 @@ mod tests {
         // Sized to fit exactly one toast slot above the status bar:
         // top margin(1) + box(3) + margin(1) + status bar(1) = 6 rows.
         let area = Rect::new(0, 0, 80, 6);
-        assert!(toast_slot_rect(area, 0).is_some(), "first slot fits exactly");
+        assert!(
+            toast_slot_rect(area, 0).is_some(),
+            "first slot fits exactly"
+        );
         assert_eq!(
             toast_slot_rect(area, 1),
             None,
@@ -1411,16 +1434,24 @@ mod tests {
         // The status bar's row (the very last one) is untouched by toasts —
         // render_toasts must stay clear of it.
         let last_row_blank = (0..50).all(|x| buf[(x, 11)].symbol() == " ");
-        assert!(last_row_blank, "toasts must not draw into the status bar row");
+        assert!(
+            last_row_blank,
+            "toasts must not draw into the status bar row"
+        );
 
         // The old top-right home for toasts is now empty.
         let top_right_blank = (0..3).all(|y| (30..50).all(|x| buf[(x, y)].symbol() == " "));
-        assert!(top_right_blank, "toasts must have moved off the top-right corner");
+        assert!(
+            top_right_blank,
+            "toasts must have moved off the top-right corner"
+        );
 
         // Something was actually painted near the bottom-right corner, just
         // above the reserved status row.
-        let bottom_right_painted =
-            (7..11).any(|y| (30..50).any(|x| buf[(x, y)].symbol() != " "));
-        assert!(bottom_right_painted, "expected toast content near the bottom-right corner");
+        let bottom_right_painted = (7..11).any(|y| (30..50).any(|x| buf[(x, y)].symbol() != " "));
+        assert!(
+            bottom_right_painted,
+            "expected toast content near the bottom-right corner"
+        );
     }
 }

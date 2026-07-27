@@ -43,20 +43,26 @@ impl App {
         if self.compare_range.is_some() {
             self.compare_range = None;
             self.compare_marked = Some(oid);
-            self.toast(crate::toast::ToastKind::Info, format!(
-                "Marked {} for compare (previous comparison cleared)",
-                short_hash(oid)
-            ));
+            self.toast(
+                crate::toast::ToastKind::Info,
+                format!(
+                    "Marked {} for compare (previous comparison cleared)",
+                    short_hash(oid)
+                ),
+            );
             return;
         }
 
         match self.compare_marked {
             None => {
                 self.compare_marked = Some(oid);
-                self.toast(crate::toast::ToastKind::Info, format!(
-                    "Marked {} — select another commit and press m to compare",
-                    short_hash(oid)
-                ));
+                self.toast(
+                    crate::toast::ToastKind::Info,
+                    format!(
+                        "Marked {} — select another commit and press m to compare",
+                        short_hash(oid)
+                    ),
+                );
             }
             Some(marked) if marked == oid => {
                 self.compare_marked = None;
@@ -69,11 +75,14 @@ impl App {
                 // Focus stays on the graph so a single Esc clears the
                 // comparison; the files pane and detail pane already reflect it.
                 self.commit_detail_scroll = 0;
-                self.toast(crate::toast::ToastKind::Success, format!(
-                    "Comparing {} → {} (older → newer). Space opens a file; Esc clears.",
-                    short_hash(old),
-                    short_hash(new)
-                ));
+                self.toast(
+                    crate::toast::ToastKind::Success,
+                    format!(
+                        "Comparing {} → {} (older → newer). Space opens a file; Esc clears.",
+                        short_hash(old),
+                        short_hash(new)
+                    ),
+                );
             }
         }
     }

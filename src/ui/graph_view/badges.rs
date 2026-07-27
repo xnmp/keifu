@@ -262,8 +262,12 @@ mod tests {
         let approved = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::Approved, false));
         assert!(approved.contains(PR_APPROVED_ICON));
         assert!(!approved.contains(PR_CHANGES_ICON));
-        let changes =
-            pr_badge_text(&pr_with(1, CiStatus::Fail, ReviewState::ChangesRequested, false));
+        let changes = pr_badge_text(&pr_with(
+            1,
+            CiStatus::Fail,
+            ReviewState::ChangesRequested,
+            false,
+        ));
         assert!(changes.contains(PR_CHANGES_ICON));
         assert!(!changes.contains(PR_APPROVED_ICON));
 
@@ -272,7 +276,10 @@ mod tests {
         assert!(both.contains(PR_APPROVED_ICON) && both.contains(PR_COMMENT_ICON));
         let check_at = both.find(PR_APPROVED_ICON).unwrap();
         let comment_at = both.find(PR_COMMENT_ICON).unwrap();
-        assert!(check_at < comment_at, "review marker precedes comment: {both:?}");
+        assert!(
+            check_at < comment_at,
+            "review marker precedes comment: {both:?}"
+        );
         // Icon(1)+" #12"(4) + " ✓"(2) + " ⌘"(2) = 9 columns.
         assert_eq!(display_width(&both), 9);
     }
@@ -281,19 +288,31 @@ mod tests {
     fn pr_badge_color_follows_ci_status() {
         let theme = Theme::dark();
         assert_eq!(
-            pr_badge_color(&pr_with(1, CiStatus::None, ReviewState::None, false), &theme),
+            pr_badge_color(
+                &pr_with(1, CiStatus::None, ReviewState::None, false),
+                &theme
+            ),
             theme.pr_badge
         );
         assert_eq!(
-            pr_badge_color(&pr_with(1, CiStatus::Pass, ReviewState::None, false), &theme),
+            pr_badge_color(
+                &pr_with(1, CiStatus::Pass, ReviewState::None, false),
+                &theme
+            ),
             theme.pr_ci_pass
         );
         assert_eq!(
-            pr_badge_color(&pr_with(1, CiStatus::Pending, ReviewState::None, false), &theme),
+            pr_badge_color(
+                &pr_with(1, CiStatus::Pending, ReviewState::None, false),
+                &theme
+            ),
             theme.pr_ci_pending
         );
         assert_eq!(
-            pr_badge_color(&pr_with(1, CiStatus::Fail, ReviewState::None, false), &theme),
+            pr_badge_color(
+                &pr_with(1, CiStatus::Fail, ReviewState::None, false),
+                &theme
+            ),
             theme.pr_ci_fail
         );
     }
@@ -302,10 +321,22 @@ mod tests {
     fn pr_badge_color_splits_passing_by_merge_readiness() {
         let theme = Theme::dark();
         // Green checks + clear to merge → full green.
-        let clear = pr_full(1, CiStatus::Pass, ReviewState::None, MergeState::Clear, false);
+        let clear = pr_full(
+            1,
+            CiStatus::Pass,
+            ReviewState::None,
+            MergeState::Clear,
+            false,
+        );
         assert_eq!(pr_badge_color(&clear, &theme), theme.pr_ci_pass);
         // Green checks but a blocking merge state → chartreuse "passing-but-blocked".
-        let blocked = pr_full(1, CiStatus::Pass, ReviewState::None, MergeState::Blocked, false);
+        let blocked = pr_full(
+            1,
+            CiStatus::Pass,
+            ReviewState::None,
+            MergeState::Blocked,
+            false,
+        );
         assert_eq!(pr_badge_color(&blocked, &theme), theme.pr_ci_pass_blocked);
         // Green checks but changes requested → also chartreuse, via the review path.
         let changes = pr_full(
@@ -341,7 +372,10 @@ mod tests {
             MergeState::Blocked,
             false,
         );
-        assert_eq!(pr_badge_color(&pending_blocked, &theme), theme.pr_ci_pending);
+        assert_eq!(
+            pr_badge_color(&pending_blocked, &theme),
+            theme.pr_ci_pending
+        );
     }
 
     #[test]

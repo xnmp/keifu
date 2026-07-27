@@ -38,7 +38,10 @@ fn conflicted_merge_app() -> (tempfile::TempDir, App) {
     // Select the uncommitted node (index 0) and prime the quick diff so the
     // conflicted file is classified without waiting on the async loader.
     app.graph_nav.graph_list_state.select(Some(0));
-    assert!(app.is_uncommitted_selected(), "uncommitted node should exist");
+    assert!(
+        app.is_uncommitted_selected(),
+        "uncommitted node should exist"
+    );
     app.diff_cache.set_quick_uncommitted(app.repo.repo());
     app.sync_file_list_cache();
     (td, app)

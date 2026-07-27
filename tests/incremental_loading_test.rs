@@ -98,9 +98,13 @@ fn commit(repo: &Repository, refname: &str, parent: Option<Oid>, secs: i64, cont
     tb.insert("f", blob, 0o100644).unwrap();
     let tree = repo.find_tree(tb.write().unwrap()).unwrap();
     let sig = Signature::new("T", "t@e", &Time::new(secs, 0)).unwrap();
-    let parents: Vec<_> = parent.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+    let parents: Vec<_> = parent
+        .iter()
+        .map(|p| repo.find_commit(*p).unwrap())
+        .collect();
     let refs: Vec<&git2::Commit> = parents.iter().collect();
-    repo.commit(Some(refname), &sig, &sig, "m", &tree, &refs).unwrap()
+    repo.commit(Some(refname), &sig, &sig, "m", &tree, &refs)
+        .unwrap()
 }
 
 /// A linear repo of `n` commits on main.
@@ -153,7 +157,9 @@ fn extension_adds_commits_bumps_generation_and_preserves_selection() {
 
     // Select the 3rd loaded commit (stays loaded after extension).
     let sel = app.commits[2].oid;
-    app.graph_nav.graph_list_state.select(Some(row_of(&app, sel)));
+    app.graph_nav
+        .graph_list_state
+        .select(Some(row_of(&app, sel)));
     let gen_before = app.graph_generation;
 
     app.load_more_commits(false); // limit 5 -> 505, walks the full 30
@@ -182,12 +188,18 @@ fn extension_respects_the_branch_filter() {
     app.commit_load_limit = 2;
     app.all_commits_loaded = false;
     app.refresh(false).unwrap();
-    assert!(!app.commits.iter().any(|c| c.oid == f), "hidden pre-extension");
+    assert!(
+        !app.commits.iter().any(|c| c.oid == f),
+        "hidden pre-extension"
+    );
 
     app.load_more_commits(false);
     assert!(
         !app.commits.iter().any(|c| c.oid == f),
         "the filter still excludes the hidden branch's exclusive commit after extension"
     );
-    assert!(app.commits.iter().any(|c| c.oid == a), "main history present");
+    assert!(
+        app.commits.iter().any(|c| c.oid == a),
+        "main history present"
+    );
 }

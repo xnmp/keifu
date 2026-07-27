@@ -16,11 +16,25 @@ fn key_mod(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
 }
 
 fn map_normal_graph(key_event: KeyEvent) -> Option<Action> {
-    map_key_to_action(key_event, &AppMode::Normal, FocusedPanel::Graph, false, false, false)
+    map_key_to_action(
+        key_event,
+        &AppMode::Normal,
+        FocusedPanel::Graph,
+        false,
+        false,
+        false,
+    )
 }
 
 fn map_normal_files(key_event: KeyEvent) -> Option<Action> {
-    map_key_to_action(key_event, &AppMode::Normal, FocusedPanel::Files, false, false, false)
+    map_key_to_action(
+        key_event,
+        &AppMode::Normal,
+        FocusedPanel::Files,
+        false,
+        false,
+        false,
+    )
 }
 
 fn map_normal_detail(key_event: KeyEvent) -> Option<Action> {
@@ -77,9 +91,18 @@ fn alt_slash_toggles_layout() {
 
 #[test]
 fn left_arrow_cycles_panel_left() {
-    assert_eq!(map_normal_graph(key(KeyCode::Left)), Some(Action::PanelLeft));
-    assert_eq!(map_normal_files(key(KeyCode::Left)), Some(Action::PanelLeft));
-    assert_eq!(map_normal_detail(key(KeyCode::Left)), Some(Action::PanelLeft));
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Left)),
+        Some(Action::PanelLeft)
+    );
+    assert_eq!(
+        map_normal_files(key(KeyCode::Left)),
+        Some(Action::PanelLeft)
+    );
+    assert_eq!(
+        map_normal_detail(key(KeyCode::Left)),
+        Some(Action::PanelLeft)
+    );
 }
 
 #[test]
@@ -92,7 +115,10 @@ fn right_arrow_cycles_panel_right() {
 
 #[test]
 fn tab_cycles_panel_right() {
-    assert_eq!(map_normal_graph(key(KeyCode::Tab)), Some(Action::PanelRight));
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Tab)),
+        Some(Action::PanelRight)
+    );
 }
 
 #[test]
@@ -117,15 +143,24 @@ fn graph_mode_navigation() {
         map_normal_graph(key_mod(KeyCode::Char('u'), KeyModifiers::CONTROL)),
         Some(Action::PageUp)
     );
-    assert_eq!(map_normal_graph(key(KeyCode::PageDown)), Some(Action::PageDown));
+    assert_eq!(
+        map_normal_graph(key(KeyCode::PageDown)),
+        Some(Action::PageDown)
+    );
     assert_eq!(map_normal_graph(key(KeyCode::PageUp)), Some(Action::PageUp));
-    assert_eq!(map_normal_graph(key(KeyCode::Char('g'))), Some(Action::GoToTop));
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Char('g'))),
+        Some(Action::GoToTop)
+    );
     assert_eq!(map_normal_graph(key(KeyCode::Home)), Some(Action::GoToTop));
     assert_eq!(
         map_normal_graph(key_mod(KeyCode::Char('G'), KeyModifiers::SHIFT)),
         Some(Action::GoToBottom)
     );
-    assert_eq!(map_normal_graph(key(KeyCode::End)), Some(Action::GoToBottom));
+    assert_eq!(
+        map_normal_graph(key(KeyCode::End)),
+        Some(Action::GoToBottom)
+    );
 }
 
 #[test]
@@ -160,7 +195,10 @@ fn graph_mode_actions() {
         map_normal_graph(key(KeyCode::Char('d'))),
         Some(Action::DeleteBranch)
     );
-    assert_eq!(map_normal_graph(key(KeyCode::Char('f'))), Some(Action::Fetch));
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Char('f'))),
+        Some(Action::Fetch)
+    );
     assert_eq!(
         map_normal_graph(key(KeyCode::Char(' '))),
         Some(Action::OpenFileDiff)
@@ -191,7 +229,10 @@ fn files_mode_navigation() {
     assert_eq!(map_normal_files(key(KeyCode::Up)), Some(Action::MoveUp));
     assert_eq!(map_normal_files(key(KeyCode::Down)), Some(Action::MoveDown));
     assert_eq!(map_normal_files(key(KeyCode::Home)), Some(Action::GoToTop));
-    assert_eq!(map_normal_files(key(KeyCode::End)), Some(Action::GoToBottom));
+    assert_eq!(
+        map_normal_files(key(KeyCode::End)),
+        Some(Action::GoToBottom)
+    );
 }
 
 #[test]
@@ -244,7 +285,10 @@ fn files_mode_operations() {
         map_normal_files(key_mod(KeyCode::Char('f'), KeyModifiers::CONTROL)),
         Some(Action::StartFilesFilter)
     );
-    assert_eq!(map_normal_files(key(KeyCode::Esc)), Some(Action::FocusGraph));
+    assert_eq!(
+        map_normal_files(key(KeyCode::Esc)),
+        Some(Action::FocusGraph)
+    );
 }
 
 // ── Files filter mode ───────────────────────────────────────────────
@@ -254,12 +298,18 @@ fn files_filter_mode_input() {
     let map = |k: KeyEvent| {
         map_key_to_action(k, &AppMode::Normal, FocusedPanel::Files, false, true, false)
     };
-    assert_eq!(map(key(KeyCode::Char('a'))), Some(Action::FilesFilterChar('a')));
+    assert_eq!(
+        map(key(KeyCode::Char('a'))),
+        Some(Action::FilesFilterChar('a'))
+    );
     assert_eq!(
         map(key_mod(KeyCode::Char('A'), KeyModifiers::SHIFT)),
         Some(Action::FilesFilterChar('A'))
     );
-    assert_eq!(map(key(KeyCode::Backspace)), Some(Action::FilesFilterBackspace));
+    assert_eq!(
+        map(key(KeyCode::Backspace)),
+        Some(Action::FilesFilterBackspace)
+    );
     assert_eq!(map(key(KeyCode::Enter)), Some(Action::Confirm));
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
 }
@@ -269,12 +319,18 @@ fn files_filter_mode_input() {
 #[test]
 fn commit_detail_navigation() {
     assert_eq!(map_normal_detail(key(KeyCode::Up)), Some(Action::MoveUp));
-    assert_eq!(map_normal_detail(key(KeyCode::Down)), Some(Action::MoveDown));
+    assert_eq!(
+        map_normal_detail(key(KeyCode::Down)),
+        Some(Action::MoveDown)
+    );
     assert_eq!(
         map_normal_detail(key(KeyCode::Enter)),
         Some(Action::StartEditing)
     );
-    assert_eq!(map_normal_detail(key(KeyCode::Esc)), Some(Action::FocusGraph));
+    assert_eq!(
+        map_normal_detail(key(KeyCode::Esc)),
+        Some(Action::FocusGraph)
+    );
 }
 
 #[test]
@@ -489,8 +545,9 @@ fn branch_filter_controls() {
 
 #[test]
 fn help_mode_dismiss() {
-    let map =
-        |k: KeyEvent| map_key_to_action(k, &AppMode::Help, FocusedPanel::Graph, false, false, false);
+    let map = |k: KeyEvent| {
+        map_key_to_action(k, &AppMode::Help, FocusedPanel::Graph, false, false, false)
+    };
 
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::ToggleHelp));
     assert_eq!(map(key(KeyCode::Char('q'))), Some(Action::ToggleHelp));
@@ -609,7 +666,10 @@ fn file_diff_mode_scrolling() {
     assert_eq!(map(key(KeyCode::Left)), Some(Action::ScrollLeft));
     assert_eq!(map(key(KeyCode::Char('l'))), Some(Action::ScrollRight));
     assert_eq!(map(key(KeyCode::Right)), Some(Action::ScrollRight));
-    assert_eq!(map(key(KeyCode::Char('0'))), Some(Action::ScrollToLineStart));
+    assert_eq!(
+        map(key(KeyCode::Char('0'))),
+        Some(Action::ScrollToLineStart)
+    );
 }
 
 #[test]
@@ -685,7 +745,10 @@ fn files_mode_stage_all_unstage_all_keys() {
         Some(Action::UnstageAll)
     );
     // Lowercase s stays whole-file stage/unstage.
-    assert_eq!(map_normal_files(key(KeyCode::Char('s'))), Some(Action::ToggleStage));
+    assert_eq!(
+        map_normal_files(key(KeyCode::Char('s'))),
+        Some(Action::ToggleStage)
+    );
 }
 
 #[test]
@@ -733,10 +796,7 @@ fn commit_menu_filter_typing() {
     };
     let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
 
-    assert_eq!(
-        map(key(KeyCode::Char('a'))),
-        Some(Action::InputChar('a'))
-    );
+    assert_eq!(map(key(KeyCode::Char('a'))), Some(Action::InputChar('a')));
     assert_eq!(map(key(KeyCode::Backspace)), Some(Action::InputBackspace));
 }
 

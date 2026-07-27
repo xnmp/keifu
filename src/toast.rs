@@ -157,7 +157,7 @@ mod tests {
         let t0 = Instant::now();
         let mut q = ToastQueue::new();
         q.push(ToastKind::Info, "i", t0); // expires at t0+4
-        // Just before expiry: still visible, evict is a no-op.
+                                          // Just before expiry: still visible, evict is a no-op.
         assert!(!q.evict(at(t0, 3)));
         assert_eq!(q.visible().len(), 1);
         // Exactly at expiry (expires_at > now is false) → evicted.
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(q.next_expiry(), None);
         q.push(ToastKind::Error, "e", t0); // expires t0+8
         q.push(ToastKind::Info, "i", at(t0, 1)); // expires t0+5
-        // Earliest of {t0+8, t0+5} is t0+5.
+                                                 // Earliest of {t0+8, t0+5} is t0+5.
         assert_eq!(q.next_expiry(), Some(at(t0, 1) + DEFAULT_TTL));
     }
 
@@ -206,8 +206,8 @@ mod tests {
         let t0 = Instant::now();
         let mut q = ToastQueue::new();
         q.push(ToastKind::Info, "old", t0); // expires t0+4
-        // Push three more well after the first expired: 'old' is gone, so we
-        // never exceed the cap by keeping a dead toast.
+                                            // Push three more well after the first expired: 'old' is gone, so we
+                                            // never exceed the cap by keeping a dead toast.
         q.push(ToastKind::Info, "a", at(t0, 10));
         q.push(ToastKind::Info, "b", at(t0, 10));
         q.push(ToastKind::Info, "c", at(t0, 10));

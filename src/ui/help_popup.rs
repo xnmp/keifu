@@ -69,16 +69,19 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
             "Branch filter (type to filter by name, @ by author)",
         ),
         Row("Shift+O", "Show/hide remote-only branches"),
-        Row("Shift+H", "Hide/dim branches merged into the trunk (incl. squash)"),
+        Row(
+            "Shift+H",
+            "Hide/dim branches merged into the trunk (incl. squash)",
+        ),
         Row("Ctrl+f", "Filter commits (message/author/hash)"),
         Row("m", "Mark / compare two commits (Esc clears)"),
-        Row("o", "Open PR in browser (badge color = CI: green/yellow/red)"),
+        Row(
+            "o",
+            "Open PR in browser (badge color = CI: green/yellow/red)",
+        ),
         Row("c", "CI check details (see failure logs without a browser)"),
         Row("v", "View PR conversation (comments, reviews, threads)"),
-        Row(
-            "Shift+M",
-            "Toggle author/hash/date, muted merges & avatars",
-        ),
+        Row("Shift+M", "Toggle author/hash/date, muted merges & avatars"),
         Row("< / >", "Shrink / widen the graph column (… = truncated)"),
         Row("t", "Toggle branch tracing (dim off-lineage lanes)"),
         Row("^", "Jump to fork point (merge base with main / HEAD)"),
@@ -86,7 +89,10 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
             "Ctrl+↑ / Ctrl+↓",
             "Jump to previous/next commit on the same graph line",
         ),
-        Row("Ctrl+Z", "Undo last op — branch/tag delete, merge, pull, rename"),
+        Row(
+            "Ctrl+Z",
+            "Undo last op — branch/tag delete, merge, pull, rename",
+        ),
         Blank,
         Header("Files Panel"),
     ];
@@ -138,7 +144,10 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Enter", "Open the selected issue's detail"),
         Row("Tab / f", "Cycle status filter (open / closed / all)"),
         Row("t", "Filter by label (checkbox picker)"),
-        Row("u", "Toggle unblocked-only (hide issues with open blockers)"),
+        Row(
+            "u",
+            "Toggle unblocked-only (hide issues with open blockers)",
+        ),
         Row("l", "Toggle tags on the selected issue"),
         Row("n", "New issue"),
         Row("c", "Comment (in detail)"),
@@ -158,8 +167,14 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Drag divider", "Resize the graph/detail split"),
         Blank,
         Header("Other"),
-        Row("Ctrl+P / :", "Command palette (commands, branches, commits)"),
-        Row("Ctrl+, / ,", "Settings menu (toggle/edit persisted settings)"),
+        Row(
+            "Ctrl+P / :",
+            "Command palette (commands, branches, commits)",
+        ),
+        Row(
+            "Ctrl+, / ,",
+            "Settings menu (toggle/edit persisted settings)",
+        ),
         Row("Shift+R", "Refresh"),
         Row("F5", "Full update (fetch all remotes + PRs + refresh)"),
         Row("?", "Toggle this help"),
@@ -271,8 +286,19 @@ mod tests {
         // rendered as "Shift+<Key>" here, not a bare capital letter, and no
         // abbreviations like "S-Tab" / "C-k" should remain.
         let shift_bound_keys = [
-            "Shift+G", "Shift+P", "Shift+B", "Shift+O", "Shift+H", "Shift+M", "Shift+A",
-            "Shift+N", "Shift+I", "Shift+R", "Shift+S", "Shift+U", "Shift+Tab",
+            "Shift+G",
+            "Shift+P",
+            "Shift+B",
+            "Shift+O",
+            "Shift+H",
+            "Shift+M",
+            "Shift+A",
+            "Shift+N",
+            "Shift+I",
+            "Shift+R",
+            "Shift+S",
+            "Shift+U",
+            "Shift+Tab",
         ];
         let text: String = entries(true)
             .iter()

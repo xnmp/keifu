@@ -21,9 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{
-    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{backend::TestBackend, Terminal};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -64,8 +62,8 @@ pub struct DebugCommand {
 
 /// Bind the listener and spawn the server thread.
 pub fn spawn(addr: &str) -> Result<Receiver<DebugCommand>> {
-    let listener =
-        TcpListener::bind(addr).with_context(|| format!("Failed to bind debug server to {addr}"))?;
+    let listener = TcpListener::bind(addr)
+        .with_context(|| format!("Failed to bind debug server to {addr}"))?;
     let (tx, rx) = mpsc::channel::<DebugCommand>();
 
     thread::spawn(move || {
@@ -411,13 +409,15 @@ mod tests {
     fn parses_ctrl_alt_combo() {
         let events = parse_key_sequence("<c-a-w>").unwrap();
         assert_eq!(events[0].code, KeyCode::Char('w'));
-        assert_eq!(events[0].modifiers, KeyModifiers::CONTROL | KeyModifiers::ALT);
+        assert_eq!(
+            events[0].modifiers,
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        );
     }
 
     #[test]
     fn parses_json_request_variants() {
-        let keys: DebugRequest =
-            serde_json::from_str(r#"{"cmd":"keys","keys":"j j"}"#).unwrap();
+        let keys: DebugRequest = serde_json::from_str(r#"{"cmd":"keys","keys":"j j"}"#).unwrap();
         assert!(matches!(keys, DebugRequest::Keys { .. }));
 
         let mouse: DebugRequest =

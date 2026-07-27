@@ -80,8 +80,7 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                 ("empty commit", self.theme.placeholder_style())
             };
             // Lead with a space to match the pane's content inset.
-            Paragraph::new(Line::from(Span::styled(format!(" {text}"), style)))
-                .render(inner, buf);
+            Paragraph::new(Line::from(Span::styled(format!(" {text}"), style))).render(inner, buf);
             return;
         }
 
@@ -202,10 +201,7 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                     if is_selected {
                         // Highlight selected row
                         let highlight_style = self.theme.selection_style();
-                        buf.set_style(
-                            Rect::new(inner.x, y, inner.width, 1),
-                            highlight_style,
-                        );
+                        buf.set_style(Rect::new(inner.x, y, inner.width, 1), highlight_style);
                     }
 
                     buf.set_line(inner.x, y, &line, inner.width);

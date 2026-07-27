@@ -33,12 +33,7 @@ pub enum SettingGroup {
 
 impl SettingGroup {
     /// Section order in the menu.
-    pub const ALL: [SettingGroup; 4] = [
-        Self::Graph,
-        Self::Files,
-        Self::Refresh,
-        Self::Interface,
-    ];
+    pub const ALL: [SettingGroup; 4] = [Self::Graph, Self::Files, Self::Refresh, Self::Interface];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -210,7 +205,11 @@ impl SettingDescriptor {
 pub fn format_value(kind: SettingKind, v: SettingValue) -> String {
     match (kind, v) {
         (SettingKind::Bool, SettingValue::Bool(b)) => {
-            if b { "On".into() } else { "Off".into() }
+            if b {
+                "On".into()
+            } else {
+                "Off".into()
+            }
         }
         (SettingKind::Enum { options }, SettingValue::Enum(i)) => {
             options.get(i).copied().unwrap_or("?").to_string()
@@ -383,12 +382,7 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             metadata_columns.pr_subjects,
             metadata_columns.pr_subjects
         ),
-        config_bool!(
-            "Squash-merge link lines",
-            Graph,
-            None,
-            ui.squash_link_lines
-        ),
+        config_bool!("Squash-merge link lines", Graph, None, ui.squash_link_lines),
         state_bool!(
             "Author avatars",
             Graph,
@@ -475,7 +469,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             set: |a, v| a.graph_width_cap = value_to_cap(v),
         },
         // ── Files ──────────────────────────────────────────────────
-        state_bool!("Diff line wrap", Files, None, diff_word_wrap, diff_word_wrap),
+        state_bool!(
+            "Diff line wrap",
+            Files,
+            None,
+            diff_word_wrap,
+            diff_word_wrap
+        ),
         state_bool!(
             "Group files by folder",
             Files,
@@ -666,10 +666,19 @@ mod tests {
         let k = SettingKind::Enum {
             options: RENDERER_OPTIONS,
         };
-        assert_eq!(cycle_value(&k, SettingValue::Enum(0)), SettingValue::Enum(1));
-        assert_eq!(cycle_value(&k, SettingValue::Enum(1)), SettingValue::Enum(2));
+        assert_eq!(
+            cycle_value(&k, SettingValue::Enum(0)),
+            SettingValue::Enum(1)
+        );
+        assert_eq!(
+            cycle_value(&k, SettingValue::Enum(1)),
+            SettingValue::Enum(2)
+        );
         // wraps 2 -> 0
-        assert_eq!(cycle_value(&k, SettingValue::Enum(2)), SettingValue::Enum(0));
+        assert_eq!(
+            cycle_value(&k, SettingValue::Enum(2)),
+            SettingValue::Enum(0)
+        );
     }
 
     #[test]
@@ -680,10 +689,19 @@ mod tests {
             step: 5,
             zero_label: None,
         };
-        assert_eq!(cycle_value(&k, SettingValue::Int(20)), SettingValue::Int(25));
-        assert_eq!(cycle_value(&k, SettingValue::Int(75)), SettingValue::Int(80));
+        assert_eq!(
+            cycle_value(&k, SettingValue::Int(20)),
+            SettingValue::Int(25)
+        );
+        assert_eq!(
+            cycle_value(&k, SettingValue::Int(75)),
+            SettingValue::Int(80)
+        );
         // 80 + 5 > 80 → wrap to min
-        assert_eq!(cycle_value(&k, SettingValue::Int(80)), SettingValue::Int(20));
+        assert_eq!(
+            cycle_value(&k, SettingValue::Int(80)),
+            SettingValue::Int(20)
+        );
     }
 
     #[test]
@@ -785,7 +803,9 @@ mod tests {
             );
         }
         // "Dim merged branches" is the only label containing "dim".
-        assert!(visible.iter().any(|&i| ds[i].label == "Dim merged branches"));
+        assert!(visible
+            .iter()
+            .any(|&i| ds[i].label == "Dim merged branches"));
         // A setting with no relationship to "dim" must be excluded.
         assert!(!visible.iter().any(|&i| ds[i].label == "Auto-fetch"));
     }
@@ -798,7 +818,10 @@ mod tests {
         let visible = filter_descriptors(&ds, "e");
         let mut sorted = visible.clone();
         sorted.sort_unstable();
-        assert_eq!(visible, sorted, "filtered indices must stay in ascending/original order");
+        assert_eq!(
+            visible, sorted,
+            "filtered indices must stay in ascending/original order"
+        );
     }
 
     #[test]

@@ -10,19 +10,16 @@ use tempfile::TempDir;
 /// Commit a single-file tree onto `refname`, at wall-clock `secs` (so the walk
 /// order is deterministic), with the given parents. Pure object plumbing — no
 /// workdir/index churn.
-fn commit(
-    repo: &Repository,
-    refname: &str,
-    parents: &[Oid],
-    secs: i64,
-    content: &str,
-) -> Oid {
+fn commit(repo: &Repository, refname: &str, parents: &[Oid], secs: i64, content: &str) -> Oid {
     let blob = repo.blob(content.as_bytes()).unwrap();
     let mut tb = repo.treebuilder(None).unwrap();
     tb.insert("file.txt", blob, 0o100644).unwrap();
     let tree = repo.find_tree(tb.write().unwrap()).unwrap();
     let sig = Signature::new("Test", "t@e.com", &Time::new(secs, 0)).unwrap();
-    let parent_commits: Vec<_> = parents.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+    let parent_commits: Vec<_> = parents
+        .iter()
+        .map(|p| repo.find_commit(*p).unwrap())
+        .collect();
     let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
     repo.commit(Some(refname), &sig, &sig, "msg", &tree, &parent_refs)
         .unwrap()

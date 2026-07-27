@@ -103,7 +103,8 @@ impl NetworkManager {
         let path = repo_path.to_string();
         let remote_owned = remote.to_string();
         thread::spawn(move || {
-            let result = fetch_remote(&path, &remote_owned, creds.as_ref()).map_err(|e| e.to_string());
+            let result =
+                fetch_remote(&path, &remote_owned, creds.as_ref()).map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.fetch_receiver = Some(rx);
@@ -131,7 +132,12 @@ impl NetworkManager {
     }
 
     /// Start a background push per `spec`.
-    pub fn start_push(&mut self, repo_path: &str, spec: PushSpec, creds: Option<Credentials>) -> String {
+    pub fn start_push(
+        &mut self,
+        repo_path: &str,
+        spec: PushSpec,
+        creds: Option<Credentials>,
+    ) -> String {
         let (tx, rx) = mpsc::channel();
         let path = repo_path.to_string();
         let message = match &spec {
@@ -180,8 +186,14 @@ impl NetworkManager {
             None => "Pulling...".to_string(),
         };
         thread::spawn(move || {
-            let result = pull(&path, remote.as_deref(), branch.as_deref(), mode, creds.as_ref())
-                .map_err(|e| e.to_string());
+            let result = pull(
+                &path,
+                remote.as_deref(),
+                branch.as_deref(),
+                mode,
+                creds.as_ref(),
+            )
+            .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.pull_receiver = Some(rx);

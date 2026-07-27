@@ -191,7 +191,10 @@ mod tests {
     fn save_then_load_round_trips_every_field() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("entry.json");
-        assert!(MergedCache::load_from(&path).is_none(), "cold cache is a miss");
+        assert!(
+            MergedCache::load_from(&path).is_none(),
+            "cold cache is a miss"
+        );
         let original = sample();
         original.save_to(&path);
         let loaded = MergedCache::load_from(&path).expect("saved entry loads back");
@@ -216,7 +219,10 @@ mod tests {
             r#"{"version":999,"signature":1,"gh_merged":[],"merged":["x"],"squash_targets":[]}"#,
         )
         .unwrap();
-        assert!(MergedCache::load_from(&path).is_none(), "wrong version → miss");
+        assert!(
+            MergedCache::load_from(&path).is_none(),
+            "wrong version → miss"
+        );
     }
 
     #[test]
@@ -224,7 +230,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("bad.json");
         std::fs::write(&path, "{ not valid json ]").unwrap();
-        assert!(MergedCache::load_from(&path).is_none(), "corrupt file → miss");
+        assert!(
+            MergedCache::load_from(&path).is_none(),
+            "corrupt file → miss"
+        );
     }
 
     #[test]
@@ -249,7 +258,11 @@ mod tests {
         .unwrap();
         let loaded = MergedCache::load_from(&path).expect("entry with a bad target still loads");
         assert_eq!(loaded.merged.len(), 2);
-        assert_eq!(loaded.squash_targets.len(), 1, "only the valid target survives");
+        assert_eq!(
+            loaded.squash_targets.len(),
+            1,
+            "only the valid target survives"
+        );
         assert!(loaded.squash_targets.contains_key("a"));
     }
 

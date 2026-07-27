@@ -139,7 +139,11 @@ fn squash_target_from_fork(
         let Ok(parent) = commit.parent(0) else {
             continue;
         };
-        let pid = tree_diff_patch_id(repo, parent.tree().ok().as_ref(), commit.tree().ok().as_ref());
+        let pid = tree_diff_patch_id(
+            repo,
+            parent.tree().ok().as_ref(),
+            commit.tree().ok().as_ref(),
+        );
         // A pid hit is a candidate, not proof (zero-context ids can collide) —
         // confirm the branch's work is exactly contained at this landing point,
         // and keep scanning past a collision in case the real squash sits
@@ -416,7 +420,9 @@ fn branch_is_merged(
     // remote ref whose branch part equals the trunk's is a trunk copy (#100
     // review). `base_short` strips a leading remote segment from the base name
     // (bare `main` → `main`, `origin/main` → `main`); trunk names carry no '/'.
-    let base_short = base_name.split_once('/').map_or(base_name, |(_, rest)| rest);
+    let base_short = base_name
+        .split_once('/')
+        .map_or(base_name, |(_, rest)| rest);
     if b.is_remote && gh_key(b) == base_short {
         return false;
     }
@@ -444,7 +450,9 @@ fn branch_is_merged(
             !l.is_remote
                 && l.name == gh_key(b)
                 && l.tip_oid != b.tip_oid
-                && repo.graph_descendant_of(l.tip_oid, b.tip_oid).unwrap_or(false)
+                && repo
+                    .graph_descendant_of(l.tip_oid, b.tip_oid)
+                    .unwrap_or(false)
         })
     } else {
         b.ahead == 0 && b.behind > 0
@@ -490,7 +498,10 @@ pub fn explain_classification(
     let _ = writeln!(
         out,
         "trunk tips tested: {}",
-        tips.iter().map(|&t| short(t)).collect::<Vec<_>>().join(", ")
+        tips.iter()
+            .map(|&t| short(t))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     let _ = writeln!(
         out,
@@ -499,7 +510,10 @@ pub fn explain_classification(
     );
     let _ = writeln!(out, "gh merged-PR heads known: {}", gh_merged.len());
 
-    let base_short = base.name.split_once('/').map_or(base.name.as_str(), |(_, rest)| rest);
+    let base_short = base
+        .name
+        .split_once('/')
+        .map_or(base.name.as_str(), |(_, rest)| rest);
     // Branches the direct (trunk-tips-only) pass below classifies, so the
     // transitive section at the end can report exactly the ones only the fixed
     // point catches.
@@ -523,7 +537,10 @@ pub fn explain_classification(
             continue;
         }
         if b.is_remote && gh_key(b) == base_short {
-            let _ = writeln!(out, "  guard: trunk mirror on another remote — never classified");
+            let _ = writeln!(
+                out,
+                "  guard: trunk mirror on another remote — never classified"
+            );
             continue;
         }
         let stale_tracking = if b.is_remote {
@@ -531,7 +548,9 @@ pub fn explain_classification(
                 !l.is_remote
                     && l.name == gh_key(b)
                     && l.tip_oid != b.tip_oid
-                    && repo.graph_descendant_of(l.tip_oid, b.tip_oid).unwrap_or(false)
+                    && repo
+                        .graph_descendant_of(l.tip_oid, b.tip_oid)
+                        .unwrap_or(false)
             })
         } else {
             b.ahead == 0 && b.behind > 0
@@ -555,7 +574,11 @@ pub fn explain_classification(
                 }
                 let _ = walk.hide(f);
                 let n = walk.take(SQUASH_SCAN_LIMIT + 1).count();
-                if n > SQUASH_SCAN_LIMIT { format!(">{SQUASH_SCAN_LIMIT} (CAP!)") } else { n.to_string() }
+                if n > SQUASH_SCAN_LIMIT {
+                    format!(">{SQUASH_SCAN_LIMIT} (CAP!)")
+                } else {
+                    n.to_string()
+                }
             });
             let ancestry = is_ancestor_merged(repo, b.tip_oid, t);
             let squash = squash_merge_target(repo, b.tip_oid, t);
@@ -582,7 +605,10 @@ pub fn explain_classification(
         let in_gh = gh_merged.contains(key);
         let _ = writeln!(out, "  gh: key '{key}' in merged-PR set: {in_gh}");
         if verdict.is_none() && in_gh {
-            if tips.iter().any(|&t| branch_content_in_base(repo, b.tip_oid, t)) {
+            if tips
+                .iter()
+                .any(|&t| branch_content_in_base(repo, b.tip_oid, t))
+            {
                 verdict = Some("MERGED (gh signal + content contained)".into());
             } else {
                 let _ = writeln!(out, "  gh signal present but content NOT contained (conflict-resolved landing, or novel work)");
@@ -591,20 +617,28 @@ pub fn explain_classification(
         if verdict.is_some() {
             direct_merged.insert(&b.name);
         }
-        let _ = writeln!(out, "  => {}", verdict.unwrap_or_else(|| "visible (not classified merged)".into()));
+        let _ = writeln!(
+            out,
+            "  => {}",
+            verdict.unwrap_or_else(|| "visible (not classified merged)".into())
+        );
     }
 
     // The real classifier iterates to a fixed point, re-testing unclassified
     // branches against the tips of branches already classified (transitive
     // merges). Run it and report what only that pass caught, naming a merged
     // branch whose tip carries the landing when one is identifiable.
-    let final_merged = classify_merged_branches(repo, branches, base.tip_oid, &base.name, gh_merged);
+    let final_merged =
+        classify_merged_branches(repo, branches, base.tip_oid, &base.name, gh_merged);
     let transitive: Vec<&BranchInfo> = branches
         .iter()
         .filter(|b| final_merged.contains(&b.name) && !direct_merged.contains(b.name.as_str()))
         .collect();
     if !transitive.is_empty() {
-        let _ = writeln!(out, "\ntransitive pass (merged into an already-merged branch):");
+        let _ = writeln!(
+            out,
+            "\ntransitive pass (merged into an already-merged branch):"
+        );
         for b in transitive {
             let via = branches.iter().find(|a| {
                 a.name != b.name
@@ -617,8 +651,12 @@ pub fn explain_classification(
                 out,
                 "  {} => MERGED transitively{}",
                 b.name,
-                via.map(|a| format!(" (landed in merged branch {} @ {})", a.name, short(a.tip_oid)))
-                    .unwrap_or_default()
+                via.map(|a| format!(
+                    " (landed in merged branch {} @ {})",
+                    a.name,
+                    short(a.tip_oid)
+                ))
+                .unwrap_or_default()
             );
         }
     }
@@ -746,7 +784,9 @@ pub fn base_ref_tips(branches: &[BranchInfo], base_ref: &str) -> Vec<Oid> {
                 // "<remote>/<branch>": the segment after the remote must equal
                 // the base name exactly — `ends_with` would also claim
                 // `origin/feature/dev` for base `dev`.
-                b.name.split_once('/').is_some_and(|(_, rest)| rest == base_ref)
+                b.name
+                    .split_once('/')
+                    .is_some_and(|(_, rest)| rest == base_ref)
             } else {
                 b.name == base_ref
             }
@@ -808,9 +848,7 @@ pub fn classify_base_update_merges(
                 continue;
             };
             // Second parent already on the base ⇒ the base was merged in.
-            if second == base_tip
-                || repo.graph_descendant_of(base_tip, second).unwrap_or(false)
-            {
+            if second == base_tip || repo.graph_descendant_of(base_tip, second).unwrap_or(false) {
                 out.insert(oid);
             }
         }
@@ -841,7 +879,10 @@ mod tests {
         }
         let tree = repo.find_tree(tb.write().unwrap()).unwrap();
         let sig = Signature::new("Dev", "dev@example.com", &Time::new(secs, 0)).unwrap();
-        let parent_commits: Vec<_> = parents.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+        let parent_commits: Vec<_> = parents
+            .iter()
+            .map(|p| repo.find_commit(*p).unwrap())
+            .collect();
         let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
         repo.commit(Some(refname), &sig, &sig, "msg", &tree, &parent_refs)
             .unwrap()
@@ -865,8 +906,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("b.txt", "b")]);
-        let c = commit(&repo, "refs/heads/main", 3000, &[b], &[("base.txt", "base"), ("b.txt", "b"), ("c.txt", "c")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("b.txt", "b")],
+        );
+        let c = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[b],
+            &[("base.txt", "base"), ("b.txt", "b"), ("c.txt", "c")],
+        );
         assert!(is_ancestor_merged(&repo, b, c));
         assert!(is_merged_into(&repo, b, c));
     }
@@ -877,17 +930,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let t = commit(&repo, "refs/heads/topic", 2500, &[a], &[("base.txt", "base"), ("feat.txt", "feat")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let t = commit(
+            &repo,
+            "refs/heads/topic",
+            2500,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "feat")],
+        );
         // Merge commit carrying both files; parents are main tip and topic tip.
         let m = commit(
             &repo,
             "refs/heads/main",
             3000,
             &[b, t],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "feat")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "feat"),
+            ],
         );
-        assert!(is_merged_into(&repo, t, m), "topic reachable from the merge commit");
+        assert!(
+            is_merged_into(&repo, t, m),
+            "topic reachable from the merge commit"
+        );
     }
 
     #[test]
@@ -899,9 +971,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "two")],
+        );
         // The squash commit introduces the feature's *net* change (add feat.txt
         // = two) on top of main — same hunk as feature's cumulative diff.
         let s = commit(
@@ -909,11 +999,21 @@ mod tests {
             "refs/heads/main",
             3000,
             &[b],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "two")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "two"),
+            ],
         );
 
-        assert!(!is_ancestor_merged(&repo, f2, s), "no commit is shared after a squash");
-        assert!(is_squash_merged(&repo, f2, s), "patch-id matches the squashed commit");
+        assert!(
+            !is_ancestor_merged(&repo, f2, s),
+            "no commit is shared after a squash"
+        );
+        assert!(
+            is_squash_merged(&repo, f2, s),
+            "patch-id matches the squashed commit"
+        );
         assert!(is_merged_into(&repo, f2, s));
     }
 
@@ -923,8 +1023,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let g = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let g = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("other.txt", "x")],
+        );
         assert!(!is_ancestor_merged(&repo, g, b));
         assert!(!is_squash_merged(&repo, g, b));
         assert!(!is_merged_into(&repo, g, b));
@@ -949,10 +1061,16 @@ mod tests {
         ];
         assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("main"));
 
-        let bs = vec![local("feature", Oid::zero(), true), local("master", Oid::zero(), false)];
+        let bs = vec![
+            local("feature", Oid::zero(), true),
+            local("master", Oid::zero(), false),
+        ];
         assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("master"));
 
-        let bs = vec![local("feature", Oid::zero(), true), local("dev", Oid::zero(), false)];
+        let bs = vec![
+            local("feature", Oid::zero(), true),
+            local("dev", Oid::zero(), false),
+        ];
         assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("feature"));
 
         assert!(base_branch(&[]).is_none());
@@ -966,17 +1084,46 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        repo.reference("refs/heads/topic", b, true, "topic").unwrap();
-        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
-        let g = commit(&repo, "refs/heads/gone", 2300, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        repo.reference("refs/heads/topic", b, true, "topic")
+            .unwrap();
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "two")],
+        );
+        let g = commit(
+            &repo,
+            "refs/heads/gone",
+            2300,
+            &[a],
+            &[("base.txt", "base"), ("other.txt", "x")],
+        );
         let s = commit(
             &repo,
             "refs/heads/main",
             3000,
             &[b],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "two")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "two"),
+            ],
         );
 
         let branches = vec![
@@ -999,7 +1146,10 @@ mod tests {
         // commit for the squash-merged branch only.
         let (merged2, targets) =
             classify_merged_branches_with_targets(&repo, &branches, s, "main", &HashSet::new());
-        assert_eq!(merged2, merged, "target variant's set matches the plain one");
+        assert_eq!(
+            merged2, merged,
+            "target variant's set matches the plain one"
+        );
         assert_eq!(
             targets.get("feature"),
             Some(&s),
@@ -1009,7 +1159,10 @@ mod tests {
             !targets.contains_key("topic"),
             "an ancestry merge has no single squash landing commit"
         );
-        assert!(!targets.contains_key("gone"), "unmerged branch has no target");
+        assert!(
+            !targets.contains_key("gone"),
+            "unmerged branch has no target"
+        );
     }
 
     #[test]
@@ -1019,15 +1172,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "two")],
+        );
         let s = commit(
             &repo,
             "refs/heads/main",
             3000,
             &[b],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "two")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "two"),
+            ],
         );
         assert_eq!(
             squash_merge_target(&repo, f2, s),
@@ -1035,10 +1210,24 @@ mod tests {
             "the squash commit is named"
         );
         // A branch that never landed has no target.
-        let g = commit(&repo, "refs/heads/gone", 2300, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
-        assert_eq!(squash_merge_target(&repo, g, s), None, "unmerged → no target");
+        let g = commit(
+            &repo,
+            "refs/heads/gone",
+            2300,
+            &[a],
+            &[("base.txt", "base"), ("other.txt", "x")],
+        );
+        assert_eq!(
+            squash_merge_target(&repo, g, s),
+            None,
+            "unmerged → no target"
+        );
         // An ancestry (fully-contained) branch is not a squash → no target.
-        assert_eq!(squash_merge_target(&repo, b, s), None, "ancestry → no target");
+        assert_eq!(
+            squash_merge_target(&repo, b, s),
+            None,
+            "ancestry → no target"
+        );
     }
 
     // ── Squash onto an ADVANCED base (issue #97) ─────────────────────────────
@@ -1056,14 +1245,53 @@ mod tests {
         // changes L1 -> L1x (adjacent to FEAT) before the feature squashes in.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\nL4\nL5\n")]);
-        let f1 = commit(&repo, "refs/heads/feature", 1100, &[a], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\nL5\n")]);
-        let f2 = commit(&repo, "refs/heads/feature", 1200, &[f1], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\nL5\n"), ("note.txt", "n")]);
+        let a = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("file.txt", "L1\nL2\nL3\nL4\nL5\n")],
+        );
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\nL5\n")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            1200,
+            &[f1],
+            &[
+                ("file.txt", "L1\nL2\nFEAT\nL3\nL4\nL5\n"),
+                ("note.txt", "n"),
+            ],
+        );
         // Base advances (L1 -> L1x), then the squash lands feature on top of it.
-        let adv = commit(&repo, "refs/heads/main", 2000, &[a], &[("file.txt", "L1x\nL2\nL3\nL4\nL5\n")]);
-        let s = commit(&repo, "refs/heads/main", 3000, &[adv], &[("file.txt", "L1x\nL2\nFEAT\nL3\nL4\nL5\n"), ("note.txt", "n")]);
+        let adv = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("file.txt", "L1x\nL2\nL3\nL4\nL5\n")],
+        );
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[adv],
+            &[
+                ("file.txt", "L1x\nL2\nFEAT\nL3\nL4\nL5\n"),
+                ("note.txt", "n"),
+            ],
+        );
 
-        assert!(!is_ancestor_merged(&repo, f2, s), "no shared commit after a squash");
+        assert!(
+            !is_ancestor_merged(&repo, f2, s),
+            "no shared commit after a squash"
+        );
         assert!(
             is_squash_merged(&repo, f2, s),
             "squash onto an advanced base (context drift) must be detected"
@@ -1081,11 +1309,35 @@ mod tests {
         // where the work is contained by construction.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\n")]);
-        let f = commit(&repo, "refs/heads/feature", 1100, &[a], &[("file.txt", "L1\nL2\nFEAT\nL3\n")]);
-        let s = commit(&repo, "refs/heads/main", 2000, &[a], &[("file.txt", "L1\nL2\nFEAT\nL3\n")]);
+        let a = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("file.txt", "L1\nL2\nL3\n")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("file.txt", "L1\nL2\nFEAT\nL3\n")],
+        );
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("file.txt", "L1\nL2\nFEAT\nL3\n")],
+        );
         // Trunk later rewrites the landed line.
-        let t = commit(&repo, "refs/heads/main", 3000, &[s], &[("file.txt", "L1\nL2\nFEAT-v2\nL3\n")]);
+        let t = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[s],
+            &[("file.txt", "L1\nL2\nFEAT-v2\nL3\n")],
+        );
 
         // Sanity: the gap this test pins down — at the tip the branch is no
         // longer cleanly contained, so a tip-anchored gate would miss it.
@@ -1094,7 +1346,11 @@ mod tests {
             is_squash_merged(&repo, f, t),
             "a squashed branch must stay classified after trunk edits its lines"
         );
-        assert_eq!(squash_merge_target(&repo, f, t), Some(s), "link target is the squash commit");
+        assert_eq!(
+            squash_merge_target(&repo, f, t),
+            Some(s),
+            "link target is the squash commit"
+        );
     }
 
     #[test]
@@ -1104,11 +1360,32 @@ mod tests {
         // context must not make an unrelated branch collide.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\nL4\nL5\n")]);
-        let f = commit(&repo, "refs/heads/feature", 1100, &[a], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\nL5\n")]);
+        let a = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("file.txt", "L1\nL2\nL3\nL4\nL5\n")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\nL5\n")],
+        );
         // Base advances but never picks up FEAT.
-        let adv = commit(&repo, "refs/heads/main", 2000, &[a], &[("file.txt", "L1x\nL2\nL3\nL4\nL5\n")]);
-        assert!(!is_squash_merged(&repo, f, adv), "an unlanded branch must never be squash-detected");
+        let adv = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("file.txt", "L1x\nL2\nL3\nL4\nL5\n")],
+        );
+        assert!(
+            !is_squash_merged(&repo, f, adv),
+            "an unlanded branch must never be squash-detected"
+        );
         assert!(!is_merged_into(&repo, f, adv));
     }
 
@@ -1121,18 +1398,43 @@ mod tests {
         // cross-check is what must keep the branch visible.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "A\nB\nC\nD\nE\n")]);
+        let a = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("file.txt", "A\nB\nC\nD\nE\n")],
+        );
         // Trunk commit inserts INSERTED after A.
-        let p = commit(&repo, "refs/heads/main", 2000, &[a], &[("file.txt", "A\nINSERTED\nB\nC\nD\nE\n")]);
+        let p = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("file.txt", "A\nINSERTED\nB\nC\nD\nE\n")],
+        );
         // Feature inserts the SAME line after D — genuinely different, unlanded work.
-        let f = commit(&repo, "refs/heads/feature", 2100, &[a], &[("file.txt", "A\nB\nC\nD\nINSERTED\nE\n")]);
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("file.txt", "A\nB\nC\nD\nINSERTED\nE\n")],
+        );
 
-        assert!(!branch_content_in_base(&repo, f, p), "the two insertions differ — not contained");
+        assert!(
+            !branch_content_in_base(&repo, f, p),
+            "the two insertions differ — not contained"
+        );
         assert!(
             !is_squash_merged(&repo, f, p),
             "a zero-context patch-id collision must not classify unlanded work as merged"
         );
-        assert_eq!(squash_merge_target(&repo, f, p), None, "no genuine squash to name");
+        assert_eq!(
+            squash_merge_target(&repo, f, p),
+            None,
+            "no genuine squash to name"
+        );
         assert!(!is_merged_into(&repo, f, p));
     }
 
@@ -1145,17 +1447,44 @@ mod tests {
         // NOT be rescued locally: local precision stays intact.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\n")]);
-        let f = commit(&repo, "refs/heads/feature", 1100, &[a], &[("file.txt", "L1\nBRANCH\nL3\n")]);
+        let a = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("file.txt", "L1\nL2\nL3\n")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("file.txt", "L1\nBRANCH\nL3\n")],
+        );
         // The landed version differs (maintainer tweaked BRANCH -> BRANCH-fixed);
         // the base also advanced the same line, so a merge would conflict.
-        let s = commit(&repo, "refs/heads/main", 3000, &[a], &[("file.txt", "L1\nBRANCH-fixed\nL3\n")]);
-        assert!(!is_squash_merged(&repo, f, s), "content drift: patch-id cannot match");
-        assert!(!branch_content_in_base(&repo, f, s), "divergent lines conflict, so not contained");
+        let s = commit(
+            &repo,
+            "refs/heads/main",
+            3000,
+            &[a],
+            &[("file.txt", "L1\nBRANCH-fixed\nL3\n")],
+        );
+        assert!(
+            !is_squash_merged(&repo, f, s),
+            "content drift: patch-id cannot match"
+        );
+        assert!(
+            !branch_content_in_base(&repo, f, s),
+            "divergent lines conflict, so not contained"
+        );
         // Without gh it stays visible; the gh signal alone can't rescue it either,
         // because the content cross-check (correctly) rejects the conflict.
         let branches = vec![local("main", s, true), local("feature", f, false)];
-        assert!(!classify_merged_branches(&repo, &branches, s, "main", &gh(&["feature"])).contains("feature"));
+        assert!(
+            !classify_merged_branches(&repo, &branches, s, "main", &gh(&["feature"]))
+                .contains("feature")
+        );
     }
 
     #[test]
@@ -1168,26 +1497,73 @@ mod tests {
         // edit to the base side and correctly sees the branch as contained.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a = commit(&repo, "refs/heads/main", 1000, &[], &[("shared.txt", "S1\nS2\nS3\n")]);
+        let a = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("shared.txt", "S1\nS2\nS3\n")],
+        );
         // Feature adds x.txt and y.txt across two commits (no single squash equals
         // its combined diff), keeping shared.txt at the forked content.
-        let f1 = commit(&repo, "refs/heads/feature", 1100, &[a], &[("shared.txt", "S1\nS2\nS3\n"), ("x.txt", "x")]);
-        let f2 = commit(&repo, "refs/heads/feature", 1200, &[f1], &[("shared.txt", "S1\nS2\nS3\n"), ("x.txt", "x"), ("y.txt", "y")]);
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("shared.txt", "S1\nS2\nS3\n"), ("x.txt", "x")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            1200,
+            &[f1],
+            &[
+                ("shared.txt", "S1\nS2\nS3\n"),
+                ("x.txt", "x"),
+                ("y.txt", "y"),
+            ],
+        );
         // Base lands x and y as two separate commits AND advances shared.txt.
-        let b1 = commit(&repo, "refs/heads/main", 2000, &[a], &[("shared.txt", "S1x\nS2\nS3\n"), ("x.txt", "x")]);
-        let b2 = commit(&repo, "refs/heads/main", 2100, &[b1], &[("shared.txt", "S1x\nS2\nS3\n"), ("x.txt", "x"), ("y.txt", "y")]);
+        let b1 = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("shared.txt", "S1x\nS2\nS3\n"), ("x.txt", "x")],
+        );
+        let b2 = commit(
+            &repo,
+            "refs/heads/main",
+            2100,
+            &[b1],
+            &[
+                ("shared.txt", "S1x\nS2\nS3\n"),
+                ("x.txt", "x"),
+                ("y.txt", "y"),
+            ],
+        );
 
         assert!(!is_ancestor_merged(&repo, f2, b2));
-        assert!(!is_squash_merged(&repo, f2, b2), "no single squash commit matches");
+        assert!(
+            !is_squash_merged(&repo, f2, b2),
+            "no single squash commit matches"
+        );
         assert!(
             branch_content_in_base(&repo, f2, b2),
             "three-way check: branch content is contained despite the advanced shared file"
         );
         let branches = vec![local("main", b2, true), local("feature", f2, false)];
         // Without gh: content match alone isn't trusted → stays visible.
-        assert!(!classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new()).contains("feature"));
+        assert!(
+            !classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new())
+                .contains("feature")
+        );
         // With gh: classified.
-        assert!(classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"])).contains("feature"));
+        assert!(
+            classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"]))
+                .contains("feature")
+        );
     }
 
     fn remote(name: &str, tip: Oid) -> BranchInfo {
@@ -1212,12 +1588,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let d1 = commit(&repo, "refs/heads/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "d")]);
+        let d1 = commit(
+            &repo,
+            "refs/heads/dev",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("d.txt", "d")],
+        );
         // Feature off the working trunk, two commits.
-        let f1 = commit(&repo, "refs/heads/feature", 3000, &[d1], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 3100, &[f1], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one\ntwo")]);
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            3000,
+            &[d1],
+            &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            3100,
+            &[f1],
+            &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one\ntwo")],
+        );
         // The squash lands on origin/dev only; local dev stays at d1.
-        let s = commit(&repo, "refs/remotes/origin/dev", 4000, &[d1], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one\ntwo")]);
+        let s = commit(
+            &repo,
+            "refs/remotes/origin/dev",
+            4000,
+            &[d1],
+            &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "one\ntwo")],
+        );
 
         let dev = BranchInfo {
             name: "dev".into(),
@@ -1243,9 +1643,19 @@ mod tests {
             &base.name,
             &HashSet::new(),
         );
-        assert!(set.contains("feature"), "landed branch classifies pre-pull: {set:?}");
-        assert_eq!(targets.get("feature"), Some(&s), "squash target on origin/dev");
-        assert!(!set.contains("origin/dev"), "the working trunk's remote counterpart is a trunk");
+        assert!(
+            set.contains("feature"),
+            "landed branch classifies pre-pull: {set:?}"
+        );
+        assert_eq!(
+            targets.get("feature"),
+            Some(&s),
+            "squash target on origin/dev"
+        );
+        assert!(
+            !set.contains("origin/dev"),
+            "the working trunk's remote counterpart is a trunk"
+        );
         assert!(!set.contains("dev"), "HEAD never classifies");
     }
 
@@ -1259,8 +1669,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let r = commit(&repo, "refs/remotes/origin/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "one")]);
-        let l = commit(&repo, "refs/heads/dev", 2100, &[r], &[("base.txt", "base"), ("d.txt", "one\ntwo")]);
+        let r = commit(
+            &repo,
+            "refs/remotes/origin/dev",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("d.txt", "one")],
+        );
+        let l = commit(
+            &repo,
+            "refs/heads/dev",
+            2100,
+            &[r],
+            &[("base.txt", "base"), ("d.txt", "one\ntwo")],
+        );
 
         let branches = vec![
             local("main", a, false),
@@ -1268,7 +1690,8 @@ mod tests {
             remote("origin/dev", r),
         ];
         let base = base_branch(&branches).unwrap();
-        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        let set =
+            classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
         assert!(
             !set.contains("origin/dev"),
             "the remote mirror of the live local line is stale, not merged: {set:?}"
@@ -1283,8 +1706,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let m = commit(&repo, "refs/heads/master", 1100, &[a], &[("base.txt", "base"), ("m.txt", "m")]);
-        let f = commit(&repo, "refs/heads/feature", 2000, &[m], &[("base.txt", "base"), ("m.txt", "m"), ("f.txt", "f")]);
+        let m = commit(
+            &repo,
+            "refs/heads/master",
+            1100,
+            &[a],
+            &[("base.txt", "base"), ("m.txt", "m")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            2000,
+            &[m],
+            &[("base.txt", "base"), ("m.txt", "m"), ("f.txt", "f")],
+        );
 
         let branches = vec![
             local("main", a, false),
@@ -1293,8 +1728,12 @@ mod tests {
         ];
         let base = base_branch(&branches).unwrap();
         assert_eq!(base.name, "main");
-        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
-        assert!(!set.contains("master"), "a conventional trunk name never classifies: {set:?}");
+        let set =
+            classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        assert!(
+            !set.contains("master"),
+            "a conventional trunk name never classifies: {set:?}"
+        );
         assert!(!set.contains("main"));
     }
 
@@ -1307,9 +1746,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let d1 = commit(&repo, "refs/heads/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "one")]);
-        let d2 = commit(&repo, "refs/remotes/origin/dev", 2100, &[d1], &[("base.txt", "base"), ("d.txt", "one\ntwo")]);
-        let f = commit(&repo, "refs/heads/feature", 3000, &[d2], &[("base.txt", "base"), ("d.txt", "one\ntwo"), ("f.txt", "f")]);
+        let d1 = commit(
+            &repo,
+            "refs/heads/dev",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("d.txt", "one")],
+        );
+        let d2 = commit(
+            &repo,
+            "refs/remotes/origin/dev",
+            2100,
+            &[d1],
+            &[("base.txt", "base"), ("d.txt", "one\ntwo")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            3000,
+            &[d2],
+            &[("base.txt", "base"), ("d.txt", "one\ntwo"), ("f.txt", "f")],
+        );
 
         let dev = BranchInfo {
             name: "dev".into(),
@@ -1327,7 +1784,8 @@ mod tests {
             local("feature", f, true), // checked out — its tip contains origin/dev
         ];
         let base = base_branch(&branches).unwrap();
-        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        let set =
+            classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
         assert!(
             !set.contains("dev"),
             "a branch strictly behind its upstream is stale, not merged: {set:?}"
@@ -1350,9 +1808,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let d1 = commit(&repo, "refs/heads/dev", 2000, &[a], &[("base.txt", "base"), ("d.txt", "one")]);
-        let d2 = commit(&repo, "refs/heads/dev", 2100, &[d1], &[("base.txt", "base"), ("d.txt", "one\ntwo")]);
-        repo.reference("refs/heads/marker", d1, true, "marker").unwrap();
+        let d1 = commit(
+            &repo,
+            "refs/heads/dev",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("d.txt", "one")],
+        );
+        let d2 = commit(
+            &repo,
+            "refs/heads/dev",
+            2100,
+            &[d1],
+            &[("base.txt", "base"), ("d.txt", "one\ntwo")],
+        );
+        repo.reference("refs/heads/marker", d1, true, "marker")
+            .unwrap();
 
         let branches = vec![
             local("main", a, false),
@@ -1360,7 +1831,8 @@ mod tests {
             local("marker", d1, false),
         ];
         let base = base_branch(&branches).unwrap();
-        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
+        let set =
+            classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &HashSet::new());
         assert!(
             !set.contains("marker"),
             "a branch behind on the checked-out line is not merged (#112): {set:?}"
@@ -1368,7 +1840,8 @@ mod tests {
         // Not even a merged-PR name match may override it: for an on-line tip
         // the containment cross-check is trivially true, so the gh name alone
         // would decide — and behind must never read as merged.
-        let set = classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &gh(&["marker"]));
+        let set =
+            classify_merged_branches(&repo, &branches, base.tip_oid, &base.name, &gh(&["marker"]));
         assert!(
             !set.contains("marker"),
             "the gh signal must not classify an on-line (behind) tip: {set:?}"
@@ -1384,8 +1857,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let t = commit(&repo, "refs/heads/topic", 2100, &[a], &[("base.txt", "base"), ("t.txt", "t")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let t = commit(
+            &repo,
+            "refs/heads/topic",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("t.txt", "t")],
+        );
         let m = commit(
             &repo,
             "refs/heads/main",
@@ -1423,14 +1908,55 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Feature branched from main, merged into dev (real merge commit).
-        let f = commit(&repo, "refs/heads/feature", 2000, &[a], &[("base.txt", "base"), ("f.txt", "f")]);
-        let d1 = commit(&repo, "refs/heads/dev", 2100, &[a], &[("base.txt", "base"), ("d.txt", "d")]);
-        let d2 = commit(&repo, "refs/heads/dev", 2200, &[d1, f], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "f")]);
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("f.txt", "f")],
+        );
+        let d1 = commit(
+            &repo,
+            "refs/heads/dev",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("d.txt", "d")],
+        );
+        let d2 = commit(
+            &repo,
+            "refs/heads/dev",
+            2200,
+            &[d1, f],
+            &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "f")],
+        );
         // A second feature squash-merged into dev.
-        let g = commit(&repo, "refs/heads/feature2", 3000, &[a], &[("base.txt", "base"), ("g.txt", "g")]);
-        let s = commit(&repo, "refs/heads/dev", 3100, &[d2], &[("base.txt", "base"), ("d.txt", "d"), ("f.txt", "f"), ("g.txt", "g")]);
+        let g = commit(
+            &repo,
+            "refs/heads/feature2",
+            3000,
+            &[a],
+            &[("base.txt", "base"), ("g.txt", "g")],
+        );
+        let s = commit(
+            &repo,
+            "refs/heads/dev",
+            3100,
+            &[d2],
+            &[
+                ("base.txt", "base"),
+                ("d.txt", "d"),
+                ("f.txt", "f"),
+                ("g.txt", "g"),
+            ],
+        );
         // An unlanded branch.
-        let u = commit(&repo, "refs/heads/wip", 4000, &[a], &[("base.txt", "base"), ("u.txt", "u")]);
+        let u = commit(
+            &repo,
+            "refs/heads/wip",
+            4000,
+            &[a],
+            &[("base.txt", "base"), ("u.txt", "u")],
+        );
 
         let branches = vec![
             local("main", a, false),
@@ -1448,12 +1974,28 @@ mod tests {
             &base.name,
             &HashSet::new(),
         );
-        assert!(set.contains("feature"), "merge-commit landing on the checked-out trunk: {set:?}");
-        assert!(set.contains("feature2"), "squash landing on the checked-out trunk: {set:?}");
-        assert_eq!(targets.get("feature2"), Some(&s), "squash target on the checked-out trunk");
+        assert!(
+            set.contains("feature"),
+            "merge-commit landing on the checked-out trunk: {set:?}"
+        );
+        assert!(
+            set.contains("feature2"),
+            "squash landing on the checked-out trunk: {set:?}"
+        );
+        assert_eq!(
+            targets.get("feature2"),
+            Some(&s),
+            "squash target on the checked-out trunk"
+        );
         assert!(!set.contains("wip"), "unlanded work stays visible");
-        assert!(!set.contains("main"), "the lagging primary trunk is never classified");
-        assert!(!set.contains("dev"), "the checked-out branch is never classified");
+        assert!(
+            !set.contains("main"),
+            "the lagging primary trunk is never classified"
+        );
+        assert!(
+            !set.contains("dev"),
+            "the checked-out branch is never classified"
+        );
     }
 
     #[test]
@@ -1465,16 +2007,70 @@ mod tests {
         // HEAD sits on an unrelated dev branch.
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
-        let a1 = commit(&repo, "refs/heads/main", 1000, &[], &[("file.txt", "L1\nL2\nL3\nL4\n")]);
-        let a2 = commit(&repo, "refs/heads/main", 1100, &[a1], &[("file.txt", "L1\nL2\nL3\nL4\n"), ("readme.md", "r")]);
+        let a1 = commit(
+            &repo,
+            "refs/heads/main",
+            1000,
+            &[],
+            &[("file.txt", "L1\nL2\nL3\nL4\n")],
+        );
+        let a2 = commit(
+            &repo,
+            "refs/heads/main",
+            1100,
+            &[a1],
+            &[("file.txt", "L1\nL2\nL3\nL4\n"), ("readme.md", "r")],
+        );
         // Local feature: two commits, ref survives the merge.
-        let f1 = commit(&repo, "refs/heads/feature", 2000, &[a2], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r")]);
-        let f2 = commit(&repo, "refs/heads/feature", 2100, &[f1], &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r"), ("new.txt", "n")]);
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2000,
+            &[a2],
+            &[("file.txt", "L1\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[f1],
+            &[
+                ("file.txt", "L1\nL2\nFEAT\nL3\nL4\n"),
+                ("readme.md", "r"),
+                ("new.txt", "n"),
+            ],
+        );
         // origin/main: a drift commit editing a line adjacent to the feature's
         // change, then the squash. No origin/feature ref exists (deleted).
-        let m3 = commit(&repo, "refs/remotes/origin/main", 3000, &[a2], &[("file.txt", "L1x\nL2\nL3\nL4\n"), ("readme.md", "r")]);
-        let s = commit(&repo, "refs/remotes/origin/main", 4000, &[m3], &[("file.txt", "L1x\nL2\nFEAT\nL3\nL4\n"), ("readme.md", "r"), ("new.txt", "n")]);
-        let d = commit(&repo, "refs/heads/dev", 5000, &[a2], &[("file.txt", "L1\nL2\nL3\nL4\n"), ("readme.md", "r"), ("dev.txt", "d")]);
+        let m3 = commit(
+            &repo,
+            "refs/remotes/origin/main",
+            3000,
+            &[a2],
+            &[("file.txt", "L1x\nL2\nL3\nL4\n"), ("readme.md", "r")],
+        );
+        let s = commit(
+            &repo,
+            "refs/remotes/origin/main",
+            4000,
+            &[m3],
+            &[
+                ("file.txt", "L1x\nL2\nFEAT\nL3\nL4\n"),
+                ("readme.md", "r"),
+                ("new.txt", "n"),
+            ],
+        );
+        let d = commit(
+            &repo,
+            "refs/heads/dev",
+            5000,
+            &[a2],
+            &[
+                ("file.txt", "L1\nL2\nL3\nL4\n"),
+                ("readme.md", "r"),
+                ("dev.txt", "d"),
+            ],
+        );
 
         let branches = vec![
             local("main", a2, false),
@@ -1495,7 +2091,11 @@ mod tests {
             set.contains("feature"),
             "surviving local ref must classify via the drifted origin/main tip: {set:?}"
         );
-        assert_eq!(targets.get("feature"), Some(&s), "link target is the squash on origin/main");
+        assert_eq!(
+            targets.get("feature"),
+            Some(&s),
+            "link target is the squash on origin/main"
+        );
         assert!(!set.contains("dev"), "unlanded work stays visible");
     }
 
@@ -1512,12 +2112,36 @@ mod tests {
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Feature: two commits building feat.txt (multi-commit, so only the
         // *cumulative* diff equals the squash — the case #82 is about).
-        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "one\ntwo")],
+        );
         // Squash lands the feature's net diff on origin/main (single commit).
-        let s = commit(&repo, "refs/remotes/origin/main", 3000, &[a], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        let s = commit(
+            &repo,
+            "refs/remotes/origin/main",
+            3000,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one\ntwo")],
+        );
         // An unrelated branch that genuinely never landed.
-        let g = commit(&repo, "refs/heads/gone", 2300, &[a], &[("base.txt", "base"), ("other.txt", "x")]);
+        let g = commit(
+            &repo,
+            "refs/heads/gone",
+            2300,
+            &[a],
+            &[("base.txt", "base"), ("other.txt", "x")],
+        );
 
         let branches = vec![
             local("main", a, true), // stale local trunk, also HEAD
@@ -1526,18 +2150,36 @@ mod tests {
             local("gone", g, false),
         ];
         // Sanity: against the stale local tip alone, the squash is invisible.
-        assert!(!is_squash_merged(&repo, f2, a), "stale local tip cannot see the squash");
-        assert!(is_squash_merged(&repo, f2, s), "remote tip carries the squash");
+        assert!(
+            !is_squash_merged(&repo, f2, a),
+            "stale local tip cannot see the squash"
+        );
+        assert!(
+            is_squash_merged(&repo, f2, s),
+            "remote tip carries the squash"
+        );
 
         // base_branch prefers the (stale) local main; classification must reach
         // through to origin/main anyway.
         let base = base_branch(&branches).unwrap();
         assert_eq!(base.name, "main");
         let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
-        assert!(merged.contains("feature"), "squash on ahead remote trunk must be classified");
-        assert!(!merged.contains("gone"), "genuinely unmerged branch stays visible");
-        assert!(!merged.contains("main"), "the trunk itself is never classified");
-        assert!(!merged.contains("origin/main"), "remote branches are never classified");
+        assert!(
+            merged.contains("feature"),
+            "squash on ahead remote trunk must be classified"
+        );
+        assert!(
+            !merged.contains("gone"),
+            "genuinely unmerged branch stays visible"
+        );
+        assert!(
+            !merged.contains("main"),
+            "the trunk itself is never classified"
+        );
+        assert!(
+            !merged.contains("origin/main"),
+            "remote branches are never classified"
+        );
         assert_eq!(merged.len(), 1);
     }
 
@@ -1550,10 +2192,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let t = commit(&repo, "refs/heads/topic", 2000, &[a], &[("base.txt", "base"), ("t.txt", "t")]);
+        let t = commit(
+            &repo,
+            "refs/heads/topic",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("t.txt", "t")],
+        );
         // origin/main advanced on its own line, then merged topic in; local
         // main lags at `a`. Parents [x (trunk, first), t (topic, second)].
-        let x = commit(&repo, "refs/remotes/origin/main", 2400, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let x = commit(
+            &repo,
+            "refs/remotes/origin/main",
+            2400,
+            &[a],
+            &[("base.txt", "base"), ("x.txt", "x")],
+        );
         let u = commit(
             &repo,
             "refs/remotes/origin/main",
@@ -1561,10 +2215,17 @@ mod tests {
             &[x, t],
             &[("base.txt", "base"), ("x.txt", "x"), ("t.txt", "t")],
         );
-        let branches = vec![local("main", a, true), remote("origin/main", u), local("topic", t, false)];
+        let branches = vec![
+            local("main", a, true),
+            remote("origin/main", u),
+            local("topic", t, false),
+        ];
         let base = base_branch(&branches).unwrap();
         let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
-        assert!(merged.contains("topic"), "merge landed only on the remote trunk must classify: {merged:?}");
+        assert!(
+            merged.contains("topic"),
+            "merge landed only on the remote trunk must classify: {merged:?}"
+        );
     }
 
     #[test]
@@ -1573,7 +2234,11 @@ mod tests {
         // second tip — behaviour is identical to before.
         let z = Oid::zero();
         let branches = vec![local("main", z, true), remote("origin/main", z)];
-        assert_eq!(base_tips(&branches, z, "main"), vec![z], "equal remote adds no tip");
+        assert_eq!(
+            base_tips(&branches, z, "main"),
+            vec![z],
+            "equal remote adds no tip"
+        );
         // A remote base name has no bare `origin/…` counterpart to add.
         assert_eq!(base_tips(&branches, z, "origin/main"), vec![z]);
         // No remote trunk present at all → just the local tip.
@@ -1596,23 +2261,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
         // Feature (two commits) lives only on the remote after the merge.
-        let f1 = commit(&repo, "refs/remotes/origin/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/remotes/origin/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        let f1 = commit(
+            &repo,
+            "refs/remotes/origin/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/remotes/origin/feature",
+            2200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "one\ntwo")],
+        );
         // Squash lands the feature's net diff on main.
         let s = commit(
             &repo,
             "refs/heads/main",
             3000,
             &[b],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "one\ntwo")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "one\ntwo"),
+            ],
         );
 
-        let branches = vec![
-            local("main", s, true),
-            remote("origin/feature", f2),
-        ];
+        let branches = vec![local("main", s, true), remote("origin/feature", f2)];
         let (merged, targets) =
             classify_merged_branches_with_targets(&repo, &branches, s, "main", &HashSet::new());
         assert!(
@@ -1636,11 +2320,20 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // origin/main ahead of local main by one commit.
-        let u = commit(&repo, "refs/remotes/origin/main", 2000, &[a], &[("base.txt", "base"), ("u.txt", "u")]);
+        let u = commit(
+            &repo,
+            "refs/remotes/origin/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("u.txt", "u")],
+        );
         let branches = vec![local("main", a, true), remote("origin/main", u)];
         let base = base_branch(&branches).unwrap();
         let merged = merged_local_branches(&repo, &branches, base.tip_oid, &base.name);
-        assert!(!merged.contains("origin/main"), "the remote trunk is never classified as merged");
+        assert!(
+            !merged.contains("origin/main"),
+            "the remote trunk is never classified as merged"
+        );
         assert!(merged.is_empty(), "no branch to classify here");
     }
 
@@ -1655,11 +2348,24 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Local main advances past `a`.
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
         // upstream/main lags at `a` — a strict ancestor of local main's tip.
-        repo.reference("refs/remotes/upstream/main", a, true, "upstream/main").unwrap();
+        repo.reference("refs/remotes/upstream/main", a, true, "upstream/main")
+            .unwrap();
         // A genuinely-merged feature to prove the guard didn't over-suppress.
-        let f = commit(&repo, "refs/remotes/origin/feature", 2100, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let f = commit(
+            &repo,
+            "refs/remotes/origin/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
 
         let branches = vec![
             local("main", b, true),
@@ -1688,17 +2394,50 @@ mod tests {
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Branch content lands across two base commits (no single squash matches),
         // so only the gh signal + content check can classify it.
-        let f1 = commit(&repo, "refs/remotes/origin/feature", 1100, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
-        let f2 = commit(&repo, "refs/remotes/origin/feature", 1200, &[f1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
-        let b1 = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
-        let b2 = commit(&repo, "refs/heads/main", 2100, &[b1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+        let f1 = commit(
+            &repo,
+            "refs/remotes/origin/feature",
+            1100,
+            &[a],
+            &[("base.txt", "base"), ("x.txt", "x")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/remotes/origin/feature",
+            1200,
+            &[f1],
+            &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")],
+        );
+        let b1 = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("x.txt", "x")],
+        );
+        let b2 = commit(
+            &repo,
+            "refs/heads/main",
+            2100,
+            &[b1],
+            &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")],
+        );
 
         let branches = vec![local("main", b2, true), remote("origin/feature", f2)];
-        assert!(!is_squash_merged(&repo, f2, b2), "no single squash commit matches");
+        assert!(
+            !is_squash_merged(&repo, f2, b2),
+            "no single squash commit matches"
+        );
         // Without gh: content match alone is not trusted → stays visible.
-        assert!(!classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new()).contains("origin/feature"));
+        assert!(
+            !classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new())
+                .contains("origin/feature")
+        );
         // With gh reporting head "feature" (no prefix): the remote ref classifies.
-        assert!(classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"])).contains("origin/feature"));
+        assert!(
+            classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"]))
+                .contains("origin/feature")
+        );
     }
 
     #[test]
@@ -1709,11 +2448,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let f = commit(&repo, "refs/remotes/origin/feature", 2100, &[a], &[("base.txt", "base"), ("novel.txt", "new work")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let f = commit(
+            &repo,
+            "refs/remotes/origin/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("novel.txt", "new work")],
+        );
         let branches = vec![local("main", b, true), remote("origin/feature", f)];
         assert!(
-            !classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"])).contains("origin/feature"),
+            !classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"]))
+                .contains("origin/feature"),
             "remote name reuse with novel content must not be classified"
         );
     }
@@ -1730,10 +2482,28 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Feature: two commits building feat.txt.
-        let f1 = commit(&repo, "refs/heads/feature", 1100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 1200, &[f1], &[("base.txt", "base"), ("feat.txt", "one\ntwo")]);
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            1200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "one\ntwo")],
+        );
         // Base advances (adds main.txt) while the PR is open.
-        let adv = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let adv = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
         // "Update branch": merge the advanced base INTO the feature branch. First
         // parent = feature (f2), second = base (adv). Tree carries both sides.
         let m = commit(
@@ -1741,7 +2511,11 @@ mod tests {
             "refs/heads/feature",
             2500,
             &[f2, adv],
-            &[("base.txt", "base"), ("feat.txt", "one\ntwo"), ("main.txt", "main")],
+            &[
+                ("base.txt", "base"),
+                ("feat.txt", "one\ntwo"),
+                ("main.txt", "main"),
+            ],
         );
         // Squash lands the feature's net diff on top of the advanced base.
         let s = commit(
@@ -1749,16 +2523,31 @@ mod tests {
             "refs/heads/main",
             3000,
             &[adv],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "one\ntwo")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "one\ntwo"),
+            ],
         );
 
-        assert_eq!(repo.merge_base(m, s).unwrap(), adv, "merge_base is the back-merge sync point");
-        assert!(!is_ancestor_merged(&repo, m, s), "no shared commit after the squash");
+        assert_eq!(
+            repo.merge_base(m, s).unwrap(),
+            adv,
+            "merge_base is the back-merge sync point"
+        );
+        assert!(
+            !is_ancestor_merged(&repo, m, s),
+            "no shared commit after the squash"
+        );
         assert!(
             is_squash_merged(&repo, m, s),
             "a squash must still be detected after the base was back-merged into the branch"
         );
-        assert_eq!(squash_merge_target(&repo, m, s), Some(s), "link target is the squash commit");
+        assert_eq!(
+            squash_merge_target(&repo, m, s),
+            Some(s),
+            "link target is the squash commit"
+        );
     }
 
     fn gh(names: &[&str]) -> HashSet<String> {
@@ -1774,9 +2563,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
         // New "feature" adds a file the base has never seen.
-        let f = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("novel.txt", "new work")]);
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("novel.txt", "new work")],
+        );
 
         let branches = vec![local("main", b, true), local("feature", f, false)];
         // GitHub claims a merged PR with head "feature".
@@ -1785,7 +2586,10 @@ mod tests {
             !merged.contains("feature"),
             "name reuse with novel content must not be classified merged"
         );
-        assert!(!branch_content_in_base(&repo, f, b), "branch carries content the base lacks");
+        assert!(
+            !branch_content_in_base(&repo, f, b),
+            "branch carries content the base lacks"
+        );
     }
 
     #[test]
@@ -1798,22 +2602,58 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Branch adds x.txt and y.txt across two commits.
-        let f1 = commit(&repo, "refs/heads/feature", 1100, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
-        let f2 = commit(&repo, "refs/heads/feature", 1200, &[f1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("base.txt", "base"), ("x.txt", "x")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            1200,
+            &[f1],
+            &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")],
+        );
         // Base lands the same content, but as two separate commits (no single
         // squash commit equals the branch's combined diff).
-        let b1 = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
-        let b2 = commit(&repo, "refs/heads/main", 2100, &[b1], &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")]);
+        let b1 = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("x.txt", "x")],
+        );
+        let b2 = commit(
+            &repo,
+            "refs/heads/main",
+            2100,
+            &[b1],
+            &[("base.txt", "base"), ("x.txt", "x"), ("y.txt", "y")],
+        );
 
         assert!(!is_ancestor_merged(&repo, f2, b2));
-        assert!(!is_squash_merged(&repo, f2, b2), "no single squash commit matches");
-        assert!(branch_content_in_base(&repo, f2, b2), "all content is present in the base");
+        assert!(
+            !is_squash_merged(&repo, f2, b2),
+            "no single squash commit matches"
+        );
+        assert!(
+            branch_content_in_base(&repo, f2, b2),
+            "all content is present in the base"
+        );
 
         let branches = vec![local("main", b2, true), local("feature", f2, false)];
         // Without the GitHub signal it stays unclassified (content match alone is
         // not trusted); with it, it's merged.
-        assert!(!classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new()).contains("feature"));
-        assert!(classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"])).contains("feature"));
+        assert!(
+            !classify_merged_branches(&repo, &branches, b2, "main", &HashSet::new())
+                .contains("feature")
+        );
+        assert!(
+            classify_merged_branches(&repo, &branches, b2, "main", &gh(&["feature"]))
+                .contains("feature")
+        );
     }
 
     #[test]
@@ -1825,13 +2665,31 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
         // Branch commit with the SAME tree as `a` (net-empty change).
-        let f = commit(&repo, "refs/heads/feature", 1100, &[a], &[("base.txt", "base")]);
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1100,
+            &[a],
+            &[("base.txt", "base")],
+        );
         // Base advances with an empty commit (same tree again).
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base")],
+        );
 
-        assert!(branch_content_in_base(&repo, f, b), "net-empty branch has nothing to land");
+        assert!(
+            branch_content_in_base(&repo, f, b),
+            "net-empty branch has nothing to land"
+        );
         let branches = vec![local("main", b, true), local("feature", f, false)];
-        assert!(classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"])).contains("feature"));
+        assert!(
+            classify_merged_branches(&repo, &branches, b, "main", &gh(&["feature"]))
+                .contains("feature")
+        );
     }
 
     // ── base-update ("back-merge") classification (#55) ──────────────
@@ -1845,8 +2703,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let c = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base2")]);
-        let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("feat.txt", "x")]);
+        let c = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base2")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1500,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "x")],
+        );
         // Merge the updated base (c) into the PR branch; first parent = feature.
         let m = commit(
             &repo,
@@ -1870,8 +2740,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "m")]);
-        let t = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("feat.txt", "x")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "m")],
+        );
+        let t = commit(
+            &repo,
+            "refs/heads/feature",
+            1500,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "x")],
+        );
         let m = commit(
             &repo,
             "refs/heads/main",
@@ -1895,9 +2777,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let c = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base2")]);
-        let f = commit(&repo, "refs/heads/feat", 1500, &[a], &[("base.txt", "base"), ("f.txt", "f")]);
-        let s = commit(&repo, "refs/heads/sibling", 1600, &[a], &[("base.txt", "base"), ("s.txt", "s")]);
+        let c = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base2")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feat",
+            1500,
+            &[a],
+            &[("base.txt", "base"), ("f.txt", "f")],
+        );
+        let s = commit(
+            &repo,
+            "refs/heads/sibling",
+            1600,
+            &[a],
+            &[("base.txt", "base"), ("s.txt", "s")],
+        );
         let m = commit(
             &repo,
             "refs/heads/feat",
@@ -1906,7 +2806,10 @@ mod tests {
             &[("base.txt", "base"), ("f.txt", "f"), ("s.txt", "s")],
         );
         let set = classify_base_update_merges(&repo, &[(m, c)]);
-        assert!(set.is_empty(), "merging a non-base sibling is not a base-update");
+        assert!(
+            set.is_empty(),
+            "merging a non-base sibling is not a base-update"
+        );
     }
 
     #[test]
@@ -1914,7 +2817,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("x.txt", "x")]);
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1500,
+            &[a],
+            &[("base.txt", "base"), ("x.txt", "x")],
+        );
         // No PR heads at all.
         assert!(classify_base_update_merges(&repo, &[]).is_empty());
         // A PR head whose branch has no merge commit.
@@ -1928,8 +2837,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let c = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base2")]);
-        let f = commit(&repo, "refs/heads/feature", 1500, &[a], &[("base.txt", "base"), ("feat.txt", "x")]);
+        let c = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base2")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            1500,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "x")],
+        );
         let m = commit(
             &repo,
             "refs/heads/feature",
@@ -1937,7 +2858,13 @@ mod tests {
             &[f, c],
             &[("base.txt", "base2"), ("feat.txt", "x")],
         );
-        let g = commit(&repo, "refs/heads/feature", 3500, &[m], &[("base.txt", "base2"), ("feat.txt", "y")]);
+        let g = commit(
+            &repo,
+            "refs/heads/feature",
+            3500,
+            &[m],
+            &[("base.txt", "base2"), ("feat.txt", "y")],
+        );
         let set = classify_base_update_merges(&repo, &[(g, c)]);
         assert!(set.contains(&m), "a mid-branch back-merge is still found");
     }
@@ -1951,9 +2878,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let d1 = commit(&repo, "refs/heads/dev", 1500, &[a], &[("base.txt", "base"), ("d.txt", "1")]);
-        let f = commit(&repo, "refs/heads/feature", 2000, &[d1], &[("base.txt", "base"), ("d.txt", "1"), ("f.txt", "f")]);
-        let d2 = commit(&repo, "refs/heads/dev", 2500, &[d1], &[("base.txt", "base"), ("d.txt", "2")]);
+        let d1 = commit(
+            &repo,
+            "refs/heads/dev",
+            1500,
+            &[a],
+            &[("base.txt", "base"), ("d.txt", "1")],
+        );
+        let f = commit(
+            &repo,
+            "refs/heads/feature",
+            2000,
+            &[d1],
+            &[("base.txt", "base"), ("d.txt", "1"), ("f.txt", "f")],
+        );
+        let d2 = commit(
+            &repo,
+            "refs/heads/dev",
+            2500,
+            &[d1],
+            &[("base.txt", "base"), ("d.txt", "2")],
+        );
         let m = commit(
             &repo,
             "refs/heads/feature",
@@ -1963,7 +2908,10 @@ mod tests {
         );
         // Paired with the PR's real base (dev), the back-merge is found.
         let set = classify_base_update_merges(&repo, &[(m, d2)]);
-        assert!(set.contains(&m), "dev back-merge classifies against dev's tip");
+        assert!(
+            set.contains(&m),
+            "dev back-merge classifies against dev's tip"
+        );
         // Paired with the repo-wide trunk (the pre-#103 behavior), it is
         // invisible: m's second parent is on dev, not on main.
         assert!(
@@ -2021,9 +2969,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "main")]);
-        let s1 = commit(&repo, "refs/heads/sub", 2100, &[a], &[("base.txt", "base"), ("sub.txt", "s")]);
-        let f1 = commit(&repo, "refs/heads/feature", 2200, &[a], &[("base.txt", "base"), ("feat.txt", "f")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "main")],
+        );
+        let s1 = commit(
+            &repo,
+            "refs/heads/sub",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("sub.txt", "s")],
+        );
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "f")],
+        );
         let f2 = commit(
             &repo,
             "refs/heads/feature",
@@ -2036,7 +3002,12 @@ mod tests {
             "refs/heads/main",
             3000,
             &[b],
-            &[("base.txt", "base"), ("main.txt", "main"), ("feat.txt", "f"), ("sub.txt", "s")],
+            &[
+                ("base.txt", "base"),
+                ("main.txt", "main"),
+                ("feat.txt", "f"),
+                ("sub.txt", "s"),
+            ],
         );
 
         let branches = vec![
@@ -2046,7 +3017,10 @@ mod tests {
         ];
         let merged = merged_local_branches(&repo, &branches, sq, "main");
         assert!(merged.contains("feature"), "feature squashed to trunk");
-        assert!(merged.contains("sub"), "sub landed through feature (transitive)");
+        assert!(
+            merged.contains("sub"),
+            "sub landed through feature (transitive)"
+        );
         assert!(!merged.contains("main"));
     }
 
@@ -2060,10 +3034,22 @@ mod tests {
         let repo = Repository::init(dir.path()).unwrap();
         let base = ("base.txt", "base");
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[base]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[base, ("main.txt", "m")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[base, ("main.txt", "m")],
+        );
         let c1 = commit(&repo, "refs/heads/c", 2100, &[a], &[base, ("c.txt", "c")]);
         let b1 = commit(&repo, "refs/heads/bb", 2200, &[a], &[base, ("bb.txt", "b")]);
-        let b2 = commit(&repo, "refs/heads/bb", 2300, &[b1], &[base, ("bb.txt", "b"), ("c.txt", "c")]);
+        let b2 = commit(
+            &repo,
+            "refs/heads/bb",
+            2300,
+            &[b1],
+            &[base, ("bb.txt", "b"), ("c.txt", "c")],
+        );
         let a1 = commit(&repo, "refs/heads/aa", 2400, &[a], &[base, ("aa.txt", "a")]);
         let a2 = commit(
             &repo,
@@ -2077,7 +3063,13 @@ mod tests {
             "refs/heads/main",
             3000,
             &[b],
-            &[base, ("main.txt", "m"), ("aa.txt", "a"), ("bb.txt", "b"), ("c.txt", "c")],
+            &[
+                base,
+                ("main.txt", "m"),
+                ("aa.txt", "a"),
+                ("bb.txt", "b"),
+                ("c.txt", "c"),
+            ],
         );
 
         let branches = vec![
@@ -2100,9 +3092,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "m")]);
-        let s1 = commit(&repo, "refs/heads/sub", 2100, &[a], &[("base.txt", "base"), ("sub.txt", "s")]);
-        let f1 = commit(&repo, "refs/heads/feature", 2200, &[a], &[("base.txt", "base"), ("feat.txt", "f")]);
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "m")],
+        );
+        let s1 = commit(
+            &repo,
+            "refs/heads/sub",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("sub.txt", "s")],
+        );
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "f")],
+        );
         let f2 = commit(
             &repo,
             "refs/heads/feature",
@@ -2130,10 +3140,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let a = commit(&repo, "refs/heads/main", 1000, &[], &[("base.txt", "base")]);
-        let b = commit(&repo, "refs/heads/main", 2000, &[a], &[("base.txt", "base"), ("main.txt", "m")]);
-        let f1 = commit(&repo, "refs/heads/feature", 2100, &[a], &[("base.txt", "base"), ("feat.txt", "one")]);
-        let f2 = commit(&repo, "refs/heads/feature", 2200, &[f1], &[("base.txt", "base"), ("feat.txt", "two")]);
-        repo.reference("refs/heads/backup", f1, true, "backup").unwrap();
+        let b = commit(
+            &repo,
+            "refs/heads/main",
+            2000,
+            &[a],
+            &[("base.txt", "base"), ("main.txt", "m")],
+        );
+        let f1 = commit(
+            &repo,
+            "refs/heads/feature",
+            2100,
+            &[a],
+            &[("base.txt", "base"), ("feat.txt", "one")],
+        );
+        let f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            2200,
+            &[f1],
+            &[("base.txt", "base"), ("feat.txt", "two")],
+        );
+        repo.reference("refs/heads/backup", f1, true, "backup")
+            .unwrap();
         let sq = commit(
             &repo,
             "refs/heads/main",
@@ -2149,6 +3178,9 @@ mod tests {
         ];
         let merged = merged_local_branches(&repo, &branches, sq, "main");
         assert!(merged.contains("feature"));
-        assert!(merged.contains("backup"), "old state of a landed line is landed");
+        assert!(
+            merged.contains("backup"),
+            "old state of a landed line is landed"
+        );
     }
 }

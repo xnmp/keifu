@@ -191,8 +191,8 @@ impl App {
             // Close first: a re-target starts from a clean slate rather than
             // mutating the open menu in place.
             self.mode = AppMode::Normal;
-            let same_commit = target.is_some()
-                && target == self.graph_nav.graph_list_state.selected();
+            let same_commit =
+                target.is_some() && target == self.graph_nav.graph_list_state.selected();
             if target.is_none() || same_commit {
                 return;
             }
@@ -298,7 +298,11 @@ impl App {
 
         // Scrollable popups: route the wheel to their up/down.
         if self.mode_scrolls_with_wheel() {
-            let a = if down { Action::MoveDown } else { Action::MoveUp };
+            let a = if down {
+                Action::MoveDown
+            } else {
+                Action::MoveUp
+            };
             let _ = self.handle_action(a);
             return;
         }
@@ -320,7 +324,11 @@ impl App {
         };
         if let Some(panel) = panel {
             self.focused_panel = panel;
-            let a = if down { Action::MoveDown } else { Action::MoveUp };
+            let a = if down {
+                Action::MoveDown
+            } else {
+                Action::MoveUp
+            };
             let _ = self.handle_normal_action(a);
         }
     }

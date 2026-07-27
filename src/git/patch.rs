@@ -114,9 +114,7 @@ pub fn extract_hunk_from_working_tree(
 ) -> Result<Option<HunkPatch>> {
     let head_tree = match repo.head() {
         Ok(head) => Some(head.peel_to_tree()?),
-        Err(err)
-            if err.code() == ErrorCode::UnbornBranch || err.code() == ErrorCode::NotFound =>
-        {
+        Err(err) if err.code() == ErrorCode::UnbornBranch || err.code() == ErrorCode::NotFound => {
             None
         }
         Err(err) => return Err(err.into()),

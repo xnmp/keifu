@@ -6,9 +6,7 @@
 use image::RgbaImage;
 use keifu::git::graph::{build_graph, lineage_oids};
 use keifu::git::GitRepository;
-use keifu::ui::graph_pixels::{
-    build_row_spec, rasterize_row, CellShape, PIXEL_LEFT_PAD_CELLS,
-};
+use keifu::ui::graph_pixels::{build_row_spec, rasterize_row, CellShape, PIXEL_LEFT_PAD_CELLS};
 use keifu::ui::theme::Theme;
 
 fn main() {
@@ -25,9 +23,9 @@ fn main() {
     let stashes = repo.get_stashes();
     let tags = repo.get_tags();
     let commits = repo.get_commits(200, &branches, &stashes, false).unwrap();
-    let head = commits.iter().find(|c| {
-        branches.iter().any(|b| b.is_head && b.tip_oid == c.oid)
-    });
+    let head = commits
+        .iter()
+        .find(|c| branches.iter().any(|b| b.is_head && b.tip_oid == c.oid));
     let layout = build_graph(
         &commits,
         &branches,
@@ -82,8 +80,7 @@ fn main() {
                 let mut underlay = vec![keifu::git::graph::CellType::Empty; width];
                 // Fold edge identity alongside, mirroring merge_connector_cells,
                 // so the underlay dims/recolors exactly like the app.
-                let mut underlay_oids: Vec<keifu::git::graph::CellOids> =
-                    vec![(None, None); width];
+                let mut underlay_oids: Vec<keifu::git::graph::CellOids> = vec![(None, None); width];
                 for &p in &pending {
                     for (col, cell) in layout.nodes[p].cells.iter().enumerate() {
                         if *cell != keifu::git::graph::CellType::Empty {
@@ -172,16 +169,14 @@ fn main() {
             .iter()
             .filter_map(|n| {
                 n.commit.as_ref().map(|c| {
-                    let rgb = keifu::ui::graph_pixels::color_to_rgb(
-                        theme.lane_color(n.color_index),
-                    );
+                    let rgb =
+                        keifu::ui::graph_pixels::color_to_rgb(theme.lane_color(n.color_index));
                     (c.oid, rgb)
                 })
             })
             .collect();
-        let is_lit = |edge: Option<keifu::git::graph::CellEdge>| {
-            edge.is_some_and(|e| lit.contains_key(&e))
-        };
+        let is_lit =
+            |edge: Option<keifu::git::graph::CellEdge>| edge.is_some_and(|e| lit.contains_key(&e));
         let color_of = |edge: Option<keifu::git::graph::CellEdge>| {
             edge.and_then(|e| lit.get(&e))
                 .and_then(|oid| lane_rgb.get(oid))
@@ -193,31 +188,30 @@ fn main() {
             (&mut spec.underlay, underlay_oids),
         ];
         for (cells, oids) in layers {
-        for (ci, pc) in cells.iter_mut().enumerate() {
-            let (primary, secondary) =
-                oids.get(ci).copied().unwrap_or((None, None));
-            if pc.shape == CellShape::HorizontalPipe {
-                pc.dim_secondary = !is_lit(primary);
-                pc.dim = !is_lit(secondary);
-                if let Some(rgb) = color_of(primary) {
-                    pc.secondary = rgb;
-                }
-                if let Some(rgb) = color_of(secondary) {
-                    pc.color = rgb;
-                }
-            } else if matches!(pc.shape, CellShape::Commit { .. }) {
-                pc.dim = !(is_lit(primary) || is_lit(secondary));
-                pc.dim_secondary = pc.dim;
-            } else {
-                // Own stroke = primary edge only; a secondary edge is a
-                // co-routed sibling drawn by its own curve (see graph_view).
-                pc.dim = !is_lit(primary);
-                pc.dim_secondary = pc.dim;
-                if let Some(rgb) = color_of(primary) {
-                    pc.color = rgb;
+            for (ci, pc) in cells.iter_mut().enumerate() {
+                let (primary, secondary) = oids.get(ci).copied().unwrap_or((None, None));
+                if pc.shape == CellShape::HorizontalPipe {
+                    pc.dim_secondary = !is_lit(primary);
+                    pc.dim = !is_lit(secondary);
+                    if let Some(rgb) = color_of(primary) {
+                        pc.secondary = rgb;
+                    }
+                    if let Some(rgb) = color_of(secondary) {
+                        pc.color = rgb;
+                    }
+                } else if matches!(pc.shape, CellShape::Commit { .. }) {
+                    pc.dim = !(is_lit(primary) || is_lit(secondary));
+                    pc.dim_secondary = pc.dim;
+                } else {
+                    // Own stroke = primary edge only; a secondary edge is a
+                    // co-routed sibling drawn by its own curve (see graph_view).
+                    pc.dim = !is_lit(primary);
+                    pc.dim_secondary = pc.dim;
+                    if let Some(rgb) = color_of(primary) {
+                        pc.color = rgb;
+                    }
                 }
             }
-        }
         }
         if std::env::var("DUMP_OIDS").is_ok() {
             let sid = |o: git2::Oid| o.to_string()[..7].to_string();
@@ -230,8 +224,7 @@ fn main() {
                 "row {i} {node_label} lane={} color_index={}",
                 node.lane, node.color_index
             );
-            for (layer, oids_l) in [("cells", &node.cell_oids), ("underlay", underlay_oids)]
-            {
+            for (layer, oids_l) in [("cells", &node.cell_oids), ("underlay", underlay_oids)] {
                 for (ci, (pe, se)) in oids_l.iter().enumerate() {
                     if pe.is_none() && se.is_none() {
                         continue;

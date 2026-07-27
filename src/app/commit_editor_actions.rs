@@ -72,7 +72,10 @@ impl App {
                 // Ctrl+Enter with no message: amend --no-edit
                 commit_amend_no_edit(&self.repo_path)?;
                 self.refresh(true)?;
-                self.toast(crate::toast::ToastKind::Success, "Commit amended (--no-edit)");
+                self.toast(
+                    crate::toast::ToastKind::Success,
+                    "Commit amended (--no-edit)",
+                );
                 self.focused_panel = FocusedPanel::Graph;
             }
             return Ok(());

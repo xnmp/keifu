@@ -58,7 +58,10 @@ fn single_remote_fetch_skips_picker() {
         !matches!(app.mode, AppMode::RemotePicker { .. }),
         "single-remote fetch must not prompt"
     );
-    assert!(app.is_fetching(), "fetch should have started in the background");
+    assert!(
+        app.is_fetching(),
+        "fetch should have started in the background"
+    );
 }
 
 #[test]
@@ -70,7 +73,12 @@ fn pull_without_remote_reports_message() {
     app.handle_action(Action::Pull).unwrap();
 
     assert!(matches!(app.mode, AppMode::Normal));
-    let toast_texts: Vec<&str> = app.toasts.visible().iter().map(|t| t.text.as_str()).collect();
+    let toast_texts: Vec<&str> = app
+        .toasts
+        .visible()
+        .iter()
+        .map(|t| t.text.as_str())
+        .collect();
     assert!(
         toast_texts.iter().any(|t| t.contains("No remote")),
         "expected a no-remote toast, got {toast_texts:?}"
@@ -134,7 +142,9 @@ fn delete_remote_branch_flow_removes_branch_from_remote() {
     }
 
     assert!(
-        git_cli(&path, &["ls-remote", "--heads", "origin", "feature"]).trim().is_empty(),
+        git_cli(&path, &["ls-remote", "--heads", "origin", "feature"])
+            .trim()
+            .is_empty(),
         "feature should be deleted from origin"
     );
     assert!(app.pending_remote_deletions.is_empty());
@@ -156,10 +166,19 @@ fn toggle_remote_branches_hides_remote_only_commits() {
     // commit, publish that commit under refs/remotes/origin/*, then delete the
     // local branch so nothing local points at it.
     git_cli(&path, &["checkout", "-b", "tmp"]);
-    let remote_oid = commit_file(git_repo.repo(), "remote-only.txt", "remote\n", "remote only work");
+    let remote_oid = commit_file(
+        git_repo.repo(),
+        "remote-only.txt",
+        "remote\n",
+        "remote only work",
+    );
     git_cli(
         &path,
-        &["update-ref", "refs/remotes/origin/agent-work", &remote_oid.to_string()],
+        &[
+            "update-ref",
+            "refs/remotes/origin/agent-work",
+            &remote_oid.to_string(),
+        ],
     );
     git_cli(&path, &["checkout", &base]);
     git_cli(&path, &["branch", "-D", "tmp"]);
@@ -171,7 +190,10 @@ fn toggle_remote_branches_hides_remote_only_commits() {
 
     // Default: remotes shown, so the remote-only commit is in the graph.
     assert!(!app.hide_remote_branches);
-    assert!(shows_remote(&app), "remote-only commit should show by default");
+    assert!(
+        shows_remote(&app),
+        "remote-only commit should show by default"
+    );
 
     // Toggle hides the remote-only commit but keeps local work.
     app.handle_action(Action::ToggleRemoteBranches).unwrap();
@@ -182,5 +204,8 @@ fn toggle_remote_branches_hides_remote_only_commits() {
     // Toggle back restores it.
     app.handle_action(Action::ToggleRemoteBranches).unwrap();
     assert!(!app.hide_remote_branches);
-    assert!(shows_remote(&app), "remote-only commit should return when shown again");
+    assert!(
+        shows_remote(&app),
+        "remote-only commit should return when shown again"
+    );
 }

@@ -33,7 +33,10 @@ impl App {
                                 if let Some(commit) = &node.commit {
                                     add_tag(self.repo.repo(), &input, commit.oid)?;
                                     self.refresh(true)?;
-                                    self.toast(crate::toast::ToastKind::Success, format!("Tag '{}' created", input));
+                                    self.toast(
+                                        crate::toast::ToastKind::Success,
+                                        format!("Tag '{}' created", input),
+                                    );
                                 }
                             }
                         }
@@ -55,14 +58,20 @@ impl App {
                                 },
                             });
                             self.refresh(true)?;
-                            self.toast(crate::toast::ToastKind::Success, format!("Renamed '{}' -> '{}'", old_name, input));
+                            self.toast(
+                                crate::toast::ToastKind::Success,
+                                format!("Renamed '{}' -> '{}'", old_name, input),
+                            );
                         }
                     }
                     InputAction::BranchFromStash { index } => {
                         if !input.is_empty() {
                             stash_branch(&self.repo_path, &input, index)?;
                             self.refresh(true)?;
-                            self.toast(crate::toast::ToastKind::Success, format!("Created branch '{}' from stash", input));
+                            self.toast(
+                                crate::toast::ToastKind::Success,
+                                format!("Created branch '{}' from stash", input),
+                            );
                         }
                     }
                     InputAction::StashPush { scope } => {

@@ -64,7 +64,13 @@ pub fn map_key_to_action(
     }
 
     match mode {
-        AppMode::Normal => map_normal_mode(key, focused_panel, editing_commit, files_filter_active, commit_filter_active),
+        AppMode::Normal => map_normal_mode(
+            key,
+            focused_panel,
+            editing_commit,
+            files_filter_active,
+            commit_filter_active,
+        ),
         AppMode::Help => map_help_mode(key),
         AppMode::Input { action, .. } => {
             if *action == crate::app::InputAction::Search {
@@ -191,8 +197,8 @@ fn map_normal_mode(
     // Command palette: Ctrl+P (or ':' for vim muscle memory) from any panel,
     // unless a text filter is currently capturing input.
     if !files_filter_active && !commit_filter_active {
-        let ctrl_p = key.modifiers.contains(KeyModifiers::CONTROL)
-            && key.code == KeyCode::Char('p');
+        let ctrl_p =
+            key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p');
         let colon = !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
             && key.code == KeyCode::Char(':');
@@ -537,22 +543,16 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::CommitChanges),
 
         // Ctrl+Enter amends last commit
-        (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => {
-            Some(Action::AmendCommit)
-        }
+        (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => Some(Action::AmendCommit),
 
         // Ctrl+S: stash staged changes with commit message
-        (m, KeyCode::Char('s')) if m.contains(KeyModifiers::CONTROL) => {
-            Some(Action::StashStaged)
-        }
+        (m, KeyCode::Char('s')) if m.contains(KeyModifiers::CONTROL) => Some(Action::StashStaged),
 
         // Esc exits edit mode
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::StopEditing),
 
         // Shift+Enter / Alt+Enter inserts newline
-        (m, KeyCode::Enter)
-            if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::ALT) =>
-        {
+        (m, KeyCode::Enter) if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::ALT) => {
             Some(Action::EditorNewline)
         }
 
@@ -577,12 +577,12 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
         (m, KeyCode::Char('u')) if m.contains(KeyModifiers::CONTROL) => {
             Some(Action::EditorKillLine)
         }
-        (m, KeyCode::Char('d')) if m.contains(KeyModifiers::ALT) => {
-            Some(Action::EditorDeleteWord)
-        }
+        (m, KeyCode::Char('d')) if m.contains(KeyModifiers::ALT) => Some(Action::EditorDeleteWord),
 
         // Alt+Left / Ctrl+Left / Alt+b: word left
-        (m, KeyCode::Left) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) => {
+        (m, KeyCode::Left)
+            if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) =>
+        {
             Some(Action::EditorWordLeft(shift))
         }
         (m, KeyCode::Char('b')) if m.contains(KeyModifiers::ALT) && !shift => {
@@ -590,7 +590,9 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
         }
 
         // Alt+Right / Ctrl+Right / Alt+f: word right
-        (m, KeyCode::Right) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) => {
+        (m, KeyCode::Right)
+            if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::CONTROL) =>
+        {
             Some(Action::EditorWordRight(shift))
         }
         (m, KeyCode::Char('f')) if m.contains(KeyModifiers::ALT) && !shift => {
@@ -598,7 +600,9 @@ fn map_editor_mode(key: KeyEvent) -> Option<Action> {
         }
 
         // Ctrl+Home / Alt+Home: text start
-        (m, KeyCode::Home) if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) => {
+        (m, KeyCode::Home)
+            if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+        {
             Some(Action::EditorTextStart(shift))
         }
         // Ctrl+End / Alt+End: text end
@@ -947,7 +951,6 @@ fn map_text_editing_shortcut(key: KeyEvent) -> Option<Action> {
     }
 }
 
-
 fn map_input_mode(key: KeyEvent) -> Option<Action> {
     if let Some(action) = map_text_editing_shortcut(key) {
         return Some(action);
@@ -1088,11 +1091,8 @@ mod tests {
     fn release_events_produce_no_action() {
         // With keyboard enhancement on, the terminal echoes a Release for every
         // key. It must not re-fire the binding (here: 'p' → Pull in the graph).
-        let press = KeyEvent::new_with_kind(
-            KeyCode::Char('p'),
-            KeyModifiers::NONE,
-            KeyEventKind::Press,
-        );
+        let press =
+            KeyEvent::new_with_kind(KeyCode::Char('p'), KeyModifiers::NONE, KeyEventKind::Press);
         let release = KeyEvent::new_with_kind(
             KeyCode::Char('p'),
             KeyModifiers::NONE,
@@ -1106,11 +1106,8 @@ mod tests {
     fn repeat_events_behave_as_press() {
         // A held navigation key repeats; Repeat is treated as Press so scrolling
         // continues while held.
-        let repeat = KeyEvent::new_with_kind(
-            KeyCode::Down,
-            KeyModifiers::NONE,
-            KeyEventKind::Repeat,
-        );
+        let repeat =
+            KeyEvent::new_with_kind(KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Repeat);
         assert_eq!(map_normal(repeat), Some(Action::MoveDown));
     }
 
@@ -1161,7 +1158,10 @@ mod tests {
         assert_eq!(map_settings_menu_mode(d), Some(Action::InputChar('d')));
         // Uppercase (Shift held) types too.
         let shift_d = KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT);
-        assert_eq!(map_settings_menu_mode(shift_d), Some(Action::InputChar('D')));
+        assert_eq!(
+            map_settings_menu_mode(shift_d),
+            Some(Action::InputChar('D'))
+        );
     }
 
     #[test]
@@ -1280,11 +1280,8 @@ mod tests {
     #[test]
     fn repeat_events_can_be_capslock() {
         // A held caps-locked key repeats; the hint should still be eligible.
-        let key = KeyEvent::new_with_kind(
-            KeyCode::Char('K'),
-            KeyModifiers::NONE,
-            KeyEventKind::Repeat,
-        );
+        let key =
+            KeyEvent::new_with_kind(KeyCode::Char('K'), KeyModifiers::NONE, KeyEventKind::Repeat);
         assert!(looks_like_capslock(&key));
     }
 
