@@ -88,7 +88,9 @@ fn build_detail(d: &IssueDetail, theme: &Theme) -> Vec<Line<'static>> {
     out.push(Line::from(vec![
         Span::styled(
             state_text,
-            Style::default().fg(state_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(state_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  @{} · opened {}", d.author, date_only(&d.created_at)),

@@ -5,7 +5,8 @@ use super::*;
 impl App {
     /// Update fuzzy search results for the given query
     pub(crate) fn update_fuzzy_search(&mut self, query: &str) {
-        self.search_state.fuzzy_matches = fuzzy_search_branches(query, &self.graph_nav.branch_positions);
+        self.search_state.fuzzy_matches =
+            fuzzy_search_branches(query, &self.graph_nav.branch_positions);
         self.search_state.clamp_selection();
     }
 

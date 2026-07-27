@@ -17,14 +17,14 @@ pub const MISSING_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Small, pleasant fallback palette. Same email always maps to the same
 /// entry (see [`fallback_color`]).
 const FALLBACK_PALETTE: [[u8; 3]; 8] = [
-    [231, 76, 60],   // red
-    [230, 126, 34],  // orange
-    [241, 196, 15],  // yellow
-    [46, 204, 113],  // green
-    [26, 188, 156],  // teal
-    [52, 152, 219],  // blue
-    [155, 89, 182],  // purple
-    [231, 76, 145],  // pink
+    [231, 76, 60],  // red
+    [230, 126, 34], // orange
+    [241, 196, 15], // yellow
+    [46, 204, 113], // green
+    [26, 188, 156], // teal
+    [52, 152, 219], // blue
+    [155, 89, 182], // purple
+    [231, 76, 145], // pink
 ];
 
 /// Lowercase + trim — the Gravatar/cache normalization.
@@ -281,10 +281,7 @@ mod tests {
 
     #[test]
     fn gravatar_url_normalizes_before_hashing() {
-        assert_eq!(
-            gravatar_url("  FOO@BAR.com  "),
-            gravatar_url("foo@bar.com")
-        );
+        assert_eq!(gravatar_url("  FOO@BAR.com  "), gravatar_url("foo@bar.com"));
     }
 
     // -- resolve_avatar_url -----------------------------------------------
@@ -313,10 +310,7 @@ mod tests {
     fn cache_png_path_ends_with_hash_and_extension() {
         let dir = Path::new("/tmp/whatever");
         let path = cache_png_path(dir, "foo@bar.com");
-        assert_eq!(
-            path,
-            dir.join(format!("{}.png", email_hash("foo@bar.com")))
-        );
+        assert_eq!(path, dir.join(format!("{}.png", email_hash("foo@bar.com"))));
         assert!(path
             .file_name()
             .unwrap()

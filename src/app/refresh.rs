@@ -41,7 +41,11 @@ impl App {
         } else {
             self.toast(
                 crate::toast::ToastKind::Success,
-                format!("Loaded {} more commits ({} total)", added, self.commits.len()),
+                format!(
+                    "Loaded {} more commits ({} total)",
+                    added,
+                    self.commits.len()
+                ),
             );
         }
     }
@@ -107,7 +111,8 @@ impl App {
         // Reclassify the existing full diff's staging status in place
         // (avoids a redundant async reload — line counts don't change).
         // Then seal the cache key so poll() won't trigger a reload.
-        self.diff_cache.reclassify_uncommitted_staging(self.working_tree_status.as_ref());
+        self.diff_cache
+            .reclassify_uncommitted_staging(self.working_tree_status.as_ref());
         self.sync_file_list_cache();
 
         // Find best target: next in same section, then prev, then any file
@@ -116,9 +121,9 @@ impl App {
             .iter()
             .chain(prev_in_section.iter())
             .find_map(|path| {
-                let i = new_items.iter().position(
-                    |item| matches!(item, FilesPaneItem::File(f) if f.path == *path),
-                )?;
+                let i = new_items
+                    .iter()
+                    .position(|item| matches!(item, FilesPaneItem::File(f) if f.path == *path))?;
                 if section_of(new_items, i) == old_section {
                     Some((path.clone(), old_section.map(|s| s.to_string())))
                 } else {
@@ -144,7 +149,8 @@ impl App {
         }
 
         let node = self
-            .graph_nav.graph_list_state
+            .graph_nav
+            .graph_list_state
             .selected()
             .and_then(|idx| self.graph_layout.nodes.get(idx))?;
 
@@ -167,7 +173,8 @@ impl App {
     /// Returns the new target and whether it changed since the last sync.
     fn sync_selected_diff_target(&mut self) -> (Option<DiffTarget>, bool) {
         let target = self.current_diff_target();
-        self.diff_cache.sync_selected_target(target, self.repo.repo())
+        self.diff_cache
+            .sync_selected_target(target, self.repo.repo())
     }
 
     /// Refresh repository data
@@ -299,7 +306,11 @@ impl App {
             .first()
             .is_some_and(|node| node.is_uncommitted);
         self.restore_selection(&snapshot, has_uncommitted_node);
-        self.invalidate_caches(force, snapshot.was_uncommitted_selected, has_uncommitted_node);
+        self.invalidate_caches(
+            force,
+            snapshot.was_uncommitted_selected,
+            has_uncommitted_node,
+        );
         Ok(())
     }
 
@@ -456,11 +467,12 @@ impl App {
             self.graph_nav.selected_branch_position = None;
         } else {
             // Restore branch selection if the branch still exists
-            self.graph_nav.selected_branch_position = snapshot
-                .prev_branch_name
-                .as_ref()
-                .and_then(|name| {
-                    self.graph_nav.branch_positions.iter().position(|(_, n)| n == name)
+            self.graph_nav.selected_branch_position =
+                snapshot.prev_branch_name.as_ref().and_then(|name| {
+                    self.graph_nav
+                        .branch_positions
+                        .iter()
+                        .position(|(_, n)| n == name)
                 });
 
             // Sync node selection with branch selection
@@ -490,7 +502,8 @@ impl App {
         if self.graph_nav.selected_branch_position.is_none() {
             if let Some(selected_idx) = self.graph_nav.graph_list_state.selected() {
                 if let Some(pos) = self
-                    .graph_nav.branch_positions
+                    .graph_nav
+                    .branch_positions
                     .iter()
                     .position(|(node_idx, _)| *node_idx == selected_idx)
                 {
@@ -522,7 +535,8 @@ impl App {
         } else {
             // Auto-refresh: smart cache - only clear if selection changed
             let selected_oid = self
-                .graph_nav.graph_list_state
+                .graph_nav
+                .graph_list_state
                 .selected()
                 .and_then(|idx| self.graph_layout.nodes.get(idx))
                 .and_then(|n| n.commit.as_ref())
@@ -558,11 +572,9 @@ impl App {
     /// Update diff info for the selected node (commit or uncommitted changes, async)
     pub fn update_diff_cache(&mut self) -> bool {
         let (target, target_changed) = self.sync_selected_diff_target();
-        let events = self.diff_cache.poll(
-            target,
-            &self.repo_path,
-            self.working_tree_status.as_ref(),
-        );
+        let events =
+            self.diff_cache
+                .poll(target, &self.repo_path, self.working_tree_status.as_ref());
         let has_message = events.message.is_some();
         if let Some(msg) = events.message {
             self.set_message(msg);
@@ -584,12 +596,14 @@ impl App {
 
     /// Get the best available diff: full if cached, otherwise quick file list
     pub fn cached_diff_or_quick(&self) -> Option<&CommitDiffInfo> {
-        self.diff_cache.cached_diff_or_quick(self.current_diff_target())
+        self.diff_cache
+            .cached_diff_or_quick(self.current_diff_target())
     }
 
     /// Whether line stats are still loading (full diff not yet available but quick is)
     pub fn is_line_stats_loading(&self) -> bool {
-        self.diff_cache.is_line_stats_loading(self.current_diff_target())
+        self.diff_cache
+            .is_line_stats_loading(self.current_diff_target())
     }
 
     /// Whether diff is loading or pending (debouncing) for the selected node
@@ -650,7 +664,8 @@ mod tests {
         let oid_feat = commit_file(&git, "f.txt", "f", "feature work");
         // Leave HEAD on the default branch so the feature tip is only reachable
         // via `feature` (HEAD is always walked, regardless of the filter).
-        git.set_head(&format!("refs/heads/{default_branch}")).unwrap();
+        git.set_head(&format!("refs/heads/{default_branch}"))
+            .unwrap();
 
         let repo = GitRepository::open(tempdir.path()).unwrap();
         let mut app = App::from_repo(repo).unwrap();
@@ -693,6 +708,10 @@ mod tests {
             .and_then(|i| app.graph_layout.nodes.get(i))
             .and_then(|n| n.commit.as_ref())
             .map(|c| c.oid);
-        assert_eq!(selected_oid, Some(oid_base), "selection should follow the base commit");
+        assert_eq!(
+            selected_oid,
+            Some(oid_base),
+            "selection should follow the base commit"
+        );
     }
 }

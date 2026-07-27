@@ -51,12 +51,7 @@ pub fn text_area(popup: Rect) -> Rect {
     let inner_w = popup.width.saturating_sub(4);
     let inner_h = popup.height.saturating_sub(2);
     // Header row on top, hint row at bottom.
-    Rect::new(
-        inner_x,
-        inner_y + 1,
-        inner_w,
-        inner_h.saturating_sub(2),
-    )
+    Rect::new(inner_x, inner_y + 1, inner_w, inner_h.saturating_sub(2))
 }
 
 impl<'a> Widget for PrComposeWidget<'a> {
@@ -92,7 +87,12 @@ impl<'a> Widget for PrComposeWidget<'a> {
             } else {
                 Style::default().fg(self.theme.text_primary)
             };
-            buf.set_string(body.x, body.y + row as u16, trunc(line, body.width as usize), style);
+            buf.set_string(
+                body.x,
+                body.y + row as u16,
+                trunc(line, body.width as usize),
+                style,
+            );
         }
 
         // Hint (bottom row).

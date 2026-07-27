@@ -62,22 +62,23 @@ pub fn compute_commit_detail_layout<'a>(
         let header_lines = &commit_lines[..raw_offset.min(commit_lines.len())];
         if !header_lines.is_empty() {
             let hp = Paragraph::new(header_lines.to_vec()).wrap(Wrap { trim: false });
-            app.commit_editor_line_offset =
-                hp.line_count(commit_inner_width as u16) as u16;
+            app.commit_editor_line_offset = hp.line_count(commit_inner_width as u16) as u16;
         }
     }
-    app.commit_detail_max_scroll =
-        commit_wrapped_total.saturating_sub(commit_visible) as u16;
+    app.commit_detail_max_scroll = commit_wrapped_total.saturating_sub(commit_visible) as u16;
     // Clamp current scroll to the newly computed max
-    app.commit_detail_scroll = app
-        .commit_detail_scroll
-        .min(app.commit_detail_max_scroll);
+    app.commit_detail_scroll = app.commit_detail_scroll.min(app.commit_detail_max_scroll);
 
     commit_lines
 }
 
 impl<'a> CommitDetailWidget<'a> {
-    pub fn new(app: &App, _commit_area: Rect, theme: &'a Theme, commit_lines: Vec<Line<'a>>) -> Self {
+    pub fn new(
+        app: &App,
+        _commit_area: Rect,
+        theme: &'a Theme,
+        commit_lines: Vec<Line<'a>>,
+    ) -> Self {
         Self {
             commit_lines,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
@@ -125,10 +126,13 @@ impl<'a> CommitDetailWidget<'a> {
         }
 
         let Some(selected) = app.graph_nav.graph_list_state.selected() else {
-            return (vec![Line::from(Span::styled(
-                "Select a commit",
-                Style::default().fg(theme.text_muted),
-            ))], None);
+            return (
+                vec![Line::from(Span::styled(
+                    "Select a commit",
+                    Style::default().fg(theme.text_muted),
+                ))],
+                None,
+            );
         };
 
         let Some(node) = app.graph_layout.nodes.get(selected) else {
@@ -179,7 +183,9 @@ impl<'a> CommitDetailWidget<'a> {
                 // Track where editor text starts for auto-scroll
                 editor_line_offset = Some(lines.len() as u16);
                 let sel = app.commit_editor.selection.map(|s| s.ordered());
-                let sel_style = Style::default().bg(theme.editor_selection_bg).fg(theme.editor_selection_fg);
+                let sel_style = Style::default()
+                    .bg(theme.editor_selection_bg)
+                    .fg(theme.editor_selection_fg);
                 let mut byte_offset = 0usize;
                 for line_text in app.commit_editor.lines() {
                     let line_start = byte_offset;
@@ -217,10 +223,13 @@ impl<'a> CommitDetailWidget<'a> {
 
         // Handle connector rows (no commit)
         let Some(commit) = &node.commit else {
-            return (vec![Line::from(Span::styled(
-                "(connector line)",
-                Style::default().fg(theme.text_muted),
-            ))], None);
+            return (
+                vec![Line::from(Span::styled(
+                    "(connector line)",
+                    Style::default().fg(theme.text_muted),
+                ))],
+                None,
+            );
         };
 
         // Build commit detail lines
@@ -255,7 +264,9 @@ impl<'a> CommitDetailWidget<'a> {
             lines.push(Line::from(""));
             editor_line_offset = Some(lines.len() as u16);
             let sel = app.commit_editor.selection.map(|s| s.ordered());
-            let sel_style = Style::default().bg(theme.editor_selection_bg).fg(theme.editor_selection_fg);
+            let sel_style = Style::default()
+                .bg(theme.editor_selection_bg)
+                .fg(theme.editor_selection_fg);
             let mut byte_offset = 0usize;
             for line_text in app.commit_editor.lines() {
                 let line_start = byte_offset;
@@ -284,7 +295,10 @@ impl<'a> CommitDetailWidget<'a> {
                 }
                 byte_offset = line_end + 1;
             }
-        } else if node.is_head && app.focused_panel == FocusedPanel::CommitDetail && !app.editing_commit_message {
+        } else if node.is_head
+            && app.focused_panel == FocusedPanel::CommitDetail
+            && !app.editing_commit_message
+        {
             lines.push(Line::from(Span::styled(
                 "Press Enter to edit commit message (amend)",
                 Style::default().fg(theme.text_muted),
@@ -301,7 +315,6 @@ impl<'a> CommitDetailWidget<'a> {
 
         (lines, editor_line_offset)
     }
-
 }
 
 impl<'a> Widget for CommitDetailWidget<'a> {

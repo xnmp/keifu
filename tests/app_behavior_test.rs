@@ -193,7 +193,12 @@ fn move_selection_clamps_at_boundaries() {
 fn page_up_down_moves_by_10() {
     let (_td, repo) = init_repo();
     for i in 0..20 {
-        commit_file(repo.repo(), "a.txt", &format!("{i}"), &format!("commit {i}"));
+        commit_file(
+            repo.repo(),
+            "a.txt",
+            &format!("{i}"),
+            &format!("commit {i}"),
+        );
     }
     let mut app = make_app(repo);
 
@@ -208,7 +213,12 @@ fn page_up_down_moves_by_10() {
 fn go_to_top_and_bottom() {
     let (_td, repo) = init_repo();
     for i in 0..5 {
-        commit_file(repo.repo(), "a.txt", &format!("{i}"), &format!("commit {i}"));
+        commit_file(
+            repo.repo(),
+            "a.txt",
+            &format!("{i}"),
+            &format!("commit {i}"),
+        );
     }
     let mut app = make_app(repo);
     let max_idx = app.graph_layout.nodes.len() - 1;
@@ -642,10 +652,12 @@ fn esc_dismisses_the_error_toast_before_quitting() {
 
     app.show_error("boom".to_string());
     app.handle_action(Action::Quit).unwrap();
-    assert!(!app.should_quit, "first Esc dismisses the toast, not the app");
     assert!(
-        !app
-            .toasts
+        !app.should_quit,
+        "first Esc dismisses the toast, not the app"
+    );
+    assert!(
+        !app.toasts
             .visible()
             .iter()
             .any(|t| t.kind == keifu::toast::ToastKind::Error),
@@ -1238,22 +1250,37 @@ fn confirm_merge_creates_merge_commit() {
     repo.repo()
         .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
         .unwrap();
-    let c_feat = commit_to_ref(repo.repo(), "refs/heads/feature", "feature.txt", "f", "feature work");
+    let c_feat = commit_to_ref(
+        repo.repo(),
+        "refs/heads/feature",
+        "feature.txt",
+        "f",
+        "feature work",
+    );
     let c_main = commit_file(repo.repo(), "main.txt", "m", "main work");
     let mut app = make_app(repo);
     assert_eq!(head_oid(td.path()), c_main);
 
     app.mode = AppMode::Confirm {
         message: "Merge 'feature'?".to_string(),
-        action: ConfirmAction::Merge { name: "feature".to_string(), is_remote: false },
+        action: ConfirmAction::Merge {
+            name: "feature".to_string(),
+            is_remote: false,
+        },
     };
     app.handle_action(Action::Confirm).unwrap();
 
     // main and feature diverged, so the merge produces a two-parent commit.
     let (_, parent_count, parents, _) = head_commit_facts(td.path());
-    assert_eq!(parent_count, 2, "merge should create a two-parent merge commit");
+    assert_eq!(
+        parent_count, 2,
+        "merge should create a two-parent merge commit"
+    );
     assert!(parents.contains(&c_main), "one parent is the previous HEAD");
-    assert!(parents.contains(&c_feat), "other parent is the merged branch tip");
+    assert!(
+        parents.contains(&c_feat),
+        "other parent is the merged branch tip"
+    );
     assert!(matches!(app.mode, AppMode::Normal));
 }
 
@@ -1264,13 +1291,22 @@ fn confirm_rebase_replays_head_onto_branch() {
     repo.repo()
         .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
         .unwrap();
-    let c_feat = commit_to_ref(repo.repo(), "refs/heads/feature", "feature.txt", "f", "feature work");
+    let c_feat = commit_to_ref(
+        repo.repo(),
+        "refs/heads/feature",
+        "feature.txt",
+        "f",
+        "feature work",
+    );
     let c_main = commit_file(repo.repo(), "main.txt", "m", "main work");
     let mut app = make_app(repo);
 
     app.mode = AppMode::Confirm {
         message: "Rebase onto 'feature'?".to_string(),
-        action: ConfirmAction::Rebase { name: "feature".to_string(), is_remote: false },
+        action: ConfirmAction::Rebase {
+            name: "feature".to_string(),
+            is_remote: false,
+        },
     };
     app.handle_action(Action::Confirm).unwrap();
 
@@ -1331,8 +1367,14 @@ fn confirm_revert_undoes_commit_changes() {
     app.handle_action(Action::Confirm).unwrap();
 
     let (_, _, parents, _) = head_commit_facts(td.path());
-    assert_eq!(parents[0], c2, "revert commit sits on top of the reverted commit");
-    assert!(!td.path().join("b.txt").exists(), "revert removed the file the commit added");
+    assert_eq!(
+        parents[0], c2,
+        "revert commit sits on top of the reverted commit"
+    );
+    assert!(
+        !td.path().join("b.txt").exists(),
+        "revert removed the file the commit added"
+    );
     assert!(td.path().join("a.txt").exists());
 }
 
@@ -1350,10 +1392,19 @@ fn confirm_reset_soft_moves_head_keeps_changes_staged() {
     app.handle_action(Action::Confirm).unwrap();
 
     assert_eq!(head_oid(td.path()), c1, "HEAD moved back to c1");
-    assert!(td.path().join("b.txt").exists(), "working-tree file is preserved");
+    assert!(
+        td.path().join("b.txt").exists(),
+        "working-tree file is preserved"
+    );
     let st = path_status(td.path(), "b.txt");
-    assert!(st.contains(Status::INDEX_NEW), "b.txt stays staged after a soft reset");
-    assert!(!st.contains(Status::WT_NEW), "b.txt is not an unstaged/untracked change");
+    assert!(
+        st.contains(Status::INDEX_NEW),
+        "b.txt stays staged after a soft reset"
+    );
+    assert!(
+        !st.contains(Status::WT_NEW),
+        "b.txt is not an unstaged/untracked change"
+    );
 }
 
 #[test]
@@ -1370,10 +1421,19 @@ fn confirm_reset_mixed_moves_head_unstages_changes() {
     app.handle_action(Action::Confirm).unwrap();
 
     assert_eq!(head_oid(td.path()), c1, "HEAD moved back to c1");
-    assert!(td.path().join("b.txt").exists(), "working-tree file is preserved");
+    assert!(
+        td.path().join("b.txt").exists(),
+        "working-tree file is preserved"
+    );
     let st = path_status(td.path(), "b.txt");
-    assert!(st.contains(Status::WT_NEW), "b.txt is unstaged (untracked) after a mixed reset");
-    assert!(!st.contains(Status::INDEX_NEW), "b.txt is not staged after a mixed reset");
+    assert!(
+        st.contains(Status::WT_NEW),
+        "b.txt is unstaged (untracked) after a mixed reset"
+    );
+    assert!(
+        !st.contains(Status::INDEX_NEW),
+        "b.txt is not staged after a mixed reset"
+    );
 }
 
 #[test]
@@ -1382,7 +1442,10 @@ fn confirm_reset_hard_moves_head_and_reverts_worktree() {
     let c1 = commit_file(repo.repo(), "a.txt", "original", "root");
     commit_file(repo.repo(), "a.txt", "modified", "change a");
     let mut app = make_app(repo);
-    assert_eq!(fs::read_to_string(td.path().join("a.txt")).unwrap(), "modified");
+    assert_eq!(
+        fs::read_to_string(td.path().join("a.txt")).unwrap(),
+        "modified"
+    );
 
     app.mode = AppMode::Confirm {
         message: "Reset hard?".to_string(),
@@ -1801,8 +1864,7 @@ fn hide_branch_removes_it_from_the_graph_immediately_and_toasts() {
         "the branch was recorded as hidden"
     );
     assert!(
-        !app
-            .graph_layout
+        !app.graph_layout
             .nodes
             .iter()
             .any(|n| n.branch_names.iter().any(|b| b == "feature")),
@@ -1840,8 +1902,14 @@ fn undo_stage_unstages_file() {
 
     app.handle_action(Action::UndoLastFileOp).unwrap();
     let st = path_status(td.path(), "b.txt");
-    assert!(st.contains(Status::WT_NEW), "undo returned b.txt to unstaged");
-    assert!(!st.contains(Status::INDEX_NEW), "undo removed the staged entry");
+    assert!(
+        st.contains(Status::WT_NEW),
+        "undo returned b.txt to unstaged"
+    );
+    assert!(
+        !st.contains(Status::INDEX_NEW),
+        "undo removed the staged entry"
+    );
     assert!(app.last_undoable_op.is_none(), "undo cleared the undo slot");
 }
 
@@ -1880,8 +1948,14 @@ fn undo_archive_restores_file() {
     prime_uncommitted(&mut app);
 
     app.handle_action(Action::ArchiveFile).unwrap();
-    assert!(!td.path().join("b.txt").exists(), "file moved out of the working tree");
-    assert!(td.path().join(".archive/b.txt").exists(), "file moved into .archive/");
+    assert!(
+        !td.path().join("b.txt").exists(),
+        "file moved out of the working tree"
+    );
+    assert!(
+        td.path().join(".archive/b.txt").exists(),
+        "file moved into .archive/"
+    );
     assert!(app.last_undoable_op.is_some());
 
     app.handle_action(Action::UndoLastFileOp).unwrap();
@@ -1893,7 +1967,10 @@ fn undo_archive_restores_file() {
         !td.path().join(".archive/b.txt").exists(),
         "file removed from .archive/ on undo"
     );
-    assert_eq!(fs::read_to_string(td.path().join("b.txt")).unwrap(), "keep me");
+    assert_eq!(
+        fs::read_to_string(td.path().join("b.txt")).unwrap(),
+        "keep me"
+    );
     assert!(app.last_undoable_op.is_none());
 }
 
@@ -1954,7 +2031,10 @@ fn archive_moves_file_and_gitignores_archive_dir() {
 
     app.handle_action(Action::ArchiveFile).unwrap();
 
-    assert!(!td.path().join("scratch.txt").exists(), "file moved out of working tree");
+    assert!(
+        !td.path().join("scratch.txt").exists(),
+        "file moved out of working tree"
+    );
     assert_eq!(
         fs::read_to_string(td.path().join(".archive/scratch.txt")).unwrap(),
         "temp"
@@ -1975,12 +2055,18 @@ fn repo_with_feature_branch() -> (TempDir, App, Oid, Oid, Oid) {
     let (td, repo) = init_repo();
     let c1 = commit_file(repo.repo(), "a.txt", "a", "shared root");
     let c2 = commit_file(repo.repo(), "b.txt", "b", "main work"); // HEAD = main @ c2
-    // Branch `feature` off the shared root, then add a commit reachable only
-    // through `feature` (HEAD and the working tree are left untouched).
+                                                                  // Branch `feature` off the shared root, then add a commit reachable only
+                                                                  // through `feature` (HEAD and the working tree are left untouched).
     repo.repo()
         .branch("feature", &repo.repo().find_commit(c1).unwrap(), false)
         .unwrap();
-    let f1 = commit_to_ref(repo.repo(), "refs/heads/feature", "f.txt", "f", "feature work");
+    let f1 = commit_to_ref(
+        repo.repo(),
+        "refs/heads/feature",
+        "f.txt",
+        "f",
+        "feature work",
+    );
     let app = make_app(repo);
     (td, app, c1, f1, c2)
 }
@@ -2000,7 +2086,10 @@ fn hiding_a_branch_removes_exclusive_commits_but_keeps_shared_ancestors() {
     app.refresh(true).unwrap();
 
     let oids = commit_oids(&app);
-    assert!(!oids.contains(&f1), "feature's exclusive commit must vanish");
+    assert!(
+        !oids.contains(&f1),
+        "feature's exclusive commit must vanish"
+    );
     assert!(oids.contains(&c1), "shared ancestor must remain");
     assert!(oids.contains(&c2), "main's own commit must remain");
     // The hidden commit is gone from the rendered graph nodes too.
@@ -2068,7 +2157,10 @@ fn selection_survives_branch_hide_refresh() {
 
     // Selection stays in bounds and still points at the same commit.
     let sel = app.graph_nav.graph_list_state.selected().unwrap();
-    assert!(sel < app.graph_layout.nodes.len(), "selection stays in bounds");
+    assert!(
+        sel < app.graph_layout.nodes.len(),
+        "selection stays in bounds"
+    );
     assert_eq!(
         app.graph_layout.nodes[sel].commit.as_ref().map(|c| c.oid),
         Some(c2),
@@ -2091,7 +2183,9 @@ fn startup_defers_merged_classification_to_the_background() {
     // `topic` carries its own commit and lands on the base via a merge COMMIT,
     // so its tip hangs off the base's first-parent line — unambiguously merged
     // (a tip ON the line would read as merely behind since #112).
-    repo.repo().reference("refs/heads/topic", a, true, "topic").unwrap();
+    repo.repo()
+        .reference("refs/heads/topic", a, true, "topic")
+        .unwrap();
     let t = commit_to_ref(repo.repo(), "refs/heads/topic", "t.txt", "t", "topic work");
     let b = commit_file(repo.repo(), "b.txt", "b", "advance base");
     {
@@ -2150,14 +2244,21 @@ fn hiding_the_focused_pane_moves_focus_to_the_graph() {
         "focus must never remain on a hidden pane"
     );
     assert!(
-        app.toasts.visible().iter().any(|t| t.text.contains("Files pane hidden")),
+        app.toasts
+            .visible()
+            .iter()
+            .any(|t| t.text.contains("Files pane hidden")),
         "the toggle reports its new state"
     );
 
     // Toggling again brings the pane back (focus stays where it is).
     app.handle_action(Action::ToggleFilesPane).unwrap();
     assert!(!app.hide_files_pane);
-    assert!(app.toasts.visible().iter().any(|t| t.text.contains("Files pane shown")));
+    assert!(app
+        .toasts
+        .visible()
+        .iter()
+        .any(|t| t.text.contains("Files pane shown")));
 }
 
 #[test]
@@ -2187,7 +2288,11 @@ fn panel_cycling_skips_hidden_panes() {
     app.handle_action(Action::ToggleFilesPane).unwrap();
     assert_eq!(app.focused_panel, FocusedPanel::Graph);
     app.handle_action(Action::PanelRight).unwrap();
-    assert_eq!(app.focused_panel, FocusedPanel::CommitDetail, "skips hidden Files");
+    assert_eq!(
+        app.focused_panel,
+        FocusedPanel::CommitDetail,
+        "skips hidden Files"
+    );
     app.handle_action(Action::PanelRight).unwrap();
     assert_eq!(app.focused_panel, FocusedPanel::Graph);
     app.handle_action(Action::PanelLeft).unwrap();
@@ -2197,7 +2302,11 @@ fn panel_cycling_skips_hidden_panes() {
     app.handle_action(Action::ToggleCommitPane).unwrap();
     assert_eq!(app.focused_panel, FocusedPanel::Graph);
     app.handle_action(Action::PanelRight).unwrap();
-    assert_eq!(app.focused_panel, FocusedPanel::Graph, "graph is the only visible panel");
+    assert_eq!(
+        app.focused_panel,
+        FocusedPanel::Graph,
+        "graph is the only visible panel"
+    );
     app.handle_action(Action::PanelLeft).unwrap();
     assert_eq!(app.focused_panel, FocusedPanel::Graph);
 }

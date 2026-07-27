@@ -26,7 +26,8 @@ fn commit_wd(repo: &Repository, secs: i64, path: &str, content: &str) -> Oid {
 
 fn checkout(repo: &Repository, refname: &str) {
     repo.set_head(refname).unwrap();
-    repo.checkout_head(Some(CheckoutBuilder::new().force())).unwrap();
+    repo.checkout_head(Some(CheckoutBuilder::new().force()))
+        .unwrap();
 }
 
 /// main = a (tip), feature = a <- b (ahead of main), lightweight tag `lw` and
@@ -36,7 +37,8 @@ fn fixture() -> (TempDir, App, Oid, Oid) {
     let repo = Repository::init(dir.path()).unwrap();
     repo.set_head("refs/heads/main").unwrap();
     let a = commit_wd(&repo, 1000, "a.txt", "a");
-    repo.branch("feature", &repo.find_commit(a).unwrap(), false).unwrap();
+    repo.branch("feature", &repo.find_commit(a).unwrap(), false)
+        .unwrap();
     checkout(&repo, "refs/heads/feature");
     let b = commit_wd(&repo, 2000, "b.txt", "b");
     checkout(&repo, "refs/heads/main");
@@ -146,7 +148,10 @@ fn undo_merge_resets_head_and_keeps_tree() {
     // Fast-forward merge feature into main: HEAD moves a -> b.
     run_op_then_undo(
         &mut app,
-        ConfirmAction::Merge { name: "feature".into(), is_remote: false },
+        ConfirmAction::Merge {
+            name: "feature".into(),
+            is_remote: false,
+        },
     );
     // Undo resets main back to a.
     assert_eq!(head(&app), a, "HEAD reset to the pre-merge commit");
@@ -198,7 +203,10 @@ fn undo_dropped_when_branch_was_recreated_since() {
     app.mode = AppMode::Normal;
     app.handle_action(Action::UndoLastOp).unwrap();
     // Verification fails → error toast (#116), entry dropped, no confirm, no action.
-    assert!(matches!(app.mode, AppMode::Normal), "errors never block the UI");
+    assert!(
+        matches!(app.mode, AppMode::Normal),
+        "errors never block the UI"
+    );
     assert!(
         app.toasts
             .visible()
@@ -215,7 +223,10 @@ fn undo_merge_blocked_by_a_dirty_tree() {
     let (_dir, mut app, _a, b) = fixture();
     app.mode = AppMode::Confirm {
         message: String::new(),
-        action: ConfirmAction::Merge { name: "feature".into(), is_remote: false },
+        action: ConfirmAction::Merge {
+            name: "feature".into(),
+            is_remote: false,
+        },
     };
     app.handle_action(Action::Confirm).unwrap();
     assert_eq!(head(&app), b);
@@ -244,7 +255,10 @@ fn checkout_is_not_recorded_in_the_undo_ledger() {
     let (_dir, mut app, _a, _b) = fixture();
     app.mode = AppMode::Confirm {
         message: String::new(),
-        action: ConfirmAction::Checkout { name: "feature".into(), is_remote: false },
+        action: ConfirmAction::Checkout {
+            name: "feature".into(),
+            is_remote: false,
+        },
     };
     app.handle_action(Action::Confirm).unwrap();
     assert!(

@@ -144,8 +144,9 @@ mod tests {
     fn surfaces_producer_error() {
         // The gh-missing case: the producer returns Err, and `poll` surfaces it
         // instead of substituting an empty value.
-        let mut f: IntervalFetch<String> =
-            IntervalFetch::new(Duration::from_secs(300), |_| Err("gh not available".to_string()));
+        let mut f: IntervalFetch<String> = IntervalFetch::new(Duration::from_secs(300), |_| {
+            Err("gh not available".to_string())
+        });
         f.maybe_start("repo");
         assert_eq!(drain(&mut f).unwrap_err(), "gh not available");
     }
@@ -166,7 +167,11 @@ mod tests {
         // Not due yet (300s interval) → no second spawn, nothing to poll.
         f.maybe_start("repo");
         assert!(f.poll().is_none());
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "interval must gate the refetch");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "interval must gate the refetch"
+        );
     }
 
     #[test]

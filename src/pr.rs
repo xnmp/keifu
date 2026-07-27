@@ -271,9 +271,15 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
         .filter(|p| p.state.is_empty() || p.state.eq_ignore_ascii_case("open"))
         .map(|p| {
             let ci = aggregate_ci(p.status_check_rollup.as_deref().unwrap_or_default());
-            let review = ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
-            let merge_state = MergeState::from_status(p.merge_state_status.as_deref().unwrap_or_default());
-            let pr_author = p.author.as_ref().map(|a| a.login.as_str()).unwrap_or_default();
+            let review =
+                ReviewState::from_decision(p.review_decision.as_deref().unwrap_or_default());
+            let merge_state =
+                MergeState::from_status(p.merge_state_status.as_deref().unwrap_or_default());
+            let pr_author = p
+                .author
+                .as_ref()
+                .map(|a| a.login.as_str())
+                .unwrap_or_default();
             let outside_activity = has_outside_activity(
                 pr_author,
                 p.comments.as_deref().unwrap_or_default(),
@@ -435,7 +441,11 @@ pub fn message_is_github_merge(summary: &str) -> bool {
 /// - squash commits: `is_merge` false and `summary` ends with a strict
 ///   `<title> (#<digits>)` suffix — exactly one space before the paren, and
 ///   nothing after the closing paren.
-pub fn pr_landed_subject(summary: &str, full_message: &str, is_merge: bool) -> Option<(u64, String)> {
+pub fn pr_landed_subject(
+    summary: &str,
+    full_message: &str,
+    is_merge: bool,
+) -> Option<(u64, String)> {
     if is_merge {
         parse_merge_pr_subject(summary, full_message)
     } else {
@@ -454,7 +464,11 @@ fn parse_merge_pr_subject(summary: &str, full_message: &str) -> Option<(u64, Str
     let number: u64 = digits.parse().ok()?;
     // Skip the subject line itself (full_message's first line), then take the
     // first non-blank line that follows as the title.
-    let title = full_message.lines().skip(1).map(str::trim).find(|l| !l.is_empty())?;
+    let title = full_message
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .find(|l| !l.is_empty())?;
     Some((number, title.to_string()))
 }
 
@@ -598,34 +612,32 @@ mod tests {
     #[test]
     fn ci_checkrun_shape_mixed_fail_and_pending_is_fail() {
         // Real CheckRun shape (status/conclusion). Fail beats pending.
-        let pr = one(
-            r#","statusCheckRollup":[
+        let pr = one(r#","statusCheckRollup":[
                 {"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null},
                 {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"},
                 {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}
-            ]"#,
-        );
+            ]"#);
         assert_eq!(pr.ci, CiStatus::Fail);
     }
 
     #[test]
     fn ci_checkrun_running_is_pending() {
         // A null conclusion (still running) with no failures → Pending.
-        let pr = one(
-            r#","statusCheckRollup":[
+        let pr = one(r#","statusCheckRollup":[
                 {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
                 {"__typename":"CheckRun","status":"QUEUED","conclusion":null}
-            ]"#,
-        );
+            ]"#);
         assert_eq!(pr.ci, CiStatus::Pending);
     }
 
     #[test]
     fn ci_statuscontext_shape_is_handled() {
         // Legacy StatusContext shape (state), as emitted by e.g. Prow/tide.
-        let pending = one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING"}]"#);
+        let pending =
+            one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING"}]"#);
         assert_eq!(pending.ci, CiStatus::Pending);
-        let failed = one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"FAILURE"}]"#);
+        let failed =
+            one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"FAILURE"}]"#);
         assert_eq!(failed.ci, CiStatus::Fail);
         let ok = one(r#","statusCheckRollup":[{"__typename":"StatusContext","state":"SUCCESS"}]"#);
         assert_eq!(ok.ci, CiStatus::Pass);
@@ -633,13 +645,11 @@ mod tests {
 
     #[test]
     fn ci_all_success_is_pass_including_skipped_and_neutral() {
-        let pr = one(
-            r#","statusCheckRollup":[
+        let pr = one(r#","statusCheckRollup":[
                 {"status":"COMPLETED","conclusion":"SUCCESS"},
                 {"status":"COMPLETED","conclusion":"SKIPPED"},
                 {"status":"COMPLETED","conclusion":"NEUTRAL"}
-            ]"#,
-        );
+            ]"#);
         assert_eq!(pr.ci, CiStatus::Pass);
     }
 
@@ -669,12 +679,18 @@ mod tests {
 
     #[test]
     fn review_decision_mapping() {
-        assert_eq!(one(r#","reviewDecision":"APPROVED""#).review, ReviewState::Approved);
+        assert_eq!(
+            one(r#","reviewDecision":"APPROVED""#).review,
+            ReviewState::Approved
+        );
         assert_eq!(
             one(r#","reviewDecision":"CHANGES_REQUESTED""#).review,
             ReviewState::ChangesRequested
         );
-        assert_eq!(one(r#","reviewDecision":"REVIEW_REQUIRED""#).review, ReviewState::None);
+        assert_eq!(
+            one(r#","reviewDecision":"REVIEW_REQUIRED""#).review,
+            ReviewState::None
+        );
         assert_eq!(one(r#","reviewDecision":"""#).review, ReviewState::None);
         assert_eq!(one(r#","reviewDecision":null"#).review, ReviewState::None);
         assert_eq!(one("").review, ReviewState::None);
@@ -706,8 +722,14 @@ mod tests {
     #[test]
     fn merge_state_missing_or_empty_is_clear() {
         assert_eq!(one("").merge_state, MergeState::Clear); // field absent
-        assert_eq!(one(r#","mergeStateStatus":"""#).merge_state, MergeState::Clear);
-        assert_eq!(one(r#","mergeStateStatus":null"#).merge_state, MergeState::Clear);
+        assert_eq!(
+            one(r#","mergeStateStatus":"""#).merge_state,
+            MergeState::Clear
+        );
+        assert_eq!(
+            one(r#","mergeStateStatus":null"#).merge_state,
+            MergeState::Clear
+        );
     }
 
     #[test]
@@ -717,7 +739,10 @@ mod tests {
         let pr = one(r#","mergeStateStatus":"CLEAN","reviewDecision":"CHANGES_REQUESTED""#);
         assert_eq!(pr.merge_state, MergeState::Clear);
         assert_eq!(pr.review, ReviewState::ChangesRequested);
-        assert!(pr.is_merge_blocked(), "changes-requested blocks regardless of merge state");
+        assert!(
+            pr.is_merge_blocked(),
+            "changes-requested blocks regardless of merge state"
+        );
     }
 
     // ── outside activity ─────────────────────────────────────────────
@@ -752,14 +777,11 @@ mod tests {
     #[test]
     fn outside_activity_detects_non_author_reviews() {
         // A review (not just an issue comment) by a non-author counts as activity.
-        let reviewed = one(
-            r#","author":{"login":"me"},"reviews":[{"author":{"login":"reviewer"}}]"#,
-        );
+        let reviewed =
+            one(r#","author":{"login":"me"},"reviews":[{"author":{"login":"reviewer"}}]"#);
         assert!(reviewed.outside_activity, "a non-author reviewed");
 
-        let self_review = one(
-            r#","author":{"login":"me"},"reviews":[{"author":{"login":"me"}}]"#,
-        );
+        let self_review = one(r#","author":{"login":"me"},"reviews":[{"author":{"login":"me"}}]"#);
         assert!(!self_review.outside_activity, "only the author reviewed");
 
         // Reviews and comments are both considered.
@@ -785,7 +807,10 @@ mod tests {
     fn base_ref_parsed_from_json() {
         // #103: the PR's own base branch, so back-merge classification can
         // anchor on it instead of the repo-wide trunk.
-        assert_eq!(one(r#","baseRefName":"dev""#).base_ref.as_deref(), Some("dev"));
+        assert_eq!(
+            one(r#","baseRefName":"dev""#).base_ref.as_deref(),
+            Some("dev")
+        );
         assert_eq!(one("").base_ref, None);
         assert_eq!(one(r#","baseRefName":"""#).base_ref, None);
         assert_eq!(one(r#","baseRefName":null"#).base_ref, None);
@@ -937,9 +962,9 @@ mod tests {
     fn refresh_summary_multiple_uses_counts() {
         let old = map(&[("a", 1, CiStatus::Pending)]);
         let new = map(&[
-            ("a", 1, CiStatus::Pass),  // CI change
-            ("b", 2, CiStatus::None),  // new
-            ("c", 3, CiStatus::None),  // new
+            ("a", 1, CiStatus::Pass), // CI change
+            ("b", 2, CiStatus::None), // new
+            ("c", 3, CiStatus::None), // new
         ]);
         // Order-independent count summary.
         assert_eq!(
@@ -1021,6 +1046,13 @@ mod tests {
     #[test]
     fn non_merge_prefix_is_never_treated_as_a_merge_subject() {
         let summary = "Merge branch 'main' into feature";
-        assert_eq!(pr_landed_subject(summary, "Merge branch 'main' into feature\n\nsome body", true), None);
+        assert_eq!(
+            pr_landed_subject(
+                summary,
+                "Merge branch 'main' into feature\n\nsome body",
+                true
+            ),
+            None
+        );
     }
 }

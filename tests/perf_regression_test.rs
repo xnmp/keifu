@@ -46,7 +46,10 @@ fn commit_to(
     let blob = repo.blob(contents.as_bytes()).unwrap();
     builder.insert(path, blob, 0o100644).unwrap();
     let tree = repo.find_tree(builder.write().unwrap()).unwrap();
-    let parents: Vec<git2::Commit> = parent.map(|p| repo.find_commit(p).unwrap()).into_iter().collect();
+    let parents: Vec<git2::Commit> = parent
+        .map(|p| repo.find_commit(p).unwrap())
+        .into_iter()
+        .collect();
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
     repo.commit(Some(refname), &sig, &sig, path, &tree, &parent_refs)
         .unwrap()
@@ -129,7 +132,10 @@ fn rasterize_window_budget() {
     let layout = build_graph(&commits, &branches, &tags, &stashes, None, None, &[]);
     let theme = Theme::dark();
     let n = layout.nodes.len();
-    assert!(n >= 50, "fixture should produce a real window of rows, got {n}");
+    assert!(
+        n >= 50,
+        "fixture should produce a real window of rows, got {n}"
+    );
 
     let started = Instant::now();
     let neighbor = |i: usize| NeighborRow {
@@ -168,7 +174,11 @@ fn startup_phases_are_recorded() {
     let dir = branchy_repo(4);
     let app = App::from_repo(GitRepository::open(dir.path()).unwrap()).unwrap();
     let recorded: Vec<&str> = app.perf.ops().map(|(name, _)| name).collect();
-    for phase in ["startup.commits", "startup.build_graph", "startup.app_new_total"] {
+    for phase in [
+        "startup.commits",
+        "startup.build_graph",
+        "startup.app_new_total",
+    ] {
         assert!(
             app.perf
                 .ops()

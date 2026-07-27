@@ -75,7 +75,11 @@ fn main() {
         }
     }
 
-    for (fi, (ni, underlay)) in folded.iter().enumerate().take(end.min(folded.len())).skip(start)
+    for (fi, (ni, underlay)) in folded
+        .iter()
+        .enumerate()
+        .take(end.min(folded.len()))
+        .skip(start)
     {
         let node = &layout.nodes[*ni];
         let subj: String = node

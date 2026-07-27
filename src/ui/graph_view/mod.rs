@@ -1,5 +1,6 @@
 //! Graph view widget
 
+use chrono::Local;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -7,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget},
 };
-use chrono::Local;
 
 use std::collections::HashSet;
 
@@ -45,8 +45,8 @@ pub use pixel_dim::{build_pixel_base_specs, dim_pixel_specs_window};
 // module share one predicate.
 use row::{is_base_update_row, render_graph_line_tail, RowFlags, RowRenderCtx};
 
-pub use rows::{visible_nodes, visible_rows, RenderRow};
 use rows::visible_row_window;
+pub use rows::{visible_nodes, visible_rows, RenderRow};
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
@@ -105,7 +105,11 @@ pub(super) fn apply_merged_lane_dim(
             if edge_touches_merged(primary, merged, exempt) {
                 pc.dim_secondary = true;
             }
-            let trunk = if secondary.is_some() { secondary } else { primary };
+            let trunk = if secondary.is_some() {
+                secondary
+            } else {
+                primary
+            };
             if edge_touches_merged(trunk, merged, exempt) {
                 pc.dim = true;
             }
@@ -144,8 +148,8 @@ impl<'a> GraphViewWidget<'a> {
         // (hide already removes them from the graph). `lane_oids` stays populated
         // across the toggle, so gating here reflects a settings flip instantly
         // without a rebuild — `None` = feature off, no row/cell is dimmed by it.
-        let merged_lane_oids = (app.merged.dim && !app.merged.hide)
-            .then_some(&app.merged.lane_oids);
+        let merged_lane_oids =
+            (app.merged.dim && !app.merged.hide).then_some(&app.merged.lane_oids);
         // The selected commit is exempt from merged-lane dimming: the row under
         // the cursor un-mutes and its own strokes stay live (its lane siblings
         // keep dimming), so inspecting a merged commit never reads greyed-out.
@@ -201,9 +205,8 @@ impl<'a> GraphViewWidget<'a> {
         // placeholders. See `visible_row_window` for why the window is correct.
         let n = rows.len();
         let offset = app.graph_nav.graph_list_state.offset();
-        let selected_pos = current_selected.and_then(|sel| {
-            rows.iter().position(|r| r.full_idx == sel)
-        });
+        let selected_pos =
+            current_selected.and_then(|sel| rows.iter().position(|r| r.full_idx == sel));
         let (win_start, win_end) =
             visible_row_window(n, offset, viewport_height as usize, selected_pos);
 
@@ -234,8 +237,14 @@ impl<'a> GraphViewWidget<'a> {
                         .compare_range
                         .is_some_and(|(old, new)| old == c.oid || new == c.oid)
             });
-            let (line, chips) =
-                render_graph_line(node, &ctx, RowFlags { is_selected, is_marked });
+            let (line, chips) = render_graph_line(
+                node,
+                &ctx,
+                RowFlags {
+                    is_selected,
+                    is_marked,
+                },
+            );
             items.push(ListItem::new(line));
             chip_hits.push(chips);
         }
@@ -346,7 +355,15 @@ fn render_graph_line<'a>(
         left_width += AVATAR_RESERVED_CELLS as usize;
     }
 
-    render_graph_line_tail(spans, left_width, node, ctx, flags, is_base_update, is_merged_lane)
+    render_graph_line_tail(
+        spans,
+        left_width,
+        node,
+        ctx,
+        flags,
+        is_base_update,
+        is_merged_lane,
+    )
 }
 
 /// Render the Unicode box-drawing glyphs for a row's cells into `spans`, capped
@@ -382,7 +399,9 @@ fn render_cells_unicode(
         // dimmed lane must not grey the live trunk's glyph. One glyph can't
         // split strokes, so the arm's stub inherits the trunk's style here;
         // the pixel renderer fades each stroke independently.
-        let merged_dims = |idx: usize, oids: crate::git::graph::CellOids, m: &HashSet<git2::Oid>| {
+        let merged_dims = |idx: usize,
+                           oids: crate::git::graph::CellOids,
+                           m: &HashSet<git2::Oid>| {
             match node.cells.get(idx) {
                 Some(CellType::TeeRight(_) | CellType::TeeLeft(_)) => {
                     let trunk = if oids.1.is_some() { oids.1 } else { oids.0 };
@@ -465,9 +484,7 @@ fn render_cells_unicode(
             CellType::TeeLeft(color_idx) => ('┤', theme.lane_color(*color_idx)),
             CellType::TeeUp(color_idx) => ('┴', theme.lane_color(*color_idx)),
             // Band junction (#115): the stem is the distinguishing stroke.
-            CellType::TeeDown(_h_color_idx, s_color_idx) => {
-                ('┬', theme.lane_color(*s_color_idx))
-            }
+            CellType::TeeDown(_h_color_idx, s_color_idx) => ('┬', theme.lane_color(*s_color_idx)),
         };
 
         // Line glyphs render bold; non-lineage cells dim while tracing.
@@ -950,7 +967,11 @@ mod tests {
     /// The pure [`RowModel`] the tail resolves for a row, mirroring
     /// [`render_row`]'s columns/flags. For decision tests that assert on the
     /// model directly rather than scanning rendered spans.
-    fn model_row(node: &GraphNode, open_prs: &HashMap<String, PrInfo>, mute_merges: bool) -> RowModel {
+    fn model_row(
+        node: &GraphNode,
+        open_prs: &HashMap<String, PrInfo>,
+        mute_merges: bool,
+    ) -> RowModel {
         let cols = MetadataColumns {
             author: false,
             hash: false,
@@ -1086,7 +1107,9 @@ mod tests {
     #[test]
     fn merged_branch_row_dims_when_dim_setting_on() {
         let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
-        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()]
+            .into_iter()
+            .collect();
 
         let model = model_row_with_merged(&node, &merged, true);
         let chip = model_chip(&model, "feature/ancestry-landed");
@@ -1104,7 +1127,9 @@ mod tests {
     #[test]
     fn merged_branch_row_renders_normally_when_dim_setting_off() {
         let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
-        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()]
+            .into_iter()
+            .collect();
 
         let model = model_row_with_merged(&node, &merged, false);
         let chip = model_chip(&model, "feature/ancestry-landed");
@@ -1123,7 +1148,9 @@ mod tests {
         // Emission companion to the decision tests above: the rendered line
         // carries the merged badge as its own span, in the merged style.
         let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
-        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()]
+            .into_iter()
+            .collect();
         let theme = Theme::dark();
         let open_prs = HashMap::new();
         let pr_ctx = PrContext::new(&open_prs);
@@ -1169,7 +1196,9 @@ mod tests {
         // `selection_style` would only strip DIM, leaving the muted hue), while
         // the merged badge stays as the "this landed" indicator.
         let node = branch_tip_node("ancestry commit", &["feature/ancestry-landed"]);
-        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()].into_iter().collect();
+        let merged: HashSet<String> = ["feature/ancestry-landed".to_string()]
+            .into_iter()
+            .collect();
         let unmerged_model = model_row_with_merged(&node, &HashSet::new(), true);
         let unmerged_chip = model_chip(&unmerged_model, "feature/ancestry-landed").clone();
 
@@ -1409,7 +1438,11 @@ mod tests {
         );
 
         assert!(!model.row_is_muted, "selected merged-lane row is not muted");
-        assert_eq!(model.msg_style.fg, None, "no muted fg while selected: {:?}", model.msg_style);
+        assert_eq!(
+            model.msg_style.fg, None,
+            "no muted fg while selected: {:?}",
+            model.msg_style
+        );
         assert!(
             model.msg_style.add_modifier.contains(Modifier::BOLD),
             "selection bold applies: {:?}",
@@ -1432,7 +1465,11 @@ mod tests {
 
         let model = model_row_with_merged_lane(&node, None);
 
-        assert_eq!(model.msg_style.fg, None, "feature off: message not greyed: {:?}", model.msg_style);
+        assert_eq!(
+            model.msg_style.fg, None,
+            "feature off: message not greyed: {:?}",
+            model.msg_style
+        );
         assert!(
             !model.msg_style.add_modifier.contains(Modifier::DIM),
             "feature off: message not DIM: {:?}",
@@ -1456,7 +1493,11 @@ mod tests {
 
         let model = model_row_with_merged_lane(&trunk, Some(&lane));
 
-        assert_eq!(model.msg_style.fg, None, "non-lane commit not greyed: {:?}", model.msg_style);
+        assert_eq!(
+            model.msg_style.fg, None,
+            "non-lane commit not greyed: {:?}",
+            model.msg_style
+        );
         assert_eq!(
             model.author_style.fg,
             Some(theme.author_color),
@@ -1487,10 +1528,7 @@ mod tests {
         }];
         // primary = arm edge (merge commit → trunk parent); the merge commit
         // is in the dim set. secondary = the lane's own pass-through edge.
-        let oids = vec![(
-            Some((oid(5), oid(1))),
-            Some((oid(2), oid(1))),
-        )];
+        let oids = vec![(Some((oid(5), oid(1))), Some((oid(2), oid(1))))];
         let merged: HashSet<git2::Oid> = [oid(5)].into_iter().collect();
         apply_merged_lane_dim(&mut cells, &oids, &merged, None);
         assert!(cells[0].dim_secondary, "the arm into the dim lane fades");
@@ -1656,7 +1694,11 @@ mod tests {
     // ── base-update ("back-merge") muting (#55) ──────────────────────
 
     /// MetadataColumns with only the given merge-muting toggles set.
-    fn merge_cols(mute_merges: bool, mute_base_merges: bool, collapse_merges: bool) -> MetadataColumns {
+    fn merge_cols(
+        mute_merges: bool,
+        mute_base_merges: bool,
+        collapse_merges: bool,
+    ) -> MetadataColumns {
         MetadataColumns {
             author: false,
             hash: false,
@@ -1685,9 +1727,13 @@ mod tests {
         let mut set = HashSet::new();
         set.insert(oid(30));
         // Option ON + this commit is in the set → strong mute (muted fg + DIM).
-        let style = model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set).msg_style;
+        let style =
+            model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set).msg_style;
         assert_eq!(style.fg, Some(theme.text_muted), "strong-muted fg");
-        assert!(style.add_modifier.contains(Modifier::DIM), "strong-muted DIM");
+        assert!(
+            style.add_modifier.contains(Modifier::DIM),
+            "strong-muted DIM"
+        );
     }
 
     #[test]
@@ -1697,14 +1743,23 @@ mod tests {
         let mut set = HashSet::new();
         set.insert(oid(30));
         // Option OFF → not muted even though the commit is in the set.
-        let s_off =
-            model_row_with(&node, &HashMap::new(), merge_cols(false, false, false), &set).msg_style;
+        let s_off = model_row_with(
+            &node,
+            &HashMap::new(),
+            merge_cols(false, false, false),
+            &set,
+        )
+        .msg_style;
         assert_eq!(s_off.fg, None);
         assert!(!s_off.add_modifier.contains(Modifier::DIM));
         // Option ON but commit NOT in the set → not muted.
-        let s_empty =
-            model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &HashSet::new())
-                .msg_style;
+        let s_empty = model_row_with(
+            &node,
+            &HashMap::new(),
+            merge_cols(false, true, false),
+            &HashSet::new(),
+        )
+        .msg_style;
         assert_eq!(s_empty.fg, None);
         assert!(!s_empty.add_modifier.contains(Modifier::DIM));
     }
@@ -1720,7 +1775,10 @@ mod tests {
         let line = render_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set);
         // The merge-arc glyph ╰ is present and carries DIM.
         let arc = find_style(&line, "╰").expect("merge-arc glyph present");
-        assert!(arc.add_modifier.contains(Modifier::DIM), "connector cell dimmed: {arc:?}");
+        assert!(
+            arc.add_modifier.contains(Modifier::DIM),
+            "connector cell dimmed: {arc:?}"
+        );
     }
 
     #[test]
@@ -1730,8 +1788,14 @@ mod tests {
         let mut set = HashSet::new();
         set.insert(oid(30));
         let merge = merge_node_full(30, "Merge main into feature", [1, 2]);
-        assert!(is_base_update_row(&merge, true, &set), "qualifying back-merge");
-        assert!(!is_base_update_row(&merge, false, &set), "toggle off never mutes");
+        assert!(
+            is_base_update_row(&merge, true, &set),
+            "qualifying back-merge"
+        );
+        assert!(
+            !is_base_update_row(&merge, false, &set),
+            "toggle off never mutes"
+        );
         assert!(
             !is_base_update_row(&merge, true, &HashSet::new()),
             "not in set never mutes"
@@ -1739,11 +1803,17 @@ mod tests {
         // HEAD is never muted even when it qualifies otherwise.
         let mut head = merge_node_full(30, "Merge main into feature", [1, 2]);
         head.is_head = true;
-        assert!(!is_base_update_row(&head, true, &set), "HEAD is never muted");
+        assert!(
+            !is_base_update_row(&head, true, &set),
+            "HEAD is never muted"
+        );
         // A non-merge commit in the set is not a back-merge.
         let mut single = merge_node_full(30, "regular", [1, 2]);
         single.commit.as_mut().unwrap().parent_oids = vec![oid(1)];
-        assert!(!is_base_update_row(&single, true, &set), "non-merge never mutes");
+        assert!(
+            !is_base_update_row(&single, true, &set),
+            "non-merge never mutes"
+        );
     }
 
     /// Render a one-row List through the real StatefulWidget highlight path and
@@ -1766,7 +1836,12 @@ mod tests {
     fn first_letter_modifier(buf: &Buffer) -> Modifier {
         for x in 0..buf.area.width {
             let cell = &buf[(x, 0)];
-            if cell.symbol().chars().next().is_some_and(|c| c.is_alphabetic()) {
+            if cell
+                .symbol()
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic())
+            {
                 return cell.modifier;
             }
         }
@@ -1815,8 +1890,17 @@ mod tests {
         // Decision test: a collapsed merge selects `RowMessage::Collapse` (the
         // bare glyph, not the message text) and mutes the message style.
         let node = merge_node_full(31, "Merge branch 'topic'", [1, 2]);
-        let model = model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
-        assert_eq!(model.message, RowMessage::Collapse, "collapse selects the merge glyph");
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            merge_cols(false, false, true),
+            &HashSet::new(),
+        );
+        assert_eq!(
+            model.message,
+            RowMessage::Collapse,
+            "collapse selects the merge glyph"
+        );
         // Collapse implies muting: the message style is dimmed.
         assert!(model.msg_style.add_modifier.contains(Modifier::DIM));
     }
@@ -1834,7 +1918,10 @@ mod tests {
         );
         let style = find_style(&line, MERGE_ICON).expect("merge glyph span emitted");
         assert_eq!(style.fg, Some(Theme::dark().text_muted), "glyph is muted");
-        assert!(style.add_modifier.contains(Modifier::DIM), "glyph is dimmed");
+        assert!(
+            style.add_modifier.contains(Modifier::DIM),
+            "glyph is dimmed"
+        );
     }
 
     #[test]
@@ -1842,7 +1929,12 @@ mod tests {
         // A non-merge commit keeps its raw message even with collapse on.
         let mut node = merge_node("real message");
         node.commit.as_mut().unwrap().parent_oids = vec![git2::Oid::zero()]; // 1 parent
-        let model = model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new());
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            merge_cols(false, false, true),
+            &HashSet::new(),
+        );
         assert_eq!(
             model.message,
             RowMessage::Raw {
@@ -1891,7 +1983,12 @@ mod tests {
 
     /// A merge node whose full message carries a body (subject + blank line +
     /// title), the real shape of a GitHub merge-commit message.
-    fn merge_node_with_body(oid_byte: u8, subject: &str, title: &str, parents: [u8; 2]) -> GraphNode {
+    fn merge_node_with_body(
+        oid_byte: u8,
+        subject: &str,
+        title: &str,
+        parents: [u8; 2],
+    ) -> GraphNode {
         let mut n = merge_node_full(oid_byte, subject, parents);
         n.commit.as_mut().unwrap().full_message = format!("{subject}\n\n{title}\n");
         n
@@ -1907,7 +2004,12 @@ mod tests {
             "Add the frobnicator",
             [1, 2],
         );
-        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(true, false),
+            &HashSet::new(),
+        );
         assert_eq!(
             model.message,
             RowMessage::PrSubject {
@@ -1925,7 +2027,12 @@ mod tests {
             "Add the frobnicator",
             [1, 2],
         );
-        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(false, false),
+            &HashSet::new(),
+        );
         assert_eq!(
             model.message,
             RowMessage::Raw {
@@ -1938,7 +2045,12 @@ mod tests {
     #[test]
     fn squash_commit_subject_rewritten_to_icon_and_title() {
         let node = commit_node(50, "Add the frobnicator (#456)", &[]);
-        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(true, false),
+            &HashSet::new(),
+        );
         assert_eq!(
             model.message,
             RowMessage::PrSubject {
@@ -1951,7 +2063,12 @@ mod tests {
     #[test]
     fn squash_commit_keeps_raw_subject_when_toggle_off() {
         let node = commit_node(51, "Add the frobnicator (#456)", &[]);
-        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(false, false),
+            &HashSet::new(),
+        );
         assert_eq!(
             model.message,
             RowMessage::Raw {
@@ -1970,7 +2087,12 @@ mod tests {
             "Add the frobnicator",
             [1, 2],
         );
-        let model = model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, true), &HashSet::new());
+        let model = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(true, true),
+            &HashSet::new(),
+        );
         assert_eq!(
             model.message,
             RowMessage::Collapse,
@@ -1989,12 +2111,20 @@ mod tests {
             [1, 2],
         );
         // Collapse ON (+ pr-subjects ON): Collapse wins outright.
-        let collapse =
-            model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, true), &HashSet::new());
+        let collapse = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(true, true),
+            &HashSet::new(),
+        );
         assert_eq!(collapse.message, RowMessage::Collapse);
         // Collapse OFF, pr-subjects ON: rewrites to the title only.
-        let subject =
-            model_row_with(&node, &HashMap::new(), cols_pr_subjects(true, false), &HashSet::new());
+        let subject = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(true, false),
+            &HashSet::new(),
+        );
         assert_eq!(
             subject.message,
             RowMessage::PrSubject {
@@ -2002,8 +2132,12 @@ mod tests {
             }
         );
         // Both OFF: the raw subject.
-        let raw =
-            model_row_with(&node, &HashMap::new(), cols_pr_subjects(false, false), &HashSet::new());
+        let raw = model_row_with(
+            &node,
+            &HashMap::new(),
+            cols_pr_subjects(false, false),
+            &HashSet::new(),
+        );
         assert_eq!(
             raw.message,
             RowMessage::Raw {
@@ -2029,7 +2163,17 @@ mod tests {
             [((a, a), a)].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit), false, None, None);
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            8,
+            Some(&lit),
+            false,
+            None,
+            None,
+        );
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
@@ -2047,7 +2191,10 @@ mod tests {
     fn tracing_off_dims_nothing_in_unicode() {
         let theme = Theme::dark();
         let mut node = node_with_cells(vec![CellType::Commit(0), CellType::Pipe(1)], false);
-        node.cell_oids = vec![(Some((oid(1), oid(1))), None), (Some((oid(2), oid(2))), None)];
+        node.cell_oids = vec![
+            (Some((oid(1), oid(1))), None),
+            (Some((oid(2), oid(2))), None),
+        ];
         let mut spans: Vec<Span> = Vec::new();
         render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false, None, None);
         assert!(spans
@@ -2068,7 +2215,17 @@ mod tests {
         let merged: HashSet<git2::Oid> = [m].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false, Some(&merged), None);
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            8,
+            None,
+            false,
+            Some(&merged),
+            None,
+        );
 
         let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
         let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
@@ -2094,7 +2251,17 @@ mod tests {
         let merged: HashSet<git2::Oid> = [m, other].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, None, false, Some(&merged), Some(m));
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            8,
+            None,
+            false,
+            Some(&merged),
+            Some(m),
+        );
 
         let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
         let pipe = spans.iter().find(|s| s.content.contains('│')).unwrap();
@@ -2121,7 +2288,17 @@ mod tests {
         let merged: HashSet<git2::Oid> = [m].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
-        render_cells_unicode(&mut spans, &node, &theme, 0, 8, Some(&lit), false, Some(&merged), None);
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            8,
+            Some(&lit),
+            false,
+            Some(&merged),
+            None,
+        );
 
         let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
         assert!(
@@ -2156,7 +2333,17 @@ mod tests {
 
         let mut spans: Vec<Span> = Vec::new();
         // cap = 3 leaves room for 2 glyphs plus the `…` marker.
-        render_cells_unicode(&mut spans, &node, &theme, 0, 3, Some(&lit), false, None, None);
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            3,
+            Some(&lit),
+            false,
+            None,
+            None,
+        );
 
         let commit = spans.iter().find(|s| s.content.contains('●')).unwrap();
         assert!(!commit.style.add_modifier.contains(Modifier::DIM));
@@ -2191,7 +2378,12 @@ mod tests {
         };
         let collapse_merge = {
             let node = merge_node_full(62, "Merge branch 'topic'", [1, 2]);
-            model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new())
+            model_row_with(
+                &node,
+                &HashMap::new(),
+                merge_cols(false, false, true),
+                &HashSet::new(),
+            )
         };
         let merged_lane = {
             let node = commit_node(63, "landed feature work", &[]);
@@ -2207,9 +2399,21 @@ mod tests {
             ("merged-lane", merged_lane),
         ] {
             assert!(model.row_is_muted, "{name}: row_is_muted");
-            assert_eq!(model.hash_style.fg, Some(theme.text_muted), "{name}: hash greyed");
-            assert_eq!(model.author_style.fg, Some(theme.text_muted), "{name}: author greyed");
-            assert_eq!(model.date_style.fg, Some(theme.text_muted), "{name}: date greyed");
+            assert_eq!(
+                model.hash_style.fg,
+                Some(theme.text_muted),
+                "{name}: hash greyed"
+            );
+            assert_eq!(
+                model.author_style.fg,
+                Some(theme.text_muted),
+                "{name}: author greyed"
+            );
+            assert_eq!(
+                model.date_style.fg,
+                Some(theme.text_muted),
+                "{name}: date greyed"
+            );
         }
     }
 
@@ -2224,7 +2428,10 @@ mod tests {
         let both =
             model_row_with(&node, &HashMap::new(), merge_cols(false, true, false), &set).msg_style;
         assert_eq!(both.fg, Some(theme.text_muted), "base-update greys the fg");
-        assert!(both.add_modifier.contains(Modifier::DIM), "base-update adds DIM");
+        assert!(
+            both.add_modifier.contains(Modifier::DIM),
+            "base-update adds DIM"
+        );
 
         // The same PR-merge subject WITHOUT the base-update classification: greyed
         // fg but NO DIM (PR-merge is the weaker mute).
@@ -2259,7 +2466,12 @@ mod tests {
         let collapse_merge = {
             let mut node = merge_node_full(72, "Merge branch 'topic'", [1, 2]);
             node.is_head = true;
-            model_row_with(&node, &HashMap::new(), merge_cols(false, false, true), &HashSet::new())
+            model_row_with(
+                &node,
+                &HashMap::new(),
+                merge_cols(false, false, true),
+                &HashSet::new(),
+            )
         };
         for (name, model) in [
             ("base-update", base_update),
@@ -2310,7 +2522,8 @@ mod tests {
             trace: None,
         };
         let commit = node.commit.as_ref().expect("commit node");
-        let is_base_update = is_base_update_row(node, cols.mute_base_merges, ctx.base_update_merges);
+        let is_base_update =
+            is_base_update_row(node, cols.mute_base_merges, ctx.base_update_merges);
         resolve_row_model(
             node,
             commit,
@@ -2351,7 +2564,11 @@ mod tests {
             !muted.add_modifier.contains(Modifier::BOLD),
             "selected muted row keeps the mute style, no model-level BOLD: {muted:?}"
         );
-        assert_eq!(muted.fg, Some(theme.text_muted), "muted fg retained under selection");
+        assert_eq!(
+            muted.fg,
+            Some(theme.text_muted),
+            "muted fg retained under selection"
+        );
         assert!(
             muted.add_modifier.contains(Modifier::DIM),
             "muted DIM retained under selection: {muted:?}"

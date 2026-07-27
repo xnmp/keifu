@@ -20,7 +20,10 @@ impl App {
         let oids = match file_history(&self.repo_path, &path_str, FILE_HISTORY_LIMIT) {
             Ok(oids) => oids,
             Err(e) => {
-                self.toast(crate::toast::ToastKind::Error, format!("File history failed: {e}"));
+                self.toast(
+                    crate::toast::ToastKind::Error,
+                    format!("File history failed: {e}"),
+                );
                 return;
             }
         };
@@ -31,7 +34,10 @@ impl App {
             .collect();
 
         if entries.is_empty() {
-            self.toast(crate::toast::ToastKind::Info, format!("No history for {}", path.display()));
+            self.toast(
+                crate::toast::ToastKind::Info,
+                format!("No history for {}", path.display()),
+            );
             return;
         }
 
@@ -105,11 +111,7 @@ impl App {
     }
 
     /// Open the file-diff viewer for `path` as it changed in commit `oid`.
-    fn open_file_diff_at_commit(
-        &mut self,
-        oid: Oid,
-        path: &std::path::Path,
-    ) -> Result<()> {
+    fn open_file_diff_at_commit(&mut self, oid: Oid, path: &std::path::Path) -> Result<()> {
         let file = FileDiffInfo {
             path: path.to_path_buf(),
             kind: FileChangeKind::Modified,
@@ -119,7 +121,10 @@ impl App {
             stage_status: None,
         };
         if let Err(e) = self.enter_file_diff(DiffTarget::Commit(oid), 0, vec![file], path) {
-            self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
+            self.toast(
+                crate::toast::ToastKind::Error,
+                format!("Cannot open diff: {e}"),
+            );
             self.mode = AppMode::Normal;
         }
         Ok(())

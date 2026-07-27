@@ -231,7 +231,10 @@ impl App {
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
-                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
+                        self.toast(
+                            crate::toast::ToastKind::Error,
+                            format!("Cannot open diff: {e}"),
+                        );
                     }
                 } else if self.is_diff_loading() {
                     self.toast(crate::toast::ToastKind::Info, "Loading diff...");
@@ -286,9 +289,9 @@ impl App {
                 .iter()
                 .position(|&idx| idx == current)
                 .unwrap_or(0);
-            let new_pos =
-                (pos as i32 + delta).clamp(0, self.visible_commit_indices.len() as i32 - 1)
-                    as usize;
+            let new_pos = (pos as i32 + delta)
+                .clamp(0, self.visible_commit_indices.len() as i32 - 1)
+                as usize;
             let new_idx = self.visible_commit_indices[new_pos];
             self.graph_nav.graph_list_state.select(Some(new_idx));
             self.graph_nav.sync_branch_selection_to_node(new_idx);
@@ -559,15 +562,23 @@ impl App {
         // Resolve the target (borrows the repo immutably) before mutating self.
         let target = {
             let repo = self.repo.repo();
-            fork_target(selected, main_tip, head_tip, |a, b| repo.merge_base(a, b).ok())
+            fork_target(selected, main_tip, head_tip, |a, b| {
+                repo.merge_base(a, b).ok()
+            })
         };
 
         match target {
             ForkTarget::Jump(oid) => match row_of_commit(&self.graph_layout, oid) {
                 Some(idx) => self.select_commit_by_full_idx(idx),
-                None => self.toast(crate::toast::ToastKind::Info, "Merge base beyond loaded history"),
+                None => self.toast(
+                    crate::toast::ToastKind::Info,
+                    "Merge base beyond loaded history",
+                ),
             },
-            ForkTarget::Linear => self.toast(crate::toast::ToastKind::Info, "No divergence — linear history"),
+            ForkTarget::Linear => self.toast(
+                crate::toast::ToastKind::Info,
+                "No divergence — linear history",
+            ),
             ForkTarget::NoBase => self.toast(crate::toast::ToastKind::Info, "No merge base found"),
         }
     }
@@ -578,7 +589,10 @@ impl App {
     /// in `git::graph`). A subtle bound stop: no-op (selection unchanged)
     /// when the lane ends — no error message, matching `move_selection`'s
     /// clamp-at-the-edge behavior.
-    fn jump_same_lane(&mut self, lookup: fn(&crate::git::graph::GraphLayout, usize) -> Option<usize>) {
+    fn jump_same_lane(
+        &mut self,
+        lookup: fn(&crate::git::graph::GraphLayout, usize) -> Option<usize>,
+    ) {
         let Some(current) = self.graph_nav.selected_index() else {
             return;
         };
@@ -673,7 +687,10 @@ mod tests {
 
         let repo = GitRepository::open(dir).expect("open repo");
         let mut app = App::from_repo(repo).expect("build app");
-        assert!(!app.has_uncommitted_node(), "clean tree: no uncommitted node");
+        assert!(
+            !app.has_uncommitted_node(),
+            "clean tree: no uncommitted node"
+        );
 
         let head_idx = app
             .graph_layout

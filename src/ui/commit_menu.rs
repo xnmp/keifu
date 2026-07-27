@@ -111,7 +111,9 @@ impl<'a> Widget for CommitMenuWidget<'a> {
             if let Some((_, indices)) = match_result {
                 for (ci, ch) in label.chars().enumerate() {
                     let style = if indices.contains(&ci) {
-                        base_style.add_modifier(Modifier::BOLD).fg(self.theme.help_key)
+                        base_style
+                            .add_modifier(Modifier::BOLD)
+                            .fg(self.theme.help_key)
                     } else {
                         base_style
                     };

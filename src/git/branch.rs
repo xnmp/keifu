@@ -134,7 +134,8 @@ pub fn remote_only_branch_names(branches: &[BranchInfo]) -> HashSet<String> {
         .filter(|b| b.is_remote)
         .filter(|remote| {
             !locals.iter().any(|local| {
-                local.tip_oid == remote.tip_oid || local.upstream.as_deref() == Some(remote.name.as_str())
+                local.tip_oid == remote.tip_oid
+                    || local.upstream.as_deref() == Some(remote.name.as_str())
             })
         })
         .map(|b| b.name.clone())
@@ -182,7 +183,12 @@ pub fn split_remote_ref(remotes: &[String], refname: &str) -> Option<(String, St
 pub fn branch_authors(repo: &Repository, branches: &[BranchInfo]) -> HashMap<String, String> {
     branches
         .iter()
-        .map(|b| (b.name.clone(), branch_author(repo, b, branches).unwrap_or_default()))
+        .map(|b| {
+            (
+                b.name.clone(),
+                branch_author(repo, b, branches).unwrap_or_default(),
+            )
+        })
         .collect()
 }
 
@@ -316,10 +322,7 @@ mod tests {
         // Regression test for #57: no upstream configured, but the short
         // names line up (`main` / `origin/main`) while the tips differ (local
         // is behind). Name-matching alone must not exempt this remote either.
-        let branches = vec![
-            local("main", oid(1), None),
-            remote("origin/main", oid(2)),
-        ];
+        let branches = vec![local("main", oid(1), None), remote("origin/main", oid(2))];
         let names = remote_only_branch_names(&branches);
         assert!(names.contains("origin/main"));
     }
@@ -328,10 +331,7 @@ mod tests {
     fn remote_sharing_tip_with_local_is_not_remote_only() {
         // Differently named, no upstream, but pointing at the same commit —
         // e.g. a just-pushed branch or `origin/HEAD` aliasing the default.
-        let branches = vec![
-            local("main", oid(7), None),
-            remote("origin/HEAD", oid(7)),
-        ];
+        let branches = vec![local("main", oid(7), None), remote("origin/HEAD", oid(7))];
         assert!(remote_only_branch_names(&branches).is_empty());
     }
 
@@ -339,10 +339,10 @@ mod tests {
     fn classifies_a_mixed_set() {
         let branches = vec![
             local("main", oid(1), Some("origin/main")),
-            remote("origin/main", oid(1)),        // tracked: same tip as local main
-            remote("origin/dependabot", oid(2)),  // remote-only
-            remote("origin/colleague", oid(3)),   // remote-only
-            local("wip", oid(4), None),           // local-only, untouched
+            remote("origin/main", oid(1)), // tracked: same tip as local main
+            remote("origin/dependabot", oid(2)), // remote-only
+            remote("origin/colleague", oid(3)), // remote-only
+            local("wip", oid(4), None),    // local-only, untouched
         ];
         let names = remote_only_branch_names(&branches);
         assert_eq!(names.len(), 2);
@@ -418,7 +418,10 @@ mod tests {
                 .collect();
             sort_for_display(&mut rotated);
             let names: Vec<String> = rotated.iter().map(|b| b.name.clone()).collect();
-            assert_eq!(names, baseline, "insertion order must not affect sorted badge order");
+            assert_eq!(
+                names, baseline,
+                "insertion order must not affect sorted badge order"
+            );
         }
     }
 
@@ -444,7 +447,10 @@ mod tests {
         tb.insert("file.txt", blob, 0o100644).unwrap();
         let tree = repo.find_tree(tb.write().unwrap()).unwrap();
         let sig = Signature::new(author, "dev@example.com", &Time::new(secs, 0)).unwrap();
-        let parent_commits: Vec<_> = parents.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
+        let parent_commits: Vec<_> = parents
+            .iter()
+            .map(|p| repo.find_commit(*p).unwrap())
+            .collect();
         let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
         repo.commit(Some(refname), &sig, &sig, "msg", &tree, &parent_refs)
             .unwrap()
@@ -469,7 +475,14 @@ mod tests {
         let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
         let b = commit(&repo, "refs/heads/main", "Main Dev", 2000, &[a], "b");
         let f1 = commit(&repo, "refs/heads/feature", "Feat Dev", 3000, &[a], "f1");
-        let _f2 = commit(&repo, "refs/heads/feature", "Feat Dev Jr", 4000, &[f1], "f2");
+        let _f2 = commit(
+            &repo,
+            "refs/heads/feature",
+            "Feat Dev Jr",
+            4000,
+            &[f1],
+            "f2",
+        );
 
         let branches = vec![info("main", b), info("feature", _f2)];
         let authors = branch_authors(&repo, &branches);
@@ -507,12 +520,16 @@ mod tests {
         let a = commit(&repo, "refs/heads/main", "Root", 1000, &[], "a");
         let b = commit(&repo, "refs/heads/main", "Topic Author", 2000, &[a], "b");
         let c = commit(&repo, "refs/heads/main", "Main Dev", 3000, &[b], "c");
-        repo.reference("refs/heads/topic", b, true, "topic").unwrap();
+        repo.reference("refs/heads/topic", b, true, "topic")
+            .unwrap();
 
         let branches = vec![info("main", c), info("topic", b)];
         let authors = branch_authors(&repo, &branches);
 
-        assert_eq!(authors.get("topic").map(String::as_str), Some("Topic Author"));
+        assert_eq!(
+            authors.get("topic").map(String::as_str),
+            Some("Topic Author")
+        );
     }
 
     #[test]

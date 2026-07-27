@@ -1,8 +1,6 @@
 //! Files pane state: selection tracking, display item building, filtering, archive listing.
 
-use crate::git::{
-    CommitDiffInfo, FileChangeKind, FileDiffInfo, StageStatus,
-};
+use crate::git::{CommitDiffInfo, FileChangeKind, FileDiffInfo, StageStatus};
 
 /// Item in the files pane (header or file entry)
 #[derive(Debug, Clone)]
@@ -45,7 +43,9 @@ impl FileSelection {
                         FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
                             current_section = Some(t);
                         }
-                        FilesPaneItem::File(f) if f.path == *path && current_section == Some(section) => {
+                        FilesPaneItem::File(f)
+                            if f.path == *path && current_section == Some(section) =>
+                        {
                             return i;
                         }
                         _ => {}
@@ -80,15 +80,12 @@ impl FileSelection {
         match items.get(idx) {
             Some(FilesPaneItem::File(f)) => {
                 self.path = Some(f.path.clone());
-                self.section = items[..=idx]
-                    .iter()
-                    .rev()
-                    .find_map(|item| match item {
-                        FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
-                            Some(t.clone())
-                        }
-                        _ => None,
-                    });
+                self.section = items[..=idx].iter().rev().find_map(|item| match item {
+                    FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
+                        Some(t.clone())
+                    }
+                    _ => None,
+                });
             }
             Some(FilesPaneItem::FolderHeader(t)) => {
                 self.path = None;
@@ -212,7 +209,8 @@ impl FilesPaneState {
 
     /// Update the selection to point at the given index in display_items_cache.
     pub fn select_file_at(&mut self, idx: usize) {
-        self.file_selection.set_from_index(idx, &self.display_items_cache);
+        self.file_selection
+            .set_from_index(idx, &self.display_items_cache);
     }
 
     /// Get the selected display item.
@@ -551,8 +549,7 @@ impl FilesPaneState {
 
     /// Check if the current selection is in the "Archived Files" section.
     pub fn is_in_archived_section(&self) -> bool {
-        section_of(&self.display_items_cache, self.file_selected_index())
-            == Some("Archived Files")
+        section_of(&self.display_items_cache, self.file_selected_index()) == Some("Archived Files")
     }
 
     /// Set the file selection directly (used by refresh_after_file_op).
@@ -590,7 +587,11 @@ mod tests {
     }
 
     fn conflicted(path: &str) -> FileDiffInfo {
-        file(path, FileChangeKind::Modified, Some(StageStatus::Conflicted))
+        file(
+            path,
+            FileChangeKind::Modified,
+            Some(StageStatus::Conflicted),
+        )
     }
 
     /// The `.archive/` walk is cached across syncs (it used to run on every
@@ -598,10 +599,8 @@ mod tests {
     /// the per-frame draw path relies on.
     #[test]
     fn archived_listing_is_cached_until_invalidated() {
-        let dir = std::env::temp_dir().join(format!(
-            "keifu-arch-cache-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("keifu-arch-cache-test-{}", std::process::id()));
         let archive = dir.join(".archive");
         std::fs::create_dir_all(&archive).unwrap();
         std::fs::write(archive.join("a.txt"), "x").unwrap();
@@ -744,10 +743,7 @@ mod tests {
 
     #[test]
     fn resolve_never_returns_header_index() {
-        let items = vec![
-            header("Section"),
-            fitem(plain("a.rs")),
-        ];
+        let items = vec![header("Section"), fitem(plain("a.rs"))];
         let sel = FileSelection::default();
         let idx = sel.resolve(&items);
         assert!(matches!(items[idx], FilesPaneItem::File(_)));
@@ -920,10 +916,7 @@ mod tests {
 
     #[test]
     fn folder_group_sorted_alphabetically_by_folder() {
-        let files = vec![
-            plain("z_dir/file.rs"),
-            plain("a_dir/file.rs"),
-        ];
+        let files = vec![plain("z_dir/file.rs"), plain("a_dir/file.rs")];
         let items = FilesPaneState::folder_group(&files);
         // BTreeMap sorts keys, so a_dir comes before z_dir
         assert!(matches!(&items[0], FilesPaneItem::FolderHeader(t) if t == "a_dir/"));
@@ -932,11 +925,7 @@ mod tests {
 
     #[test]
     fn folder_group_multiple_files_same_folder() {
-        let files = vec![
-            plain("src/a.rs"),
-            plain("src/b.rs"),
-            plain("src/c.rs"),
-        ];
+        let files = vec![plain("src/a.rs"), plain("src/b.rs"), plain("src/c.rs")];
         let items = FilesPaneState::folder_group(&files);
         // One header + three files
         assert_eq!(items.len(), 4);
@@ -945,10 +934,7 @@ mod tests {
 
     #[test]
     fn folder_group_mix_of_root_and_nested() {
-        let files = vec![
-            plain("root.rs"),
-            plain("src/nested.rs"),
-        ];
+        let files = vec![plain("root.rs"), plain("src/nested.rs")];
         let items = FilesPaneState::folder_group(&files);
         // BTreeMap: "." < "src", root files come first with no header
         let mut saw_root_file = false;
@@ -1181,10 +1167,7 @@ mod tests {
 
     #[test]
     fn move_clamps_at_bottom() {
-        let mut state = make_state_with_items(vec![
-            fitem(plain("a.rs")),
-            fitem(plain("b.rs")),
-        ]);
+        let mut state = make_state_with_items(vec![fitem(plain("a.rs")), fitem(plain("b.rs"))]);
         state.select_file_at(1);
         state.move_file_selection(1);
         assert_eq!(state.file_selected_index(), 1); // stays at last
@@ -1192,10 +1175,7 @@ mod tests {
 
     #[test]
     fn move_clamps_at_top() {
-        let mut state = make_state_with_items(vec![
-            fitem(plain("a.rs")),
-            fitem(plain("b.rs")),
-        ]);
+        let mut state = make_state_with_items(vec![fitem(plain("a.rs")), fitem(plain("b.rs"))]);
         state.select_file_at(0);
         state.move_file_selection(-1);
         assert_eq!(state.file_selected_index(), 0);
@@ -1267,10 +1247,8 @@ mod tests {
 
     #[test]
     fn select_conflict_single_conflict_stays_put() {
-        let mut state = make_state_with_items(vec![
-            header("Merge Changes"),
-            fitem(conflicted("a.rs")),
-        ]);
+        let mut state =
+            make_state_with_items(vec![header("Merge Changes"), fitem(conflicted("a.rs"))]);
         state.select_file_at(1);
         assert!(state.select_conflict(true));
         assert_eq!(state.file_selected_index(), 1);
@@ -1278,10 +1256,8 @@ mod tests {
 
     #[test]
     fn select_conflict_returns_false_when_none() {
-        let mut state = make_state_with_items(vec![
-            header("Unstaged Changes"),
-            fitem(unstaged("a.rs")),
-        ]);
+        let mut state =
+            make_state_with_items(vec![header("Unstaged Changes"), fitem(unstaged("a.rs"))]);
         assert!(!state.select_conflict(true));
         assert!(!state.select_conflict(false));
         // Selection is left untouched (still the only file).
@@ -1360,9 +1336,7 @@ mod tests {
         let headers: Vec<String> = items
             .iter()
             .filter_map(|i| match i {
-                FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => {
-                    Some(t.clone())
-                }
+                FilesPaneItem::SectionHeader(t) | FilesPaneItem::FolderHeader(t) => Some(t.clone()),
                 _ => None,
             })
             .collect();

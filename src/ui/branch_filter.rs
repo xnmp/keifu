@@ -97,7 +97,10 @@ impl<'a> Widget for BranchFilterWidget<'a> {
             buf.set_line(
                 inner.x,
                 inner.y,
-                &Line::from(Span::styled("no matching branches", self.theme.placeholder_style())),
+                &Line::from(Span::styled(
+                    "no matching branches",
+                    self.theme.placeholder_style(),
+                )),
                 inner.width,
             );
         }

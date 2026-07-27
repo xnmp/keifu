@@ -127,7 +127,10 @@ mod tests {
         let main_tip = oid(1);
         let fork = oid(5);
         let mb = |_a: Oid, _b: Oid| Some(fork);
-        assert_eq!(fork_target(f, main_tip, Some(oid(1)), mb), ForkTarget::Jump(fork));
+        assert_eq!(
+            fork_target(f, main_tip, Some(oid(1)), mb),
+            ForkTarget::Jump(fork)
+        );
     }
 
     #[test]
@@ -156,7 +159,10 @@ mod tests {
         // On main AND on HEAD (both bases == selected) → linear.
         let sel = oid(3);
         let mb = |_a: Oid, _b: Oid| Some(sel);
-        assert_eq!(fork_target(sel, oid(1), Some(oid(7)), mb), ForkTarget::Linear);
+        assert_eq!(
+            fork_target(sel, oid(1), Some(oid(7)), mb),
+            ForkTarget::Linear
+        );
         // Same, but detached HEAD (no current branch) still resolves to linear.
         assert_eq!(fork_target(sel, oid(1), None, mb), ForkTarget::Linear);
     }
@@ -164,6 +170,9 @@ mod tests {
     #[test]
     fn unrelated_histories_have_no_base() {
         let mb = |_a: Oid, _b: Oid| None;
-        assert_eq!(fork_target(oid(3), oid(1), Some(oid(7)), mb), ForkTarget::NoBase);
+        assert_eq!(
+            fork_target(oid(3), oid(1), Some(oid(7)), mb),
+            ForkTarget::NoBase
+        );
     }
 }

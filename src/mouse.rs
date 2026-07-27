@@ -11,10 +11,7 @@ pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 /// Whether `(col, row)` falls inside `rect`.
 pub fn point_in(rect: Rect, col: u16, row: u16) -> bool {
-    col >= rect.x
-        && col < rect.x + rect.width
-        && row >= rect.y
-        && row < rect.y + rect.height
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
 /// The list index a click maps to, given the list's *inner* area (inside the
@@ -243,11 +240,27 @@ mod tests {
                 target: ChipTarget::PrBadge,
             },
         ];
-        assert_eq!(chip_at(&chips, 4).map(|c| &c.target), Some(&ChipTarget::Branch("main".into())));
-        assert_eq!(chip_at(&chips, 9).map(|c| &c.target), Some(&ChipTarget::Branch("main".into())));
-        assert_eq!(chip_at(&chips, 10), None, "right edge exclusive; gap between chips");
-        assert_eq!(chip_at(&chips, 11).map(|c| &c.target), Some(&ChipTarget::PrBadge));
-        assert_eq!(chip_at(&chips, 15).map(|c| &c.target), Some(&ChipTarget::PrBadge));
+        assert_eq!(
+            chip_at(&chips, 4).map(|c| &c.target),
+            Some(&ChipTarget::Branch("main".into()))
+        );
+        assert_eq!(
+            chip_at(&chips, 9).map(|c| &c.target),
+            Some(&ChipTarget::Branch("main".into()))
+        );
+        assert_eq!(
+            chip_at(&chips, 10),
+            None,
+            "right edge exclusive; gap between chips"
+        );
+        assert_eq!(
+            chip_at(&chips, 11).map(|c| &c.target),
+            Some(&ChipTarget::PrBadge)
+        );
+        assert_eq!(
+            chip_at(&chips, 15).map(|c| &c.target),
+            Some(&ChipTarget::PrBadge)
+        );
         assert_eq!(chip_at(&chips, 16), None);
         assert_eq!(chip_at(&chips, 0), None);
     }
@@ -255,13 +268,14 @@ mod tests {
     #[test]
     fn region_at_finds_containing_rect() {
         // Two adjacent hint rects on the same (status) row: cols 0..4 and 4..9.
-        let regions = vec![
-            (rect(0, 23, 4, 1), "help"),
-            (rect(4, 23, 5, 1), "quit"),
-        ];
+        let regions = vec![(rect(0, 23, 4, 1), "help"), (rect(4, 23, 5, 1), "quit")];
         assert_eq!(region_at(&regions, 0, 23), Some(&"help"));
         assert_eq!(region_at(&regions, 3, 23), Some(&"help"));
-        assert_eq!(region_at(&regions, 4, 23), Some(&"quit"), "left edge inclusive");
+        assert_eq!(
+            region_at(&regions, 4, 23),
+            Some(&"quit"),
+            "left edge inclusive"
+        );
         assert_eq!(region_at(&regions, 8, 23), Some(&"quit"));
         assert_eq!(region_at(&regions, 9, 23), None, "right edge exclusive");
         assert_eq!(region_at(&regions, 2, 22), None, "wrong row");

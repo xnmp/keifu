@@ -113,29 +113,104 @@ pub fn command_registry() -> Vec<PaletteEntry> {
     }
 
     vec![
-        entry("Fetch all remotes & refresh", Some("F5"), Action::FullUpdate, always),
+        entry(
+            "Fetch all remotes & refresh",
+            Some("F5"),
+            Action::FullUpdate,
+            always,
+        ),
         entry("Fetch", Some("f"), Action::Fetch, always),
         entry("Pull", Some("p"), Action::Pull, always),
         entry("Push current branch", Some("P"), Action::Push, always),
         entry("Refresh", Some("R"), Action::Refresh, always),
-        entry("Commit actions menu", Some("Enter"), Action::OpenCommitMenu, has_commit),
-        entry("Create branch here", Some("b"), Action::CreateBranch, has_commit),
-        entry("Mark commit for compare", Some("m"), Action::MarkForCompare, has_commit),
-        entry("Jump to merge base with main", Some("^"), Action::JumpToMergeBase, has_commit),
-        entry("Undo last operation", Some("^Z"), Action::UndoLastOp, can_undo),
-        entry("Create pull request", None, Action::CreatePullRequest, can_create_pr),
-        entry("Merge pull request", None, Action::MergePullRequest, has_open_pr),
+        entry(
+            "Commit actions menu",
+            Some("Enter"),
+            Action::OpenCommitMenu,
+            has_commit,
+        ),
+        entry(
+            "Create branch here",
+            Some("b"),
+            Action::CreateBranch,
+            has_commit,
+        ),
+        entry(
+            "Mark commit for compare",
+            Some("m"),
+            Action::MarkForCompare,
+            has_commit,
+        ),
+        entry(
+            "Jump to merge base with main",
+            Some("^"),
+            Action::JumpToMergeBase,
+            has_commit,
+        ),
+        entry(
+            "Undo last operation",
+            Some("^Z"),
+            Action::UndoLastOp,
+            can_undo,
+        ),
+        entry(
+            "Create pull request",
+            None,
+            Action::CreatePullRequest,
+            can_create_pr,
+        ),
+        entry(
+            "Merge pull request",
+            None,
+            Action::MergePullRequest,
+            has_open_pr,
+        ),
         entry("Open PR in browser", Some("o"), Action::OpenPr, has_open_pr),
-        entry("View CI checks", Some("c"), Action::OpenCiChecks, has_open_pr),
-        entry("View PR conversation", Some("v"), Action::OpenPrThread, has_open_pr),
+        entry(
+            "View CI checks",
+            Some("c"),
+            Action::OpenCiChecks,
+            has_open_pr,
+        ),
+        entry(
+            "View PR conversation",
+            Some("v"),
+            Action::OpenPrThread,
+            has_open_pr,
+        ),
         entry("Issues: list", Some("I"), Action::OpenIssueList, always),
         entry("Issues: new issue", None, Action::NewIssue, always),
-        entry("Toggle branch tracing", Some("t"), Action::ToggleTrace, always),
-        entry("Display columns menu", Some("M"), Action::OpenMetadataMenu, always),
-        entry("Filter branches", Some("B"), Action::OpenBranchFilter, always),
+        entry(
+            "Toggle branch tracing",
+            Some("t"),
+            Action::ToggleTrace,
+            always,
+        ),
+        entry(
+            "Display columns menu",
+            Some("M"),
+            Action::OpenMetadataMenu,
+            always,
+        ),
+        entry(
+            "Filter branches",
+            Some("B"),
+            Action::OpenBranchFilter,
+            always,
+        ),
         entry("Search branches", Some("/"), Action::Search, always),
-        entry("Load 500 more commits", None, Action::LoadMoreCommits, can_load_more),
-        entry("Load all commits", None, Action::LoadAllCommits, can_load_more),
+        entry(
+            "Load 500 more commits",
+            None,
+            Action::LoadMoreCommits,
+            can_load_more,
+        ),
+        entry(
+            "Load all commits",
+            None,
+            Action::LoadAllCommits,
+            can_load_more,
+        ),
     ]
 }
 
@@ -188,7 +263,7 @@ pub fn rank(query: &str, candidates: Vec<Candidate>, cap: usize) -> PaletteResul
             .into_iter()
             .filter(|c| c.kind == PaletteKind::Command)
             .collect();
-        items.sort_by(|a, b| a.order.cmp(&b.order));
+        items.sort_by_key(|a| a.order);
         let more = items.len().saturating_sub(cap);
         items.truncate(cap);
         return PaletteResults { items, more };
@@ -290,7 +365,10 @@ mod tests {
             by_label("Fetch all remotes & refresh"),
             Action::FullUpdate
         ));
-        assert!(matches!(by_label("Toggle branch tracing"), Action::ToggleTrace));
+        assert!(matches!(
+            by_label("Toggle branch tracing"),
+            Action::ToggleTrace
+        ));
         assert!(matches!(
             by_label("Create pull request"),
             Action::CreatePullRequest

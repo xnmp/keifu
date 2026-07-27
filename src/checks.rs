@@ -455,7 +455,10 @@ mod tests {
     // ── log tail ─────────────────────────────────────────────────────
 
     fn numbered(n: usize) -> String {
-        (1..=n).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n")
+        (1..=n)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -468,7 +471,10 @@ mod tests {
         let over = tail_lines(&numbered(LOG_TAIL_LINES + 50));
         assert_eq!(over.len(), LOG_TAIL_LINES);
         assert_eq!(over.first().unwrap(), "line51");
-        assert_eq!(over.last().unwrap(), &format!("line{}", LOG_TAIL_LINES + 50));
+        assert_eq!(
+            over.last().unwrap(),
+            &format!("line{}", LOG_TAIL_LINES + 50)
+        );
         // Empty.
         assert!(tail_lines("").is_empty());
     }

@@ -18,10 +18,12 @@ pub use diff::{
     CommitDiffInfo, DiffHunkContent, DiffLineContent, DiffLineOrigin, FileChangeKind,
     FileDiffContent, FileDiffInfo, StageStatus,
 };
-pub use operations::file_history;
-pub use patch::{extract_hunk_from_working_tree, render_hunk_patch, HunkPatch, PatchLine, PatchLineKind};
 pub use extensions::configure_git_extensions;
 pub use graph::build_graph;
+pub use operations::file_history;
+pub use patch::{
+    extract_hunk_from_working_tree, render_hunk_patch, HunkPatch, PatchLine, PatchLineKind,
+};
 pub use repository::{GitRepository, OperationState, StashInfo, TagInfo, WorkingTreeStatus};
 
 use std::path::PathBuf;

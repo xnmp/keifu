@@ -122,7 +122,10 @@ impl<'a> CiChecksWidget<'a> {
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(name, base),
-                        Span::styled(format!("  {dur}"), base.patch(Style::default().fg(self.theme.text_muted))),
+                        Span::styled(
+                            format!("  {dur}"),
+                            base.patch(Style::default().fg(self.theme.text_muted)),
+                        ),
                     ]);
                     buf.set_line(inner.x, y, &line, inner.width);
                     if selected {

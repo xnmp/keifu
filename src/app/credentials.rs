@@ -21,24 +21,25 @@ impl App {
     /// fresh, user-initiated op).
     pub(crate) fn dispatch_net_op(&mut self, op: RetryableOp, attempts: u32) {
         let host = self.op_host(&op);
-        let creds = host
-            .as_ref()
-            .and_then(|h| self.credentials.get(h).cloned());
+        let creds = host.as_ref().and_then(|h| self.credentials.get(h).cloned());
         let had_creds = creds.is_some();
         let silent = matches!(&op, RetryableOp::Fetch { silent: true, .. });
 
         let message = match op.clone() {
-            RetryableOp::Fetch { remote, show_message, silent } => {
-                self.network
-                    .start_fetch(&self.repo_path, &remote, show_message, silent, creds)
-            }
-            RetryableOp::FetchAll => {
-                Some(self.network.start_fetch_all(&self.repo_path, creds))
-            }
-            RetryableOp::Push(spec) => {
-                Some(self.network.start_push(&self.repo_path, spec, creds))
-            }
-            RetryableOp::Pull { remote, branch, mode } => Some(
+            RetryableOp::Fetch {
+                remote,
+                show_message,
+                silent,
+            } => self
+                .network
+                .start_fetch(&self.repo_path, &remote, show_message, silent, creds),
+            RetryableOp::FetchAll => Some(self.network.start_fetch_all(&self.repo_path, creds)),
+            RetryableOp::Push(spec) => Some(self.network.start_push(&self.repo_path, spec, creds)),
+            RetryableOp::Pull {
+                remote,
+                branch,
+                mode,
+            } => Some(
                 self.network
                     .start_pull(&self.repo_path, remote, branch, mode, creds),
             ),
@@ -53,7 +54,13 @@ impl App {
             &op,
             RetryableOp::Fetch { .. } | RetryableOp::FetchAll | RetryableOp::Push(_)
         );
-        self.in_flight_op = Some(InFlightOp { op, host, had_creds, silent, attempts });
+        self.in_flight_op = Some(InFlightOp {
+            op,
+            host,
+            had_creds,
+            silent,
+            attempts,
+        });
         if let Some(msg) = message {
             if is_toast {
                 self.toast(crate::toast::ToastKind::Info, msg);
@@ -77,7 +84,9 @@ impl App {
             RetryableOp::Push(PushSpec::Publish { remote, .. }) => Some(remote.clone()),
             RetryableOp::Push(PushSpec::ToRemote { remote }) => Some(remote.clone()),
             RetryableOp::Push(PushSpec::Delete { remote, .. }) => Some(remote.clone()),
-            RetryableOp::Pull { remote: Some(r), .. } => Some(r.clone()),
+            RetryableOp::Pull {
+                remote: Some(r), ..
+            } => Some(r.clone()),
             RetryableOp::Pull { remote: None, .. } => self.repo.head_upstream_remote(),
         };
         remote
@@ -91,11 +100,7 @@ impl App {
     /// (the caller must NOT also show the error). Returns `false` for any other
     /// error, a silent background op, or once the prompt cap is reached — the
     /// caller then surfaces the error normally.
-    pub(crate) fn try_prompt_credentials(
-        &mut self,
-        err: &str,
-        flight: Option<InFlightOp>,
-    ) -> bool {
+    pub(crate) fn try_prompt_credentials(&mut self, err: &str, flight: Option<InFlightOp>) -> bool {
         if !is_https_auth_failure(err) {
             return false;
         }
@@ -265,10 +270,7 @@ mod tests {
 
     #[test]
     fn single_line_strips_newlines_tabs_and_controls() {
-        assert_eq!(
-            sanitize_paste_single_line("ghp_abc\n123\t\r"),
-            "ghp_abc123"
-        );
+        assert_eq!(sanitize_paste_single_line("ghp_abc\n123\t\r"), "ghp_abc123");
         // Embedded bell / null are removed; ordinary text survives.
         assert_eq!(sanitize_paste_single_line("a\u{7}b\u{0}c"), "abc");
         assert_eq!(sanitize_paste_single_line("plain-token"), "plain-token");

@@ -109,7 +109,10 @@ impl<'a> Widget for SettingsMenuWidget<'a> {
             buf.set_line(
                 inner.x,
                 inner.y,
-                &Line::from(Span::styled("no matching settings", self.theme.placeholder_style())),
+                &Line::from(Span::styled(
+                    "no matching settings",
+                    self.theme.placeholder_style(),
+                )),
                 inner.width,
             );
         }

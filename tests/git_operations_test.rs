@@ -11,8 +11,8 @@ use keifu::git::OperationState;
 
 mod common;
 use common::{
-    add_bare_origin, commit_file, git_cli, head_oid, init_repo, repo_path, stash_count,
-    stash_list, Seed,
+    add_bare_origin, commit_file, git_cli, head_oid, init_repo, repo_path, stash_count, stash_list,
+    Seed,
 };
 
 // ── Branch Operations ───────────────────────────────────────────────
@@ -25,7 +25,9 @@ fn create_branch_creates_new_branch_at_oid() {
 
     create_branch(repo, "feature", oid).unwrap();
 
-    let branch = repo.find_branch("feature", git2::BranchType::Local).unwrap();
+    let branch = repo
+        .find_branch("feature", git2::BranchType::Local)
+        .unwrap();
     let branch_oid = branch.get().peel_to_commit().unwrap().id();
     assert_eq!(branch_oid, oid);
 }
@@ -67,7 +69,10 @@ fn delete_branch_fails_on_head_branch() {
     let result = delete_branch(repo, &head_branch_name);
     assert!(result.is_err());
     assert!(
-        result.unwrap_err().to_string().contains("Cannot delete current branch"),
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot delete current branch"),
         "Expected error about deleting current branch"
     );
 }
@@ -207,7 +212,10 @@ fn stage_untracked_file() {
     stage_file(path, "new.txt").unwrap();
 
     let statuses = repo.statuses(None).unwrap();
-    let entry = statuses.iter().find(|e| e.path() == Some("new.txt")).unwrap();
+    let entry = statuses
+        .iter()
+        .find(|e| e.path() == Some("new.txt"))
+        .unwrap();
     assert!(entry.status().intersects(git2::Status::INDEX_NEW));
 }
 
@@ -295,11 +303,7 @@ fn commit_amend_no_edit_preserves_message() {
     assert_eq!(head.parent_count(), 0);
     let mut revwalk = repo.revwalk().unwrap();
     revwalk.push_head().unwrap();
-    assert_eq!(
-        revwalk.count(),
-        1,
-        "amend must not append a second commit"
-    );
+    assert_eq!(revwalk.count(), 1, "amend must not append a second commit");
 }
 
 #[test]
@@ -471,7 +475,10 @@ fn reset_hard_discards_all_changes() {
 
     let statuses = repo.statuses(None).unwrap();
     let entry = statuses.iter().find(|e| e.path() == Some("b.txt"));
-    assert!(entry.is_none(), "b.txt should not appear in status after hard reset");
+    assert!(
+        entry.is_none(),
+        "b.txt should not appear in status after hard reset"
+    );
 }
 
 // ── Merge ───────────────────────────────────────────────────────────
@@ -676,7 +683,8 @@ fn rebase_branch_conflict_returns_conflicts_and_leaves_rebase_in_progress() {
     checkout_branch(repo, "feature").unwrap();
 
     // New contract: a conflict is a typed outcome, not an Err.
-    let outcome = rebase_branch(repo, &default, git2::BranchType::Local).expect("conflict is not an error");
+    let outcome =
+        rebase_branch(repo, &default, git2::BranchType::Local).expect("conflict is not an error");
     assert!(
         matches!(outcome, OpOutcome::Conflicts { count } if count >= 1),
         "conflicting rebase returns Conflicts, got {outcome:?}"
@@ -939,7 +947,8 @@ fn checkout_remote_branch_creates_tracking_branch() {
     delete_branch(repo, "feat_src").unwrap();
     git_cli(path, &["fetch", "origin"]);
     assert!(
-        repo.find_branch("feature", git2::BranchType::Local).is_err(),
+        repo.find_branch("feature", git2::BranchType::Local)
+            .is_err(),
         "precondition: no local 'feature' branch yet"
     );
 
@@ -1033,7 +1042,8 @@ fn merge_branch_conflict_returns_conflicts_and_leaves_repo_mid_merge() {
     checkout_branch(repo, &default).unwrap();
 
     // New contract: a conflicting merge is a typed outcome, not an error.
-    let outcome = merge_branch(repo, "feature", git2::BranchType::Local).expect("conflict is not an error");
+    let outcome =
+        merge_branch(repo, "feature", git2::BranchType::Local).expect("conflict is not an error");
     assert!(
         matches!(outcome, OpOutcome::Conflicts { count } if count == 1),
         "conflicting merge returns Conflicts with the conflict count, got {outcome:?}"
@@ -1450,7 +1460,9 @@ fn rename_branch_renames_local_branch() {
     rename_branch(path, "feature", "feature-2").unwrap();
 
     // Old name gone, new name present at the same commit.
-    assert!(repo.find_branch("feature", git2::BranchType::Local).is_err());
+    assert!(repo
+        .find_branch("feature", git2::BranchType::Local)
+        .is_err());
     let renamed = repo
         .find_branch("feature-2", git2::BranchType::Local)
         .unwrap();
@@ -1502,7 +1514,10 @@ fn delete_tag_removes_tag() {
     let path = repo_path(&git_repo);
     let oid = commit_file(repo, "a.txt", "a", "initial");
     add_tag(repo, "v1.0", oid).unwrap();
-    assert!(repo.revparse_single("v1.0").is_ok(), "precondition: tag exists");
+    assert!(
+        repo.revparse_single("v1.0").is_ok(),
+        "precondition: tag exists"
+    );
 
     delete_tag(path, "v1.0").unwrap();
 
@@ -1592,7 +1607,10 @@ fn stash_all_untracked_includes_untracked_files() {
     stash_all(path, "wip", true).unwrap();
 
     // -u sweeps the untracked file into the stash, leaving the tree clean.
-    assert!(!untracked.exists(), "untracked file should be stashed with -u");
+    assert!(
+        !untracked.exists(),
+        "untracked file should be stashed with -u"
+    );
     assert_eq!(stash_count(path), 1);
 
     // Popping restores it.

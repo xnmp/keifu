@@ -13,8 +13,8 @@ pub fn add_to_gitignore(repo_path: &str, pattern: &str) -> Result<bool> {
 
     // Check if pattern already exists
     if gitignore_path.exists() {
-        let contents = std::fs::read_to_string(&gitignore_path)
-            .context("Failed to read .gitignore")?;
+        let contents =
+            std::fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
         if contents.lines().any(|line| line.trim() == pattern.trim()) {
             return Ok(false);
         }
@@ -28,8 +28,8 @@ pub fn add_to_gitignore(repo_path: &str, pattern: &str) -> Result<bool> {
 
     // Ensure we start on a new line if file doesn't end with one
     if gitignore_path.exists() {
-        let contents = std::fs::read_to_string(&gitignore_path)
-            .context("Failed to read .gitignore")?;
+        let contents =
+            std::fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
         if !contents.is_empty() && !contents.ends_with('\n') {
             writeln!(file)?;
         }
@@ -49,8 +49,7 @@ pub fn remove_from_gitignore(repo_path: &str, pattern: &str) -> Result<bool> {
         return Ok(false);
     }
 
-    let contents =
-        fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
+    let contents = fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
 
     let trimmed = pattern.trim();
     let filtered: Vec<&str> = contents
@@ -85,8 +84,7 @@ pub fn archive_path(repo_path: &str, relative_path: &str) -> Result<()> {
 
     let dest = repo.join(".archive").join(relative_path);
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .context("Failed to create .archive directory structure")?;
+        fs::create_dir_all(parent).context("Failed to create .archive directory structure")?;
     }
 
     fs::rename(&source, &dest).context(format!(
@@ -103,10 +101,7 @@ pub fn unarchive_path(repo_path: &str, relative_path: &str) -> Result<()> {
     let source = repo.join(".archive").join(relative_path);
 
     if !source.exists() {
-        bail!(
-            "Archived path does not exist: .archive/{}",
-            relative_path
-        );
+        bail!("Archived path does not exist: .archive/{}", relative_path);
     }
 
     let dest = repo.join(relative_path);
@@ -244,7 +239,11 @@ mod tests {
     #[test]
     fn remove_from_gitignore_removes_matching_line() {
         let dir = setup_temp_dir();
-        fs::write(dir.path().join(".gitignore"), "target/\nnode_modules/\n*.log\n").unwrap();
+        fs::write(
+            dir.path().join(".gitignore"),
+            "target/\nnode_modules/\n*.log\n",
+        )
+        .unwrap();
 
         let result = remove_from_gitignore(dir.path().to_str().unwrap(), "node_modules/").unwrap();
         assert!(result);
@@ -289,7 +288,11 @@ mod tests {
     fn unarchive_path_preserves_directory_structure() {
         let dir = setup_temp_dir();
         fs::create_dir_all(dir.path().join(".archive/src/utils")).unwrap();
-        fs::write(dir.path().join(".archive/src/utils/helper.rs"), "fn help() {}").unwrap();
+        fs::write(
+            dir.path().join(".archive/src/utils/helper.rs"),
+            "fn help() {}",
+        )
+        .unwrap();
 
         unarchive_path(dir.path().to_str().unwrap(), "src/utils/helper.rs").unwrap();
 

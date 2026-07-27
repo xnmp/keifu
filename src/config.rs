@@ -611,8 +611,12 @@ mod tests {
         // Default is ON; an older state.toml (no mute_merges key) keeps it ON.
         assert!(MetadataColumns::default().mute_merges);
         let older: UiState =
-            toml::from_str("[metadata_columns]\nauthor = true\nhash = true\ndate = true\n").unwrap();
-        assert!(older.metadata_columns.mute_merges, "missing key defaults ON");
+            toml::from_str("[metadata_columns]\nauthor = true\nhash = true\ndate = true\n")
+                .unwrap();
+        assert!(
+            older.metadata_columns.mute_merges,
+            "missing key defaults ON"
+        );
 
         let mut cols = MetadataColumns::default();
         cols.toggle(MetadataColumn::MuteMerges);
@@ -625,8 +629,12 @@ mod tests {
         // Default is ON; an older state.toml (no pr_subjects key) keeps it ON.
         assert!(MetadataColumns::default().pr_subjects);
         let older: UiState =
-            toml::from_str("[metadata_columns]\nauthor = true\nhash = true\ndate = true\n").unwrap();
-        assert!(older.metadata_columns.pr_subjects, "missing key defaults ON");
+            toml::from_str("[metadata_columns]\nauthor = true\nhash = true\ndate = true\n")
+                .unwrap();
+        assert!(
+            older.metadata_columns.pr_subjects,
+            "missing key defaults ON"
+        );
 
         let mut cols = MetadataColumns::default();
         cols.toggle(MetadataColumn::PrSubjects);
@@ -804,7 +812,10 @@ custom_unknown_key = \"keep me\"
         Config::default().apply_to_document(&mut doc);
         let out = doc.to_string();
         // Fresh files use standard section headers, not inline tables.
-        assert!(out.contains("[refresh]"), "expected [refresh] header: {out}");
+        assert!(
+            out.contains("[refresh]"),
+            "expected [refresh] header: {out}"
+        );
         assert!(out.contains("[ui]"), "expected [ui] header: {out}");
         let reloaded: Config = toml::from_str(&out).unwrap();
         assert!(reloaded.refresh.auto_refresh);

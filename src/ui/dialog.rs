@@ -23,12 +23,22 @@ pub struct InputDialog<'a> {
 
 impl<'a> InputDialog<'a> {
     pub fn new(title: &'a str, input: &'a str, theme: &'a Theme) -> Self {
-        Self { title, input, theme, mask: false }
+        Self {
+            title,
+            input,
+            theme,
+            mask: false,
+        }
     }
 
     /// Render the input masked (bullets) — for password/token entry.
     pub fn masked(title: &'a str, input: &'a str, theme: &'a Theme) -> Self {
-        Self { title, input, theme, mask: true }
+        Self {
+            title,
+            input,
+            theme,
+            mask: true,
+        }
     }
 }
 
@@ -112,7 +122,9 @@ impl<'a> Widget for ConfirmDialog<'a> {
                 Span::raw(": Yes  "),
                 Span::styled(
                     "n/Esc",
-                    Style::default().fg(self.theme.button_no).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(self.theme.button_no)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(": No"),
             ]),
@@ -131,7 +143,10 @@ pub struct PullDivergenceDialog<'a> {
 
 impl<'a> PullDivergenceDialog<'a> {
     /// Menu order matches the handler: 0 = Merge, 1 = Rebase.
-    pub const OPTIONS: [&'static str; 2] = ["Merge (create a merge commit)", "Rebase (replay your commits)"];
+    pub const OPTIONS: [&'static str; 2] = [
+        "Merge (create a merge commit)",
+        "Rebase (replay your commits)",
+    ];
 
     pub fn new(selected: usize, theme: &'a Theme) -> Self {
         Self { selected, theme }
@@ -366,4 +381,3 @@ impl<'a> Widget for FileHistoryWidget<'a> {
         }
     }
 }
-

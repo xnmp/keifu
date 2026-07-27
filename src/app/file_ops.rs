@@ -45,7 +45,10 @@ impl App {
                     let file_list = self.files_pane.display_file_list();
                     let flat_idx = self.display_index_to_flat_index(self.file_selected_index());
                     if let Err(e) = self.enter_file_diff(target, flat_idx, file_list, &file.path) {
-                        self.toast(crate::toast::ToastKind::Error, format!("Cannot open diff: {e}"));
+                        self.toast(
+                            crate::toast::ToastKind::Error,
+                            format!("Cannot open diff: {e}"),
+                        );
                     }
                 }
             }
@@ -64,7 +67,10 @@ impl App {
                             match self.extract_blob_to_temp(commit.oid, &path) {
                                 Ok(tmp) => tmp,
                                 Err(e) => {
-                                    self.toast(crate::toast::ToastKind::Error, format!("Cannot extract file: {e}"));
+                                    self.toast(
+                                        crate::toast::ToastKind::Error,
+                                        format!("Cannot extract file: {e}"),
+                                    );
                                     return Ok(());
                                 }
                             }
@@ -252,12 +258,8 @@ impl App {
 
         // Resolve the pattern: header → folder path, file → file path
         let pattern = match self.selected_display_item() {
-            Some(FilesPaneItem::FolderHeader(text)) => {
-                text.clone()
-            }
-            Some(FilesPaneItem::File(file)) => {
-                file.path.to_string_lossy().to_string()
-            }
+            Some(FilesPaneItem::FolderHeader(text)) => text.clone(),
+            Some(FilesPaneItem::File(file)) => file.path.to_string_lossy().to_string(),
             Some(FilesPaneItem::SectionHeader(_)) | None => return Ok(()),
         };
 
@@ -266,11 +268,17 @@ impl App {
                 self.last_undoable_op = Some(UndoableOperation::Gitignore {
                     pattern: pattern.clone(),
                 });
-                self.toast(crate::toast::ToastKind::Success, format!("Added '{}' to .gitignore", pattern));
+                self.toast(
+                    crate::toast::ToastKind::Success,
+                    format!("Added '{}' to .gitignore", pattern),
+                );
                 self.refresh_after_file_op()?;
             }
             false => {
-                self.toast(crate::toast::ToastKind::Info, format!("'{}' already in .gitignore", pattern));
+                self.toast(
+                    crate::toast::ToastKind::Info,
+                    format!("'{}' already in .gitignore", pattern),
+                );
             }
         }
 
@@ -284,12 +292,8 @@ impl App {
 
         // Resolve target: header → folder path (without trailing /), file → file path
         let target = match self.selected_display_item() {
-            Some(FilesPaneItem::FolderHeader(text)) => {
-                text.trim_end_matches('/').to_string()
-            }
-            Some(FilesPaneItem::File(file)) => {
-                file.path.to_string_lossy().to_string()
-            }
+            Some(FilesPaneItem::FolderHeader(text)) => text.trim_end_matches('/').to_string(),
+            Some(FilesPaneItem::File(file)) => file.path.to_string_lossy().to_string(),
             Some(FilesPaneItem::SectionHeader(_)) | None => return Ok(()),
         };
 
@@ -299,7 +303,10 @@ impl App {
         self.last_undoable_op = Some(UndoableOperation::Archive {
             relative_path: target.clone(),
         });
-        self.toast(crate::toast::ToastKind::Success, format!("Archived '{}'", target));
+        self.toast(
+            crate::toast::ToastKind::Success,
+            format!("Archived '{}'", target),
+        );
         self.refresh_after_file_op()?;
 
         Ok(())
@@ -311,7 +318,10 @@ impl App {
         };
         let target = file.path.to_string_lossy().to_string();
         unarchive_path(&self.repo_path, &target)?;
-        self.toast(crate::toast::ToastKind::Success, format!("Unarchived '{}'", target));
+        self.toast(
+            crate::toast::ToastKind::Success,
+            format!("Unarchived '{}'", target),
+        );
         self.refresh_after_file_op()?;
         Ok(())
     }
@@ -391,26 +401,32 @@ impl App {
                 } else {
                     unstage_file(&self.repo_path, &path)?;
                 }
-                self.toast(crate::toast::ToastKind::Success, format!("Undid stage/unstage '{}'", path));
+                self.toast(
+                    crate::toast::ToastKind::Success,
+                    format!("Undid stage/unstage '{}'", path),
+                );
             }
             UndoableOperation::Gitignore { pattern } => {
                 match remove_from_gitignore(&self.repo_path, &pattern)? {
-                    true => self.toast(crate::toast::ToastKind::Success, format!(
-                        "Removed '{}' from .gitignore",
-                        pattern
-                    )),
+                    true => self.toast(
+                        crate::toast::ToastKind::Success,
+                        format!("Removed '{}' from .gitignore", pattern),
+                    ),
                     false => {
-                        self.toast(crate::toast::ToastKind::Info, format!(
-                            "'{}' not found in .gitignore",
-                            pattern
-                        ));
+                        self.toast(
+                            crate::toast::ToastKind::Info,
+                            format!("'{}' not found in .gitignore", pattern),
+                        );
                         return Ok(());
                     }
                 }
             }
             UndoableOperation::Archive { relative_path } => {
                 unarchive_path(&self.repo_path, &relative_path)?;
-                self.toast(crate::toast::ToastKind::Success, format!("Restored '{}' from archive", relative_path));
+                self.toast(
+                    crate::toast::ToastKind::Success,
+                    format!("Restored '{}' from archive", relative_path),
+                );
             }
         }
 
@@ -431,17 +447,25 @@ impl App {
             return;
         };
         match copy_to_clipboard(&path) {
-            Ok(outcome) => {
-                self.toast(crate::toast::ToastKind::Success, format!("Copied path '{}'{}", path, outcome.suffix()))
-            }
-            Err(e) => self.toast(crate::toast::ToastKind::Error, format!("Clipboard error: {}", e)),
+            Ok(outcome) => self.toast(
+                crate::toast::ToastKind::Success,
+                format!("Copied path '{}'{}", path, outcome.suffix()),
+            ),
+            Err(e) => self.toast(
+                crate::toast::ToastKind::Error,
+                format!("Clipboard error: {}", e),
+            ),
         }
     }
 
     pub(crate) fn selected_stash_index(&self) -> Option<usize> {
         let node = self.selected_commit_node()?;
         let label = node.stash_label.as_ref()?;
-        label.strip_prefix("stash@{")?.strip_suffix('}')?.parse().ok()
+        label
+            .strip_prefix("stash@{")?
+            .strip_suffix('}')?
+            .parse()
+            .ok()
     }
 }
 

@@ -44,7 +44,11 @@ impl PerfStats {
     pub fn record(&mut self, name: &'static str, duration: Duration) {
         self.ops.entry(name).or_default().record(duration);
         if duration >= SLOW_THRESHOLD {
-            tracing::debug!(op = name, ms = duration.as_millis() as u64, "slow operation");
+            tracing::debug!(
+                op = name,
+                ms = duration.as_millis() as u64,
+                "slow operation"
+            );
         }
     }
 

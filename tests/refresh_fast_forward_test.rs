@@ -69,7 +69,11 @@ fn non_checked_out_branch_behind_upstream_is_fast_forwarded() {
     git_cli(&path, &["fetch", "origin"]);
 
     let repo = open(Path::new(&path));
-    assert_eq!(branch_tip(&repo, "feature"), base, "precondition: feature is behind");
+    assert_eq!(
+        branch_tip(&repo, "feature"),
+        base,
+        "precondition: feature is behind"
+    );
 
     let summary = fast_forward_behind_branches(&repo);
 
@@ -95,7 +99,11 @@ fn checked_out_branch_behind_is_fast_forwarded_when_clean() {
     git_cli(&path, &["fetch", "origin"]);
 
     let repo = open(Path::new(&path));
-    assert_eq!(head_oid(&repo), base, "precondition: checked-out branch is behind");
+    assert_eq!(
+        head_oid(&repo),
+        base,
+        "precondition: checked-out branch is behind"
+    );
 
     let summary = fast_forward_behind_branches(&repo);
 
@@ -127,7 +135,10 @@ fn checked_out_branch_behind_is_skipped_when_working_tree_dirty() {
     let repo = open(Path::new(&path));
     let summary = fast_forward_behind_branches(&repo);
 
-    assert!(summary.moved.is_empty(), "dirty checked-out branch must not move");
+    assert!(
+        summary.moved.is_empty(),
+        "dirty checked-out branch must not move"
+    );
     assert!(summary.failed.is_empty(), "a dirty skip is not a failure");
     assert_eq!(head_oid(&repo), base, "HEAD must stay put on a dirty tree");
 }
@@ -154,9 +165,16 @@ fn diverged_branch_is_left_untouched() {
     let repo = open(Path::new(&path));
     let summary = fast_forward_behind_branches(&repo);
 
-    assert!(summary.moved.is_empty(), "a diverged branch must not fast-forward");
+    assert!(
+        summary.moved.is_empty(),
+        "a diverged branch must not fast-forward"
+    );
     assert!(summary.failed.is_empty());
-    assert_eq!(branch_tip(&repo, "feature"), local_tip, "feature tip unchanged");
+    assert_eq!(
+        branch_tip(&repo, "feature"),
+        local_tip,
+        "feature tip unchanged"
+    );
 }
 
 #[test]
@@ -182,7 +200,10 @@ fn up_to_date_and_ahead_branches_are_untouched() {
     let repo = open(Path::new(&path));
     let summary = fast_forward_behind_branches(&repo);
 
-    assert!(summary.moved.is_empty(), "neither up-to-date nor ahead branches move");
+    assert!(
+        summary.moved.is_empty(),
+        "neither up-to-date nor ahead branches move"
+    );
     assert!(summary.failed.is_empty());
     assert_eq!(branch_tip(&repo, "even"), even_tip);
     assert_eq!(branch_tip(&repo, "ahead"), ahead_tip);
@@ -195,7 +216,10 @@ fn up_to_date_and_ahead_branches_are_untouched() {
 fn pump_fetch_to_completion(app: &mut App) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while !app.update_fetch_status() {
-        assert!(Instant::now() < deadline, "background fetch never completed");
+        assert!(
+            Instant::now() < deadline,
+            "background fetch never completed"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -203,7 +227,14 @@ fn pump_fetch_to_completion(app: &mut App) {
 /// Repo whose checked-out default branch tracks origin and will be strictly
 /// behind once the app fetches. Returns (tempdir, origin tempdir, path, branch,
 /// base OID, upstream OID that a fetch will bring in).
-fn behind_after_fetch_fixture() -> (tempfile::TempDir, tempfile::TempDir, String, String, Oid, Oid) {
+fn behind_after_fetch_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    String,
+    String,
+    Oid,
+    Oid,
+) {
     let (td, git_repo) = init_repo(Seed::TrackedFile);
     let path = git_repo.path.clone();
     let default = current_branch(git_repo.repo());
@@ -227,7 +258,11 @@ fn full_update_fast_forwards_when_setting_enabled() {
     pump_fetch_to_completion(&mut app);
 
     let repo = open(Path::new(&path));
-    assert_eq!(head_oid(&repo), upstream, "F5 must fast-forward the behind branch");
+    assert_eq!(
+        head_oid(&repo),
+        upstream,
+        "F5 must fast-forward the behind branch"
+    );
     assert_ne!(head_oid(&repo), base);
 }
 
@@ -244,6 +279,10 @@ fn full_update_does_not_fast_forward_when_setting_disabled() {
     let repo = open(Path::new(&path));
     // The fetch still ran (remote-tracking ref advanced), but with the setting
     // off the local branch stays behind — nothing moved.
-    assert_eq!(head_oid(&repo), base, "setting off must leave the branch behind");
+    assert_eq!(
+        head_oid(&repo),
+        base,
+        "setting off must leave the branch behind"
+    );
     assert_ne!(head_oid(&repo), upstream);
 }

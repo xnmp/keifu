@@ -99,7 +99,11 @@ mod tests {
         assert_eq!(effective_graph_width(10, None), 10, "None = uncapped");
         assert_eq!(effective_graph_width(10, Some(6)), 6);
         assert_eq!(effective_graph_width(10, Some(2)), 4, "floor at 4");
-        assert_eq!(effective_graph_width(10, Some(100)), 10, "cap >= needed = uncapped");
+        assert_eq!(
+            effective_graph_width(10, Some(100)),
+            10,
+            "cap >= needed = uncapped"
+        );
         // Graph too small to cap: floor collapses to needed.
         assert_eq!(effective_graph_width(2, Some(6)), 2);
         assert_eq!(effective_graph_width(2, None), 2);

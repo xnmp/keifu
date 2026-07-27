@@ -98,7 +98,13 @@ fn build_thread(t: &PrThread, theme: &Theme) -> Vec<Line<'static>> {
                 created_at,
                 body,
             } => {
-                out.push(item_header(author, "commented", created_at, theme.author_color, theme));
+                out.push(item_header(
+                    author,
+                    "commented",
+                    created_at,
+                    theme.author_color,
+                    theme,
+                ));
                 push_body(&mut out, body, theme, "");
             }
             ConversationItem::Review {
@@ -114,7 +120,10 @@ fn build_thread(t: &PrThread, theme: &Theme) -> Vec<Line<'static>> {
         }
     }
     if t.more_items > 0 {
-        out.push(muted_line(&format!("  …{} more comments/reviews", t.more_items), theme));
+        out.push(muted_line(
+            &format!("  …{} more comments/reviews", t.more_items),
+            theme,
+        ));
     }
 
     // Review threads.
@@ -139,7 +148,10 @@ fn build_thread(t: &PrThread, theme: &Theme) -> Vec<Line<'static>> {
                 push_thread(&mut out, th, theme);
             }
             if t.more_threads > 0 {
-                out.push(muted_line(&format!("  …{} more threads", t.more_threads), theme));
+                out.push(muted_line(
+                    &format!("  …{} more threads", t.more_threads),
+                    theme,
+                ));
             }
         }
         Some(_) => {}
@@ -156,10 +168,7 @@ fn push_thread(out: &mut Vec<Line<'static>>, th: &ReviewThread, theme: &Theme) {
     };
     // Unresolved threads are prominent (accent); resolved are muted.
     let (tag, style) = if th.resolved {
-        (
-            "[resolved]",
-            Style::default().fg(theme.text_muted),
-        )
+        ("[resolved]", Style::default().fg(theme.text_muted))
     } else {
         (
             "[open]",
@@ -169,7 +178,10 @@ fn push_thread(out: &mut Vec<Line<'static>>, th: &ReviewThread, theme: &Theme) {
         )
     };
     out.push(Line::from(vec![
-        Span::styled(format!("  {loc} "), Style::default().fg(theme.text_secondary)),
+        Span::styled(
+            format!("  {loc} "),
+            Style::default().fg(theme.text_secondary),
+        ),
         Span::styled(tag.to_string(), style),
     ]));
     for c in &th.comments {
@@ -182,7 +194,10 @@ fn push_thread(out: &mut Vec<Line<'static>>, th: &ReviewThread, theme: &Theme) {
         push_body(out, &c.body, theme, "    ");
     }
     if th.more_comments > 0 {
-        out.push(muted_line(&format!("    …{} more", th.more_comments), theme));
+        out.push(muted_line(
+            &format!("    …{} more", th.more_comments),
+            theme,
+        ));
     }
 }
 
@@ -203,7 +218,9 @@ fn item_header(
         ),
         Span::styled(
             label.to_string(),
-            Style::default().fg(label_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(label_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" · {}", date_only(created_at)),

@@ -114,7 +114,8 @@ impl App {
                 if let Some((remote, branch)) = &delete_target {
                     // The ref is gone upstream and locally (push --delete prunes
                     // the tracking ref); drop the optimistic hide and reconcile.
-                    self.pending_remote_deletions.remove(&format!("{remote}/{branch}"));
+                    self.pending_remote_deletions
+                        .remove(&format!("{remote}/{branch}"));
                     self.toast(ToastKind::Success, format!("Deleted {remote}/{branch}"));
                 } else {
                     self.toast(ToastKind::Success, "Pushed");
@@ -135,7 +136,8 @@ impl App {
                 } else if let Some((remote, branch)) = &delete_target {
                     // Terminal deletion failure: surface it and undo the
                     // optimistic hide via a refresh so the branch reappears.
-                    self.pending_remote_deletions.remove(&format!("{remote}/{branch}"));
+                    self.pending_remote_deletions
+                        .remove(&format!("{remote}/{branch}"));
                     self.toast(
                         ToastKind::Error,
                         format!("Delete {remote}/{branch} failed: {e}"),
@@ -163,7 +165,10 @@ impl App {
 
     /// Branch tips as (name, oid) pairs — the identity a fetch can move.
     fn branch_tips(branches: &[crate::git::BranchInfo]) -> Vec<(String, git2::Oid)> {
-        branches.iter().map(|b| (b.name.clone(), b.tip_oid)).collect()
+        branches
+            .iter()
+            .map(|b| (b.name.clone(), b.tip_oid))
+            .collect()
     }
 
     /// Poll the background pull. On success, refresh and either confirm or (on
@@ -189,7 +194,8 @@ impl App {
                         // If the pull (fast-forward or merge) moved HEAD, record a
                         // reset-back undo. The pre-pull HEAD was snapshotted at
                         // launch (the op is async).
-                        if let (Some(pre), Some(post)) = (self.pre_pull_head, self.repo.head_oid()) {
+                        if let (Some(pre), Some(post)) = (self.pre_pull_head, self.repo.head_oid())
+                        {
                             if pre != post {
                                 self.record_undo(crate::undo::UndoEntry {
                                     description: "Pull".to_string(),
@@ -460,7 +466,11 @@ impl App {
 
     pub(crate) fn start_fetch_remote(&mut self, remote: String, show_message: bool, silent: bool) {
         self.dispatch_net_op(
-            RetryableOp::Fetch { remote, show_message, silent },
+            RetryableOp::Fetch {
+                remote,
+                show_message,
+                silent,
+            },
             0,
         );
     }
@@ -552,7 +562,14 @@ impl App {
         self.last_pull = Some((remote.clone(), branch.clone()));
         // Snapshot HEAD so a completed pull that moved it can record an undo.
         self.pre_pull_head = self.repo.head_oid();
-        self.dispatch_net_op(RetryableOp::Pull { remote, branch, mode }, 0);
+        self.dispatch_net_op(
+            RetryableOp::Pull {
+                remote,
+                branch,
+                mode,
+            },
+            0,
+        );
     }
 
     /// Rerun the last pull with an explicit strategy after the divergence
@@ -615,7 +632,10 @@ mod tests {
             app.mode
         );
         assert!(
-            app.toasts.visible().iter().any(|t| t.text.contains("commit or stash")),
+            app.toasts
+                .visible()
+                .iter()
+                .any(|t| t.text.contains("commit or stash")),
             "expected a commit-or-stash error toast"
         );
 
@@ -641,7 +661,8 @@ mod tests {
             let sig = git2::Signature::now("t", "t@example.com").unwrap();
             let tree_id = repo.index().unwrap().write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
             let head = repo.head().unwrap().peel_to_commit().unwrap();
             repo.branch("side", &head, false).unwrap();
         }
@@ -682,7 +703,10 @@ mod tests {
         assert!(app.update_fetch_status());
 
         assert!(
-            app.toasts.visible().iter().any(|t| t.text.contains("graph updated")),
+            app.toasts
+                .visible()
+                .iter()
+                .any(|t| t.text.contains("graph updated")),
             "an in-place tip move must toast as a change, not 'up to date'"
         );
         assert!(app.pr_fetch.is_due(), "open-PR fetch must be forced (#107)");
@@ -704,7 +728,10 @@ mod tests {
         assert!(app.update_fetch_status());
 
         assert!(
-            app.toasts.visible().iter().any(|t| t.text.contains("up to date")),
+            app.toasts
+                .visible()
+                .iter()
+                .any(|t| t.text.contains("up to date")),
             "unchanged fetch keeps the up-to-date toast"
         );
         assert!(!app.pr_fetch.is_due(), "no ref change → no forced gh poll");
@@ -736,7 +763,8 @@ mod tests {
         let (_tempdir, mut app) = test_app();
 
         // First failure of the episode: latched and reported.
-        app.network.complete_fetch_for_test(Err("offline".to_string()), true);
+        app.network
+            .complete_fetch_for_test(Err("offline".to_string()), true);
         assert!(app.update_fetch_status());
         assert!(app.refresh_latches.auto_fetch);
         assert_eq!(app.message.as_deref(), Some("Auto-fetch failed: offline"));
@@ -744,7 +772,8 @@ mod tests {
         // Repeated failures within the same episode must not re-report.
         for _ in 0..5 {
             app.message = None;
-            app.network.complete_fetch_for_test(Err("offline".to_string()), true);
+            app.network
+                .complete_fetch_for_test(Err("offline".to_string()), true);
             assert!(app.update_fetch_status());
             assert!(app.refresh_latches.auto_fetch);
             assert_eq!(app.message, None, "latched failure must not re-report");
@@ -757,7 +786,8 @@ mod tests {
 
         // The next failure starts a new episode and reports again.
         app.message = None;
-        app.network.complete_fetch_for_test(Err("offline".to_string()), true);
+        app.network
+            .complete_fetch_for_test(Err("offline".to_string()), true);
         assert!(app.update_fetch_status());
         assert!(app.refresh_latches.auto_fetch);
         assert_eq!(app.message.as_deref(), Some("Auto-fetch failed: offline"));

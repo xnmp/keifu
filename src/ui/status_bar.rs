@@ -90,14 +90,7 @@ impl HintBar {
 
     /// Push a `key`+`desc` hint pair and record the combined span as a clickable
     /// region bound to `action`.
-    fn hint(
-        &mut self,
-        key: &str,
-        key_style: Style,
-        desc: &str,
-        desc_style: Style,
-        action: Action,
-    ) {
+    fn hint(&mut self, key: &str, key_style: Style, desc: &str, desc_style: Style, action: Action) {
         let start = self.x;
         self.span(Span::styled(key.to_string(), key_style));
         self.span(Span::styled(desc.to_string(), desc_style));
@@ -303,8 +296,20 @@ impl StatusBar {
             // c/A are only wired up in the files pane, so only advertise them
             // once that's actually where the hint applies.
             if focused_panel == FocusedPanel::Files {
-                hb.hint(" c ", key_style, "continue ", desc_style, Action::ContinueOperation);
-                hb.hint(" A ", key_style, "abort ", desc_style, Action::AbortOperation);
+                hb.hint(
+                    " c ",
+                    key_style,
+                    "continue ",
+                    desc_style,
+                    Action::ContinueOperation,
+                );
+                hb.hint(
+                    " A ",
+                    key_style,
+                    "abort ",
+                    desc_style,
+                    Action::AbortOperation,
+                );
             }
             hb.raw("  ");
         }
@@ -350,22 +355,52 @@ impl StatusBar {
                         match focused_panel {
                             FocusedPanel::Graph => {
                                 hb.hint_static(" ↑↓ ", key_style, "move ", desc_style);
-                                hb.hint(" Enter ", key_style, "actions ", desc_style, Action::OpenCommitMenu);
+                                hb.hint(
+                                    " Enter ",
+                                    key_style,
+                                    "actions ",
+                                    desc_style,
+                                    Action::OpenCommitMenu,
+                                );
                                 // Only when the selected commit has an open PR.
                                 if let Some(hint) = &pr_hint {
-                                    hb.hint(" o ", key_style, &format!("{hint} "), desc_style, Action::OpenPr);
+                                    hb.hint(
+                                        " o ",
+                                        key_style,
+                                        &format!("{hint} "),
+                                        desc_style,
+                                        Action::OpenPr,
+                                    );
                                     // ...and a CI checks hint when the PR reports checks.
                                     if pr_has_ci {
-                                        hb.hint(" c ", key_style, "checks ", desc_style, Action::OpenCiChecks);
+                                        hb.hint(
+                                            " c ",
+                                            key_style,
+                                            "checks ",
+                                            desc_style,
+                                            Action::OpenCiChecks,
+                                        );
                                     }
-                                    hb.hint(" v ", key_style, "thread ", desc_style, Action::OpenPrThread);
+                                    hb.hint(
+                                        " v ",
+                                        key_style,
+                                        "thread ",
+                                        desc_style,
+                                        Action::OpenPrThread,
+                                    );
                                 }
                                 // Only when the graph is wide enough to be capped.
                                 if graph_cappable {
                                     hb.hint_static(" <> ", key_style, "width ", desc_style);
                                 }
                                 hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
-                                hb.hint(" B ", key_style, "branches ", desc_style, Action::OpenBranchFilter);
+                                hb.hint(
+                                    " B ",
+                                    key_style,
+                                    "branches ",
+                                    desc_style,
+                                    Action::OpenBranchFilter,
+                                );
                                 hb.hint(" ? ", key_style, "help", desc_style, Action::ToggleHelp);
                             }
                             FocusedPanel::Files if is_filtering => {
@@ -375,35 +410,125 @@ impl StatusBar {
                                     .add_modifier(Modifier::BOLD);
                                 hb.span(Span::styled(" FILTER ", filter_style));
                                 hb.raw("  ");
-                                hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::Confirm);
+                                hb.hint(
+                                    " Enter ",
+                                    key_style,
+                                    "confirm ",
+                                    desc_style,
+                                    Action::Confirm,
+                                );
                                 hb.hint(" Esc ", key_style, "cancel ", desc_style, Action::Cancel);
                             }
                             FocusedPanel::Files => {
                                 hb.hint_static(" ↑↓ ", key_style, "select ", desc_style);
-                                hb.hint(" Enter ", key_style, "diff ", desc_style, Action::OpenFileDiff);
-                                hb.hint(" Space ", key_style, "open ", desc_style, Action::OpenWithDefault);
+                                hb.hint(
+                                    " Enter ",
+                                    key_style,
+                                    "diff ",
+                                    desc_style,
+                                    Action::OpenFileDiff,
+                                );
+                                hb.hint(
+                                    " Space ",
+                                    key_style,
+                                    "open ",
+                                    desc_style,
+                                    Action::OpenWithDefault,
+                                );
                                 if is_uncommitted {
-                                    hb.hint(" s ", key_style, "stage ", desc_style, Action::ToggleStage);
-                                    hb.hint(" r ", key_style, "restore ", desc_style, Action::RestoreFile);
-                                    hb.hint(" i ", key_style, "ignore ", desc_style, Action::AddToGitignore);
-                                    hb.hint(" v ", key_style, "archive ", desc_style, Action::ArchiveFile);
-                                    hb.hint(" Del ", key_style, "trash ", desc_style, Action::TrashFile);
-                                    hb.hint(" ^z ", key_style, "undo ", desc_style, Action::UndoLastFileOp);
+                                    hb.hint(
+                                        " s ",
+                                        key_style,
+                                        "stage ",
+                                        desc_style,
+                                        Action::ToggleStage,
+                                    );
+                                    hb.hint(
+                                        " r ",
+                                        key_style,
+                                        "restore ",
+                                        desc_style,
+                                        Action::RestoreFile,
+                                    );
+                                    hb.hint(
+                                        " i ",
+                                        key_style,
+                                        "ignore ",
+                                        desc_style,
+                                        Action::AddToGitignore,
+                                    );
+                                    hb.hint(
+                                        " v ",
+                                        key_style,
+                                        "archive ",
+                                        desc_style,
+                                        Action::ArchiveFile,
+                                    );
+                                    hb.hint(
+                                        " Del ",
+                                        key_style,
+                                        "trash ",
+                                        desc_style,
+                                        Action::TrashFile,
+                                    );
+                                    hb.hint(
+                                        " ^z ",
+                                        key_style,
+                                        "undo ",
+                                        desc_style,
+                                        Action::UndoLastFileOp,
+                                    );
                                 }
-                                hb.hint(" f ", key_style, "folders ", desc_style, Action::ToggleFolderView);
-                                hb.hint(" ^f ", key_style, "filter ", desc_style, Action::StartFilesFilter);
+                                hb.hint(
+                                    " f ",
+                                    key_style,
+                                    "folders ",
+                                    desc_style,
+                                    Action::ToggleFolderView,
+                                );
+                                hb.hint(
+                                    " ^f ",
+                                    key_style,
+                                    "filter ",
+                                    desc_style,
+                                    Action::StartFilesFilter,
+                                );
                                 hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
                                 hb.hint(" ? ", key_style, "help", desc_style, Action::ToggleHelp);
                             }
                             FocusedPanel::CommitDetail => {
                                 hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
                                 if is_uncommitted {
-                                    hb.hint(" Enter ", key_style, "edit msg ", desc_style, Action::StartEditing);
-                                    hb.hint(" Ctrl+Enter ", key_style, "amend ", desc_style, Action::AmendCommit);
-                                    hb.hint(" Ctrl+S ", key_style, "stash ", desc_style, Action::StashStaged);
+                                    hb.hint(
+                                        " Enter ",
+                                        key_style,
+                                        "edit msg ",
+                                        desc_style,
+                                        Action::StartEditing,
+                                    );
+                                    hb.hint(
+                                        " Ctrl+Enter ",
+                                        key_style,
+                                        "amend ",
+                                        desc_style,
+                                        Action::AmendCommit,
+                                    );
+                                    hb.hint(
+                                        " Ctrl+S ",
+                                        key_style,
+                                        "stash ",
+                                        desc_style,
+                                        Action::StashStaged,
+                                    );
                                 }
                                 hb.hint_static(" ←→ ", key_style, "panels ", desc_style);
-                                hb.hint(" Esc ", key_style, "graph ", desc_style, Action::FocusGraph);
+                                hb.hint(
+                                    " Esc ",
+                                    key_style,
+                                    "graph ",
+                                    desc_style,
+                                    Action::FocusGraph,
+                                );
                                 hb.hint(" ? ", key_style, "help", desc_style, Action::ToggleHelp);
                             }
                         }
@@ -411,16 +536,31 @@ impl StatusBar {
                 }
             },
             AppMode::Help => {
-                hb.hint(" Esc/q ", key_style, "close help", desc_style, Action::ToggleHelp);
+                hb.hint(
+                    " Esc/q ",
+                    key_style,
+                    "close help",
+                    desc_style,
+                    Action::ToggleHelp,
+                );
             }
             AppMode::Input { .. } => {
-                hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::Confirm);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "confirm ",
+                    desc_style,
+                    Action::Confirm,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::Confirm { action, .. } => {
                 hb.hint(" y ", key_style, "yes ", desc_style, Action::Confirm);
                 hb.hint(" n ", key_style, "no", desc_style, Action::Cancel);
-                if matches!(action, crate::app::ConfirmAction::DeleteBranchWithRemote { .. }) {
+                if matches!(
+                    action,
+                    crate::app::ConfirmAction::DeleteBranchWithRemote { .. }
+                ) {
                     hb.hint(
                         " Ctrl+Enter/R ",
                         key_style,
@@ -439,8 +579,18 @@ impl StatusBar {
                 if !diff_word_wrap {
                     hb.hint_static(" ←→ ", key_style, "pan ", desc_style);
                 }
-                let wrap_label = if diff_word_wrap { "wrap on " } else { "wrap off " };
-                hb.hint(" ^⌥w ", key_style, wrap_label, desc_style, Action::ToggleDiffWrap);
+                let wrap_label = if diff_word_wrap {
+                    "wrap on "
+                } else {
+                    "wrap off "
+                };
+                hb.hint(
+                    " ^⌥w ",
+                    key_style,
+                    wrap_label,
+                    desc_style,
+                    Action::ToggleDiffWrap,
+                );
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::CommitMenu { .. }
@@ -449,93 +599,249 @@ impl StatusBar {
             | AppMode::TagPicker { .. }
             | AppMode::RemotePicker { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "select ", desc_style);
-                hb.hint(" Enter ", key_style, "confirm ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "confirm ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::MetadataMenu { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Space ",
+                    key_style,
+                    "toggle ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::Settings { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Space ",
+                    key_style,
+                    "toggle ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint_static(" 0-9 ", key_style, "number ", desc_style);
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::PullDivergence { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                hb.hint(" Enter ", key_style, "choose ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "choose ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::CiChecks => {
                 hb.hint_static(" ↑↓ ", key_style, "nav ", desc_style);
-                hb.hint(" Enter ", key_style, "details ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "details ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" o ", key_style, "open ", desc_style, Action::OpenPr);
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::PrThread => {
                 hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
                 hb.hint(" o ", key_style, "open PR ", desc_style, Action::OpenPr);
-                hb.hint(" r ", key_style, "review ", desc_style, Action::OpenReviewPicker);
+                hb.hint(
+                    " r ",
+                    key_style,
+                    "review ",
+                    desc_style,
+                    Action::OpenReviewPicker,
+                );
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::PrCompose { .. } => {
-                hb.hint(" Ctrl+S ", key_style, "submit ", desc_style, Action::SubmitCompose);
-                hb.hint(" Ctrl+E ", key_style, "editor ", desc_style, Action::ExternalEdit);
+                hb.hint(
+                    " Ctrl+S ",
+                    key_style,
+                    "submit ",
+                    desc_style,
+                    Action::SubmitCompose,
+                );
+                hb.hint(
+                    " Ctrl+E ",
+                    key_style,
+                    "editor ",
+                    desc_style,
+                    Action::ExternalEdit,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::IssueList => {
                 hb.hint_static(" ↑↓ ", key_style, "nav ", desc_style);
-                hb.hint(" Enter ", key_style, "open ", desc_style, Action::OpenIssueDetail);
-                hb.hint(" Tab ", key_style, "state ", desc_style, Action::CycleIssueFilter);
-                hb.hint(" t ", key_style, "labels ", desc_style, Action::OpenIssueLabelFilter);
-                hb.hint(" u ", key_style, "unblocked ", desc_style, Action::ToggleUnblockedOnly);
-                hb.hint(" l ", key_style, "tag ", desc_style, Action::EditIssueLabels);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "open ",
+                    desc_style,
+                    Action::OpenIssueDetail,
+                );
+                hb.hint(
+                    " Tab ",
+                    key_style,
+                    "state ",
+                    desc_style,
+                    Action::CycleIssueFilter,
+                );
+                hb.hint(
+                    " t ",
+                    key_style,
+                    "labels ",
+                    desc_style,
+                    Action::OpenIssueLabelFilter,
+                );
+                hb.hint(
+                    " u ",
+                    key_style,
+                    "unblocked ",
+                    desc_style,
+                    Action::ToggleUnblockedOnly,
+                );
+                hb.hint(
+                    " l ",
+                    key_style,
+                    "tag ",
+                    desc_style,
+                    Action::EditIssueLabels,
+                );
                 hb.hint(" n ", key_style, "new ", desc_style, Action::NewIssue);
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::IssueDetail => {
                 hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
-                hb.hint(" c ", key_style, "comment ", desc_style, Action::CommentOnIssue);
-                hb.hint(" x ", key_style, "close/reopen ", desc_style, Action::ToggleIssueState);
-                hb.hint(" l ", key_style, "labels ", desc_style, Action::EditIssueLabels);
-                hb.hint(" a ", key_style, "assignees ", desc_style, Action::EditIssueAssignees);
+                hb.hint(
+                    " c ",
+                    key_style,
+                    "comment ",
+                    desc_style,
+                    Action::CommentOnIssue,
+                );
+                hb.hint(
+                    " x ",
+                    key_style,
+                    "close/reopen ",
+                    desc_style,
+                    Action::ToggleIssueState,
+                );
+                hb.hint(
+                    " l ",
+                    key_style,
+                    "labels ",
+                    desc_style,
+                    Action::EditIssueLabels,
+                );
+                hb.hint(
+                    " a ",
+                    key_style,
+                    "assignees ",
+                    desc_style,
+                    Action::EditIssueAssignees,
+                );
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::IssueLabelFilter { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::ToggleIssueLabel);
+                hb.hint(
+                    " Space ",
+                    key_style,
+                    "toggle ",
+                    desc_style,
+                    Action::ToggleIssueLabel,
+                );
                 hb.hint(" ^a ", key_style, "all ", desc_style, Action::SelectAll);
                 hb.hint(" ^o ", key_style, "none ", desc_style, Action::SelectNone);
-                hb.hint(" Enter ", key_style, "apply ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "apply ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::IssueCompose { .. } => {
-                hb.hint(" Ctrl+S ", key_style, "submit ", desc_style, Action::SubmitCompose);
-                hb.hint(" Ctrl+E ", key_style, "editor ", desc_style, Action::ExternalEdit);
+                hb.hint(
+                    " Ctrl+S ",
+                    key_style,
+                    "submit ",
+                    desc_style,
+                    Action::SubmitCompose,
+                );
+                hb.hint(
+                    " Ctrl+E ",
+                    key_style,
+                    "editor ",
+                    desc_style,
+                    Action::ExternalEdit,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::IssueLabelPicker { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::ToggleIssueLabel);
-                hb.hint(" Enter ", key_style, "apply ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Space ",
+                    key_style,
+                    "toggle ",
+                    desc_style,
+                    Action::ToggleIssueLabel,
+                );
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "apply ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::PrMergePicker { .. } | AppMode::PrReviewPicker { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                hb.hint(" Enter ", key_style, "choose ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "choose ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
             AppMode::BranchFilter { .. } => {
-                hb.hint(" Space ", key_style, "toggle ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Space ",
+                    key_style,
+                    "toggle ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" C-a ", key_style, "all ", desc_style, Action::SelectAll);
                 hb.hint(" C-o ", key_style, "none ", desc_style, Action::SelectNone);
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
             AppMode::FileHistory { .. } => {
                 hb.hint_static(" ↑/↓ ", key_style, "select ", desc_style);
-                hb.hint(" Enter ", key_style, "open diff ", desc_style, Action::MenuSelect);
+                hb.hint(
+                    " Enter ",
+                    key_style,
+                    "open diff ",
+                    desc_style,
+                    Action::MenuSelect,
+                );
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
             AppMode::CommandPalette { .. } => {
@@ -684,7 +990,10 @@ mod tests {
         // "↑↓" are two display columns despite being multi-byte.
         hb.raw("↑↓");
         hb.hint(" k ", s, "d", s, Action::Cancel);
-        assert_eq!(hb.hints[0].start, 2, "wide glyphs count as their column width");
+        assert_eq!(
+            hb.hints[0].start, 2,
+            "wide glyphs count as their column width"
+        );
     }
 
     #[test]

@@ -173,7 +173,11 @@ pub(super) fn optimize_branch_display(
             // Single-remote repos drop the "<remote>/" prefix (cloud conveys it).
             // The chip still targets the full remote ref.
             let display = chip_display_name(name, remotes);
-            return vec![chip(make_label(&prefix, display, None), make_style(name), name)];
+            return vec![chip(
+                make_label(&prefix, display, None),
+                make_style(name),
+                name,
+            )];
         }
     } else if branch_names.len() == 2 {
         let synced_local = branch_names.iter().find(|name| {
@@ -185,7 +189,11 @@ pub(super) fn optimize_branch_display(
         if let Some(local) = synced_local {
             let prefix = format!("{} ", SYNCED_ICON);
             // The collapsed synced pair targets the local branch.
-            return vec![chip(make_label(&prefix, local, None), make_style(local), local)];
+            return vec![chip(
+                make_label(&prefix, local, None),
+                make_style(local),
+                local,
+            )];
         }
     }
 
@@ -202,7 +210,11 @@ pub(super) fn optimize_branch_display(
                 // Single remote: drop the prefix but add the cloud icon so this
                 // remote-only chip still reads as remote in a multi-branch row.
                 let prefix = format!("{} ", REMOTE_ONLY_ICON);
-                result.push(chip(make_label(&prefix, bare, None), make_style(name), name));
+                result.push(chip(
+                    make_label(&prefix, bare, None),
+                    make_style(name),
+                    name,
+                ));
             } else {
                 result.push(chip(make_label("", name, None), make_style(name), name));
             }
@@ -218,7 +230,11 @@ pub(super) fn optimize_branch_display(
             } else {
                 String::new()
             };
-            result.push(chip(make_label(&prefix, name, None), make_style(name), name));
+            result.push(chip(
+                make_label(&prefix, name, None),
+                make_style(name),
+                name,
+            ));
         }
     }
 
@@ -504,7 +520,10 @@ mod tests {
     fn strip_remote_classifies_by_configured_remote_only() {
         let remotes = vec!["origin".to_string(), "upstream".to_string()];
         assert_eq!(strip_remote("upstream/main", &remotes), Some("main"));
-        assert_eq!(strip_remote("origin/feature/x", &remotes), Some("feature/x"));
+        assert_eq!(
+            strip_remote("origin/feature/x", &remotes),
+            Some("feature/x")
+        );
         // A slash alone does not make a branch remote.
         assert_eq!(strip_remote("feature/x", &remotes), None);
         assert_eq!(strip_remote("main", &remotes), None);
@@ -568,7 +587,10 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         let label = &out[0].label;
-        assert!(label.contains(REMOTE_ONLY_ICON), "cloud icon kept: {label:?}");
+        assert!(
+            label.contains(REMOTE_ONLY_ICON),
+            "cloud icon kept: {label:?}"
+        );
         assert!(label.contains("feat"));
         assert!(!label.contains("origin/"), "prefix stripped: {label:?}");
     }
@@ -753,7 +775,10 @@ mod tests {
             "no cloud on local chips: {label:?}"
         );
         assert!(!label.contains(SYNCED_ICON), "no synced marker: {label:?}");
-        assert!(label.contains("feature") && label.contains("hotfix"), "{label:?}");
+        assert!(
+            label.contains("feature") && label.contains("hotfix"),
+            "{label:?}"
+        );
     }
 
     // ── badge order is stable regardless of selection (issue #50) ────
@@ -821,7 +846,11 @@ mod tests {
         let theme = Theme::dark();
         let names = ["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
         let out = optimize_branch_display(&names, false, 0, None, &theme, &[]);
-        assert_eq!(out.len(), 1, "multi-branch collapses to a single combined chip");
+        assert_eq!(
+            out.len(),
+            1,
+            "multi-branch collapses to a single combined chip"
+        );
         assert!(
             out[0].label.contains('+'),
             "the +N overflow marker is present: {:?}",
@@ -918,7 +947,11 @@ mod tests {
             "bracketed name still yields a non-empty label: {:?}",
             bracketed[0].label
         );
-        assert!(bracketed[0].label.contains("wip"), "{:?}", bracketed[0].label);
+        assert!(
+            bracketed[0].label.contains("wip"),
+            "{:?}",
+            bracketed[0].label
+        );
         // #98: the target is recorded at construction, so delimiter collisions
         // in the label cannot corrupt it.
         assert_eq!(

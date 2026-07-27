@@ -435,19 +435,17 @@ pub fn build_graph(
         // historical main branch). The very first commit to land on lane 0 claims
         // it — checked here before the continue/new-branch split so a lane-0 line
         // first reached via first-parent inheritance still gets the main colour.
-        let commit_color_index = if lane == 0
-            && !main_color_assigned
-            && (head_line_reserved || nodes.is_empty())
-        {
-            main_color_assigned = true;
-            color_assigner.assign_main_color(lane)
-        } else if commit_lane_opt.is_some() {
-            // Continue existing branch
-            color_assigner.continue_lane(lane)
-        } else {
-            // New branch start - assign a new color (exclude reserved)
-            color_assigner.assign_color(lane)
-        };
+        let commit_color_index =
+            if lane == 0 && !main_color_assigned && (head_line_reserved || nodes.is_empty()) {
+                main_color_assigned = true;
+                color_assigner.assign_main_color(lane)
+            } else if commit_lane_opt.is_some() {
+                // Continue existing branch
+                color_assigner.continue_lane(lane)
+            } else {
+                // New branch start - assign a new color (exclude reserved)
+                color_assigner.assign_color(lane)
+            };
         oid_color_index.insert(commit.oid, commit_color_index);
         // Record lane color (to preserve colors during forks)
         lane_color_index.insert(lane, commit_color_index);
@@ -634,12 +632,7 @@ pub fn build_graph(
             // Check if the ending lane is tracking a commit that hasn't been shown yet
             let ending_lane_oid = lanes.get(ending_lane).and_then(|o| *o);
             let ending_oid_already_shown = ending_lane_oid
-                .map(|oid| {
-                    oid_to_row
-                        .get(&oid)
-                        .map(|&r| r < row_idx)
-                        .unwrap_or(true)
-                })
+                .map(|oid| oid_to_row.get(&oid).map(|&r| r < row_idx).unwrap_or(true))
                 .unwrap_or(true);
 
             let continues_down = !ending_oid_already_shown;
@@ -929,12 +922,7 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
             if (i == u && lane == ulane) || (i == l && lane == llane) {
                 return true; // the endpoint dot's own column
             }
-            nodes[i]
-                .cells
-                .get(ci)
-                .copied()
-                .unwrap_or(CellType::Empty)
-                == CellType::Empty
+            nodes[i].cells.get(ci).copied().unwrap_or(CellType::Empty) == CellType::Empty
         })
     };
     // Junction fallback (issue #115): when the lower endpoint's own lane is
@@ -952,7 +940,11 @@ fn draw_squash_link(nodes: &mut [GraphNode], max_lane: &mut usize, r1: usize, r2
         }
         let ci = llane * 2;
         let cell = |row: usize, col: usize| {
-            nodes[row].cells.get(col).copied().unwrap_or(CellType::Empty)
+            nodes[row]
+                .cells
+                .get(col)
+                .copied()
+                .unwrap_or(CellType::Empty)
         };
         // Intermediate rows must be free for the stem's pipe.
         if !((u + 1)..l).all(|i| cell(i, ci) == CellType::Empty) {
@@ -1240,11 +1232,7 @@ fn build_row_cells_with_colors(
 /// The `(child, parent)` edge of the pass-through pipe on `lane`, whose awaited
 /// parent is `awaited`. Returns `None` when the lane has no recorded child (it
 /// then can't be a real traced edge, so it must not light up).
-fn lane_edge(
-    active_lane_children: &[Option<Oid>],
-    lane: usize,
-    awaited: Oid,
-) -> Option<CellEdge> {
+fn lane_edge(active_lane_children: &[Option<Oid>], lane: usize, awaited: Oid) -> Option<CellEdge> {
     active_lane_children
         .get(lane)
         .copied()
@@ -1407,16 +1395,12 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     // the lane number, so this uniquely picks the branch-line continuation and
     // never leaks onto a reused lane's unrelated occupant).
     let mut cur = sel;
-    loop {
-        let Some(&cur_row) = oid_row.get(&cur) else {
-            break;
-        };
+    while let Some(&cur_row) = oid_row.get(&cur) {
         let cur_lane = layout.nodes[cur_row].lane;
         let child = layout.nodes.iter().find_map(|n| {
             let c = n.commit.as_ref()?;
             let first_parent = c.parent_oids.first()?;
-            (*first_parent == cur && n.lane == cur_lane && !set.contains(&c.oid))
-                .then_some(c.oid)
+            (*first_parent == cur && n.lane == cur_lane && !set.contains(&c.oid)).then_some(c.oid)
         });
         match child {
             Some(ch) => {
@@ -1521,10 +1505,7 @@ fn merge_commit_row(layout: &GraphLayout, oid: Oid) -> Option<usize> {
 /// off-lineage lane (`first parent == on-line parent` distinguishes that
 /// lead-in from a merge arc). Commit dots light via their `(oid, oid)` self
 /// edge.
-pub fn trace_lit_edges(
-    layout: &GraphLayout,
-    lineage: &HashSet<Oid>,
-) -> HashMap<CellEdge, Oid> {
+pub fn trace_lit_edges(layout: &GraphLayout, lineage: &HashSet<Oid>) -> HashMap<CellEdge, Oid> {
     let mut lit = HashMap::new();
     for node in &layout.nodes {
         let Some(c) = node.commit.as_ref() else {
@@ -1622,7 +1603,11 @@ pub fn merged_lane_oids(commits: &[CommitInfo], live_tips: &[Oid]) -> HashSet<Oi
 /// `exempt` — the selected commit — never counts: the commit under the cursor
 /// keeps its dot and its own strokes live even on a merged lane, so selecting
 /// a dimmed commit un-dims what the user is inspecting.
-pub fn edge_touches_merged(edge: Option<CellEdge>, merged: &HashSet<Oid>, exempt: Option<Oid>) -> bool {
+pub fn edge_touches_merged(
+    edge: Option<CellEdge>,
+    merged: &HashSet<Oid>,
+    exempt: Option<Oid>,
+) -> bool {
     edge.is_some_and(|(child, parent)| {
         !exempt.is_some_and(|e| e == child || e == parent)
             && (merged.contains(&child) || merged.contains(&parent))
@@ -1721,7 +1706,11 @@ mod tests {
             &HashMap::new(),
             1,
         );
-        assert_eq!(cells[0], CellType::TeeRight(0), "trunk cell is the ├ marker");
+        assert_eq!(
+            cells[0],
+            CellType::TeeRight(0),
+            "trunk cell is the ├ marker"
+        );
         assert_eq!(
             oids[0],
             (
@@ -1753,7 +1742,11 @@ mod tests {
             &HashMap::new(),
             1,
         );
-        assert_eq!(cells[0], CellType::MergeRight(0), "trunk cell is the ╰ corner");
+        assert_eq!(
+            cells[0],
+            CellType::MergeRight(0),
+            "trunk cell is the ╰ corner"
+        );
         assert_eq!(
             oids[0],
             (Some((merge_commit, trunk_parent)), None),
@@ -1786,7 +1779,11 @@ mod tests {
         // HEAD is the newest commit on lane 0, its lane clear above → no
         // connector, just the uncommitted dot on the same lane.
         let head = oid(1);
-        let mut nodes = vec![commit_node(head, 0, vec![CellType::Commit(0), CellType::Empty])];
+        let mut nodes = vec![commit_node(
+            head,
+            0,
+            vec![CellType::Commit(0), CellType::Empty],
+        )];
         let mut max_lane = 0;
         insert_uncommitted_node(&mut nodes, &mut max_lane, Some(head), Some(3));
 
@@ -1842,7 +1839,10 @@ mod tests {
         // curve would overwrite the pink pipe. The fix requires the lane free on
         // the HEAD row too, so it moves right to lane 2 (col 4).
         assert!(nodes[0].is_uncommitted);
-        assert_eq!(nodes[0].lane, 2, "uncommitted lane avoids the active pink lane");
+        assert_eq!(
+            nodes[0].lane, 2,
+            "uncommitted lane avoids the active pink lane"
+        );
         assert_eq!(max_lane, 2);
 
         // HEAD is now at index 2 (uncommitted inserted at 0, newer at 1).
@@ -1909,7 +1909,11 @@ mod tests {
     /// Whether the cell at `(row, col)` is lit by the trace.
     fn traced(layout: &GraphLayout, lit: &HashMap<CellEdge, Oid>, row: usize, col: usize) -> bool {
         cell_is_traced(
-            layout.nodes[row].cell_oids.get(col).copied().unwrap_or((None, None)),
+            layout.nodes[row]
+                .cell_oids
+                .get(col)
+                .copied()
+                .unwrap_or((None, None)),
             lit,
         )
     }
@@ -1919,27 +1923,58 @@ mod tests {
         let (layout, [_a, b, c, _f1, _f2, _z]) = trace_fixture();
         let lineage = trace_lit_edges(&layout, &lineage_oids(&layout, row_of(&layout, b)));
 
-        let (a_row, b_row, c_row) = (row_of(&layout, oid(1)), row_of(&layout, b), row_of(&layout, c));
+        let (a_row, b_row, c_row) = (
+            row_of(&layout, oid(1)),
+            row_of(&layout, b),
+            row_of(&layout, c),
+        );
         let conn_row = c_row - 1; // fork connector immediately precedes C
 
         // Trunk commits and pipes are traced.
-        assert!(traced(&layout, &lineage, a_row, 0), "A's dot is on the trunk lineage");
+        assert!(
+            traced(&layout, &lineage, a_row, 0),
+            "A's dot is on the trunk lineage"
+        );
         assert!(traced(&layout, &lineage, b_row, 0), "B's dot");
         assert!(traced(&layout, &lineage, c_row, 0), "C's dot");
-        assert!(traced(&layout, &lineage, row_of(&layout, oid(4)), 0), "trunk pipe B→C at F1's row");
-        assert!(traced(&layout, &lineage, row_of(&layout, oid(5)), 0), "trunk pipe B→C at F2's row");
+        assert!(
+            traced(&layout, &lineage, row_of(&layout, oid(4)), 0),
+            "trunk pipe B→C at F1's row"
+        );
+        assert!(
+            traced(&layout, &lineage, row_of(&layout, oid(5)), 0),
+            "trunk pipe B→C at F2's row"
+        );
 
         // The merge into A (its curve/lead-in to F1) is NOT traced — the bug.
-        assert!(!traced(&layout, &lineage, a_row, 1), "merge lead-in A→F1 stays dim");
-        assert!(!traced(&layout, &lineage, a_row, 2), "merge curve A→F1 stays dim");
+        assert!(
+            !traced(&layout, &lineage, a_row, 1),
+            "merge lead-in A→F1 stays dim"
+        );
+        assert!(
+            !traced(&layout, &lineage, a_row, 2),
+            "merge curve A→F1 stays dim"
+        );
         // The feature pipe (spawned by the merge, edge A→F1) is NOT traced.
-        assert!(!traced(&layout, &lineage, b_row, 2), "feature pipe at B's row stays dim");
+        assert!(
+            !traced(&layout, &lineage, b_row, 2),
+            "feature pipe at B's row stays dim"
+        );
 
         // Fork connector: the main-lane ├ (edge B→C) is traced; the merging
         // strokes climbing into the feature lane (edge F2→C) are NOT.
-        assert!(traced(&layout, &lineage, conn_row, 0), "fork main-lane ├ is traced");
-        assert!(!traced(&layout, &lineage, conn_row, 1), "fork merging lead-in stays dim");
-        assert!(!traced(&layout, &lineage, conn_row, 2), "fork merging curve stays dim");
+        assert!(
+            traced(&layout, &lineage, conn_row, 0),
+            "fork main-lane ├ is traced"
+        );
+        assert!(
+            !traced(&layout, &lineage, conn_row, 1),
+            "fork merging lead-in stays dim"
+        );
+        assert!(
+            !traced(&layout, &lineage, conn_row, 2),
+            "fork merging curve stays dim"
+        );
     }
 
     #[test]
@@ -1949,29 +1984,54 @@ mod tests {
 
         let a_row = row_of(&layout, oid(1));
         let b_row = row_of(&layout, oid(2));
-        let (f1_row, f2_row, c_row) = (row_of(&layout, f1), row_of(&layout, f2), row_of(&layout, c));
+        let (f1_row, f2_row, c_row) =
+            (row_of(&layout, f1), row_of(&layout, f2), row_of(&layout, c));
         let conn_row = c_row - 1;
 
         // The feature line and the fork parent are traced.
         assert!(traced(&layout, &lineage, f1_row, 2), "F1's dot");
         assert!(traced(&layout, &lineage, f2_row, 2), "F2's dot");
-        assert!(traced(&layout, &lineage, c_row, 0), "C's dot (fork parent, on the F line)");
+        assert!(
+            traced(&layout, &lineage, c_row, 0),
+            "C's dot (fork parent, on the F line)"
+        );
         // The fork commit's connector strokes for the F lane ARE traced —
         // both endpoints (F2, C) are on the feature lineage.
-        assert!(traced(&layout, &lineage, conn_row, 1), "fork merging lead-in for F lane");
-        assert!(traced(&layout, &lineage, conn_row, 2), "fork merging curve for F lane");
+        assert!(
+            traced(&layout, &lineage, conn_row, 1),
+            "fork merging lead-in for F lane"
+        );
+        assert!(
+            traced(&layout, &lineage, conn_row, 2),
+            "fork merging curve for F lane"
+        );
 
         // The merge arc absorbing the feature (edge A→F1, F1 a non-first
         // parent) lights from the branch side, completing the branch's arc.
-        assert!(traced(&layout, &lineage, a_row, 1), "merge lead-in A→F1 lights");
-        assert!(traced(&layout, &lineage, a_row, 2), "merge curve A→F1 lights");
-        assert!(traced(&layout, &lineage, b_row, 2), "feature pipe above F1 lights");
+        assert!(
+            traced(&layout, &lineage, a_row, 1),
+            "merge lead-in A→F1 lights"
+        );
+        assert!(
+            traced(&layout, &lineage, a_row, 2),
+            "merge curve A→F1 lights"
+        );
+        assert!(
+            traced(&layout, &lineage, b_row, 2),
+            "feature pipe above F1 lights"
+        );
 
         // UP from F1 finds no child (A's FIRST parent is B), so A's own dot
         // and the trunk-only cells stay untraced.
         assert!(!traced(&layout, &lineage, a_row, 0), "A's dot stays dim");
-        assert!(!traced(&layout, &lineage, b_row, 0), "B's dot (trunk-only) stays dim");
-        assert!(!traced(&layout, &lineage, conn_row, 0), "fork main-lane ├ stays dim");
+        assert!(
+            !traced(&layout, &lineage, b_row, 0),
+            "B's dot (trunk-only) stays dim"
+        );
+        assert!(
+            !traced(&layout, &lineage, conn_row, 0),
+            "fork main-lane ├ stays dim"
+        );
     }
 
     #[test]
@@ -2024,7 +2084,10 @@ mod tests {
         // straight past them to C.
         let b_row = row_of(&layout, b);
         let c_row = row_of(&layout, c);
-        assert!(c_row > b_row + 1, "fixture must interleave rows between B and C");
+        assert!(
+            c_row > b_row + 1,
+            "fixture must interleave rows between B and C"
+        );
         assert_eq!(same_lane_ancestor_row(&layout, b_row), Some(c_row));
         // C -> D: trunk continues to the root.
         assert_eq!(
@@ -2094,7 +2157,10 @@ mod tests {
         let commits = vec![ci(tip, vec![b]), ci(a, vec![b]), ci(b, vec![])];
         let layout = build_graph(&commits, &[], &[], &[], None, None, &[]);
 
-        assert_eq!(same_lane_descendant_row(&layout, row_of(&layout, tip)), None);
+        assert_eq!(
+            same_lane_descendant_row(&layout, row_of(&layout, tip)),
+            None
+        );
     }
 
     #[test]
@@ -2166,15 +2232,26 @@ mod tests {
         let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1), &[]);
 
         // HEAD's line (F1 and its ancestor Z) sits at the far-left lane 0...
-        assert_eq!(layout.nodes[row_of(&layout, f1)].lane, 0, "HEAD tip at lane 0");
         assert_eq!(
-            layout.nodes[row_of(&layout, z)].lane, 0,
+            layout.nodes[row_of(&layout, f1)].lane,
+            0,
+            "HEAD tip at lane 0"
+        );
+        assert_eq!(
+            layout.nodes[row_of(&layout, z)].lane,
+            0,
             "HEAD's first-parent ancestor stays at lane 0"
         );
         // ...even though an older branch's commit (M1) is drawn first (row 0),
         // and that branch shifts one lane to the right.
-        assert!(layout.nodes[row_of(&layout, m1)].lane >= 1, "other branch shifts right");
-        assert!(layout.nodes[row_of(&layout, m2)].lane >= 1, "other branch shifts right");
+        assert!(
+            layout.nodes[row_of(&layout, m1)].lane >= 1,
+            "other branch shifts right"
+        );
+        assert!(
+            layout.nodes[row_of(&layout, m2)].lane >= 1,
+            "other branch shifts right"
+        );
     }
 
     #[test]
@@ -2186,11 +2263,13 @@ mod tests {
         // The lane-0 HEAD line owns the reserved main (blue) colour; the other
         // branch, though processed first, cannot claim it.
         assert_eq!(
-            layout.nodes[row_of(&layout, f1)].color_index, MAIN_BRANCH_COLOR,
+            layout.nodes[row_of(&layout, f1)].color_index,
+            MAIN_BRANCH_COLOR,
             "HEAD's line is the blue main line"
         );
         assert_ne!(
-            layout.nodes[row_of(&layout, m1)].color_index, MAIN_BRANCH_COLOR,
+            layout.nodes[row_of(&layout, m1)].color_index,
+            MAIN_BRANCH_COLOR,
             "a non-HEAD branch must not collide with the main colour"
         );
     }
@@ -2202,10 +2281,15 @@ mod tests {
         let (commits, [_m1, _m2, f1, z]) = diverged_fixture();
         let layout = build_graph(&commits, &[], &[], &[], None, Some(f1), &[]);
 
-        assert_eq!(layout.nodes[row_of(&layout, f1)].lane, 0, "detached HEAD at lane 0");
+        assert_eq!(
+            layout.nodes[row_of(&layout, f1)].lane,
+            0,
+            "detached HEAD at lane 0"
+        );
         assert_eq!(layout.nodes[row_of(&layout, z)].lane, 0);
         assert_eq!(
-            layout.nodes[row_of(&layout, f1)].color_index, MAIN_BRANCH_COLOR,
+            layout.nodes[row_of(&layout, f1)].color_index,
+            MAIN_BRANCH_COLOR,
             "detached HEAD's line is still the blue main line"
         );
     }
@@ -2234,7 +2318,11 @@ mod tests {
             .filter(|(_, n)| n.is_head)
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(head_rows, vec![row_of(&layout, x)], "exactly the HEAD row is flagged");
+        assert_eq!(
+            head_rows,
+            vec![row_of(&layout, x)],
+            "exactly the HEAD row is flagged"
+        );
     }
 
     /// Detached at a commit that *is* on a branch (a branch tip). No branch is
@@ -2246,7 +2334,10 @@ mod tests {
         let branches = [branch("main", m1, false), branch("feature", f1, false)];
         let layout = build_graph(&commits, &branches, &[], &[], None, Some(f1), &[]);
 
-        assert!(layout.nodes[row_of(&layout, f1)].is_head, "detached-on-tip row is HEAD");
+        assert!(
+            layout.nodes[row_of(&layout, f1)].is_head,
+            "detached-on-tip row is HEAD"
+        );
         assert!(
             !layout.nodes[row_of(&layout, m1)].is_head,
             "non-HEAD tip is not flagged"
@@ -2261,7 +2352,10 @@ mod tests {
         let layout = build_graph(&commits, &[], &[], &[], None, None, &[]);
 
         assert_eq!(layout.nodes[row_of(&layout, m1)].lane, 0);
-        assert_eq!(layout.nodes[row_of(&layout, m1)].color_index, MAIN_BRANCH_COLOR);
+        assert_eq!(
+            layout.nodes[row_of(&layout, m1)].color_index,
+            MAIN_BRANCH_COLOR
+        );
         assert!(layout.nodes[row_of(&layout, f1)].lane >= 1);
     }
 
@@ -2280,9 +2374,14 @@ mod tests {
         ];
         let layout = build_graph(&commits, &[], &[], &[], None, Some(foo), &[]);
 
-        assert_eq!(layout.nodes[row_of(&layout, foo)].lane, 0, "HEAD stays leftmost");
         assert_eq!(
-            layout.nodes[row_of(&layout, b1)].lane, 0,
+            layout.nodes[row_of(&layout, foo)].lane,
+            0,
+            "HEAD stays leftmost"
+        );
+        assert_eq!(
+            layout.nodes[row_of(&layout, b1)].lane,
+            0,
             "a commit fast-forwarded ahead of HEAD shares lane 0"
         );
         assert!(
@@ -2367,7 +2466,10 @@ mod tests {
             assert_eq!(a.cells, b.cells, "option-off layout must be stable");
             assert_eq!(a.cell_oids, b.cell_oids);
         }
-        assert!(!has_squash_grey(&base), "no link cells when the option is off");
+        assert!(
+            !has_squash_grey(&base),
+            "no link cells when the option is off"
+        );
     }
 
     #[test]
@@ -2505,7 +2607,10 @@ mod tests {
         // separate up-and-right elbow leaving the tip).
         assert!(matches!(linked.nodes[fr].cells[gcol], CellType::Commit(_)));
         assert!(
-            matches!(linked.nodes[fr - 1].cells[gcol], CellType::Pipe(SQUASH_LINK_COLOR_INDEX)),
+            matches!(
+                linked.nodes[fr - 1].cells[gcol],
+                CellType::Pipe(SQUASH_LINK_COLOR_INDEX)
+            ),
             "grey connector runs straight down into the tip dot"
         );
 
@@ -2522,7 +2627,10 @@ mod tests {
         // Continuity: every intermediate row carries the grey pipe in that column.
         for i in (sr + 1)..fr {
             assert!(
-                matches!(linked.nodes[i].cells[gcol], CellType::Pipe(SQUASH_LINK_COLOR_INDEX)),
+                matches!(
+                    linked.nodes[i].cells[gcol],
+                    CellType::Pipe(SQUASH_LINK_COLOR_INDEX)
+                ),
                 "intermediate row {i} carries the grey connector pipe"
             );
         }
@@ -2678,7 +2786,10 @@ mod tests {
 
         // Fixture preconditions: at least one intermediate row, and the band
         // crosses the tip's lane column on S's row as a plain overlay cell.
-        assert!(fr > sr + 1, "fixture must put intermediate rows between S and F");
+        assert!(
+            fr > sr + 1,
+            "fixture must put intermediate rows between S and F"
+        );
         assert!(
             matches!(
                 base.nodes[sr].cells[gcol],
@@ -2748,14 +2859,17 @@ mod tests {
 
         // No junction — a curve cannot host a stem.
         assert!(
-            !linked.nodes.iter().any(|n| n
-                .cells
+            !linked
+                .nodes
                 .iter()
-                .any(|c| matches!(c, CellType::TeeDown(_, _)))),
+                .any(|n| n.cells.iter().any(|c| matches!(c, CellType::TeeDown(_, _)))),
             "the junction must not compose with a landing curve"
         );
         // The landing curve itself survives verbatim.
-        assert_eq!(base.nodes[sr].cells[flane * 2], linked.nodes[sr].cells[flane * 2]);
+        assert_eq!(
+            base.nodes[sr].cells[flane * 2],
+            linked.nodes[sr].cells[flane * 2]
+        );
         // And the link still drew, somewhere, without panicking.
         assert!(has_squash_grey(&linked));
     }
@@ -2835,7 +2949,10 @@ mod tests {
         // set, asserted separately so the no-ref case can't regress.
         let (commits, [a, _b, _c, f1, f2, _s1, g1, _z]) = merged_lane_fixture();
         let merged = merged_lane_oids(&commits, &[a, g1]);
-        assert!(merged.contains(&f1) && merged.contains(&f2), "ref-less side lane dims");
+        assert!(
+            merged.contains(&f1) && merged.contains(&f2),
+            "ref-less side lane dims"
+        );
     }
 
     #[test]
@@ -2847,7 +2964,10 @@ mod tests {
         let commits = vec![ci(a, vec![b]), ci(b, vec![c]), ci(c, vec![])];
         // B's branch is "merged" (ff) — trunk tip A reaches it first-parent.
         let merged = merged_lane_oids(&commits, &[a]);
-        assert!(merged.is_empty(), "no commit exclusive to a ff-merged branch");
+        assert!(
+            merged.is_empty(),
+            "no commit exclusive to a ff-merged branch"
+        );
     }
 
     #[test]
@@ -2868,8 +2988,16 @@ mod tests {
         assert!(!edge_touches_merged(Some((oid(1), oid(3))), &merged, None));
         assert!(!edge_touches_merged(None, &merged, None));
         // A cell touches when either of its two edges does.
-        assert!(cell_touches_merged((None, Some((oid(4), oid(3)))), &merged, None));
-        assert!(!cell_touches_merged((Some((oid(1), oid(2))), None), &merged, None));
+        assert!(cell_touches_merged(
+            (None, Some((oid(4), oid(3)))),
+            &merged,
+            None
+        ));
+        assert!(!cell_touches_merged(
+            (Some((oid(1), oid(2))), None),
+            &merged,
+            None
+        ));
     }
 
     #[test]
@@ -2878,10 +3006,30 @@ mod tests {
         // even when its other endpoint is also in the set — so the selected
         // dot and its own strokes stay live; unrelated edges still dim.
         let merged: HashSet<Oid> = [oid(4), oid(5)].into_iter().collect();
-        assert!(!edge_touches_merged(Some((oid(4), oid(3))), &merged, Some(oid(4))));
-        assert!(!edge_touches_merged(Some((oid(4), oid(5))), &merged, Some(oid(4))));
-        assert!(!edge_touches_merged(Some((oid(1), oid(4))), &merged, Some(oid(4))));
-        assert!(edge_touches_merged(Some((oid(5), oid(3))), &merged, Some(oid(4))));
-        assert!(!cell_touches_merged((Some((oid(4), oid(3))), None), &merged, Some(oid(4))));
+        assert!(!edge_touches_merged(
+            Some((oid(4), oid(3))),
+            &merged,
+            Some(oid(4))
+        ));
+        assert!(!edge_touches_merged(
+            Some((oid(4), oid(5))),
+            &merged,
+            Some(oid(4))
+        ));
+        assert!(!edge_touches_merged(
+            Some((oid(1), oid(4))),
+            &merged,
+            Some(oid(4))
+        ));
+        assert!(edge_touches_merged(
+            Some((oid(5), oid(3))),
+            &merged,
+            Some(oid(4))
+        ));
+        assert!(!cell_touches_merged(
+            (Some((oid(4), oid(3))), None),
+            &merged,
+            Some(oid(4))
+        ));
     }
 }

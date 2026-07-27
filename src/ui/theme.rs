@@ -334,16 +334,16 @@ impl Theme {
             // Graph lanes: darker colors for light backgrounds
             lane_colors: [
                 Color::DarkGray,
-                Color::Rgb(0, 130, 0),    // dark green
-                Color::Rgb(150, 0, 150),  // dark magenta
-                Color::Rgb(160, 120, 0),  // dark yellow/gold
+                Color::Rgb(0, 130, 0),   // dark green
+                Color::Rgb(150, 0, 150), // dark magenta
+                Color::Rgb(160, 120, 0), // dark yellow/gold
                 Color::Red,
-                Color::Rgb(0, 140, 140),  // dark cyan
-                Color::Rgb(0, 100, 0),    // darker green
-                Color::Rgb(130, 0, 130),  // darker magenta
-                Color::Rgb(140, 100, 0),  // darker gold
-                Color::Blue,              // main branch
-                Color::Rgb(180, 0, 0),    // dark red
+                Color::Rgb(0, 140, 140), // dark cyan
+                Color::Rgb(0, 100, 0),   // darker green
+                Color::Rgb(130, 0, 130), // darker magenta
+                Color::Rgb(140, 100, 0), // darker gold
+                Color::Blue,             // main branch
+                Color::Rgb(180, 0, 0),   // dark red
             ],
             uncommitted_color: Color::Gray,
             // A soft blue-grey for light backgrounds: darker than the page but
@@ -557,7 +557,7 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
-    pub fn file_change_style(&self, kind: &crate::git::FileChangeKind) -> (& 'static str, Color) {
+    pub fn file_change_style(&self, kind: &crate::git::FileChangeKind) -> (&'static str, Color) {
         use crate::git::FileChangeKind;
         match kind {
             FileChangeKind::Added => ("A", self.file_added),

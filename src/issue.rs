@@ -520,10 +520,7 @@ pub fn parse_blocked(json: &str) -> Result<HashSet<u64>, String> {
 /// timestamp, relative to now. Falls back to the date portion when unparseable.
 pub fn relative_time(iso: &str) -> String {
     match chrono::DateTime::parse_from_rfc3339(iso) {
-        Ok(dt) => relative_between(
-            dt.with_timezone(&chrono::Utc),
-            chrono::Utc::now(),
-        ),
+        Ok(dt) => relative_between(dt.with_timezone(&chrono::Utc), chrono::Utc::now()),
         Err(_) => iso.split('T').next().unwrap_or(iso).to_string(),
     }
 }
@@ -629,7 +626,14 @@ impl IssueFetch {
             let out = gh::run(
                 &path,
                 &[
-                    "issue", "list", "--state", state, "--limit", "100", "--json", LIST_FIELDS,
+                    "issue",
+                    "list",
+                    "--state",
+                    state,
+                    "--limit",
+                    "100",
+                    "--json",
+                    LIST_FIELDS,
                 ],
                 LIST_TIMEOUT,
             );
@@ -666,8 +670,11 @@ impl IssueFetch {
     /// orphaned worker's `send` fails harmlessly; `poll_detail` matches by
     /// number), so switching issues while a fetch is in flight never stalls.
     pub fn start_detail(&mut self, repo_path: &str, number: u64) {
-        if !should_start_detail(self.detail_cache.contains_key(&number), self.pending_detail, number)
-        {
+        if !should_start_detail(
+            self.detail_cache.contains_key(&number),
+            self.pending_detail,
+            number,
+        ) {
             return;
         }
         let (tx, rx) = mpsc::channel();
@@ -814,7 +821,14 @@ impl IssueFetch {
 fn fetch_blocked(repo_path: &str) -> Result<HashSet<u64>, String> {
     let repo_out = gh::run(
         repo_path,
-        &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        &[
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+            "-q",
+            ".nameWithOwner",
+        ],
         BLOCKED_TIMEOUT,
     )?;
     if !repo_out.success {
@@ -874,8 +888,14 @@ mod tests {
         assert_eq!(
             first.labels,
             vec![
-                IssueLabel { name: "bug".into(), color: "d73a4a".into() },
-                IssueLabel { name: "p1".into(), color: "000000".into() },
+                IssueLabel {
+                    name: "bug".into(),
+                    color: "d73a4a".into()
+                },
+                IssueLabel {
+                    name: "p1".into(),
+                    color: "000000".into()
+                },
             ]
         );
         assert_eq!(first.assignees, vec!["alice", "bob"]);
@@ -894,7 +914,11 @@ mod tests {
             ("Closed", IssueState::Closed),
         ] {
             let json = format!(r#"[{{"number":1,"state":"{raw}"}}]"#);
-            assert_eq!(parse_issue_list(&json).unwrap()[0].state, want, "state {raw}");
+            assert_eq!(
+                parse_issue_list(&json).unwrap()[0].state,
+                want,
+                "state {raw}"
+            );
         }
     }
 
@@ -1045,8 +1069,14 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                IssueLabel { name: "bug".into(), color: "d73a4a".into() },
-                IssueLabel { name: "enhancement".into(), color: "a2eeef".into() },
+                IssueLabel {
+                    name: "bug".into(),
+                    color: "d73a4a".into()
+                },
+                IssueLabel {
+                    name: "enhancement".into(),
+                    color: "a2eeef".into()
+                },
             ]
         );
     }
@@ -1098,7 +1128,10 @@ mod tests {
             state: IssueState::Open,
             labels: labels
                 .iter()
-                .map(|n| IssueLabel { name: (*n).to_string(), color: String::new() })
+                .map(|n| IssueLabel {
+                    name: (*n).to_string(),
+                    color: String::new(),
+                })
                 .collect(),
             assignees: vec![],
             author: "ghost".into(),
@@ -1118,7 +1151,10 @@ mod tests {
 
     #[test]
     fn label_filter_requires_at_least_one_selected_label() {
-        let f = IssueViewFilter { labels: vec!["bug".into(), "p1".into()], unblocked_only: false };
+        let f = IssueViewFilter {
+            labels: vec!["bug".into(), "p1".into()],
+            unblocked_only: false,
+        };
         assert!(f.is_active());
         assert!(issue_matches(&issue_with(1, &["bug"]), &f, false));
         assert!(issue_matches(&issue_with(2, &["p1", "docs"]), &f, false));
@@ -1128,14 +1164,20 @@ mod tests {
 
     #[test]
     fn unblocked_only_hides_blocked_issues() {
-        let f = IssueViewFilter { labels: vec![], unblocked_only: true };
+        let f = IssueViewFilter {
+            labels: vec![],
+            unblocked_only: true,
+        };
         assert!(issue_matches(&issue_with(1, &[]), &f, false));
         assert!(!issue_matches(&issue_with(2, &[]), &f, true));
     }
 
     #[test]
     fn label_and_unblocked_filters_compose() {
-        let f = IssueViewFilter { labels: vec!["bug".into()], unblocked_only: true };
+        let f = IssueViewFilter {
+            labels: vec!["bug".into()],
+            unblocked_only: true,
+        };
         // has label + unblocked → visible
         assert!(issue_matches(&issue_with(1, &["bug"]), &f, false));
         // has label but blocked → hidden
@@ -1151,7 +1193,10 @@ mod tests {
             issue_with(20, &["docs"]),
             issue_with(30, &["bug", "p1"]),
         ];
-        let f = IssueViewFilter { labels: vec!["bug".into()], unblocked_only: true };
+        let f = IssueViewFilter {
+            labels: vec!["bug".into()],
+            unblocked_only: true,
+        };
         let mut blocked = HashSet::new();
         blocked.insert(30); // #30 blocked → dropped despite the label
         assert_eq!(visible_issues(&issues, &f, &blocked), vec![0]);
@@ -1168,10 +1213,7 @@ mod tests {
     fn blockers_in_body_matches_phrases_and_tasklists() {
         assert_eq!(blockers_in_body("Blocked by #42"), vec![42]);
         assert_eq!(blockers_in_body("this Depends On #7 to land"), vec![7]);
-        assert_eq!(
-            blockers_in_body("- [ ] #3\n- [x] #4\n* [ ] #5"),
-            vec![3, 5]
-        );
+        assert_eq!(blockers_in_body("- [ ] #3\n- [x] #4\n* [ ] #5"), vec![3, 5]);
         // Case-insensitive + de-duplicated.
         assert_eq!(blockers_in_body("BLOCKED BY #9 and blocked by #9"), vec![9]);
     }
@@ -1191,16 +1233,19 @@ mod tests {
         RawBlockedIssue {
             number,
             body: body.to_string(),
-            native: native.iter().map(|(_, open)| RawBlocker { open: *open }).collect(),
+            native: native
+                .iter()
+                .map(|(_, open)| RawBlocker { open: *open })
+                .collect(),
         }
     }
 
     #[test]
     fn compute_blocked_set_native_open_blocker_blocks() {
         let issues = vec![
-            raw(1, "", &[(2, true)]),   // blocked by open #2
+            raw(1, "", &[(2, true)]), // blocked by open #2
             raw(2, "", &[]),
-            raw(3, "", &[(2, false)]),  // blocker closed → not blocked
+            raw(3, "", &[(2, false)]), // blocker closed → not blocked
         ];
         let blocked = compute_blocked_set(&issues);
         assert!(blocked.contains(&1));
@@ -1253,7 +1298,10 @@ mod tests {
         use chrono::{Duration, Utc};
         let now = Utc::now();
         assert_eq!(relative_between(now, now), "just now");
-        assert_eq!(relative_between(now - Duration::seconds(30), now), "just now");
+        assert_eq!(
+            relative_between(now - Duration::seconds(30), now),
+            "just now"
+        );
         assert_eq!(relative_between(now - Duration::minutes(5), now), "5m");
         assert_eq!(relative_between(now - Duration::hours(3), now), "3h");
         assert_eq!(relative_between(now - Duration::days(2), now), "2d");

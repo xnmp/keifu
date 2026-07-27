@@ -184,7 +184,9 @@ pub enum PollResult {
     /// `git_changed` is true when the batch touched `.git` refs/HEAD, so the
     /// app should re-open its libgit2 handle; a working-tree-only batch leaves
     /// it false and skips the reopen.
-    Refresh { git_changed: bool },
+    Refresh {
+        git_changed: bool,
+    },
     Disconnected,
 }
 
@@ -206,9 +208,7 @@ mod tests {
                     assert!(watcher.is_some(), "watcher construction failed");
                     break;
                 }
-                None if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10))
-                }
+                None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
                 None => panic!("watcher construction did not finish in 5s"),
             }
         }

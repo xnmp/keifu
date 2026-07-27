@@ -441,7 +441,10 @@ fn layout_row<'a>(
     let mut chips: Vec<ChipHit> = Vec::new();
 
     // Chip plus a trailing space.
-    let pr_badge_width = model.pr_badge.as_ref().map_or(0, |b| display_width(&b.text) + 1);
+    let pr_badge_width = model
+        .pr_badge
+        .as_ref()
+        .map_or(0, |b| display_width(&b.text) + 1);
     let merged_badge_width = model
         .merged_badge
         .as_deref()
@@ -482,7 +485,9 @@ fn layout_row<'a>(
     // leads the row instead of trailing it). Emits nothing when absent, so
     // there's no leading gap before the branch labels on PR-less rows.
     if let Some(badge) = &model.pr_badge {
-        let style = Style::default().fg(badge.color).add_modifier(Modifier::BOLD);
+        let style = Style::default()
+            .fg(badge.color)
+            .add_modifier(Modifier::BOLD);
         let chip_start = left_width;
         left_width += display_width(&badge.text) + 1;
         chips.push(ChipHit {
@@ -710,7 +715,10 @@ mod tests {
         // Matches the theme's blend helper exactly (derivation is lane-based).
         assert_eq!(fg, theme.merged_chip_color(lane));
         // And it is visibly distinct from the unmerged chip's style.
-        assert_ne!(merged, unmerged, "merged chip differs from the unmerged chip");
+        assert_ne!(
+            merged, unmerged,
+            "merged chip differs from the unmerged chip"
+        );
         assert!(
             merged.add_modifier.contains(Modifier::DIM),
             "merged chip is dimmed"

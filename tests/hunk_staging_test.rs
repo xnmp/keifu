@@ -61,7 +61,10 @@ fn staging_one_of_two_hunks_stages_only_that_hunk() {
     apply_patch_cached(&rp, &patch).unwrap();
 
     let staged = git_cli(&rp, &["diff", "--cached"]);
-    assert!(staged.contains("+TOP"), "index should contain TOP:\n{staged}");
+    assert!(
+        staged.contains("+TOP"),
+        "index should contain TOP:\n{staged}"
+    );
     assert!(
         !staged.contains("+BOTTOM"),
         "index must NOT contain BOTTOM:\n{staged}"
@@ -142,18 +145,24 @@ fn stage_all_then_unstage_all_round_trips_including_untracked() {
     );
     // Nothing left unstaged in the tracked file, and no untracked remain.
     assert!(git_cli(&rp, &["diff", "--name-only"]).trim().is_empty());
-    assert!(git_cli(&rp, &["ls-files", "--others", "--exclude-standard"])
-        .trim()
-        .is_empty());
+    assert!(
+        git_cli(&rp, &["ls-files", "--others", "--exclude-standard"])
+            .trim()
+            .is_empty()
+    );
 
     unstage_all(&rp).unwrap();
     assert!(
-        git_cli(&rp, &["diff", "--cached", "--name-only"]).trim().is_empty(),
+        git_cli(&rp, &["diff", "--cached", "--name-only"])
+            .trim()
+            .is_empty(),
         "unstage_all must clear the index"
     );
     // Files themselves are untouched: modification + untracked file still there.
     assert!(git_cli(&rp, &["diff", "--name-only"]).contains("tracked.txt"));
-    assert!(git_cli(&rp, &["ls-files", "--others", "--exclude-standard"]).contains("brand_new.txt"));
+    assert!(
+        git_cli(&rp, &["ls-files", "--others", "--exclude-standard"]).contains("brand_new.txt")
+    );
 }
 
 #[test]

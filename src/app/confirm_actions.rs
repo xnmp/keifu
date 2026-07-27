@@ -89,7 +89,10 @@ impl App {
                     ConfirmAction::AbortOperation(op) => {
                         abort_operation(&self.repo_path, op)?;
                         self.refresh(true)?;
-                        self.toast(crate::toast::ToastKind::Success, format!("{} aborted", op.verb()));
+                        self.toast(
+                            crate::toast::ToastKind::Success,
+                            format!("{} aborted", op.verb()),
+                        );
                         self.mode = AppMode::Normal;
                         return Ok(());
                     }
@@ -117,7 +120,10 @@ impl App {
                     ConfirmAction::RestoreFile(paths) => {
                         restore_files(&self.repo_path, &paths)?;
                         let label = file_count_label(&paths);
-                        self.toast(crate::toast::ToastKind::Success, format!("Restored {}", label));
+                        self.toast(
+                            crate::toast::ToastKind::Success,
+                            format!("Restored {}", label),
+                        );
                         self.mode = AppMode::Normal;
                         self.refresh_after_file_op()?;
                         return Ok(());
@@ -132,9 +138,15 @@ impl App {
                         }
                         if errors.is_empty() {
                             let label = file_count_label(&paths);
-                            self.toast(crate::toast::ToastKind::Success, format!("Moved {} to recycle bin", label));
+                            self.toast(
+                                crate::toast::ToastKind::Success,
+                                format!("Moved {} to recycle bin", label),
+                            );
                         } else {
-                            self.toast(crate::toast::ToastKind::Error, format!("Trash errors: {}", errors.join("; ")));
+                            self.toast(
+                                crate::toast::ToastKind::Error,
+                                format!("Trash errors: {}", errors.join("; ")),
+                            );
                         }
                         self.mode = AppMode::Normal;
                         self.refresh_after_file_op()?;
@@ -142,7 +154,10 @@ impl App {
                     }
                     ConfirmAction::StashDrop(index) => {
                         stash_drop(&self.repo_path, index)?;
-                        self.toast(crate::toast::ToastKind::Success, format!("Dropped stash@{{{}}}", index));
+                        self.toast(
+                            crate::toast::ToastKind::Success,
+                            format!("Dropped stash@{{{}}}", index),
+                        );
                     }
                     ConfirmAction::DeleteTag(name) => {
                         // Capture the target commit + whether it's annotated,
@@ -157,9 +172,16 @@ impl App {
                             (target, is_annotated_tag(repo, &name))
                         };
                         delete_tag(&self.repo_path, &name)?;
-                        self.toast(crate::toast::ToastKind::Success, format!("Deleted tag '{}'", name));
+                        self.toast(
+                            crate::toast::ToastKind::Success,
+                            format!("Deleted tag '{}'", name),
+                        );
                         if let Some(oid) = target {
-                            let suffix = if annotated { " as a lightweight tag" } else { "" };
+                            let suffix = if annotated {
+                                " as a lightweight tag"
+                            } else {
+                                ""
+                            };
                             self.record_undo(crate::undo::UndoEntry {
                                 description: format!("Delete tag '{name}'"),
                                 confirm: format!(
@@ -209,8 +231,11 @@ impl App {
             // optimistic remote deletion. A no-op for any other confirm dialog,
             // leaving it open.
             Action::ConfirmDeleteBranchAndRemote => {
-                if let ConfirmAction::DeleteBranchWithRemote { name, remote, branch } =
-                    confirm_action
+                if let ConfirmAction::DeleteBranchWithRemote {
+                    name,
+                    remote,
+                    branch,
+                } = confirm_action
                 {
                     self.delete_local_branch_with_undo(&name)?;
                     self.mode = AppMode::Normal;
@@ -284,11 +309,22 @@ mod tests {
         let root = td.path();
         let local = root.join("local");
         let origin = root.join("origin.git");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&origin).status().unwrap();
-        Command::new("git").args(["init", "-q", "-b", "main"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&origin)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -375,10 +411,7 @@ mod tests {
         let (_td, mut app) = app_local_and_remote_feature();
         // A local branch with no configured upstream but a same-named remote ref
         // still counts as having a remote counterpart.
-        app.branches = vec![
-            branch("x", false, None),
-            branch("origin/x", true, None),
-        ];
+        app.branches = vec![branch("x", false, None), branch("origin/x", true, None)];
         assert_eq!(
             app.remote_counterpart("x"),
             Some(("origin".to_string(), "x".to_string()))
@@ -394,7 +427,8 @@ mod tests {
             message: "Delete branch 'solo'?".to_string(),
             action: ConfirmAction::DeleteBranch("solo".to_string()),
         };
-        app.handle_confirm_action(Action::ConfirmDeleteBranchAndRemote).unwrap();
+        app.handle_confirm_action(Action::ConfirmDeleteBranchAndRemote)
+            .unwrap();
         // No remote to delete: the dialog stays open and nothing is scheduled.
         assert!(matches!(app.mode, AppMode::Confirm { .. }));
         assert!(app.pending_remote_deletions.is_empty());
@@ -405,11 +439,15 @@ mod tests {
     fn secondary_confirm_deletes_local_and_optimistically_removes_remote() {
         let (_td, mut app) = app_local_and_remote_feature();
         app.confirm_delete_branch("feature".to_string());
-        app.handle_confirm_action(Action::ConfirmDeleteBranchAndRemote).unwrap();
+        app.handle_confirm_action(Action::ConfirmDeleteBranchAndRemote)
+            .unwrap();
 
         // Local branch deleted synchronously.
         assert!(
-            app.repo.repo().find_branch("feature", git2::BranchType::Local).is_err(),
+            app.repo
+                .repo()
+                .find_branch("feature", git2::BranchType::Local)
+                .is_err(),
             "local feature should be gone"
         );
         // Optimistic: remote hidden now, deletion dispatched (in flight).
@@ -420,7 +458,10 @@ mod tests {
         // #95: the push start is reported as a toast, not a sticky
         // status-bar message — the status bar stays reserved for pull.
         assert!(
-            app.toasts.visible().iter().any(|t| t.text.contains("Deleting origin/feature")),
+            app.toasts
+                .visible()
+                .iter()
+                .any(|t| t.text.contains("Deleting origin/feature")),
             "expected a start toast for the remote-branch delete"
         );
         assert_eq!(
@@ -439,11 +480,17 @@ mod tests {
         assert!(!app.is_pushing());
         assert!(app.pending_remote_deletions.is_empty());
         assert!(
-            app.repo.repo().find_branch("origin/feature", git2::BranchType::Remote).is_err(),
+            app.repo
+                .repo()
+                .find_branch("origin/feature", git2::BranchType::Remote)
+                .is_err(),
             "origin/feature should be gone after a successful delete"
         );
         assert!(
-            app.toasts.visible().iter().any(|t| t.text.contains("Deleted origin/feature")),
+            app.toasts
+                .visible()
+                .iter()
+                .any(|t| t.text.contains("Deleted origin/feature")),
             "expected success toast"
         );
     }
@@ -457,7 +504,8 @@ mod tests {
     #[test]
     fn auth_cancel_restores_optimistically_hidden_branch() {
         let (_td, mut app) = app_local_and_remote_feature();
-        app.pending_remote_deletions.insert("origin/feature".to_string());
+        app.pending_remote_deletions
+            .insert("origin/feature".to_string());
         app.in_flight_op = Some(InFlightOp {
             op: RetryableOp::Push(PushSpec::Delete {
                 remote: "origin".to_string(),
@@ -486,7 +534,9 @@ mod tests {
             "cancelling the prompt must drop the optimistic hide"
         );
         assert!(
-            app.branches.iter().any(|b| b.is_remote && b.name == "origin/feature"),
+            app.branches
+                .iter()
+                .any(|b| b.is_remote && b.name == "origin/feature"),
             "origin/feature should reappear after cancelling"
         );
     }
@@ -495,7 +545,8 @@ mod tests {
     fn failed_remote_delete_restores_branch_and_toasts_error() {
         let (_td, mut app) = app_local_and_remote_feature();
         // Simulate an in-flight optimistic delete of origin/feature…
-        app.pending_remote_deletions.insert("origin/feature".to_string());
+        app.pending_remote_deletions
+            .insert("origin/feature".to_string());
         app.in_flight_op = Some(InFlightOp {
             op: RetryableOp::Push(PushSpec::Delete {
                 remote: "origin".to_string(),
@@ -507,13 +558,16 @@ mod tests {
             attempts: 0,
         });
         // …that fails on the remote (deterministic, no real push).
-        app.network.complete_push_for_test(Err("remote rejected".to_string()));
+        app.network
+            .complete_push_for_test(Err("remote rejected".to_string()));
         assert!(app.update_push_status());
 
         // The optimistic hide is undone and the branch is back in the graph.
         assert!(app.pending_remote_deletions.is_empty());
         assert!(
-            app.branches.iter().any(|b| b.is_remote && b.name == "origin/feature"),
+            app.branches
+                .iter()
+                .any(|b| b.is_remote && b.name == "origin/feature"),
             "origin/feature should reappear after a failed delete"
         );
         assert!(
@@ -528,7 +582,8 @@ mod tests {
     #[test]
     fn successful_remote_delete_clears_pending_and_toasts_success() {
         let (_td, mut app) = app_local_and_remote_feature();
-        app.pending_remote_deletions.insert("origin/feature".to_string());
+        app.pending_remote_deletions
+            .insert("origin/feature".to_string());
         app.in_flight_op = Some(InFlightOp {
             op: RetryableOp::Push(PushSpec::Delete {
                 remote: "origin".to_string(),
@@ -560,7 +615,10 @@ mod tests {
         // HEAD is on `main`. Even if a delete-current confirm is forced (the
         // picker normally filters HEAD out), the operation must refuse.
         assert_eq!(
-            app.branches.iter().find(|b| b.is_head).map(|b| b.name.as_str()),
+            app.branches
+                .iter()
+                .find(|b| b.is_head)
+                .map(|b| b.name.as_str()),
             Some("main")
         );
         app.mode = AppMode::Confirm {
@@ -572,7 +630,10 @@ mod tests {
             "deleting the current branch must fail"
         );
         assert!(
-            app.repo.repo().find_branch("main", git2::BranchType::Local).is_ok(),
+            app.repo
+                .repo()
+                .find_branch("main", git2::BranchType::Local)
+                .is_ok(),
             "current branch must still exist after a blocked delete"
         );
     }

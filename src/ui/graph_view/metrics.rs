@@ -111,7 +111,9 @@ mod tests {
 
     fn age(secs_ago: i64) -> String {
         let now = Local::now();
-        format_date_field(ago(now, secs_ago), now).trim_end().to_string()
+        format_date_field(ago(now, secs_ago), now)
+            .trim_end()
+            .to_string()
     }
 
     const MIN: i64 = 60;
@@ -150,7 +152,10 @@ mod tests {
         // "now" padded to DATE_FIELD_WIDTH; longer labels ("11mo") fill it exactly.
         assert_eq!(format_date_field(recent, now).len(), DATE_FIELD_WIDTH);
         let months = ago(now, 330 * DAY);
-        assert_eq!(display_width(&format_date_field(months, now)), DATE_FIELD_WIDTH);
+        assert_eq!(
+            display_width(&format_date_field(months, now)),
+            DATE_FIELD_WIDTH
+        );
     }
 
     // ── display_width ────────────────────────────────────────────────

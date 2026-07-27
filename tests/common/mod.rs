@@ -40,6 +40,15 @@ pub fn init_repo(seed: Seed) -> (TempDir, GitRepository) {
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
+        // Same reason as the identity above: it exists for the operations that
+        // shell out to real `git`, not for the git2 ones. Git for Windows
+        // installs with core.autocrlf=true globally, so `git stash pop`,
+        // `git cherry-pick --continue` and `git merge --abort` rewrite LF to
+        // CRLF on checkout — and every assertion comparing file contents to a
+        // bare "\n" literal then fails. Pinning the repo-local value keeps the
+        // bytes identical on every platform.
+        config.set_bool("core.autocrlf", false).unwrap();
+        config.set_str("core.eol", "lf").unwrap();
 
         if seed == Seed::TrackedFile {
             fs::write(tempdir.path().join("tracked.txt"), "tracked\n").unwrap();
@@ -76,8 +85,15 @@ pub fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str)
     let signature = Signature::now("Test User", "test@example.com").unwrap();
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();
-    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-        .unwrap()
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+    )
+    .unwrap()
 }
 
 /// Working-directory path of the repository, as the operations layer expects.

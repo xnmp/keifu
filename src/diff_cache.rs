@@ -236,15 +236,17 @@ impl DiffCache {
     /// Force-set quick diff for uncommitted (used after file operations).
     pub fn set_quick_uncommitted(&mut self, repo: &git2::Repository) {
         self.quick_diff_target = Some(DiffTarget::Uncommitted);
-        self.quick_diff_cache =
-            CommitDiffInfo::quick_file_list_for_working_tree(repo).ok();
+        self.quick_diff_cache = CommitDiffInfo::quick_file_list_for_working_tree(repo).ok();
     }
 
     /// Reclassify the cached full uncommitted diff's staging status using the
     /// quick diff as the source of truth. This avoids a redundant async reload
     /// after stage/unstage operations where line counts don't change.
     /// Seals the cache key so `poll()` won't trigger a reload.
-    pub fn reclassify_uncommitted_staging(&mut self, current_status: Option<&crate::git::WorkingTreeStatus>) {
+    pub fn reclassify_uncommitted_staging(
+        &mut self,
+        current_status: Option<&crate::git::WorkingTreeStatus>,
+    ) {
         let Some(full) = self.uncommitted_diff_cache.as_mut() else {
             // Full cache not yet loaded — seal the key so poll() won't
             // trigger a reload (the quick diff is already correct).
@@ -311,11 +313,15 @@ impl DiffCache {
         }
 
         // Rebuild staged/unstaged separation
-        full.staged_files = full.files.iter()
+        full.staged_files = full
+            .files
+            .iter()
             .filter(|f| matches!(f.stage_status, Some(crate::git::StageStatus::Staged)))
             .cloned()
             .collect();
-        full.unstaged_files = full.files.iter()
+        full.unstaged_files = full
+            .files
+            .iter()
             .filter(|f| !matches!(f.stage_status, Some(crate::git::StageStatus::Staged)))
             .cloned()
             .collect();
@@ -596,7 +602,6 @@ impl DiffCache {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,7 +692,9 @@ mod tests {
         assert!(cache.diff_cache.as_ref().is_none());
         assert!(cache.diff_cache_oid.is_none());
         assert!(cache.diff_loading_oid.is_none());
-        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid1()))).is_none());
+        assert!(cache
+            .cached_diff_or_quick(Some(DiffTarget::Commit(oid1())))
+            .is_none());
         assert!(cache.cached_diff(Some(DiffTarget::Uncommitted)).is_none());
         assert!(!cache.uncommitted_diff_loading);
         assert!(!cache.uncommitted_diff_failed);
@@ -750,7 +757,10 @@ mod tests {
             .collect();
         assert_eq!(staged, vec!["a.txt", "b.txt"]);
         assert_eq!(unstaged, vec!["a.txt"]);
-        assert!(cache.uncommitted_cache_key.is_some(), "fast path seals the key");
+        assert!(
+            cache.uncommitted_cache_key.is_some(),
+            "fast path seals the key"
+        );
     }
 
     #[test]
@@ -915,8 +925,16 @@ mod tests {
         cache.reclassify_uncommitted_staging(Some(&status));
 
         let full = cache.uncommitted_diff_cache.as_ref().unwrap();
-        let a = full.files.iter().find(|f| f.path == Path::new("a.txt")).unwrap();
-        let b = full.files.iter().find(|f| f.path == Path::new("b.txt")).unwrap();
+        let a = full
+            .files
+            .iter()
+            .find(|f| f.path == Path::new("a.txt"))
+            .unwrap();
+        let b = full
+            .files
+            .iter()
+            .find(|f| f.path == Path::new("b.txt"))
+            .unwrap();
         assert_eq!(a.stage_status, Some(StageStatus::Unstaged));
         assert_eq!(b.stage_status, Some(StageStatus::Staged));
 
@@ -1355,14 +1373,18 @@ mod tests {
     fn cached_diff_commit_returns_diff_when_oid_matches() {
         let mut cache = DiffCache::new();
         set_diff(&mut cache, oid1(), empty_diff());
-        assert!(cache.cached_diff(Some(DiffTarget::Commit(oid1()))).is_some());
+        assert!(cache
+            .cached_diff(Some(DiffTarget::Commit(oid1())))
+            .is_some());
     }
 
     #[test]
     fn cached_diff_commit_returns_none_when_oid_mismatch() {
         let mut cache = DiffCache::new();
         set_diff(&mut cache, oid1(), empty_diff());
-        assert!(cache.cached_diff(Some(DiffTarget::Commit(oid2()))).is_none());
+        assert!(cache
+            .cached_diff(Some(DiffTarget::Commit(oid2())))
+            .is_none());
     }
 
     #[test]
@@ -1377,7 +1399,9 @@ mod tests {
         let mut cache = DiffCache::new();
         set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
         // No full diff cached, should fall back to quick
-        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid1()))).is_some());
+        assert!(cache
+            .cached_diff_or_quick(Some(DiffTarget::Commit(oid1())))
+            .is_some());
     }
 
     #[test]
@@ -1386,8 +1410,12 @@ mod tests {
         // Quick diff was computed for oid1, but oid2 is now selected —
         // returning it would show the previous commit's files.
         set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
-        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid2()))).is_none());
-        assert!(cache.cached_diff_or_quick(Some(DiffTarget::Uncommitted)).is_none());
+        assert!(cache
+            .cached_diff_or_quick(Some(DiffTarget::Commit(oid2())))
+            .is_none());
+        assert!(cache
+            .cached_diff_or_quick(Some(DiffTarget::Uncommitted))
+            .is_none());
     }
 
     #[test]
@@ -1405,7 +1433,9 @@ mod tests {
         set_diff(&mut cache, oid1(), full);
         set_quick(&mut cache, DiffTarget::Commit(oid1()), empty_diff());
 
-        let result = cache.cached_diff_or_quick(Some(DiffTarget::Commit(oid1()))).unwrap();
+        let result = cache
+            .cached_diff_or_quick(Some(DiffTarget::Commit(oid1())))
+            .unwrap();
         assert_eq!(result.total_files, 42);
     }
 
@@ -1439,8 +1469,7 @@ mod tests {
         let repo = git2::Repository::init(dir.path()).unwrap();
         let mut cache = DiffCache::new();
 
-        let (target, changed) =
-            cache.sync_selected_target(Some(DiffTarget::Uncommitted), &repo);
+        let (target, changed) = cache.sync_selected_target(Some(DiffTarget::Uncommitted), &repo);
         assert_eq!(target, Some(DiffTarget::Uncommitted));
         assert!(changed);
 
@@ -1698,7 +1727,9 @@ mod tests {
                 .total_files,
             7
         );
-        assert!(cache.cached_diff(Some(DiffTarget::Range(oid2(), oid1()))).is_none());
+        assert!(cache
+            .cached_diff(Some(DiffTarget::Range(oid2(), oid1())))
+            .is_none());
     }
 
     #[test]
@@ -1716,7 +1747,9 @@ mod tests {
 
         let events = cache.poll(None, "/dev/null", None);
 
-        assert!(cache.cached_diff(Some(DiffTarget::Range(oid1(), oid2()))).is_some());
+        assert!(cache
+            .cached_diff(Some(DiffTarget::Range(oid1(), oid2())))
+            .is_some());
         assert_eq!(cache.range_diff_key, Some((oid1(), oid2())));
         assert!(cache.range_diff_loading.is_none());
         assert!(cache.range_diff_receiver.is_none());
@@ -1749,7 +1782,9 @@ mod tests {
 
         cache.clear_all();
 
-        assert!(cache.cached_diff(Some(DiffTarget::Range(oid1(), oid2()))).is_none());
+        assert!(cache
+            .cached_diff(Some(DiffTarget::Range(oid1(), oid2())))
+            .is_none());
         assert!(cache.range_diff_key.is_none());
         assert!(cache.range_diff_loading.is_none());
     }
@@ -1801,7 +1836,10 @@ mod tests {
         let mut cache = DiffCache::new();
         assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
         cache.clear_uncommitted();
-        assert!(!cache.uncommitted_diff_error_reported, "full clear starts a new episode");
+        assert!(
+            !cache.uncommitted_diff_error_reported,
+            "full clear starts a new episode"
+        );
         assert!(poll_uncommitted_result(&mut cache, Err("boom".into())).is_some());
     }
 

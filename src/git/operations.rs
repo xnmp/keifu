@@ -58,12 +58,17 @@ fn run_git_creds(
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
     apply_credentials(&mut cmd, creds)?;
-    let output = cmd
-        .output()
-        .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
+    let output = cmd.output().context(format!(
+        "Failed to execute git {}",
+        args.first().unwrap_or(&"")
+    ))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
+        bail!(
+            "git {} failed: {}",
+            args.first().unwrap_or(&""),
+            stderr.trim()
+        );
     }
     Ok(output)
 }
@@ -134,7 +139,10 @@ fn run_git_with_stdin(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context(format!("Failed to execute git {}", args.first().unwrap_or(&"")))?;
+        .context(format!(
+            "Failed to execute git {}",
+            args.first().unwrap_or(&"")
+        ))?;
 
     child
         .stdin
@@ -148,7 +156,11 @@ fn run_git_with_stdin(
         .context(format!("Failed to run git {}", args.first().unwrap_or(&"")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
+        bail!(
+            "git {} failed: {}",
+            args.first().unwrap_or(&""),
+            stderr.trim()
+        );
     }
     Ok(output)
 }
@@ -294,7 +306,11 @@ pub fn delete_branch(repo: &Repository, branch_name: &str) -> Result<()> {
 /// On a conflicting normal merge this returns `Ok(OpOutcome::Conflicts)` and
 /// deliberately leaves the repo mid-merge (conflicted index + MERGE_HEAD), so
 /// the caller can offer resolve/continue/abort. It is NOT an error.
-pub fn merge_branch(repo: &Repository, branch_name: &str, branch_type: BranchType) -> Result<OpOutcome> {
+pub fn merge_branch(
+    repo: &Repository,
+    branch_name: &str,
+    branch_type: BranchType,
+) -> Result<OpOutcome> {
     let branch = repo
         .find_branch(branch_name, branch_type)
         .context(format!("Branch '{}' not found", branch_name))?;
@@ -522,7 +538,11 @@ fn fast_forward_one_behind(
 /// On a conflicting step this returns `Ok(OpOutcome::Conflicts)` and leaves the
 /// rebase in progress (REBASE_HEAD etc.) for resolve/continue/abort — it does
 /// NOT abort automatically.
-pub fn rebase_branch(repo: &Repository, onto_branch: &str, branch_type: BranchType) -> Result<OpOutcome> {
+pub fn rebase_branch(
+    repo: &Repository,
+    onto_branch: &str,
+    branch_type: BranchType,
+) -> Result<OpOutcome> {
     let onto = repo
         .find_branch(onto_branch, branch_type)
         .context(format!("Branch '{}' not found", onto_branch))?;
@@ -713,10 +733,8 @@ pub fn humanize_git_error(stderr: &str) -> Option<String> {
     if stderr.contains("couldn't find remote ref") {
         return Some(match parse_missing_ref(stderr) {
             Some(r) => format!("Remote has no branch '{r}' — it may be renamed or not pushed yet"),
-            None => {
-                "That branch is missing on the remote — it may be renamed or not pushed yet"
-                    .to_string()
-            }
+            None => "That branch is missing on the remote — it may be renamed or not pushed yet"
+                .to_string(),
         });
     }
     if stderr.contains("would be overwritten by merge")
@@ -755,9 +773,15 @@ pub struct AuthUrl {
 /// `None` if no host is present.
 pub fn url_host(url: &str) -> Option<String> {
     let authority_and_path = url.split("://").last().unwrap_or(url);
-    let authority = authority_and_path.split('/').next().unwrap_or(authority_and_path);
+    let authority = authority_and_path
+        .split('/')
+        .next()
+        .unwrap_or(authority_and_path);
     // Drop any `user@` prefix and `:port` suffix.
-    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
     let host = host.split(':').next().unwrap_or(host);
     if host.is_empty() {
         None
@@ -836,7 +860,9 @@ pub fn reset_hard_checked(repo: &Repository, oid: Oid) -> Result<()> {
     if !is_working_tree_clean(repo)? {
         bail!("working tree has uncommitted changes");
     }
-    let obj = repo.find_object(oid, None).context("Target commit not found")?;
+    let obj = repo
+        .find_object(oid, None)
+        .context("Target commit not found")?;
     repo.reset(&obj, git2::ResetType::Hard, None)?;
     Ok(())
 }
@@ -845,7 +871,9 @@ pub fn reset_hard_checked(repo: &Repository, oid: Oid) -> Result<()> {
 /// restore a deleted tag. Annotated tags are downgraded to lightweight — we
 /// don't reconstruct the original tag object/message.
 pub fn create_lightweight_tag(repo: &Repository, tag_name: &str, commit_oid: Oid) -> Result<()> {
-    let obj = repo.find_object(commit_oid, None).context("Commit not found")?;
+    let obj = repo
+        .find_object(commit_oid, None)
+        .context("Commit not found")?;
     repo.tag_lightweight(tag_name, &obj, false)
         .context(format!("Failed to recreate tag '{}'", tag_name))?;
     Ok(())
@@ -1053,7 +1081,11 @@ pub fn apply_patch_cached(repo_path: &str, patch: &str) -> Result<()> {
 /// Reverse-apply a unified-diff patch to the index (`git apply --cached -R`) —
 /// unstages the change described by `patch`.
 pub fn apply_patch_cached_reverse(repo_path: &str, patch: &str) -> Result<()> {
-    run_git_with_stdin(repo_path, &["apply", "--cached", "-R", "-"], patch.as_bytes())?;
+    run_git_with_stdin(
+        repo_path,
+        &["apply", "--cached", "-R", "-"],
+        patch.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -1125,22 +1157,19 @@ fn friendly_commit_error(e: anyhow::Error) -> anyhow::Error {
 
 /// Create a commit with the given message
 pub fn commit_with_message(repo_path: &str, message: &str) -> Result<()> {
-    run_git(repo_path, &["commit", "-m", message])
-        .map_err(friendly_commit_error)?;
+    run_git(repo_path, &["commit", "-m", message]).map_err(friendly_commit_error)?;
     Ok(())
 }
 
 /// Amend the last commit with a new message.
 pub fn commit_amend(repo_path: &str, message: &str) -> Result<()> {
-    run_git(repo_path, &["commit", "--amend", "-m", message])
-        .map_err(friendly_commit_error)?;
+    run_git(repo_path, &["commit", "--amend", "-m", message]).map_err(friendly_commit_error)?;
     Ok(())
 }
 
 /// Amend the last commit without changing the message.
 pub fn commit_amend_no_edit(repo_path: &str) -> Result<()> {
-    run_git(repo_path, &["commit", "--amend", "--no-edit"])
-        .map_err(friendly_commit_error)?;
+    run_git(repo_path, &["commit", "--amend", "--no-edit"]).map_err(friendly_commit_error)?;
     Ok(())
 }
 
@@ -1237,7 +1266,15 @@ pub fn file_history(repo_path: &str, path: &str, limit: usize) -> Result<Vec<Oid
     let limit_str = limit.to_string();
     let output = run_git(
         repo_path,
-        &["log", "--follow", "-n", &limit_str, "--format=%H", "--", path],
+        &[
+            "log",
+            "--follow",
+            "-n",
+            &limit_str,
+            "--format=%H",
+            "--",
+            path,
+        ],
     )?;
     let text = String::from_utf8_lossy(&output.stdout);
     let oids = text
@@ -1253,8 +1290,7 @@ pub fn file_history(repo_path: &str, path: &str, limit: usize) -> Result<Vec<Oid
 mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
-        is_divergent_pull_error, is_https_auth_failure, url_host, AuthUrl,
-        OpOutcome, PullMode,
+        is_divergent_pull_error, is_https_auth_failure, url_host, AuthUrl, OpOutcome, PullMode,
     };
 
     #[test]
@@ -1272,7 +1308,9 @@ mod tests {
             "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
         ));
         // Unrelated errors.
-        assert!(!is_https_auth_failure("fatal: Not possible to fast-forward"));
+        assert!(!is_https_auth_failure(
+            "fatal: Not possible to fast-forward"
+        ));
         assert!(!is_https_auth_failure("Already up to date."));
     }
 
@@ -1280,21 +1318,38 @@ mod tests {
     fn extract_auth_url_pulls_host_and_optional_user() {
         assert_eq!(
             extract_auth_url("fatal: could not read Username for 'https://github.com': x"),
-            Some(AuthUrl { host: "github.com".into(), user: None })
+            Some(AuthUrl {
+                host: "github.com".into(),
+                user: None
+            })
         );
         // Embedded user@ prefills the username prompt; path is ignored.
         assert_eq!(
-            extract_auth_url("fatal: Authentication failed for 'https://alice@git.example.com/o/r.git/'"),
-            Some(AuthUrl { host: "git.example.com".into(), user: Some("alice".into()) })
+            extract_auth_url(
+                "fatal: Authentication failed for 'https://alice@git.example.com/o/r.git/'"
+            ),
+            Some(AuthUrl {
+                host: "git.example.com".into(),
+                user: Some("alice".into())
+            })
         );
         // No URL present.
-        assert_eq!(extract_auth_url("git@github.com: Permission denied (publickey)."), None);
+        assert_eq!(
+            extract_auth_url("git@github.com: Permission denied (publickey)."),
+            None
+        );
     }
 
     #[test]
     fn url_host_strips_scheme_user_and_port() {
-        assert_eq!(url_host("https://github.com/o/r.git").as_deref(), Some("github.com"));
-        assert_eq!(url_host("https://alice@github.com:443/o/r").as_deref(), Some("github.com"));
+        assert_eq!(
+            url_host("https://github.com/o/r.git").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            url_host("https://alice@github.com:443/o/r").as_deref(),
+            Some("github.com")
+        );
         assert_eq!(url_host("github.com/o/r").as_deref(), Some("github.com"));
         assert_eq!(url_host("https://").as_deref(), None);
     }
@@ -1348,9 +1403,11 @@ mod tests {
     #[test]
     fn humanize_maps_known_failures_to_guidance() {
         // Auth (both HTTPS credential and SSH key forms).
-        assert!(humanize_git_error("fatal: could not read Username for 'https://github.com'")
-            .unwrap()
-            .contains("Authentication failed"));
+        assert!(
+            humanize_git_error("fatal: could not read Username for 'https://github.com'")
+                .unwrap()
+                .contains("Authentication failed")
+        );
         assert!(humanize_git_error("remote: Permission denied (publickey).")
             .unwrap()
             .contains("Authentication failed"));
@@ -1364,9 +1421,11 @@ mod tests {
         .unwrap()
         .contains("commit or stash"));
         // Rebase-mode dirty worktree gets the same commit-or-stash guidance.
-        assert!(humanize_git_error("error: cannot pull with rebase: You have unstaged changes.")
-            .unwrap()
-            .contains("commit or stash"));
+        assert!(
+            humanize_git_error("error: cannot pull with rebase: You have unstaged changes.")
+                .unwrap()
+                .contains("commit or stash")
+        );
         // index.lock.
         assert!(humanize_git_error(
             "fatal: Unable to create '/repo/.git/index.lock': File exists."
@@ -1384,12 +1443,20 @@ mod tests {
 
     /// Init a bare remote at `path`.
     fn init_bare(path: &std::path::Path) {
-        Command::new("git").args(["init", "-q", "--bare"]).arg(path).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(path)
+            .status()
+            .unwrap();
     }
 
     /// Init a working repo with an isolated identity and one commit on `master`.
     fn init_repo_with_commit(path: &std::path::Path) {
-        Command::new("git").args(["init", "-q"]).arg(path).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(path)
+            .status()
+            .unwrap();
         git(path, &["config", "user.email", "t@t.com"]);
         git(path, &["config", "user.name", "t"]);
         std::fs::write(path.join("a.txt"), "a").unwrap();
@@ -1401,7 +1468,12 @@ mod tests {
     /// commit — so the *original* clone's `<remote>/<branch>` tracking ref does
     /// not yet exist and only appears after it fetches.
     fn push_new_branch_via_clone(remote: &std::path::Path, dst: &std::path::Path, branch: &str) {
-        Command::new("git").args(["clone", "-q"]).arg(remote).arg(dst).status().unwrap();
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(remote)
+            .arg(dst)
+            .status()
+            .unwrap();
         git(dst, &["config", "user.email", "t@t.com"]);
         git(dst, &["config", "user.name", "t"]);
         git(dst, &["checkout", "-qb", branch]);
@@ -1426,14 +1498,18 @@ mod tests {
         // A second remote pointing at a path that does not exist — every fetch of
         // it fails hard.
         let missing = tmp.path().join("nonexistent-remote.git");
-        git(&local, &["remote", "add", "broken", missing.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "broken", missing.to_str().unwrap()],
+        );
 
         // Publish a new branch to the good remote from another clone, so the
         // local repo has no `origin/feature` tracking ref yet.
         push_new_branch_via_clone(&good, &tmp.path().join("work"), "feature");
         let repo = Repository::open(&local).unwrap();
         assert!(
-            repo.find_branch("origin/feature", BranchType::Remote).is_err(),
+            repo.find_branch("origin/feature", BranchType::Remote)
+                .is_err(),
             "precondition: origin/feature absent before fetch_all"
         );
 
@@ -1442,11 +1518,15 @@ mod tests {
         // The regression: the healthy remote's ref updated even though the call
         // returned Err.
         assert!(
-            repo.find_branch("origin/feature", BranchType::Remote).is_ok(),
+            repo.find_branch("origin/feature", BranchType::Remote)
+                .is_ok(),
             "origin/feature must be updated on disk despite the broken remote"
         );
         let msg = err.to_string();
-        assert!(msg.contains("broken"), "error must name the failed remote: {msg}");
+        assert!(
+            msg.contains("broken"),
+            "error must name the failed remote: {msg}"
+        );
         assert!(
             !msg.contains("origin"),
             "error must not name the remote that succeeded: {msg}"
@@ -1464,8 +1544,14 @@ mod tests {
         init_bare(&remote_a);
         init_bare(&remote_b);
         init_repo_with_commit(&local);
-        git(&local, &["remote", "add", "origin", remote_a.to_str().unwrap()]);
-        git(&local, &["remote", "add", "upstream", remote_b.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote_a.to_str().unwrap()],
+        );
+        git(
+            &local,
+            &["remote", "add", "upstream", remote_b.to_str().unwrap()],
+        );
         git(&local, &["push", "-q", "origin", "master"]);
         git(&local, &["push", "-q", "upstream", "master"]);
 
@@ -1474,17 +1560,23 @@ mod tests {
         push_new_branch_via_clone(&remote_b, &tmp.path().join("wb"), "feat-b");
 
         let repo = Repository::open(&local).unwrap();
-        assert!(repo.find_branch("origin/feat-a", BranchType::Remote).is_err());
-        assert!(repo.find_branch("upstream/feat-b", BranchType::Remote).is_err());
+        assert!(repo
+            .find_branch("origin/feat-a", BranchType::Remote)
+            .is_err());
+        assert!(repo
+            .find_branch("upstream/feat-b", BranchType::Remote)
+            .is_err());
 
         fetch_all(local.to_str().unwrap(), None).unwrap();
 
         assert!(
-            repo.find_branch("origin/feat-a", BranchType::Remote).is_ok(),
+            repo.find_branch("origin/feat-a", BranchType::Remote)
+                .is_ok(),
             "origin/feat-a (not checked out locally) must be fetched"
         );
         assert!(
-            repo.find_branch("upstream/feat-b", BranchType::Remote).is_ok(),
+            repo.find_branch("upstream/feat-b", BranchType::Remote)
+                .is_ok(),
             "upstream/feat-b (not checked out locally) must be fetched"
         );
     }
@@ -1505,11 +1597,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
-        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -1518,23 +1621,32 @@ mod tests {
 
         let repo = Repository::open(&local).unwrap();
         assert!(
-            repo.find_branch("origin/feature", BranchType::Remote).is_ok(),
+            repo.find_branch("origin/feature", BranchType::Remote)
+                .is_ok(),
             "origin/feature present after push"
         );
 
         // A different clone deletes the branch on the remote. Deleting from our
         // own clone would auto-remove the tracking ref and not exercise prune.
         let other = tmp.path().join("other");
-        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap();
         git(&other, &["push", "-q", "origin", "--delete", "feature"]);
 
         // Still stale locally until we fetch.
-        assert!(repo.find_branch("origin/feature", BranchType::Remote).is_ok());
+        assert!(repo
+            .find_branch("origin/feature", BranchType::Remote)
+            .is_ok());
 
         fetch_remote(local.to_str().unwrap(), "origin", None).unwrap();
 
         assert!(
-            repo.find_branch("origin/feature", BranchType::Remote).is_err(),
+            repo.find_branch("origin/feature", BranchType::Remote)
+                .is_err(),
             "origin/feature must be pruned after upstream deletion + fetch"
         );
     }
@@ -1573,11 +1685,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
-        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -1594,7 +1717,12 @@ mod tests {
         // `git fetch` — bypassing our long-lived handle entirely, exactly as
         // the original bug report described.
         let other = tmp.path().join("other");
-        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap();
         git(&other, &["config", "user.email", "t@t.com"]);
         git(&other, &["config", "user.name", "t"]);
         git(&other, &["checkout", "-q", "dev"]);
@@ -1632,7 +1760,11 @@ mod tests {
             Some("Merge remote-tracking branch 'origin/dev'"),
             "commit message must follow git's own remote-tracking merge convention"
         );
-        assert_eq!(merge_commit.parent_count(), 2, "must be a real merge commit");
+        assert_eq!(
+            merge_commit.parent_count(),
+            2,
+            "must be a real merge commit"
+        );
 
         // The remote's advanced tip must be an ancestor of the new HEAD, i.e.
         // actually merged in and reachable — not just a no-op or a wrong ref.
@@ -1644,12 +1776,17 @@ mod tests {
             .target()
             .unwrap();
         assert!(
-            repo.repo().graph_descendant_of(post_head, remote_tip).unwrap(),
+            repo.repo()
+                .graph_descendant_of(post_head, remote_tip)
+                .unwrap(),
             "origin/dev's tip must be an ancestor of the merged HEAD"
         );
 
         // And the file introduced only on origin/dev landed in the working tree.
-        assert!(local.join("b.txt").exists(), "content from origin/dev must be merged in");
+        assert!(
+            local.join("b.txt").exists(),
+            "content from origin/dev must be merged in"
+        );
     }
 
     /// Same fix, same shape of bug, for `rebase_branch`: rebasing the current
@@ -1660,11 +1797,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
-        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -1676,7 +1824,12 @@ mod tests {
 
         // Advance dev upstream from a second clone.
         let other = tmp.path().join("other");
-        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap();
         git(&other, &["config", "user.email", "t@t.com"]);
         git(&other, &["config", "user.name", "t"]);
         git(&other, &["checkout", "-q", "dev"]);
@@ -1719,8 +1872,14 @@ mod tests {
             remote_tip,
             "the replayed commit's parent must be origin/dev's tip"
         );
-        assert!(local.join("b.txt").exists(), "content from origin/dev must be present after rebase");
-        assert!(local.join("c.txt").exists(), "local work must survive the rebase");
+        assert!(
+            local.join("b.txt").exists(),
+            "content from origin/dev must be present after rebase"
+        );
+        assert!(
+            local.join("c.txt").exists(),
+            "local work must survive the rebase"
+        );
     }
 
     /// Companion finding to the test above: isolates whether a *targeted*
@@ -1742,11 +1901,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
-        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
-        git(&local, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -1764,7 +1934,12 @@ mod tests {
             .unwrap();
 
         let other = tmp.path().join("other");
-        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap();
         git(&other, &["config", "user.email", "t@t.com"]);
         git(&other, &["config", "user.name", "t"]);
         git(&other, &["checkout", "-q", "dev"]);
@@ -1802,12 +1977,23 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let remote = tmp.path().join("remote.git");
         let local = tmp.path().join("local");
-        Command::new("git").args(["init", "-q", "--bare"]).arg(&remote).status().unwrap();
-        Command::new("git").args(["init", "-q"]).arg(&local).status().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&local)
+            .status()
+            .unwrap();
         git(&local, &["config", "user.email", "t@t.com"]);
         git(&local, &["config", "user.name", "t"]);
         // The remote is deliberately named `upstream`, not `origin`.
-        git(&local, &["remote", "add", "upstream", remote.to_str().unwrap()]);
+        git(
+            &local,
+            &["remote", "add", "upstream", remote.to_str().unwrap()],
+        );
         std::fs::write(local.join("a.txt"), "a").unwrap();
         git(&local, &["add", "a.txt"]);
         git(&local, &["commit", "-qm", "init"]);
@@ -1815,7 +2001,12 @@ mod tests {
 
         // A second clone adds a `feature` branch and pushes it to the shared repo.
         let other = tmp.path().join("other");
-        Command::new("git").args(["clone", "-q"]).arg(&remote).arg(&other).status().unwrap();
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap();
         git(&other, &["config", "user.email", "t@t.com"]);
         git(&other, &["config", "user.name", "t"]);
         git(&other, &["checkout", "-q", "-b", "feature"]);
@@ -1841,7 +2032,9 @@ mod tests {
         let local_branch = repo
             .find_branch("feature", BranchType::Local)
             .expect("local `feature` created");
-        let upstream = local_branch.upstream().expect("upstream set on local branch");
+        let upstream = local_branch
+            .upstream()
+            .expect("upstream set on local branch");
         assert_eq!(
             upstream.name().unwrap(),
             Some("upstream/feature"),
@@ -1853,4 +2046,3 @@ mod tests {
         assert!(local.join("b.txt").exists(), "feature content checked out");
     }
 }
-

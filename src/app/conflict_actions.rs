@@ -138,7 +138,9 @@ impl App {
     /// clean again on completion).
     pub(crate) fn handle_op_outcome(&mut self, outcome: OpOutcome, op: OperationState) {
         match outcome {
-            OpOutcome::Completed => self.toast(crate::toast::ToastKind::Success, op_completed_message(op)),
+            OpOutcome::Completed => {
+                self.toast(crate::toast::ToastKind::Success, op_completed_message(op))
+            }
             OpOutcome::Conflicts { count } => {
                 self.focus_conflict_files();
                 self.set_message(Self::conflict_guidance(count));
@@ -175,7 +177,10 @@ impl App {
             return Ok(());
         };
         if file.stage_status != Some(StageStatus::Conflicted) {
-            self.toast(crate::toast::ToastKind::Info, "Not a conflicted file (use o/t on a Merge Changes entry)");
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Not a conflicted file (use o/t on a Merge Changes entry)",
+            );
             return Ok(());
         }
         let path = file.path.to_string_lossy().to_string();
@@ -184,11 +189,14 @@ impl App {
         } else {
             accept_theirs(&self.repo_path, &path)?;
         }
-        self.toast(crate::toast::ToastKind::Success, format!(
-            "Accepted {} for '{}'",
-            if ours { "ours" } else { "theirs" },
-            path
-        ));
+        self.toast(
+            crate::toast::ToastKind::Success,
+            format!(
+                "Accepted {} for '{}'",
+                if ours { "ours" } else { "theirs" },
+                path
+            ),
+        );
         self.refresh_after_file_op()?;
         Ok(())
     }
@@ -258,7 +266,10 @@ mod tests {
 
         app.hide_files_pane = true;
         app.focus_conflict_files();
-        assert!(!app.hide_files_pane, "conflict flow must reveal the files pane");
+        assert!(
+            !app.hide_files_pane,
+            "conflict flow must reveal the files pane"
+        );
         assert_eq!(app.focused_panel, crate::app::FocusedPanel::Files);
     }
 
@@ -307,10 +318,7 @@ mod tests {
         let msg = op_guard_message(OperationState::Clean, 2, "checkout")
             .expect("lingering conflicts must block a checkout");
         assert!(msg.contains("Cannot checkout"), "names the action: {msg}");
-        assert!(
-            msg.contains("resolve"),
-            "guides toward resolution: {msg}"
-        );
+        assert!(msg.contains("resolve"), "guides toward resolution: {msg}");
     }
 
     // ── Pure predicate: commit_guard_message ────────────────────────────
@@ -326,14 +334,14 @@ mod tests {
     #[test]
     fn commit_blocked_while_conflicts_remain() {
         // Mid-merge with conflicts: guide toward Continue.
-        let msg = commit_guard_message(OperationState::Merge, 1)
-            .expect("commit blocked while unmerged");
+        let msg =
+            commit_guard_message(OperationState::Merge, 1).expect("commit blocked while unmerged");
         assert!(msg.contains("Unresolved conflicts"), "{msg}");
         assert!(msg.contains("Continue (c)"), "{msg}");
 
         // Stash-conflict (no op): still blocked, but no Continue to offer.
-        let msg = commit_guard_message(OperationState::Clean, 1)
-            .expect("commit blocked while unmerged");
+        let msg =
+            commit_guard_message(OperationState::Clean, 1).expect("commit blocked while unmerged");
         assert!(msg.contains("Unresolved conflicts"), "{msg}");
     }
 

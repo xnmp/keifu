@@ -268,7 +268,10 @@ impl<'a> IssueListWidget<'a> {
             ));
         }
         if !issue.updated_at.is_empty() {
-            spans.push(Span::styled(format!("{} ", relative_time(&issue.updated_at)), muted));
+            spans.push(Span::styled(
+                format!("{} ", relative_time(&issue.updated_at)),
+                muted,
+            ));
         }
         if let Some(who) = issue.assignees.first() {
             spans.push(Span::styled(format!("@{who}"), muted));
