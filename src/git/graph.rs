@@ -1395,10 +1395,7 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     // the lane number, so this uniquely picks the branch-line continuation and
     // never leaks onto a reused lane's unrelated occupant).
     let mut cur = sel;
-    loop {
-        let Some(&cur_row) = oid_row.get(&cur) else {
-            break;
-        };
+    while let Some(&cur_row) = oid_row.get(&cur) {
         let cur_lane = layout.nodes[cur_row].lane;
         let child = layout.nodes.iter().find_map(|n| {
             let c = n.commit.as_ref()?;

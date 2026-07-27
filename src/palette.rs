@@ -263,7 +263,7 @@ pub fn rank(query: &str, candidates: Vec<Candidate>, cap: usize) -> PaletteResul
             .into_iter()
             .filter(|c| c.kind == PaletteKind::Command)
             .collect();
-        items.sort_by(|a, b| a.order.cmp(&b.order));
+        items.sort_by_key(|a| a.order);
         let more = items.len().saturating_sub(cap);
         items.truncate(cap);
         return PaletteResults { items, more };

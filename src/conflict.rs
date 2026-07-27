@@ -6,7 +6,7 @@
 /// The four characters git uses to open conflict-marker lines. Each marker line
 /// is exactly seven of one of these, line-initial, followed by a space (before a
 /// label) or the end of the line.
-const MARKER_CHARS: [u8; 4] = [b'<', b'=', b'>', b'|'];
+const MARKER_CHARS: [u8; 4] = *b"<=>|";
 
 /// Length of a git conflict marker run (`<<<<<<<` etc. — always exactly seven).
 const MARKER_LEN: usize = 7;
