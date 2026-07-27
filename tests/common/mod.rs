@@ -40,6 +40,15 @@ pub fn init_repo(seed: Seed) -> (TempDir, GitRepository) {
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
+        // Same reason as the identity above: it exists for the operations that
+        // shell out to real `git`, not for the git2 ones. Git for Windows
+        // installs with core.autocrlf=true globally, so `git stash pop`,
+        // `git cherry-pick --continue` and `git merge --abort` rewrite LF to
+        // CRLF on checkout — and every assertion comparing file contents to a
+        // bare "\n" literal then fails. Pinning the repo-local value keeps the
+        // bytes identical on every platform.
+        config.set_bool("core.autocrlf", false).unwrap();
+        config.set_str("core.eol", "lf").unwrap();
 
         if seed == Seed::TrackedFile {
             fs::write(tempdir.path().join("tracked.txt"), "tracked\n").unwrap();
