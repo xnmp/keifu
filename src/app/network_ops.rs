@@ -452,21 +452,32 @@ impl App {
 
     /// Refresh after a debounced filesystem-watcher event.
     fn refresh_from_watcher(&mut self, git_changed: bool) {
+        let prior_refs =
+            git_changed.then(|| (self.repo.head_oid(), Self::branch_tips(&self.branches)));
         // A `.git` ref/HEAD change under a long-lived libgit2 handle is only
         // observed after a reopen, so mark the repo dirty; a working-tree-only
         // tick refreshes the graph/status but leaves the handle (and this flag)
         // alone, skipping the reopen cost.
         if git_changed {
             self.repo_dirty = true;
-            // This often means another process fetched a remote squash merge.
-            // Its GitHub PR state may have changed too, so do not leave the
-            // hide-merged classifier waiting for the five-minute poll interval.
-            self.force_gh_refresh();
         }
         // Latch: a burst of failing watcher-driven refreshes (e.g. during a
         // build) reports once per episode, not on every poll; re-arm on success.
         match self.refresh(false) {
-            Ok(()) => self.refresh_latches.watch_refresh = false,
+            Ok(()) => {
+                self.refresh_latches.watch_refresh = false;
+                if let Some((head, tips)) = prior_refs {
+                    let moved =
+                        self.repo.head_oid() != head || Self::branch_tips(&self.branches) != tips;
+                    if moved {
+                        // FETCH_HEAD rewrites are watcher-visible even for a
+                        // no-op fetch. Re-poll GitHub only when the refreshed
+                        // refs prove the remote changed, preserving the coarse
+                        // interval for idle repositories.
+                        self.force_gh_refresh();
+                    }
+                }
+            }
             Err(e) => {
                 if !self.refresh_latches.watch_refresh {
                     self.refresh_latches.watch_refresh = true;
