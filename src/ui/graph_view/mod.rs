@@ -414,6 +414,11 @@ fn render_cells_unicode(
                         trace,
                     )
                 }
+                // Unicode has one style for the whole glyph, unlike the pixel
+                // path's independently-styled strokes. Keep a crossing or
+                // co-routed glyph live when either edge is traced, otherwise
+                // its unrelated merged edge would disconnect the selected path.
+                _ if trace.is_some_and(|lit| crate::git::graph::cell_is_traced(oids, lit)) => false,
                 _ => {
                     crate::git::graph::edge_touches_merged_unless_traced(
                         oids.0,
@@ -2412,6 +2417,40 @@ mod tests {
         assert!(
             unrelated.style.add_modifier.contains(Modifier::DIM),
             "unrelated merged work remains dimmed"
+        );
+    }
+
+    #[test]
+    fn selected_merged_trace_stays_bright_at_a_unicode_crossing() {
+        // A HorizontalPipe carries two independent edges, but Unicode renders
+        // them as one glyph. The selected feature's horizontal merge arc must
+        // stay visible even when the crossed vertical edge is unrelated merged
+        // work that should otherwise dim.
+        let theme = Theme::dark();
+        let (trunk, feature, base, other) = (oid(1), oid(4), oid(3), oid(6));
+        let mut node = node_with_cells(vec![CellType::HorizontalPipe(0, 1)], false);
+        node.cell_oids = vec![(Some((trunk, feature)), Some((other, base)))];
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [((trunk, feature), feature)].into_iter().collect();
+        let merged: HashSet<git2::Oid> = [feature, other].into_iter().collect();
+
+        let mut spans: Vec<Span> = Vec::new();
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            8,
+            Some(&lit),
+            false,
+            Some(&merged),
+            None,
+        );
+
+        let crossing = spans.iter().find(|s| s.content.contains('┼')).unwrap();
+        assert!(
+            !crossing.style.add_modifier.contains(Modifier::DIM),
+            "the selected route stays visible at a shared Unicode glyph"
         );
     }
 
