@@ -1742,9 +1742,18 @@ impl App {
         let fallback = crate::git::merged::base_branch(&self.branches).map(|b| b.tip_oid);
         let mut pairs: Vec<(git2::Oid, git2::Oid)> = self
             .open_prs
-            .values()
-            .filter_map(|p| p.head_oid().map(|head| (head, p)))
-            .flat_map(|(head, p)| {
+            .iter()
+            .flat_map(|(head_ref, p)| {
+                // The graph may have advanced past GitHub's `headRefOid`:
+                // immediately after a local base merge, the visible feature
+                // tip is newer until it is pushed and the PR refresh completes.
+                // Retain GitHub's OID for refs not known locally.
+                let mut heads = crate::git::merged::branch_ref_tips(&self.branches, head_ref);
+                if let Some(head) = p.head_oid() {
+                    heads.push(head);
+                }
+                heads.sort();
+                heads.dedup();
                 let tips = match p.base_ref.as_deref() {
                     Some(base) => crate::git::merged::base_ref_tips(&self.branches, base),
                     None => Vec::new(),
@@ -1756,7 +1765,10 @@ impl App {
                 } else {
                     tips
                 };
-                tips.into_iter().map(move |tip| (head, tip))
+                heads
+                    .into_iter()
+                    .flat_map(|head| tips.iter().copied().map(move |tip| (head, tip)))
+                    .collect::<Vec<_>>()
             })
             .collect();
         // Sorted so the signature is order-independent.
