@@ -421,7 +421,7 @@ pub enum AppMode {
         entries: Vec<FileHistoryEntry>,
         selected: usize,
     },
-    /// Fuzzy command palette (Ctrl+P): commands, branches, and commits in one
+    /// Fuzzy command palette (`:`): commands, branches, and commits in one
     /// ranked list. Holds the query string and the selected row.
     CommandPalette {
         query: String,
@@ -1411,6 +1411,11 @@ impl App {
         // The command palette opens from any panel in Normal mode.
         if matches!(action, Action::OpenCommandPalette) {
             self.open_command_palette();
+            return Ok(());
+        }
+        // Branch quick search opens from any panel in Normal mode.
+        if matches!(action, Action::Search) {
+            self.open_branch_search();
             return Ok(());
         }
         // The settings menu opens from any panel in Normal mode.

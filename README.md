@@ -34,7 +34,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Branch tracing (`t`) — selecting a commit highlights its full branch line (first-parent ancestry and descendants) and dims every other lane, the way VSCode does on hover; on by default for branchy graphs
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label; filter the picker by branch name or by author (`@name`) and bulk-hide a whole author's branches; `Shift+O` hides all remote-only branches at once (remote refs with no matching local branch), composing with the per-branch filter
 - Compare any two commits
-- Command palette (`Ctrl+P` / `:`) — one fuzzy list over commands, branch checkouts, and commit jumps
+- Command palette (`:`) — one fuzzy list over commands, branch checkouts, and commit jumps
 - Session undo (`Ctrl+Z` in the graph) for branch/tag delete, merge, pull, and rename — verified against current state and confirmed before it runs
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
 - Full mouse support: click to select and focus, double-click to open, right-click for a context menu, clickable PR/branch chips, scroll-wheel routing, and a drag-resizable graph/detail divider
@@ -178,7 +178,7 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 
 | Key | Action |
 | --- | --- |
-| `/` | Search branches (incremental fuzzy search) |
+| `Ctrl+P` / `/` | Search branches (incremental fuzzy search) |
 | `↑` / `Ctrl+k` | Select previous result |
 | `↓` / `Ctrl+j` | Select next result |
 | `Enter` | Jump to selected branch |
@@ -188,7 +188,7 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+P` / `:` | Command palette — fuzzy-find over commands, branches (checkout), and commits (jump); ↑↓ to move, Enter to run, Esc to close |
+| `:` | Command palette — fuzzy-find over commands, branches (checkout), and commits (jump); ↑↓ to move, Enter to run, Esc to close |
 | `R` | Refresh repository data |
 | `F5` | Full update — fetch all remotes, refetch open PRs, and refresh |
 | `?` | Toggle help |

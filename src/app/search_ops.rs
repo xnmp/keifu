@@ -3,6 +3,16 @@
 use super::*;
 
 impl App {
+    /// Open branch quick search, preserving the selection for cancellation.
+    pub(crate) fn open_branch_search(&mut self) {
+        self.save_search_position();
+        self.mode = AppMode::Input {
+            title: "Search branches".to_string(),
+            input: String::new(),
+            action: InputAction::Search,
+        };
+    }
+
     /// Update fuzzy search results for the given query
     pub(crate) fn update_fuzzy_search(&mut self, query: &str) {
         self.search_state.fuzzy_matches =

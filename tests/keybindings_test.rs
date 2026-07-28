@@ -87,6 +87,15 @@ fn alt_slash_toggles_layout() {
     assert_eq!(map_normal_graph(k), Some(Action::ToggleLayout));
 }
 
+#[test]
+fn ctrl_p_opens_branch_search_from_every_panel() {
+    let ctrl_p = key_mod(KeyCode::Char('p'), KeyModifiers::CONTROL);
+
+    assert_eq!(map_normal_graph(ctrl_p), Some(Action::Search));
+    assert_eq!(map_normal_files(ctrl_p), Some(Action::Search));
+    assert_eq!(map_normal_detail(ctrl_p), Some(Action::Search));
+}
+
 // ── Panel navigation ────────────────────────────────────────────────
 
 #[test]

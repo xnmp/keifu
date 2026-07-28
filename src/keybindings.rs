@@ -194,15 +194,18 @@ fn map_normal_mode(
         return map_editor_mode(key);
     }
 
-    // Command palette: Ctrl+P (or ':' for vim muscle memory) from any panel,
-    // unless a text filter is currently capturing input.
+    // Ctrl+P opens branch quick search from any panel. ':' keeps the command
+    // palette available for vim muscle memory. Neither interrupts a text filter.
     if !files_filter_active && !commit_filter_active {
         let ctrl_p =
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p');
         let colon = !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
             && key.code == KeyCode::Char(':');
-        if ctrl_p || colon {
+        if ctrl_p {
+            return Some(Action::Search);
+        }
+        if colon {
             return Some(Action::OpenCommandPalette);
         }
 

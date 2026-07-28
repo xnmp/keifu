@@ -211,14 +211,6 @@ impl App {
                     action: InputAction::CreateBranch,
                 };
             }
-            Action::Search => {
-                self.save_search_position();
-                self.mode = AppMode::Input {
-                    title: "Search branches".to_string(),
-                    input: String::new(),
-                    action: InputAction::Search,
-                };
-            }
             Action::DeleteBranch => {
                 self.open_delete_branch_picker();
             }

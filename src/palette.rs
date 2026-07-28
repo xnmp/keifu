@@ -198,7 +198,7 @@ pub fn command_registry() -> Vec<PaletteEntry> {
             Action::OpenBranchFilter,
             always,
         ),
-        entry("Search branches", Some("/"), Action::Search, always),
+        entry("Search branches", Some("Ctrl+P /"), Action::Search, always),
         entry(
             "Load 500 more commits",
             None,

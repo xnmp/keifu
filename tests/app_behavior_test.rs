@@ -9,6 +9,7 @@
 use std::fs;
 use std::path::Path;
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use git2::{Oid, Repository, Signature, Status};
 use tempfile::TempDir;
 
@@ -17,6 +18,7 @@ use keifu::app::{
     App, AppMode, CommitMenuItem, ConfirmAction, FilesPaneItem, FocusedPanel, InputAction,
 };
 use keifu::git::GitRepository;
+use keifu::keybindings::map_key_to_action;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -558,6 +560,24 @@ fn search_opens_input_mode() {
 }
 
 #[test]
+fn search_opens_input_mode_from_files_panel() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+
+    app.handle_action(Action::Search).unwrap();
+
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: keifu::app::InputAction::Search,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn create_branch_opens_input_mode() {
     let (_td, repo) = init_repo();
     commit_file(repo.repo(), "a.txt", "a", "first");
@@ -997,6 +1017,99 @@ fn search_workflow() {
     // Cancel search
     app.handle_action(Action::Cancel).unwrap();
     assert!(matches!(app.mode, AppMode::Normal));
+}
+
+#[test]
+fn ctrl_p_search_navigates_confirms_and_cancels_branch_selection() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    {
+        let head = repo.repo().head().unwrap().peel_to_commit().unwrap();
+        repo.repo().branch("feature-search", &head, false).unwrap();
+    }
+    commit_to_ref(
+        repo.repo(),
+        "refs/heads/feature-search",
+        "feature.txt",
+        "feature",
+        "feature commit",
+    );
+    let mut app = make_app(repo);
+    let (feature_position, feature_node) = app
+        .graph_nav
+        .branch_positions
+        .iter()
+        .enumerate()
+        .find(|(_, (_, name))| name == "feature-search")
+        .map(|(position, (node, _))| (position, *node))
+        .expect("feature branch must be searchable");
+    let (original_position, original_node) = app
+        .graph_nav
+        .branch_positions
+        .iter()
+        .enumerate()
+        .find(|(_, (_, name))| name != "feature-search")
+        .map(|(position, (node, _))| (position, *node))
+        .expect("the starting branch must remain available");
+    app.graph_nav.selected_branch_position = Some(original_position);
+    app.graph_nav.graph_list_state.select(Some(original_node));
+
+    let ctrl_p = map_key_to_action(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &app.mode,
+        app.focused_panel,
+        false,
+        false,
+        false,
+    );
+    app.handle_action(ctrl_p.expect("Ctrl+P must open branch search"))
+        .unwrap();
+    for character in "feature".chars() {
+        app.handle_action(Action::InputChar(character)).unwrap();
+    }
+
+    assert_eq!(
+        app.graph_nav.graph_list_state.selected(),
+        Some(feature_node)
+    );
+    assert_eq!(
+        app.graph_nav.selected_branch_position,
+        Some(feature_position)
+    );
+
+    app.handle_action(Action::Confirm).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert_eq!(
+        app.graph_nav.graph_list_state.selected(),
+        Some(feature_node)
+    );
+
+    app.graph_nav.selected_branch_position = Some(original_position);
+    app.graph_nav.graph_list_state.select(Some(original_node));
+    let ctrl_p = map_key_to_action(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &app.mode,
+        app.focused_panel,
+        false,
+        false,
+        false,
+    );
+    app.handle_action(ctrl_p.expect("Ctrl+P must open branch search"))
+        .unwrap();
+    for character in "feature".chars() {
+        app.handle_action(Action::InputChar(character)).unwrap();
+    }
+    app.handle_action(Action::Cancel).unwrap();
+
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert_eq!(
+        app.graph_nav.graph_list_state.selected(),
+        Some(original_node)
+    );
+    assert_eq!(
+        app.graph_nav.selected_branch_position,
+        Some(original_position)
+    );
 }
 
 // ── Workflow: Uncommitted Changes Node Lifecycle ────────────────────
