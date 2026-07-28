@@ -742,6 +742,25 @@ mod tests {
         assert!(!app.merged.pr_branch_fetch.is_due());
     }
 
+    /// A watcher-driven ref update is usually an external fetch: a remote
+    /// squash merge may have landed even though keifu did not run that fetch.
+    /// It must therefore bypass the slow GitHub poll interval, just like a
+    /// fetch keifu performed itself.
+    #[test]
+    fn watcher_git_ref_change_forces_merged_pr_repoll() {
+        let (_tempdir, mut app) = test_app_with_side_branch();
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        app.refresh_from_watcher(true);
+
+        assert!(app.pr_fetch.is_due(), "open-PR fetch must be forced");
+        assert!(
+            app.merged.pr_branch_fetch.is_due(),
+            "a fetched squash merge must be checked immediately, not after the five-minute poll"
+        );
+    }
+
     /// #104/#107: a successful push changed the remote by definition, so the
     /// gh fetchers must re-poll immediately (new PR head OID for badges; a
     /// merge push lands in the gh merged set).
