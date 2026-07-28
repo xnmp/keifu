@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_badge_appends_review_then_comment_markers() {
+    fn pr_badge_uses_review_marker_instead_of_comment_marker() {
         // Plain: no markers.
         let plain = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::None, false));
         assert!(!plain.contains(PR_APPROVED_ICON));
@@ -287,17 +287,26 @@ mod tests {
         assert!(changes.contains(PR_CHANGES_ICON));
         assert!(!changes.contains(PR_APPROVED_ICON));
 
-        // Outside comment → comment glyph, appended after the review marker.
+        // Outside activity with a review marker is already represented by that
+        // stronger marker, so no redundant comment glyph is appended.
         let both = pr_badge_text(&pr_with(12, CiStatus::Pass, ReviewState::Approved, true));
-        assert!(both.contains(PR_APPROVED_ICON) && both.contains(PR_COMMENT_ICON));
-        let check_at = both.find(PR_APPROVED_ICON).unwrap();
-        let comment_at = both.find(PR_COMMENT_ICON).unwrap();
-        assert!(
-            check_at < comment_at,
-            "review marker precedes comment: {both:?}"
-        );
-        // Icon(1)+" #12"(4) + " ✓"(2) + " ⌘"(2) = 9 columns.
-        assert_eq!(display_width(&both), 9);
+        assert!(both.contains(PR_APPROVED_ICON));
+        assert!(!both.contains(PR_COMMENT_ICON));
+        // Icon(1)+" #12"(4) + " ✓"(2) = 7 columns.
+        assert_eq!(display_width(&both), 7);
+
+        let changes = pr_badge_text(&pr_with(
+            12,
+            CiStatus::Pass,
+            ReviewState::ChangesRequested,
+            true,
+        ));
+        assert!(changes.contains(PR_CHANGES_ICON));
+        assert!(!changes.contains(PR_COMMENT_ICON));
+
+        // Without a review marker, outside activity remains visible.
+        let comment_only = pr_badge_text(&pr_with(12, CiStatus::Pass, ReviewState::None, true));
+        assert!(comment_only.contains(PR_COMMENT_ICON));
     }
 
     #[test]
@@ -395,10 +404,9 @@ mod tests {
     }
 
     #[test]
-    fn pr_badge_encodes_approved_and_comment_state() {
-        // #43: the badge for a PR resolved by head commit encodes the approved +
-        // outside-comment markers. Asserts the badge *decision* (text) directly
-        // rather than scanning a full render.
+    fn pr_badge_encodes_approved_without_redundant_comment_state() {
+        // #43: the badge for a PR resolved by head commit encodes the approved
+        // marker, which supersedes the outside-comment marker.
         let theme = Theme::dark();
         let mut approved = pr(1);
         approved.head_oid = Some(oid(5).to_string());
@@ -415,11 +423,7 @@ mod tests {
             "approved glyph present: {:?}",
             badge.text
         );
-        assert!(
-            badge.text.contains(PR_COMMENT_ICON),
-            "comment glyph present: {:?}",
-            badge.text
-        );
+        assert!(!badge.text.contains(PR_COMMENT_ICON), "badge: {badge:?}");
     }
 
     #[test]

@@ -677,6 +677,35 @@ mod tests {
     }
 
     #[test]
+    fn approved_pr_tick_is_green_and_hides_redundant_activity_marker() {
+        // The rendering seam: even a failed-CI PR keeps its approval tick green,
+        // while its badge retains the CI color. A review marker supersedes the
+        // outside-activity message marker.
+        let mut approved = pr_head(7, 5);
+        approved.ci = CiStatus::Fail;
+        approved.review = ReviewState::Approved;
+        approved.outside_activity = true;
+        let open = open_map(vec![("feat", approved)]);
+        let line = render_row(&commit_node(5, "head", &[]), &open, false);
+        let theme = Theme::dark();
+
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref() == " \u{f42e}"
+                    && span.style.fg == Some(theme.pr_ci_pass)),
+            "approved tick must render in success green: {line:?}"
+        );
+        assert!(
+            !line
+                .spans
+                .iter()
+                .any(|span| span.content.contains('\u{f41f}')),
+            "approved PR must not also render a message marker: {line:?}"
+        );
+    }
+
+    #[test]
     fn pr_badge_renders_before_branch_pill() {
         // #98: the PR badge should lead the row, not trail the branch pill.
         let open = open_map(vec![("feat", pr_head(77, 5))]);
