@@ -765,6 +765,98 @@ mod tests {
         );
     }
 
+    #[test]
+    fn watcher_ref_change_hides_gh_confirmed_squash_branch_without_hiding_unmerged_branch() {
+        use std::collections::HashSet;
+        use std::time::{Duration, Instant};
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let repo = git2::Repository::init(path).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        std::fs::write(path.join("file.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let root = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+
+        std::fs::write(path.join("file.txt"), "topic\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let root_commit = repo.find_commit(root).unwrap();
+        let topic = repo
+            .commit(None, &sig, &sig, "topic", &tree, &[&root_commit])
+            .unwrap();
+        let topic_commit = repo.find_commit(topic).unwrap();
+        repo.branch("topic", &topic_commit, false).unwrap();
+
+        std::fs::write(path.join("keep.txt"), "keep\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("keep.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let keep = repo
+            .commit(None, &sig, &sig, "keep", &tree, &[&root_commit])
+            .unwrap();
+        let keep_commit = repo.find_commit(keep).unwrap();
+        repo.branch("keep", &keep_commit, false).unwrap();
+
+        let mut app = App::from_repo(GitRepository::open(path).unwrap()).unwrap();
+        app.merged.hide = true;
+        app.merged.pr_branch_fetch =
+            crate::interval_fetch::IntervalFetch::new(Duration::from_secs(300), |_| {
+                Ok(HashSet::from(["topic".to_string()]))
+            });
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        // An external fetch writes a squash landing commit whose extra change
+        // prevents local patch-id matching; the merged PR signal is required.
+        std::fs::write(path.join("file.txt"), "topic\nextra\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let root_commit = repo.find_commit(root).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "squash topic",
+            &tree,
+            &[&root_commit],
+        )
+        .unwrap();
+
+        app.refresh_from_watcher(true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !app.merged.branches.contains("topic") {
+            app.update_merged_prs();
+            app.update_merged_classification();
+            assert!(Instant::now() < deadline, "merged PR was not reclassified");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        assert!(
+            app.graph_layout
+                .nodes
+                .iter()
+                .all(|node| !node.branch_names.iter().any(|name| name == "topic")),
+            "hide-merged must remove the squash-merged branch from the graph"
+        );
+        assert!(
+            app.graph_layout
+                .nodes
+                .iter()
+                .any(|node| node.branch_names.iter().any(|name| name == "keep")),
+            "an unmerged branch must remain visible"
+        );
+    }
+
     /// #104/#107: a successful push changed the remote by definition, so the
     /// gh fetchers must re-poll immediately (new PR head OID for badges; a
     /// merge push lands in the gh merged set).
