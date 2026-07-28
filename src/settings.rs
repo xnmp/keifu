@@ -477,6 +477,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             diff_word_wrap
         ),
         state_bool!(
+            "Commit detail line wrap",
+            Files,
+            None,
+            commit_detail_word_wrap,
+            commit_detail_word_wrap
+        ),
+        state_bool!(
             "Group files by folder",
             Files,
             None,
@@ -610,6 +617,7 @@ mod tests {
             trace_enabled: false,
             hide_remote_branches: true,
             diff_word_wrap: true,
+            commit_detail_word_wrap: false,
             hide_merged_branches: true,
             dim_merged_branches: false,
             files_group_by_folder: true,

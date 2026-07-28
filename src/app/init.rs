@@ -222,6 +222,7 @@ impl App {
             commit_detail_max_scroll: 0,
             commit_editor_line_offset: 0,
             commit_detail_visible_rows: 20,
+            commit_detail_word_wrap: ui_state.commit_detail_word_wrap,
             commit_filter: String::new(),
             commit_filter_active: false,
             visible_commit_indices: Vec::new(),

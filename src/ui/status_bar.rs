@@ -498,6 +498,17 @@ impl StatusBar {
                             }
                             FocusedPanel::CommitDetail => {
                                 hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
+                                hb.hint(
+                                    " ^⌥w ",
+                                    key_style,
+                                    if app.commit_detail_word_wrap {
+                                        "wrap on "
+                                    } else {
+                                        "wrap off "
+                                    },
+                                    desc_style,
+                                    Action::ToggleCommitDetailWrap,
+                                );
                                 if is_uncommitted {
                                     hb.hint(
                                         " Enter ",

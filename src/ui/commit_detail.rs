@@ -16,6 +16,7 @@ pub struct CommitDetailWidget<'a> {
     commit_lines: Vec<Line<'a>>,
     is_focused: bool,
     commit_scroll: u16,
+    word_wrap: bool,
     theme: &'a Theme,
 }
 
@@ -46,7 +47,8 @@ pub fn compute_commit_detail_layout<'a>(
     // Word-wrap never splits a line whose total width already fits within
     // the available width, so when every line fits, the wrapped count is
     // just the line count — skip building (and cloning into) a Paragraph.
-    let commit_wrapped_total = if commit_inner_width == 0
+    let commit_wrapped_total = if !app.commit_detail_word_wrap
+        || commit_inner_width == 0
         || commit_lines.iter().all(|l| l.width() <= commit_inner_width)
     {
         commit_lines.len()
@@ -57,7 +59,7 @@ pub fn compute_commit_detail_layout<'a>(
 
     // Recompute editor line offset using wrapped line counts so the cursor
     // accounts for long hint text that wraps across multiple visual lines.
-    if app.editing_commit_message && commit_inner_width > 0 {
+    if app.editing_commit_message && app.commit_detail_word_wrap && commit_inner_width > 0 {
         let raw_offset = app.commit_editor_line_offset as usize;
         let header_lines = &commit_lines[..raw_offset.min(commit_lines.len())];
         if !header_lines.is_empty() {
@@ -83,6 +85,7 @@ impl<'a> CommitDetailWidget<'a> {
             commit_lines,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             commit_scroll: app.commit_detail_scroll,
+            word_wrap: app.commit_detail_word_wrap,
             theme,
         }
     }
@@ -336,9 +339,46 @@ impl<'a> Widget for CommitDetailWidget<'a> {
 
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)
-            .scroll((self.commit_scroll, 0))
-            .wrap(Wrap { trim: false });
+            .scroll((self.commit_scroll, 0));
+        let commit_paragraph = if self.word_wrap {
+            commit_paragraph.wrap(Wrap { trim: false })
+        } else {
+            commit_paragraph
+        };
 
         Widget::render(commit_paragraph, area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rendered_text(word_wrap: bool) -> String {
+        let area = Rect::new(0, 0, 14, 8);
+        let mut buffer = Buffer::empty(area);
+        let theme = Theme::dark();
+        CommitDetailWidget {
+            commit_lines: vec![Line::from("abcdefghij klmnop")],
+            is_focused: false,
+            commit_scroll: 0,
+            word_wrap,
+            theme: &theme,
+        }
+        .render(area, &mut buffer);
+
+        let mut rendered = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        rendered
+    }
+
+    #[test]
+    fn long_commit_detail_lines_render_only_when_word_wrap_is_enabled() {
+        assert!(rendered_text(true).contains("klmnop"));
+        assert!(!rendered_text(false).contains("klmnop"));
     }
 }

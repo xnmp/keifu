@@ -971,6 +971,9 @@ pub struct App {
     pub commit_editor_line_offset: u16,
     /// Visible rows in the commit detail pane (updated during render)
     pub commit_detail_visible_rows: u16,
+    /// Whether the commit detail panel wraps long lines. Enabled by default to
+    /// preserve the historical display; this is a session-local view choice.
+    pub commit_detail_word_wrap: bool,
 
     // Commit filter (graph panel Ctrl+F)
     pub commit_filter: String,
@@ -1799,6 +1802,22 @@ impl App {
         self.save_ui_state();
         let state = if self.diff_word_wrap { "on" } else { "off" };
         self.toast(crate::toast::ToastKind::Info, format!("Line wrap {state}"));
+    }
+
+    /// Toggle soft line-wrapping in the commit-detail panel and persist the
+    /// preference so it matches the sibling file-diff setting.
+    pub(crate) fn toggle_commit_detail_word_wrap(&mut self) {
+        self.commit_detail_word_wrap = !self.commit_detail_word_wrap;
+        self.save_ui_state();
+        let state = if self.commit_detail_word_wrap {
+            "on"
+        } else {
+            "off"
+        };
+        self.toast(
+            crate::toast::ToastKind::Info,
+            format!("Commit detail line wrap {state}"),
+        );
     }
 
     /// Re-lay-out the file-diff viewer's rendered lines when the wrap toggle or

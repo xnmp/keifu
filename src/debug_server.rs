@@ -273,6 +273,7 @@ fn state_json(app: &App) -> Value {
         "hide_stashes": app.hide_stashes,
         "trace_enabled": app.trace_enabled,
         "diff_word_wrap": app.diff_word_wrap,
+        "commit_detail_word_wrap": app.commit_detail_word_wrap,
         "graph_renderer": app.config.ui.graph_renderer.as_str(),
     })
 }

@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use git2::{Oid, Repository, Signature, Status};
+use ratatui::{buffer::Buffer, layout::Rect, text::Line, widgets::Widget};
 use tempfile::TempDir;
 
 use keifu::action::Action;
@@ -19,6 +20,7 @@ use keifu::app::{
 };
 use keifu::git::GitRepository;
 use keifu::keybindings::map_key_to_action;
+use keifu::ui::{commit_detail::CommitDetailWidget, theme::Theme};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -706,6 +708,44 @@ fn commit_detail_go_to_top_resets_scroll() {
 
     app.handle_action(Action::GoToTop).unwrap();
     assert_eq!(app.commit_detail_scroll, 0);
+}
+
+#[test]
+fn commit_detail_wrap_toggle_changes_the_detail_view_state() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::CommitDetail;
+
+    assert!(app.commit_detail_word_wrap);
+    app.handle_action(Action::ToggleCommitDetailWrap).unwrap();
+    assert!(!app.commit_detail_word_wrap);
+}
+
+#[test]
+fn commit_detail_wrap_action_reaches_the_rendered_panel() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::CommitDetail;
+    app.handle_action(Action::ToggleCommitDetailWrap).unwrap();
+
+    let area = Rect::new(0, 0, 14, 8);
+    let theme = Theme::dark();
+    let mut buffer = Buffer::empty(area);
+    CommitDetailWidget::new(&app, area, &theme, vec![Line::from("abcdefghij klmnop")])
+        .render(area, &mut buffer);
+
+    let mut rendered = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            rendered.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(
+        !rendered.contains("klmnop"),
+        "the action's disabled wrap state truncates the long detail line"
+    );
 }
 
 // ── Error toasts (#116) ─────────────────────────────────────────────

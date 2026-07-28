@@ -178,6 +178,8 @@ pub enum Action {
     StopEditing,
     CommitChanges,
     AmendCommit,
+    /// Toggle word-wrapping in the commit-detail panel (Ctrl+Alt+W).
+    ToggleCommitDetailWrap,
     StashStaged,
     EditorChar(char),
     EditorNewline,

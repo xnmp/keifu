@@ -500,6 +500,13 @@ fn map_files_filter_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_commit_detail_mode(key: KeyEvent) -> Option<Action> {
+    // Keep the commit-detail preference independent from the file-diff toggle.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.modifiers.contains(KeyModifiers::ALT)
+        && matches!(key.code, KeyCode::Char('w') | KeyCode::Char('W'))
+    {
+        return Some(Action::ToggleCommitDetailWrap);
+    }
     match (key.modifiers, key.code) {
         // Scroll
         (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
