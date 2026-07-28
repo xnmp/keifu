@@ -225,7 +225,7 @@ impl Theme {
                 Color::LightGreen,
                 Color::LightMagenta,
                 Color::LightYellow,
-                Color::LightBlue, // main branch
+                crate::graph::colors::MAIN_BRANCH_DISPLAY_COLOR, // main branch
                 Color::LightRed,
             ],
             uncommitted_color: Color::DarkGray,

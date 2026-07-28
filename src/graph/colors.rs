@@ -14,7 +14,7 @@ pub const LANE_COLORS: [Color; 11] = [
     Color::LightGreen,
     Color::LightMagenta,
     Color::LightYellow,
-    Color::LightBlue, // Main branch
+    MAIN_BRANCH_DISPLAY_COLOR, // Main branch
     Color::LightRed,
 ];
 
@@ -28,6 +28,9 @@ pub const UNCOMMITTED_COLOR_INDEX: usize = usize::MAX;
 /// dedicated theme entry in both renderers.
 pub const SQUASH_LINK_COLOR_INDEX: usize = usize::MAX - 1;
 
+/// Bright blue used for the trunk branch in dark terminals.
+pub const MAIN_BRANCH_DISPLAY_COLOR: Color = Color::Rgb(88, 166, 255);
+
 /// Get a color from a color index
 pub fn get_color_by_index(color_index: usize) -> Color {
     if color_index == UNCOMMITTED_COLOR_INDEX || color_index == SQUASH_LINK_COLOR_INDEX {
@@ -36,8 +39,8 @@ pub fn get_color_by_index(color_index: usize) -> Color {
     LANE_COLORS[color_index % LANE_COLORS.len()]
 }
 
-/// Main branch color (light blue)
-pub const MAIN_BRANCH_COLOR: usize = 9; // Color::LightBlue
+/// Main branch color index
+pub const MAIN_BRANCH_COLOR: usize = 9; // MAIN_BRANCH_DISPLAY_COLOR
 
 /// Color assignment to vary colors when lanes are reused
 #[derive(Debug)]
