@@ -170,8 +170,8 @@ pub fn dim_pixel_specs_window(
     // Merged-lane dim (#108), gated the same way the unicode path is: dim on and
     // hide off. `None` = feature off, so the core skips the merged-lane pass.
     let merged_oids = (app.merged.dim && !app.merged.hide).then_some(&app.merged.lane_oids);
-    // The selected commit is exempt (mirrors the unicode path's
-    // `RowRenderCtx::merged_exempt`): its dot and its own strokes stay live.
+    // The selected commit and its lit trace are exempt (mirrors the unicode
+    // path's `RowRenderCtx::merged_exempt`): a merged branch stays connected.
     let merged_exempt = app
         .selected_commit_node()
         .and_then(|n| n.commit.as_ref())
@@ -260,8 +260,8 @@ fn dim_specs_window_core(
         // to a merged branch's lane — exactly the strokes hide-merged removes.
         // Only ever SETS dim, so it composes on top of force-dim / trace above.
         if let (Some(m), Some(o)) = (merged_oids, row_oids.get(i)) {
-            apply_merged_lane_dim(&mut spec.cells, o.cells, m, merged_exempt);
-            apply_merged_lane_dim(&mut spec.underlay, o.underlay, m, merged_exempt);
+            apply_merged_lane_dim(&mut spec.cells, o.cells, m, merged_exempt, Some(lit));
+            apply_merged_lane_dim(&mut spec.underlay, o.underlay, m, merged_exempt, Some(lit));
         }
         spec
     };

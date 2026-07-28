@@ -1614,6 +1614,19 @@ pub fn edge_touches_merged(
     })
 }
 
+/// Whether an edge should receive merged-lane dimming after accounting for the
+/// active selection trace. A selected merged branch remains connected to the
+/// trunk: its traced first-parent strokes and merge arc take precedence over
+/// the background dim, while other merged-lane strokes still recede.
+pub fn edge_touches_merged_unless_traced(
+    edge: Option<CellEdge>,
+    merged: &HashSet<Oid>,
+    exempt: Option<Oid>,
+    trace: Option<&HashMap<CellEdge, Oid>>,
+) -> bool {
+    !trace.is_some_and(|lit| edge_is_traced(edge, lit)) && edge_touches_merged(edge, merged, exempt)
+}
+
 /// Whether a cell (by its `(primary, secondary)` edges) touches a merged-lane
 /// commit. Either edge counts — the Unicode text path dims the whole glyph;
 /// the pixel path fades each edge independently (see `apply_merged_lane_dim`).

@@ -68,30 +68,31 @@ pub struct GraphViewWidget<'a> {
 /// lane's own secondary edge (#113), a commit dot from either edge, every other
 /// shape from its primary edge) but ONLY dims: it never clears a `dim` flag and
 /// never recolors, so it composes on top of whatever trace/force-dim already
-/// decided.
+/// decided. A lit selection edge is exempt so a selected merged branch stays
+/// visibly connected to the trunk.
 pub(super) fn apply_merged_lane_dim(
     cells: &mut [crate::ui::graph_pixels::PixelCell],
     oids: &[crate::git::graph::CellOids],
     merged: &HashSet<git2::Oid>,
     exempt: Option<git2::Oid>,
+    trace: Option<&std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid>>,
 ) {
-    use crate::git::graph::edge_touches_merged;
+    use crate::git::graph::edge_touches_merged_unless_traced;
     use crate::ui::graph_pixels::CellShape;
+    let dims = |edge| edge_touches_merged_unless_traced(edge, merged, exempt, trace);
     for (i, pc) in cells.iter_mut().enumerate() {
         let (primary, secondary) = oids.get(i).copied().unwrap_or((None, None));
         if pc.shape == CellShape::HorizontalPipe {
             // Primary = the horizontal stroke (drawn in `secondary`); secondary =
             // the vertical lane crossed underneath (drawn in `color`).
-            if edge_touches_merged(primary, merged, exempt) {
+            if dims(primary) {
                 pc.dim_secondary = true;
             }
-            if edge_touches_merged(secondary, merged, exempt) {
+            if dims(secondary) {
                 pc.dim = true;
             }
         } else if matches!(pc.shape, CellShape::Commit { .. }) {
-            if edge_touches_merged(primary, merged, exempt)
-                || edge_touches_merged(secondary, merged, exempt)
-            {
+            if dims(primary) || dims(secondary) {
                 pc.dim = true;
                 pc.dim_secondary = true;
             }
@@ -102,7 +103,7 @@ pub(super) fn apply_merged_lane_dim(
             // dimmed lane no longer greys the live trunk it leaves from. A
             // fork-connector hub has no secondary edge — its trunk follows the
             // primary as before.
-            if edge_touches_merged(primary, merged, exempt) {
+            if dims(primary) {
                 pc.dim_secondary = true;
             }
             let trunk = if secondary.is_some() {
@@ -110,10 +111,10 @@ pub(super) fn apply_merged_lane_dim(
             } else {
                 primary
             };
-            if edge_touches_merged(trunk, merged, exempt) {
+            if dims(trunk) {
                 pc.dim = true;
             }
-        } else if edge_touches_merged(primary, merged, exempt) {
+        } else if dims(primary) {
             pc.dim = true;
             pc.dim_secondary = true;
         }
@@ -406,9 +407,31 @@ fn render_cells_unicode(
             match node.cells.get(idx) {
                 Some(CellType::TeeRight(_) | CellType::TeeLeft(_)) => {
                     let trunk = if oids.1.is_some() { oids.1 } else { oids.0 };
-                    crate::git::graph::edge_touches_merged(trunk, m, merged_exempt)
+                    crate::git::graph::edge_touches_merged_unless_traced(
+                        trunk,
+                        m,
+                        merged_exempt,
+                        trace,
+                    )
                 }
-                _ => crate::git::graph::cell_touches_merged(oids, m, merged_exempt),
+                // Unicode has one style for the whole glyph, unlike the pixel
+                // path's independently-styled strokes. Keep a crossing or
+                // co-routed glyph live when either edge is traced, otherwise
+                // its unrelated merged edge would disconnect the selected path.
+                _ if trace.is_some_and(|lit| crate::git::graph::cell_is_traced(oids, lit)) => false,
+                _ => {
+                    crate::git::graph::edge_touches_merged_unless_traced(
+                        oids.0,
+                        m,
+                        merged_exempt,
+                        trace,
+                    ) || crate::git::graph::edge_touches_merged_unless_traced(
+                        oids.1,
+                        m,
+                        merged_exempt,
+                        trace,
+                    )
+                }
             }
         };
         force_dim
@@ -1560,7 +1583,7 @@ mod tests {
         // is in the dim set. secondary = the lane's own pass-through edge.
         let oids = vec![(Some((oid(5), oid(1))), Some((oid(2), oid(1))))];
         let merged: HashSet<git2::Oid> = [oid(5)].into_iter().collect();
-        apply_merged_lane_dim(&mut cells, &oids, &merged, None);
+        apply_merged_lane_dim(&mut cells, &oids, &merged, None, None);
         assert!(cells[0].dim_secondary, "the arm into the dim lane fades");
         assert!(!cells[0].dim, "the live trunk through-line stays bright");
     }
@@ -1582,7 +1605,7 @@ mod tests {
         }];
         let oids = vec![(Some((oid(5), oid(1))), None)];
         let merged: HashSet<git2::Oid> = [oid(5)].into_iter().collect();
-        apply_merged_lane_dim(&mut cells, &oids, &merged, None);
+        apply_merged_lane_dim(&mut cells, &oids, &merged, None, None);
         assert!(cells[0].dim, "no lane edge: trunk follows the primary");
         assert!(cells[0].dim_secondary, "arm dims too");
     }
@@ -1618,9 +1641,42 @@ mod tests {
             (Some((oid(4), oid(3))), None),
         ];
         let merged: HashSet<git2::Oid> = [oid(3), oid(4), oid(5)].into_iter().collect();
-        apply_merged_lane_dim(&mut cells, &oids, &merged, Some(oid(5)));
+        apply_merged_lane_dim(&mut cells, &oids, &merged, Some(oid(5)), None);
         assert!(!cells[0].dim, "selected dot exempt from merged-lane dim");
         assert!(cells[1].dim, "the lane's other strokes still dim");
+    }
+
+    #[test]
+    fn selected_merged_branch_trace_stays_connected_in_pixel_graph() {
+        use crate::ui::graph_pixels::CellShape;
+        let cell = || crate::ui::graph_pixels::PixelCell {
+            shape: CellShape::Pipe,
+            color: [0, 255, 0],
+            secondary: [0, 255, 0],
+            dim: false,
+            dim_secondary: false,
+            curved_above: false,
+            curved_below: false,
+            spoke_on_dot: false,
+        };
+        let (trunk, feature, base) = (oid(1), oid(4), oid(3));
+        let mut cells = vec![cell(), cell()];
+        let oids = vec![
+            (Some((feature, base)), None),
+            (Some((trunk, feature)), None),
+        ];
+        let merged: HashSet<git2::Oid> = [feature].into_iter().collect();
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [((feature, base), feature), ((trunk, feature), feature)]
+                .into_iter()
+                .collect();
+
+        apply_merged_lane_dim(&mut cells, &oids, &merged, None, Some(&lit));
+
+        assert!(
+            cells.iter().all(|cell| !cell.dim && !cell.dim_secondary),
+            "the traced branch line and merge arc remain visible: {cells:?}"
+        );
     }
 
     /// The full rendered text of a row (all spans concatenated).
@@ -2307,16 +2363,31 @@ mod tests {
     }
 
     #[test]
-    fn merged_lane_dim_composes_with_trace_in_unicode() {
-        // Merged-lane dim ORs with trace: a merged-lane cell dims even when the
-        // trace would light it, so a selected merged branch still recedes.
+    fn selected_merged_branch_trace_stays_connected_in_unicode() {
+        // A selected merged branch must light its full route into the trunk.
+        // In particular, the branch line and the merge arc are traced even
+        // though both touch a merged-lane commit; unrelated merged work stays
+        // dimmed.
         let theme = Theme::dark();
-        let m = oid(4);
-        let mut node = node_with_cells(vec![CellType::Commit(0)], false);
-        node.cell_oids = vec![(Some((m, m)), None)];
+        let (trunk, feature, base, other) = (oid(1), oid(4), oid(3), oid(6));
+        let mut node = node_with_cells(
+            vec![
+                CellType::Pipe(0),
+                CellType::MergeRight(0),
+                CellType::Pipe(0),
+            ],
+            false,
+        );
+        node.cell_oids = vec![
+            (Some((feature, base)), None),
+            (Some((trunk, feature)), None),
+            (Some((other, base)), None),
+        ];
         let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
-            [((m, m), m)].into_iter().collect();
-        let merged: HashSet<git2::Oid> = [m].into_iter().collect();
+            [((feature, base), feature), ((trunk, feature), feature)]
+                .into_iter()
+                .collect();
+        let merged: HashSet<git2::Oid> = [feature, other].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
         render_cells_unicode(
@@ -2331,10 +2402,55 @@ mod tests {
             None,
         );
 
-        let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
+        let mut pipes = spans.iter().filter(|s| s.content.contains('│'));
+        let branch_line = pipes.next().unwrap();
+        let unrelated = pipes.next().unwrap();
+        let merge_arc = spans.iter().find(|s| s.content.contains('╰')).unwrap();
         assert!(
-            dot.style.add_modifier.contains(Modifier::DIM),
-            "merged-lane dim wins even when tracing lights the cell"
+            !branch_line.style.add_modifier.contains(Modifier::DIM),
+            "the selected merged branch line stays bright"
+        );
+        assert!(
+            !merge_arc.style.add_modifier.contains(Modifier::DIM),
+            "the selected merged branch's arc connects visibly into the trunk"
+        );
+        assert!(
+            unrelated.style.add_modifier.contains(Modifier::DIM),
+            "unrelated merged work remains dimmed"
+        );
+    }
+
+    #[test]
+    fn selected_merged_trace_stays_bright_at_a_unicode_crossing() {
+        // A HorizontalPipe carries two independent edges, but Unicode renders
+        // them as one glyph. The selected feature's horizontal merge arc must
+        // stay visible even when the crossed vertical edge is unrelated merged
+        // work that should otherwise dim.
+        let theme = Theme::dark();
+        let (trunk, feature, base, other) = (oid(1), oid(4), oid(3), oid(6));
+        let mut node = node_with_cells(vec![CellType::HorizontalPipe(0, 1)], false);
+        node.cell_oids = vec![(Some((trunk, feature)), Some((other, base)))];
+        let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
+            [((trunk, feature), feature)].into_iter().collect();
+        let merged: HashSet<git2::Oid> = [feature, other].into_iter().collect();
+
+        let mut spans: Vec<Span> = Vec::new();
+        render_cells_unicode(
+            &mut spans,
+            &node,
+            &theme,
+            0,
+            8,
+            Some(&lit),
+            false,
+            Some(&merged),
+            None,
+        );
+
+        let crossing = spans.iter().find(|s| s.content.contains('┼')).unwrap();
+        assert!(
+            !crossing.style.add_modifier.contains(Modifier::DIM),
+            "the selected route stays visible at a shared Unicode glyph"
         );
     }
 

@@ -167,10 +167,9 @@ pub(super) struct RowRenderCtx<'a> {
     /// graph strokes (any cell edge touching one of these commits) dim — the
     /// same strokes hide-merged would remove.
     pub merged_lane_oids: Option<&'a HashSet<git2::Oid>>,
-    /// The selected commit, exempt from merged-lane dimming: any stroke touching
-    /// it renders live (see `edge_touches_merged`), pairing with the selected
-    /// row's text un-mute in [`resolve_row_model`] so the commit under the
-    /// cursor never reads greyed-out.
+    /// The selected commit, exempt from merged-lane dimming. Its trace also
+    /// renders live, pairing with the selected row's text un-mute in
+    /// [`resolve_row_model`] so a merged branch remains connected to the trunk.
     pub merged_exempt: Option<git2::Oid>,
     pub base_update_merges: &'a HashSet<git2::Oid>,
     pub metadata_columns: MetadataColumns,
