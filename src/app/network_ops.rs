@@ -368,11 +368,6 @@ impl App {
         let unchanged = set == self.merged.branches && targets == self.merged.squash_targets;
         self.merged.branches = set;
         self.merged.squash_targets = targets;
-        // A ref refresh or merged-PR fetch can arrive while the previous
-        // classification is still running. Its result describes the older
-        // snapshot; now that the worker slot is free, coalesce onto the latest
-        // branch and GitHub inputs rather than waiting for another ref change.
-        self.kick_merged_classification();
         // Persist the freshly-computed result to the cross-session cache (#104)
         // so the next startup can serve it instantly. Written on every delivery
         // — even an unchanged/empty result — so a repo with no merged branches
@@ -380,6 +375,12 @@ impl App {
         // signature (read from the classifier, not the live inputs, which may
         // have moved on) so the entry's signature always matches its result.
         self.persist_merged_cache();
+        // A ref refresh or merged-PR fetch can arrive while the previous
+        // classification is still running. Its result describes the older
+        // snapshot; now that its cache entry is safely keyed to that snapshot,
+        // coalesce onto the latest branch and GitHub inputs rather than waiting
+        // for another ref change.
+        self.kick_merged_classification();
         if unchanged {
             // Nothing visible changed — skip the graph rebuild.
             return false;
