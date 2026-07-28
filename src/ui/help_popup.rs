@@ -134,6 +134,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("Commit Panel"),
         Row("↑ / ↓", "Scroll"),
+        Row("Ctrl+Alt+W", "Toggle soft line wrap"),
         Row("Enter", "Start editing commit message"),
         Row("Enter", "Commit changes (or save amend)"),
         Row("Ctrl+Enter", "Amend last commit"),

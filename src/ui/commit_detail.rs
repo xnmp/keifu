@@ -16,6 +16,7 @@ pub struct CommitDetailWidget<'a> {
     commit_lines: Vec<Line<'a>>,
     is_focused: bool,
     commit_scroll: u16,
+    word_wrap: bool,
     theme: &'a Theme,
 }
 
@@ -46,7 +47,8 @@ pub fn compute_commit_detail_layout<'a>(
     // Word-wrap never splits a line whose total width already fits within
     // the available width, so when every line fits, the wrapped count is
     // just the line count — skip building (and cloning into) a Paragraph.
-    let commit_wrapped_total = if commit_inner_width == 0
+    let commit_wrapped_total = if !app.commit_detail_word_wrap
+        || commit_inner_width == 0
         || commit_lines.iter().all(|l| l.width() <= commit_inner_width)
     {
         commit_lines.len()
@@ -57,7 +59,7 @@ pub fn compute_commit_detail_layout<'a>(
 
     // Recompute editor line offset using wrapped line counts so the cursor
     // accounts for long hint text that wraps across multiple visual lines.
-    if app.editing_commit_message && commit_inner_width > 0 {
+    if app.editing_commit_message && app.commit_detail_word_wrap && commit_inner_width > 0 {
         let raw_offset = app.commit_editor_line_offset as usize;
         let header_lines = &commit_lines[..raw_offset.min(commit_lines.len())];
         if !header_lines.is_empty() {
@@ -83,6 +85,7 @@ impl<'a> CommitDetailWidget<'a> {
             commit_lines,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             commit_scroll: app.commit_detail_scroll,
+            word_wrap: app.commit_detail_word_wrap,
             theme,
         }
     }
@@ -336,8 +339,12 @@ impl<'a> Widget for CommitDetailWidget<'a> {
 
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)
-            .scroll((self.commit_scroll, 0))
-            .wrap(Wrap { trim: false });
+            .scroll((self.commit_scroll, 0));
+        let commit_paragraph = if self.word_wrap {
+            commit_paragraph.wrap(Wrap { trim: false })
+        } else {
+            commit_paragraph
+        };
 
         Widget::render(commit_paragraph, area, buf);
     }
