@@ -41,6 +41,27 @@ pub enum PrBadgeMarker {
     ChangesRequested,
 }
 
+impl PrBadgeMarker {
+    /// Marker text, including the separator from the PR number.
+    pub(super) fn suffix(self) -> Option<String> {
+        match self {
+            Self::None => None,
+            Self::Approved => Some(format!(" {PR_APPROVED_ICON}")),
+            Self::ChangesRequested => Some(format!(" {PR_CHANGES_ICON}")),
+        }
+    }
+}
+
+impl From<ReviewState> for PrBadgeMarker {
+    fn from(review: ReviewState) -> Self {
+        match review {
+            ReviewState::None => Self::None,
+            ReviewState::Approved => Self::Approved,
+            ReviewState::ChangesRequested => Self::ChangesRequested,
+        }
+    }
+}
+
 /// Badge appended to a branch already merged into the trunk (merge or squash).
 /// Rendered muted/dimmed; the branch chips themselves are dimmed to match.
 /// Derived from [`MERGE_ICON`] so the glyph's codepoint exists in one place.
@@ -88,11 +109,7 @@ pub(super) fn pr_for_row(
     Some(PrBadge {
         text: pr_badge_text(pr),
         color: pr_badge_color(pr, theme),
-        marker: match pr.review {
-            ReviewState::None => PrBadgeMarker::None,
-            ReviewState::Approved => PrBadgeMarker::Approved,
-            ReviewState::ChangesRequested => PrBadgeMarker::ChangesRequested,
-        },
+        marker: pr.review.into(),
     })
 }
 
@@ -119,23 +136,16 @@ fn pr_for_row_info<'p>(
     })
 }
 
-/// Compact badge text for an open PR, e.g. ` #12 ✓ ` (approved with outside
-/// comments). Review marker first (approved / changes-requested), then a
-/// comment marker when a non-author has commented.
+/// Compact badge text for an open PR, e.g. ` #12 ✓ `. Review markers supersede
+/// the outside-activity marker because the stronger state already signals that
+/// someone acted on the PR.
 fn pr_badge_text(pr: &PrInfo) -> String {
     let mut s = format!("{} #{}", PR_BADGE_ICON, pr.number);
-    match pr.review {
-        ReviewState::Approved => {
-            s.push(' ');
-            s.push(PR_APPROVED_ICON);
-        }
-        ReviewState::ChangesRequested => {
-            s.push(' ');
-            s.push(PR_CHANGES_ICON);
-        }
-        ReviewState::None => {}
+    let marker = PrBadgeMarker::from(pr.review);
+    if let Some(suffix) = marker.suffix() {
+        s.push_str(&suffix);
     }
-    if pr.outside_activity {
+    if pr.outside_activity && marker == PrBadgeMarker::None {
         s.push(' ');
         s.push(PR_COMMENT_ICON);
     }
