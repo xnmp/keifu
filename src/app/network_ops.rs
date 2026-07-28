@@ -375,6 +375,12 @@ impl App {
         // signature (read from the classifier, not the live inputs, which may
         // have moved on) so the entry's signature always matches its result.
         self.persist_merged_cache();
+        // A ref refresh or merged-PR fetch can arrive while the previous
+        // classification is still running. Its result describes the older
+        // snapshot; now that its cache entry is safely keyed to that snapshot,
+        // coalesce onto the latest branch and GitHub inputs rather than waiting
+        // for another ref change.
+        self.kick_merged_classification();
         if unchanged {
             // Nothing visible changed — skip the graph rebuild.
             return false;
@@ -427,25 +433,7 @@ impl App {
         };
         match watcher.poll() {
             crate::watcher::PollResult::Refresh { git_changed } => {
-                // A `.git` ref/HEAD change under a long-lived libgit2 handle is
-                // only observed after a reopen, so mark the repo dirty; a
-                // working-tree-only tick refreshes the graph/status but leaves
-                // the handle (and this flag) alone, skipping the reopen cost.
-                if git_changed {
-                    self.repo_dirty = true;
-                }
-                // Latch: a burst of failing watcher-driven refreshes (e.g. during
-                // a build) reports once per episode, not on every poll; re-arm on
-                // success.
-                match self.refresh(false) {
-                    Ok(()) => self.refresh_latches.watch_refresh = false,
-                    Err(e) => {
-                        if !self.refresh_latches.watch_refresh {
-                            self.refresh_latches.watch_refresh = true;
-                            self.set_message(format!("Watch refresh failed: {e}"));
-                        }
-                    }
-                }
+                self.refresh_from_watcher(git_changed);
                 self.network.mark_refreshed();
                 true
             }
@@ -459,6 +447,43 @@ impl App {
                 true
             }
             crate::watcher::PollResult::Idle => false,
+        }
+    }
+
+    /// Refresh after a debounced filesystem-watcher event.
+    fn refresh_from_watcher(&mut self, git_changed: bool) {
+        let prior_refs =
+            git_changed.then(|| (self.repo.head_oid(), Self::branch_tips(&self.branches)));
+        // A `.git` ref/HEAD change under a long-lived libgit2 handle is only
+        // observed after a reopen, so mark the repo dirty; a working-tree-only
+        // tick refreshes the graph/status but leaves the handle (and this flag)
+        // alone, skipping the reopen cost.
+        if git_changed {
+            self.repo_dirty = true;
+        }
+        // Latch: a burst of failing watcher-driven refreshes (e.g. during a
+        // build) reports once per episode, not on every poll; re-arm on success.
+        match self.refresh(false) {
+            Ok(()) => {
+                self.refresh_latches.watch_refresh = false;
+                if let Some((head, tips)) = prior_refs {
+                    let moved =
+                        self.repo.head_oid() != head || Self::branch_tips(&self.branches) != tips;
+                    if moved {
+                        // FETCH_HEAD rewrites are watcher-visible even for a
+                        // no-op fetch. Re-poll GitHub only when the refreshed
+                        // refs prove the remote changed, preserving the coarse
+                        // interval for idle repositories.
+                        self.force_gh_refresh();
+                    }
+                }
+            }
+            Err(e) => {
+                if !self.refresh_latches.watch_refresh {
+                    self.refresh_latches.watch_refresh = true;
+                    self.set_message(format!("Watch refresh failed: {e}"));
+                }
+            }
         }
     }
 
@@ -736,6 +761,167 @@ mod tests {
         );
         assert!(!app.pr_fetch.is_due(), "no ref change → no forced gh poll");
         assert!(!app.merged.pr_branch_fetch.is_due());
+    }
+
+    /// A watcher tick caused by a no-op fetch (for example, its rewritten
+    /// `FETCH_HEAD`) must not turn the slow GitHub polls into fetch-interval
+    /// polling in an otherwise quiet repository.
+    #[test]
+    fn watcher_git_ref_change_without_tip_movement_keeps_gh_polls_throttled() {
+        let (_tempdir, mut app) = test_app_with_side_branch();
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        app.refresh_from_watcher(true);
+
+        assert!(
+            !app.pr_fetch.is_due(),
+            "no ref movement must not force PR polling"
+        );
+        assert!(!app.merged.pr_branch_fetch.is_due());
+    }
+
+    #[test]
+    fn watcher_git_ref_change_with_tip_movement_forces_merged_pr_repoll() {
+        let (tempdir, mut app) = test_app_with_side_branch();
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        advance_side_branch(tempdir.path());
+        app.refresh_from_watcher(true);
+
+        assert!(app.pr_fetch.is_due(), "moved refs must force PR polling");
+        assert!(
+            app.merged.pr_branch_fetch.is_due(),
+            "a fetched squash merge must be checked immediately, not after the five-minute poll"
+        );
+    }
+
+    #[test]
+    fn completed_classification_rekicks_when_gh_input_changed_in_flight() {
+        use std::collections::HashSet;
+        use std::time::{Duration, Instant};
+
+        let (_tempdir, mut app) = test_app_with_side_branch();
+        let expected = HashSet::from(["side".to_string()]);
+        assert_eq!(
+            app.merged.classify.last_gh_merged(),
+            Some(&HashSet::new()),
+            "startup classification must begin with no merged-PR input"
+        );
+        // Deliberately do not call `kick_merged_classification`: this models a
+        // GitHub response arriving while the prior worker still occupies its
+        // only slot. Delivery must notice and launch the newer snapshot.
+        app.merged.pr_branches = expected.clone();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.merged.classify.last_gh_merged() != Some(&expected) {
+            app.update_merged_classification();
+            assert!(
+                Instant::now() < deadline,
+                "completed worker did not re-kick against changed GitHub input"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn watcher_ref_change_hides_gh_confirmed_squash_branch_without_hiding_unmerged_branch() {
+        use std::collections::HashSet;
+        use std::time::{Duration, Instant};
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let repo = git2::Repository::init(path).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        std::fs::write(path.join("file.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let root = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+
+        std::fs::write(path.join("file.txt"), "topic\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let root_commit = repo.find_commit(root).unwrap();
+        let topic = repo
+            .commit(None, &sig, &sig, "topic", &tree, &[&root_commit])
+            .unwrap();
+        let topic_commit = repo.find_commit(topic).unwrap();
+        repo.branch("topic", &topic_commit, false).unwrap();
+
+        std::fs::write(path.join("keep.txt"), "keep\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("keep.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let keep = repo
+            .commit(None, &sig, &sig, "keep", &tree, &[&root_commit])
+            .unwrap();
+        let keep_commit = repo.find_commit(keep).unwrap();
+        repo.branch("keep", &keep_commit, false).unwrap();
+
+        let mut app = App::from_repo(GitRepository::open(path).unwrap()).unwrap();
+        app.merged.hide = true;
+        app.merged.pr_branch_fetch =
+            crate::interval_fetch::IntervalFetch::new(Duration::from_secs(300), |_| {
+                Ok(HashSet::from(["topic".to_string()]))
+            });
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        // An external fetch writes a squash landing commit whose extra change
+        // prevents local patch-id matching; the merged PR signal is required.
+        std::fs::write(path.join("file.txt"), "topic\n").unwrap();
+        std::fs::write(path.join("extra.txt"), "extra\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.add_path(std::path::Path::new("extra.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let root_commit = repo.find_commit(root).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "squash topic",
+            &tree,
+            &[&root_commit],
+        )
+        .unwrap();
+
+        app.refresh_from_watcher(true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !app.merged.branches.contains("topic") {
+            app.update_merged_prs();
+            app.update_merged_classification();
+            assert!(
+                Instant::now() < deadline,
+                "merged PR was not reclassified; gh={:?}, branches={:?}",
+                app.merged.pr_branches,
+                app.merged.branches
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        assert!(
+            app.graph_layout
+                .nodes
+                .iter()
+                .all(|node| !node.branch_names.iter().any(|name| name == "topic")),
+            "hide-merged must remove the squash-merged branch from the graph"
+        );
+        assert!(
+            app.graph_layout
+                .nodes
+                .iter()
+                .any(|node| node.branch_names.iter().any(|name| name == "keep")),
+            "an unmerged branch must remain visible"
+        );
     }
 
     /// #104/#107: a successful push changed the remote by definition, so the
