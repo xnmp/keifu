@@ -752,23 +752,66 @@ mod tests {
         assert!(!app.merged.pr_branch_fetch.is_due());
     }
 
-    /// A watcher-driven ref update is usually an external fetch: a remote
-    /// squash merge may have landed even though keifu did not run that fetch.
-    /// It must therefore bypass the slow GitHub poll interval, just like a
-    /// fetch keifu performed itself.
+    /// A watcher tick caused by a no-op fetch (for example, its rewritten
+    /// `FETCH_HEAD`) must not turn the slow GitHub polls into fetch-interval
+    /// polling in an otherwise quiet repository.
     #[test]
-    fn watcher_git_ref_change_forces_merged_pr_repoll() {
+    fn watcher_git_ref_change_without_tip_movement_keeps_gh_polls_throttled() {
         let (_tempdir, mut app) = test_app_with_side_branch();
         app.pr_fetch.mark_fetched_for_test();
         app.merged.pr_branch_fetch.mark_fetched_for_test();
 
         app.refresh_from_watcher(true);
 
-        assert!(app.pr_fetch.is_due(), "open-PR fetch must be forced");
+        assert!(
+            !app.pr_fetch.is_due(),
+            "no ref movement must not force PR polling"
+        );
+        assert!(!app.merged.pr_branch_fetch.is_due());
+    }
+
+    #[test]
+    fn watcher_git_ref_change_with_tip_movement_forces_merged_pr_repoll() {
+        let (tempdir, mut app) = test_app_with_side_branch();
+        app.pr_fetch.mark_fetched_for_test();
+        app.merged.pr_branch_fetch.mark_fetched_for_test();
+
+        advance_side_branch(tempdir.path());
+        app.refresh_from_watcher(true);
+
+        assert!(app.pr_fetch.is_due(), "moved refs must force PR polling");
         assert!(
             app.merged.pr_branch_fetch.is_due(),
             "a fetched squash merge must be checked immediately, not after the five-minute poll"
         );
+    }
+
+    #[test]
+    fn completed_classification_rekicks_when_gh_input_changed_in_flight() {
+        use std::collections::HashSet;
+        use std::time::{Duration, Instant};
+
+        let (_tempdir, mut app) = test_app_with_side_branch();
+        let expected = HashSet::from(["side".to_string()]);
+        assert_eq!(
+            app.merged.classify.last_gh_merged(),
+            Some(&HashSet::new()),
+            "startup classification must begin with no merged-PR input"
+        );
+        // Deliberately do not call `kick_merged_classification`: this models a
+        // GitHub response arriving while the prior worker still occupies its
+        // only slot. Delivery must notice and launch the newer snapshot.
+        app.merged.pr_branches = expected.clone();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.merged.classify.last_gh_merged() != Some(&expected) {
+            app.update_merged_classification();
+            assert!(
+                Instant::now() < deadline,
+                "completed worker did not re-kick against changed GitHub input"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[test]
