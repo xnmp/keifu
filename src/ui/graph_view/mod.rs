@@ -285,7 +285,8 @@ fn render_graph_line<'a>(
     // message renders strongly muted and its own graph glyphs (the noisy
     // back-merge connector) are force-dimmed. Decided once here (via the shared
     // `is_base_update_row` predicate) so both the unicode cell renderer and the
-    // pixel dim pass agree with the message tail. HEAD is never muted.
+    // pixel dim pass agree with the message tail. HEAD is included because a
+    // fresh base update is normally the feature branch's tip.
     let is_base_update = is_base_update_row(
         node,
         ctx.metadata_columns.mute_base_merges,
