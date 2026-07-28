@@ -325,8 +325,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
 
     // Pre-render pass: compute layout metrics that update App scroll state.
-    // Skipped for a hidden commit pane (#116): the layout pass shells out for
-    // signature status and recomputes wrapped lines — work with no consumer.
+    // Skipped for a hidden commit pane (#116): the layout pass recomputes
+    // wrapped lines — work with no consumer.
     let commit_lines = if commit_area.is_empty() {
         Vec::new()
     } else {
