@@ -558,6 +558,24 @@ fn search_opens_input_mode() {
 }
 
 #[test]
+fn search_opens_input_mode_from_files_panel() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+
+    app.handle_action(Action::Search).unwrap();
+
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: keifu::app::InputAction::Search,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn create_branch_opens_input_mode() {
     let (_td, repo) = init_repo();
     commit_file(repo.repo(), "a.txt", "a", "first");
