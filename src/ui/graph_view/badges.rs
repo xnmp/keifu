@@ -28,6 +28,17 @@ const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
 pub struct PrBadge {
     pub text: String,
     pub color: Color,
+    pub marker: PrBadgeMarker,
+}
+
+/// The review marker appended to an open-PR badge. Kept separate from the
+/// compact text so rendering can give an approved check its semantic color
+/// without changing the CI/merge color of the rest of the badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrBadgeMarker {
+    None,
+    Approved,
+    ChangesRequested,
 }
 
 /// Badge appended to a branch already merged into the trunk (merge or squash).
@@ -77,6 +88,11 @@ pub(super) fn pr_for_row(
     Some(PrBadge {
         text: pr_badge_text(pr),
         color: pr_badge_color(pr, theme),
+        marker: match pr.review {
+            ReviewState::None => PrBadgeMarker::None,
+            ReviewState::Approved => PrBadgeMarker::Approved,
+            ReviewState::ChangesRequested => PrBadgeMarker::ChangesRequested,
+        },
     })
 }
 
