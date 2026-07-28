@@ -58,7 +58,7 @@ pub enum Action {
     // Commit comparison (graph)
     MarkForCompare,
 
-    // Open the command palette (Ctrl+P / ':') from Normal mode
+    // Open the command palette (`:`) from Normal mode
     OpenCommandPalette,
 
     // Create / merge a pull request directly (palette shortcuts to the commit

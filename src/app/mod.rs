@@ -1415,12 +1415,7 @@ impl App {
         }
         // Branch quick search opens from any panel in Normal mode.
         if matches!(action, Action::Search) {
-            self.save_search_position();
-            self.mode = AppMode::Input {
-                title: "Search branches".to_string(),
-                input: String::new(),
-                action: InputAction::Search,
-            };
+            self.open_branch_search();
             return Ok(());
         }
         // The settings menu opens from any panel in Normal mode.
