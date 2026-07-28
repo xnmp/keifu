@@ -11,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::chips::strip_remote;
 use super::MERGE_ICON;
-use crate::pr::{CiStatus, MergeState, PrContext, PrInfo, ReviewState};
+use crate::pr::{CiStatus, PrContext, PrInfo, ReviewState};
 use crate::ui::theme::Theme;
 
 /// Nerd Font octicons for the open-PR badge and its actioned markers.
@@ -158,7 +158,7 @@ fn pr_badge_text(pr: &PrInfo) -> String {
 /// over merge readiness; passing-but-blocked PRs are chartreuse; no checks are
 /// neutral blue. Pure and frame-free so the decision can be unit-tested directly.
 fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
-    if pr.merge_state == MergeState::Draft {
+    if pr.is_draft {
         return theme.text_muted;
     }
     match pr.ci {
@@ -184,6 +184,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             merge_state: MergeState::Clear,
+            is_draft: false,
             outside_activity: false,
             head_oid: None,
             base_ref: None,
@@ -208,6 +209,7 @@ mod tests {
             ci,
             review,
             merge_state,
+            is_draft: false,
             outside_activity: outside,
             head_oid: None,
             base_ref: None,

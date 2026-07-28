@@ -70,10 +70,7 @@ impl ReviewState {
 /// mergeable PR's badge yellow while GitHub is still computing the state (#88).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeState {
-    /// The PR is a draft. Kept distinct from other blockers because its graph
-    /// badge has a dedicated muted style.
-    Draft,
-    /// The merge is blocked: `BLOCKED`, `DIRTY` (conflicts), or `BEHIND`.
+    /// The merge is blocked: `BLOCKED`, `DIRTY` (conflicts), `DRAFT`, or `BEHIND`.
     Blocked,
     /// Not blocking: `CLEAN`, `HAS_HOOKS`, `UNSTABLE`, `UNKNOWN`, or missing.
     Clear,
@@ -82,8 +79,7 @@ pub enum MergeState {
 impl MergeState {
     fn from_status(status: &str) -> Self {
         match status.to_ascii_uppercase().as_str() {
-            "DRAFT" => Self::Draft,
-            "BLOCKED" | "DIRTY" | "BEHIND" => Self::Blocked,
+            "BLOCKED" | "DIRTY" | "DRAFT" | "BEHIND" => Self::Blocked,
             _ => Self::Clear,
         }
     }
@@ -100,6 +96,9 @@ pub struct PrInfo {
     /// Merge readiness from `mergeStateStatus`. Combined with `review` to decide
     /// whether a green PR still reads as "blocked" (see [`PrInfo::is_merge_blocked`]).
     pub merge_state: MergeState,
+    /// GitHub's authoritative pull-request lifecycle flag, independent of the
+    /// lazily computed merge-readiness state.
+    pub is_draft: bool,
     /// Any comment or review authored by someone other than the PR author.
     pub outside_activity: bool,
     /// The PR's head-branch tip commit SHA (`headRefOid`), when known. This
@@ -127,7 +126,8 @@ impl PrInfo {
     /// "passing checks but not actually mergeable" badge tone (#88); it is
     /// independent of CI (a failing/pending PR is coloured by its check status).
     pub fn is_merge_blocked(&self) -> bool {
-        matches!(self.merge_state, MergeState::Draft | MergeState::Blocked)
+        self.is_draft
+            || self.merge_state == MergeState::Blocked
             || self.review == ReviewState::ChangesRequested
     }
 }
@@ -188,6 +188,8 @@ struct GhPr {
     review_decision: Option<String>,
     #[serde(default, rename = "mergeStateStatus")]
     merge_state_status: Option<String>,
+    #[serde(default, rename = "isDraft")]
+    is_draft: bool,
     #[serde(default)]
     comments: Option<Vec<Comment>>,
     #[serde(default)]
@@ -299,6 +301,7 @@ pub fn parse_pr_list(json: &str) -> HashMap<String, PrInfo> {
                     ci,
                     review,
                     merge_state,
+                    is_draft: p.is_draft,
                     outside_activity,
                     head_oid: p.head_ref_oid.filter(|s| !s.is_empty()),
                     base_ref: p.base_ref_name.filter(|s| !s.is_empty()),
@@ -525,7 +528,7 @@ fn fetch_open_prs(repo_path: &str) -> Result<HashMap<String, PrInfo>, String> {
             "pr",
             "list",
             "--json",
-            "number,url,headRefName,headRefOid,baseRefName,title,state,statusCheckRollup,reviewDecision,mergeStateStatus,comments,reviews,author",
+            "number,url,headRefName,headRefOid,baseRefName,title,state,statusCheckRollup,reviewDecision,mergeStateStatus,isDraft,comments,reviews,author",
             "--limit",
             "100",
         ],
@@ -562,6 +565,7 @@ mod tests {
                 ci: CiStatus::None,
                 review: ReviewState::None,
                 merge_state: MergeState::Clear,
+                is_draft: false,
                 outside_activity: false,
                 head_oid: None,
                 base_ref: None,
@@ -713,16 +717,17 @@ mod tests {
     }
 
     #[test]
-    fn draft_merge_state_is_preserved() {
+    fn draft_merge_state_remains_blocked() {
         let pr = one(r#","mergeStateStatus":"DRAFT""#);
-        assert_eq!(pr.merge_state, MergeState::Draft);
+        assert_eq!(pr.merge_state, MergeState::Blocked);
         assert!(pr.is_merge_blocked());
     }
 
     #[test]
-    fn is_draft_marks_unknown_readiness_as_draft() {
+    fn is_draft_marks_unknown_readiness_as_blocked() {
         let pr = one(r#","isDraft":true,"mergeStateStatus":"UNKNOWN""#);
-        assert_eq!(pr.merge_state, MergeState::Draft);
+        assert!(pr.is_draft);
+        assert_eq!(pr.merge_state, MergeState::Clear);
         assert!(pr.is_merge_blocked());
     }
 
@@ -854,6 +859,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             merge_state: MergeState::Clear,
+            is_draft: false,
             outside_activity: false,
             head_oid: head.map(str::to_string),
             base_ref: None,
@@ -937,6 +943,7 @@ mod tests {
             ci,
             review: ReviewState::None,
             merge_state: MergeState::Clear,
+            is_draft: false,
             outside_activity: false,
             head_oid: None,
             base_ref: None,

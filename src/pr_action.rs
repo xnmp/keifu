@@ -410,6 +410,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             merge_state: crate::pr::MergeState::Clear,
+            is_draft: false,
             outside_activity: false,
             head_oid: None,
             base_ref: None,

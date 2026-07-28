@@ -598,6 +598,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             merge_state: MergeState::Clear,
+            is_draft: false,
             outside_activity: false,
             head_oid: None,
             base_ref: None,
@@ -711,7 +712,7 @@ mod tests {
         let theme = Theme::dark();
         let mut draft = pr_head(7, 5);
         draft.ci = CiStatus::Fail;
-        draft.merge_state = MergeState::Draft;
+        draft.is_draft = true;
         let draft_line = render_row(
             &commit_node(5, "draft head", &[]),
             &open_map(vec![("draft", draft)]),
