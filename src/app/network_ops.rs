@@ -427,25 +427,7 @@ impl App {
         };
         match watcher.poll() {
             crate::watcher::PollResult::Refresh { git_changed } => {
-                // A `.git` ref/HEAD change under a long-lived libgit2 handle is
-                // only observed after a reopen, so mark the repo dirty; a
-                // working-tree-only tick refreshes the graph/status but leaves
-                // the handle (and this flag) alone, skipping the reopen cost.
-                if git_changed {
-                    self.repo_dirty = true;
-                }
-                // Latch: a burst of failing watcher-driven refreshes (e.g. during
-                // a build) reports once per episode, not on every poll; re-arm on
-                // success.
-                match self.refresh(false) {
-                    Ok(()) => self.refresh_latches.watch_refresh = false,
-                    Err(e) => {
-                        if !self.refresh_latches.watch_refresh {
-                            self.refresh_latches.watch_refresh = true;
-                            self.set_message(format!("Watch refresh failed: {e}"));
-                        }
-                    }
-                }
+                self.refresh_from_watcher(git_changed);
                 self.network.mark_refreshed();
                 true
             }
@@ -459,6 +441,28 @@ impl App {
                 true
             }
             crate::watcher::PollResult::Idle => false,
+        }
+    }
+
+    /// Refresh after a debounced filesystem-watcher event.
+    fn refresh_from_watcher(&mut self, git_changed: bool) {
+        // A `.git` ref/HEAD change under a long-lived libgit2 handle is only
+        // observed after a reopen, so mark the repo dirty; a working-tree-only
+        // tick refreshes the graph/status but leaves the handle (and this flag)
+        // alone, skipping the reopen cost.
+        if git_changed {
+            self.repo_dirty = true;
+        }
+        // Latch: a burst of failing watcher-driven refreshes (e.g. during a
+        // build) reports once per episode, not on every poll; re-arm on success.
+        match self.refresh(false) {
+            Ok(()) => self.refresh_latches.watch_refresh = false,
+            Err(e) => {
+                if !self.refresh_latches.watch_refresh {
+                    self.refresh_latches.watch_refresh = true;
+                    self.set_message(format!("Watch refresh failed: {e}"));
+                }
+            }
         }
     }
 
