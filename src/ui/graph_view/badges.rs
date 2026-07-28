@@ -152,13 +152,15 @@ fn pr_badge_text(pr: &PrInfo) -> String {
     s
 }
 
-/// Badge chip color across four states (#88): failing checks (red) and running
-/// checks (orange) take precedence over merge readiness — a red/pending PR isn't
-/// mergeable anyway. Only once checks are green does merge readiness split the
-/// tone: full green when clear to merge, chartreuse when passing-but-blocked
-/// (changes requested, conflicts, draft, behind base). No checks → neutral blue.
-/// Pure and frame-free so the decision can be unit-tested directly.
+/// Badge chip color: drafts are always muted so their in-progress state is
+/// visually distinct regardless of CI. Other PRs retain the four-state (#88)
+/// behavior: failing checks (red) and running checks (orange) take precedence
+/// over merge readiness; passing-but-blocked PRs are chartreuse; no checks are
+/// neutral blue. Pure and frame-free so the decision can be unit-tested directly.
 fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
+    if pr.is_draft {
+        return theme.text_muted;
+    }
     match pr.ci {
         CiStatus::None => theme.pr_badge,
         CiStatus::Fail => theme.pr_ci_fail,
@@ -182,6 +184,7 @@ mod tests {
             ci: CiStatus::None,
             review: ReviewState::None,
             merge_state: MergeState::Clear,
+            is_draft: false,
             outside_activity: false,
             head_oid: None,
             base_ref: None,
@@ -206,6 +209,7 @@ mod tests {
             ci,
             review,
             merge_state,
+            is_draft: false,
             outside_activity: outside,
             head_oid: None,
             base_ref: None,
