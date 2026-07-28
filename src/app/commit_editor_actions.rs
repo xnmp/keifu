@@ -33,16 +33,7 @@ pub(crate) fn apply_editor_edit(editor: &mut TextEditor, action: &Action) -> boo
 impl App {
     pub(crate) fn handle_commit_detail_action(&mut self, action: Action) -> Result<()> {
         if matches!(action, Action::ToggleCommitDetailWrap) {
-            self.commit_detail_word_wrap = !self.commit_detail_word_wrap;
-            let state = if self.commit_detail_word_wrap {
-                "on"
-            } else {
-                "off"
-            };
-            self.toast(
-                crate::toast::ToastKind::Info,
-                format!("Commit detail line wrap {state}"),
-            );
+            self.toggle_commit_detail_word_wrap();
             return Ok(());
         }
 

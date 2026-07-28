@@ -1804,6 +1804,22 @@ impl App {
         self.toast(crate::toast::ToastKind::Info, format!("Line wrap {state}"));
     }
 
+    /// Toggle soft line-wrapping in the commit-detail panel and persist the
+    /// preference so it matches the sibling file-diff setting.
+    pub(crate) fn toggle_commit_detail_word_wrap(&mut self) {
+        self.commit_detail_word_wrap = !self.commit_detail_word_wrap;
+        self.save_ui_state();
+        let state = if self.commit_detail_word_wrap {
+            "on"
+        } else {
+            "off"
+        };
+        self.toast(
+            crate::toast::ToastKind::Info,
+            format!("Commit detail line wrap {state}"),
+        );
+    }
+
     /// Re-lay-out the file-diff viewer's rendered lines when the wrap toggle or
     /// the pane width has changed since the last layout. Cheap no-op otherwise.
     /// Called from the renderer before it borrows the diff state, so scrolling,

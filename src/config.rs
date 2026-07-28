@@ -312,6 +312,9 @@ pub struct UiState {
     /// Soft line-wrapping in the file-diff viewer. Off by default (long lines
     /// truncate and scroll horizontally, the historical behavior).
     pub diff_word_wrap: bool,
+    /// Soft line-wrapping in the commit-detail panel. On by default to
+    /// preserve the panel's historical display behavior.
+    pub commit_detail_word_wrap: bool,
     /// Hide branches already merged into the trunk (by merge commit, fast-forward,
     /// or squash) from the graph. Off by default: merged branches are shown but
     /// dimmed, and this toggle removes them entirely.
@@ -346,6 +349,7 @@ impl Default for UiState {
             trace_enabled: true,
             hide_remote_branches: false,
             diff_word_wrap: false,
+            commit_detail_word_wrap: true,
             hide_merged_branches: false,
             dim_merged_branches: true,
             files_group_by_folder: false,
@@ -570,6 +574,7 @@ mod tests {
             trace_enabled: false,
             hide_remote_branches: true,
             diff_word_wrap: false,
+            commit_detail_word_wrap: true,
             hide_merged_branches: false,
             dim_merged_branches: false,
             files_group_by_folder: true,
@@ -693,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_word_wrap_defaults_off_and_round_trips() {
+    fn line_wrap_preferences_default_and_round_trip() {
         // Wrap is off by default, including for an older state.toml without the key.
         assert!(!UiState::default().diff_word_wrap);
         let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
@@ -705,6 +710,19 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&wrapped).unwrap()).unwrap();
         assert!(restored.diff_word_wrap);
+
+        // Commit detail wrapping is historically on, including for an older
+        // state.toml that predates this preference.
+        assert!(UiState::default().commit_detail_word_wrap);
+        let older: UiState = toml::from_str("side_panel_layout = true").unwrap();
+        assert!(older.commit_detail_word_wrap, "missing key defaults to on");
+
+        let unwrapped = UiState {
+            commit_detail_word_wrap: false,
+            ..UiState::default()
+        };
+        let restored: UiState = toml::from_str(&toml::to_string(&unwrapped).unwrap()).unwrap();
+        assert!(!restored.commit_detail_word_wrap);
     }
 
     #[test]
