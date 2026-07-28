@@ -349,3 +349,36 @@ impl<'a> Widget for CommitDetailWidget<'a> {
         Widget::render(commit_paragraph, area, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rendered_text(word_wrap: bool) -> String {
+        let area = Rect::new(0, 0, 14, 8);
+        let mut buffer = Buffer::empty(area);
+        let theme = Theme::dark();
+        CommitDetailWidget {
+            commit_lines: vec![Line::from("abcdefghij klmnop")],
+            is_focused: false,
+            commit_scroll: 0,
+            word_wrap,
+            theme: &theme,
+        }
+        .render(area, &mut buffer);
+
+        let mut rendered = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                rendered.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        rendered
+    }
+
+    #[test]
+    fn long_commit_detail_lines_render_only_when_word_wrap_is_enabled() {
+        assert!(rendered_text(true).contains("klmnop"));
+        assert!(!rendered_text(false).contains("klmnop"));
+    }
+}
