@@ -2307,16 +2307,27 @@ mod tests {
     }
 
     #[test]
-    fn merged_lane_dim_composes_with_trace_in_unicode() {
-        // Merged-lane dim ORs with trace: a merged-lane cell dims even when the
-        // trace would light it, so a selected merged branch still recedes.
+    fn selected_merged_branch_trace_stays_connected_in_unicode() {
+        // A selected merged branch must light its full route into the trunk.
+        // In particular, the branch line and the merge arc are traced even
+        // though both touch a merged-lane commit; unrelated merged work stays
+        // dimmed.
         let theme = Theme::dark();
-        let m = oid(4);
-        let mut node = node_with_cells(vec![CellType::Commit(0)], false);
-        node.cell_oids = vec![(Some((m, m)), None)];
+        let (trunk, feature, base, other) = (oid(1), oid(4), oid(3), oid(6));
+        let mut node = node_with_cells(
+            vec![CellType::Pipe(0), CellType::MergeRight(0), CellType::Pipe(0)],
+            false,
+        );
+        node.cell_oids = vec![
+            (Some((feature, base)), None),
+            (Some((trunk, feature)), None),
+            (Some((other, base)), None),
+        ];
         let lit: std::collections::HashMap<crate::git::graph::CellEdge, git2::Oid> =
-            [((m, m), m)].into_iter().collect();
-        let merged: HashSet<git2::Oid> = [m].into_iter().collect();
+            [((feature, base), feature), ((trunk, feature), feature)]
+                .into_iter()
+                .collect();
+        let merged: HashSet<git2::Oid> = [feature, other].into_iter().collect();
 
         let mut spans: Vec<Span> = Vec::new();
         render_cells_unicode(
@@ -2331,10 +2342,21 @@ mod tests {
             None,
         );
 
-        let dot = spans.iter().find(|s| s.content.contains('●')).unwrap();
+        let mut pipes = spans.iter().filter(|s| s.content.contains('│'));
+        let branch_line = pipes.next().unwrap();
+        let unrelated = pipes.next().unwrap();
+        let merge_arc = spans.iter().find(|s| s.content.contains('╰')).unwrap();
         assert!(
-            dot.style.add_modifier.contains(Modifier::DIM),
-            "merged-lane dim wins even when tracing lights the cell"
+            !branch_line.style.add_modifier.contains(Modifier::DIM),
+            "the selected merged branch line stays bright"
+        );
+        assert!(
+            !merge_arc.style.add_modifier.contains(Modifier::DIM),
+            "the selected merged branch's arc connects visibly into the trunk"
+        );
+        assert!(
+            unrelated.style.add_modifier.contains(Modifier::DIM),
+            "unrelated merged work remains dimmed"
         );
     }
 
