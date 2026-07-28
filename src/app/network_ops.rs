@@ -368,6 +368,11 @@ impl App {
         let unchanged = set == self.merged.branches && targets == self.merged.squash_targets;
         self.merged.branches = set;
         self.merged.squash_targets = targets;
+        // A ref refresh or merged-PR fetch can arrive while the previous
+        // classification is still running. Its result describes the older
+        // snapshot; now that the worker slot is free, coalesce onto the latest
+        // branch and GitHub inputs rather than waiting for another ref change.
+        self.kick_merged_classification();
         // Persist the freshly-computed result to the cross-session cache (#104)
         // so the next startup can serve it instantly. Written on every delivery
         // — even an unchanged/empty result — so a repo with no merged branches
@@ -816,9 +821,11 @@ mod tests {
 
         // An external fetch writes a squash landing commit whose extra change
         // prevents local patch-id matching; the merged PR signal is required.
-        std::fs::write(path.join("file.txt"), "topic\nextra\n").unwrap();
+        std::fs::write(path.join("file.txt"), "topic\n").unwrap();
+        std::fs::write(path.join("extra.txt"), "extra\n").unwrap();
         let mut index = repo.index().unwrap();
         index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.add_path(std::path::Path::new("extra.txt")).unwrap();
         index.write().unwrap();
         let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
         let root_commit = repo.find_commit(root).unwrap();
@@ -837,7 +844,12 @@ mod tests {
         while !app.merged.branches.contains("topic") {
             app.update_merged_prs();
             app.update_merged_classification();
-            assert!(Instant::now() < deadline, "merged PR was not reclassified");
+            assert!(
+                Instant::now() < deadline,
+                "merged PR was not reclassified; gh={:?}, branches={:?}",
+                app.merged.pr_branches,
+                app.merged.branches
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
 
