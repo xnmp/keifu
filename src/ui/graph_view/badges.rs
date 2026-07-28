@@ -11,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::chips::strip_remote;
 use super::MERGE_ICON;
-use crate::pr::{CiStatus, PrContext, PrInfo, ReviewState};
+use crate::pr::{CiStatus, MergeState, PrContext, PrInfo, ReviewState};
 use crate::ui::theme::Theme;
 
 /// Nerd Font octicons for the open-PR badge and its actioned markers.
@@ -152,13 +152,15 @@ fn pr_badge_text(pr: &PrInfo) -> String {
     s
 }
 
-/// Badge chip color across four states (#88): failing checks (red) and running
-/// checks (orange) take precedence over merge readiness — a red/pending PR isn't
-/// mergeable anyway. Only once checks are green does merge readiness split the
-/// tone: full green when clear to merge, chartreuse when passing-but-blocked
-/// (changes requested, conflicts, draft, behind base). No checks → neutral blue.
-/// Pure and frame-free so the decision can be unit-tested directly.
+/// Badge chip color: drafts are always muted so their in-progress state is
+/// visually distinct regardless of CI. Other PRs retain the four-state (#88)
+/// behavior: failing checks (red) and running checks (orange) take precedence
+/// over merge readiness; passing-but-blocked PRs are chartreuse; no checks are
+/// neutral blue. Pure and frame-free so the decision can be unit-tested directly.
 fn pr_badge_color(pr: &PrInfo, theme: &Theme) -> Color {
+    if pr.merge_state == MergeState::Draft {
+        return theme.text_muted;
+    }
     match pr.ci {
         CiStatus::None => theme.pr_badge,
         CiStatus::Fail => theme.pr_ci_fail,

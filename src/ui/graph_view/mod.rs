@@ -712,21 +712,31 @@ mod tests {
         let mut draft = pr_head(7, 5);
         draft.ci = CiStatus::Fail;
         draft.merge_state = MergeState::Draft;
-        let draft_line = render_row(&commit_node(5, "draft head", &[]), &open_map(vec![("draft", draft)]), false);
+        let draft_line = render_row(
+            &commit_node(5, "draft head", &[]),
+            &open_map(vec![("draft", draft)]),
+            false,
+        );
         assert!(
-            draft_line.spans.iter().any(|span|
-                span.content.contains("#7") && span.style.fg == Some(theme.text_muted)
-            ),
+            draft_line
+                .spans
+                .iter()
+                .any(|span| span.content.contains("#7") && span.style.fg == Some(theme.text_muted)),
             "draft PR badge must render muted: {draft_line:?}"
         );
 
         let mut open = pr_head(8, 6);
         open.ci = CiStatus::Fail;
-        let open_line = render_row(&commit_node(6, "open head", &[]), &open_map(vec![("open", open)]), false);
+        let open_line = render_row(
+            &commit_node(6, "open head", &[]),
+            &open_map(vec![("open", open)]),
+            false,
+        );
         assert!(
-            open_line.spans.iter().any(|span|
-                span.content.contains("#8") && span.style.fg == Some(theme.pr_ci_fail)
-            ),
+            open_line
+                .spans
+                .iter()
+                .any(|span| span.content.contains("#8") && span.style.fg == Some(theme.pr_ci_fail)),
             "non-draft PR badge must retain its CI styling: {open_line:?}"
         );
     }

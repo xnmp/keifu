@@ -82,7 +82,8 @@ pub enum MergeState {
 impl MergeState {
     fn from_status(status: &str) -> Self {
         match status.to_ascii_uppercase().as_str() {
-            "BLOCKED" | "DIRTY" | "DRAFT" | "BEHIND" => Self::Blocked,
+            "DRAFT" => Self::Draft,
+            "BLOCKED" | "DIRTY" | "BEHIND" => Self::Blocked,
             _ => Self::Clear,
         }
     }
@@ -126,7 +127,8 @@ impl PrInfo {
     /// "passing checks but not actually mergeable" badge tone (#88); it is
     /// independent of CI (a failing/pending PR is coloured by its check status).
     pub fn is_merge_blocked(&self) -> bool {
-        self.merge_state == MergeState::Blocked || self.review == ReviewState::ChangesRequested
+        matches!(self.merge_state, MergeState::Draft | MergeState::Blocked)
+            || self.review == ReviewState::ChangesRequested
     }
 }
 
@@ -703,11 +705,18 @@ mod tests {
 
     #[test]
     fn merge_state_blocking_statuses_map_to_blocked() {
-        for s in ["BLOCKED", "DIRTY", "DRAFT", "BEHIND"] {
+        for s in ["BLOCKED", "DIRTY", "BEHIND"] {
             let pr = one(&format!(r#","mergeStateStatus":"{s}""#));
             assert_eq!(pr.merge_state, MergeState::Blocked, "{s} should block");
             assert!(pr.is_merge_blocked(), "{s} is_merge_blocked");
         }
+    }
+
+    #[test]
+    fn draft_merge_state_is_preserved() {
+        let pr = one(r#","mergeStateStatus":"DRAFT""#);
+        assert_eq!(pr.merge_state, MergeState::Draft);
+        assert!(pr.is_merge_blocked());
     }
 
     #[test]
