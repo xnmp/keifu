@@ -452,6 +452,10 @@ impl App {
         // alone, skipping the reopen cost.
         if git_changed {
             self.repo_dirty = true;
+            // This often means another process fetched a remote squash merge.
+            // Its GitHub PR state may have changed too, so do not leave the
+            // hide-merged classifier waiting for the five-minute poll interval.
+            self.force_gh_refresh();
         }
         // Latch: a burst of failing watcher-driven refreshes (e.g. during a
         // build) reports once per episode, not on every poll; re-arm on success.
