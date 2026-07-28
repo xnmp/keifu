@@ -61,6 +61,35 @@ fn commit_to_ref(
         .unwrap()
 }
 
+/// Create a two-parent merge commit on `refname` with an explicit tree. Keeps
+/// the ref-only history setup used by graph tests independent of the checkout.
+fn merge_to_ref(
+    repo: &Repository,
+    refname: &str,
+    first_parent: Oid,
+    second_parent: Oid,
+    path: &str,
+    contents: &str,
+    message: &str,
+) -> Oid {
+    let first = repo.find_commit(first_parent).unwrap();
+    let second = repo.find_commit(second_parent).unwrap();
+    let mut builder = repo.treebuilder(Some(&first.tree().unwrap())).unwrap();
+    let blob = repo.blob(contents.as_bytes()).unwrap();
+    builder.insert(path, blob, 0o100644).unwrap();
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let sig = Signature::now("Test User", "test@example.com").unwrap();
+    repo.commit(
+        Some(refname),
+        &sig,
+        &sig,
+        message,
+        &tree,
+        &[&first, &second],
+    )
+    .unwrap()
+}
+
 /// The OID that HEAD currently points at, read from a fresh handle on disk.
 fn head_oid(repo_dir: &Path) -> Oid {
     Repository::open(repo_dir)
@@ -146,6 +175,54 @@ fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> 
 
 fn make_app(repo: GitRepository) -> keifu::app::App {
     keifu::app::App::from_repo(repo).unwrap()
+}
+
+#[test]
+fn base_update_merge_uses_the_live_feature_tip_before_github_refreshes() {
+    let (_td, repo) = init_repo();
+    let root = commit_file(repo.repo(), "base.txt", "base", "root");
+    repo.repo()
+        .branch("dev", &repo.repo().find_commit(root).unwrap(), false)
+        .unwrap();
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(root).unwrap(), false)
+        .unwrap();
+
+    let feature_before_update = commit_to_ref(
+        repo.repo(),
+        "refs/heads/feature",
+        "feature.txt",
+        "feature",
+        "feature work",
+    );
+    let dev_tip = commit_to_ref(
+        repo.repo(),
+        "refs/heads/dev",
+        "base.txt",
+        "advanced base",
+        "advance dev",
+    );
+    let base_update = merge_to_ref(
+        repo.repo(),
+        "refs/heads/feature",
+        feature_before_update,
+        dev_tip,
+        "base.txt",
+        "advanced base",
+        "Merge dev into feature",
+    );
+
+    let mut app = make_app(repo);
+    app.open_prs = keifu::pr::parse_pr_list(&format!(
+        r#"[{{"number":128,"url":"https://example.test/pr/128","headRefName":"feature","headRefOid":"{feature_before_update}","baseRefName":"dev","title":"feature","state":"OPEN"}}]"#
+    ));
+
+    app.refresh(true).unwrap();
+
+    assert!(
+        app.merged.base_update.value().contains(&base_update),
+        "the visible local base-update merge is muted before GitHub reports its new PR head"
+    );
 }
 
 // ── Graph Navigation ────────────────────────────────────────────────

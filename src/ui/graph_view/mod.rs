@@ -285,7 +285,8 @@ fn render_graph_line<'a>(
     // message renders strongly muted and its own graph glyphs (the noisy
     // back-merge connector) are force-dimmed. Decided once here (via the shared
     // `is_base_update_row` predicate) so both the unicode cell renderer and the
-    // pixel dim pass agree with the message tail. HEAD is never muted.
+    // pixel dim pass agree with the message tail. HEAD is included because a
+    // fresh base update is normally the feature branch's tip.
     let is_base_update = is_base_update_row(
         node,
         ctx.metadata_columns.mute_base_merges,
@@ -1812,8 +1813,8 @@ mod tests {
 
     #[test]
     fn is_base_update_row_predicate_is_the_shared_contract() {
-        // The single predicate both renderers key off. Only ON + merge + in-set +
-        // not-HEAD qualifies; anything else must not mute.
+        // The single predicate both renderers key off. Only ON + merge + in-set
+        // qualifies; anything else must not mute.
         let mut set = HashSet::new();
         set.insert(oid(30));
         let merge = merge_node_full(30, "Merge main into feature", [1, 2]);
@@ -1829,12 +1830,13 @@ mod tests {
             !is_base_update_row(&merge, true, &HashSet::new()),
             "not in set never mutes"
         );
-        // HEAD is never muted even when it qualifies otherwise.
+        // A just-created base update is commonly the feature branch's HEAD, and
+        // must still mute when the setting is enabled.
         let mut head = merge_node_full(30, "Merge main into feature", [1, 2]);
         head.is_head = true;
         assert!(
-            !is_base_update_row(&head, true, &set),
-            "HEAD is never muted"
+            is_base_update_row(&head, true, &set),
+            "HEAD base-update merges are muted"
         );
         // A non-merge commit in the set is not a back-merge.
         let mut single = merge_node_full(30, "regular", [1, 2]);
@@ -2473,9 +2475,9 @@ mod tests {
     }
 
     #[test]
-    fn head_is_immune_to_every_mute_category() {
-        // Four categories exclude HEAD in their own definitions, so a HEAD row
-        // that otherwise qualifies is never muted.
+    fn head_base_update_merge_is_muted_while_other_merge_mutes_stay_exempt() {
+        // A base-update merge is frequently the current feature HEAD, so it is
+        // intentionally unlike the ordinary PR/merge/collapse mute categories.
         let base_update = {
             let mut node = merge_node_full(70, "Merge main into feature", [1, 2]);
             node.is_head = true;
@@ -2502,8 +2504,8 @@ mod tests {
                 &HashSet::new(),
             )
         };
+        assert!(base_update.row_is_muted, "base-update: HEAD is muted");
         for (name, model) in [
-            ("base-update", base_update),
             ("pr-merge", pr_merge),
             ("muted-merge", muted_merge),
             ("collapse-merge", collapse_merge),

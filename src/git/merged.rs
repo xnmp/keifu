@@ -770,13 +770,10 @@ pub fn merged_local_branches(
 /// practice; this window is generous.
 const BASE_UPDATE_SCAN_LIMIT: usize = 400;
 
-/// Every locally-known tip of the branch named `base_ref` (a PR's `baseRefName`,
-/// always unqualified): the local branch of that name plus each remote's
-/// `<remote>/<base_ref>`. All tips are returned rather than picking one because
-/// local and remote may disagree (unpushed / unfetched base commits) and a
-/// back-merge's second parent need only be reachable from *some* tip of the
-/// base — testing each costs one bounded walk per tip.
-pub fn base_ref_tips(branches: &[BranchInfo], base_ref: &str) -> Vec<Oid> {
+/// Every locally-known tip of a branch name: the local branch plus each remote
+/// mirror. All tips are returned because local and remote refs may disagree
+/// while keifu renders commits reachable from either.
+pub fn branch_ref_tips(branches: &[BranchInfo], branch_name: &str) -> Vec<Oid> {
     let mut tips: Vec<Oid> = branches
         .iter()
         .filter(|b| {
@@ -786,9 +783,9 @@ pub fn base_ref_tips(branches: &[BranchInfo], base_ref: &str) -> Vec<Oid> {
                 // `origin/feature/dev` for base `dev`.
                 b.name
                     .split_once('/')
-                    .is_some_and(|(_, rest)| rest == base_ref)
+                    .is_some_and(|(_, rest)| rest == branch_name)
             } else {
-                b.name == base_ref
+                b.name == branch_name
             }
         })
         .map(|b| b.tip_oid)
@@ -796,6 +793,13 @@ pub fn base_ref_tips(branches: &[BranchInfo], base_ref: &str) -> Vec<Oid> {
     tips.sort();
     tips.dedup();
     tips
+}
+
+/// Every locally-known tip of the branch named `base_ref` (a PR's
+/// `baseRefName`). Kept as a named wrapper so callers document which side of a
+/// PR pair they are resolving.
+pub fn base_ref_tips(branches: &[BranchInfo], base_ref: &str) -> Vec<Oid> {
+    branch_ref_tips(branches, base_ref)
 }
 
 /// Classify **base-update ("back-merge") commits**: merge commits that sit on an

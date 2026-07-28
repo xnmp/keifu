@@ -126,15 +126,15 @@ pub(super) fn build_tag_labels(tag_names: &[String], theme: &Theme) -> Vec<(Stri
 /// strongly muted (#55): its message greys+dims and its own graph connector is
 /// force-dimmed so the noisy back-merge line recedes. This is the single source
 /// of truth shared by BOTH renderers — the unicode path (`render_cells_unicode`
-/// force_dim) and the pixel path (`dim_pixel_specs_window` per-row force-dim) —
-/// so they agree on which rows mute. HEAD is never muted.
+/// force_dim) and the pixel path (`dim_pixel_specs_window` per-row force-dim)
+/// agree on which rows mute. A base-update HEAD is deliberately included: it is
+/// the usual outcome directly after refreshing a feature branch from its base.
 pub(super) fn is_base_update_row(
     node: &GraphNode,
     mute_base_merges: bool,
     base_update_merges: &HashSet<git2::Oid>,
 ) -> bool {
     mute_base_merges
-        && !node.is_head
         && node.is_merge()
         && node
             .commit
