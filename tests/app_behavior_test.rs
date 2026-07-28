@@ -20,7 +20,10 @@ use keifu::app::{
 };
 use keifu::git::GitRepository;
 use keifu::keybindings::map_key_to_action;
-use keifu::ui::{commit_detail::CommitDetailWidget, theme::Theme};
+use keifu::ui::{
+    commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
+    theme::Theme,
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -745,6 +748,29 @@ fn commit_detail_wrap_action_reaches_the_rendered_panel() {
     assert!(
         !rendered.contains("klmnop"),
         "the action's disabled wrap state truncates the long detail line"
+    );
+}
+
+#[test]
+fn selected_commit_detail_omits_signature_status() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "commit message");
+    let mut app = make_app(repo);
+    let theme = Theme::dark();
+
+    let lines = compute_commit_detail_layout(&mut app, Rect::new(0, 0, 80, 20), &theme);
+    let rendered: String = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    assert!(rendered.contains("Author: Test User <test@example.com>"));
+    assert!(rendered.contains("Date:   "));
+    assert!(rendered.contains("commit message"));
+    assert!(
+        !rendered.contains("Sig:"),
+        "selected commit details must not display signature status"
     );
 }
 

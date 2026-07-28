@@ -23,7 +23,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Optional pixel-rendered graph lines (continuous VSCode-style curves) on terminals with a graphics protocol (Kitty/iTerm2); falls back to Unicode automatically (`ui.graph_renderer`)
 - Round author avatars per commit (pixel mode) — resolved from GitHub (noreply addresses) or Gravatar, downloaded in the background and disk-cached, with a deterministic colored disc fallback; toggle in the Shift+M menu
 - Commit list with branch/tag labels, compact relative age ("3d", "2w", "5mo"), author, short hash, and message (columns toggle with Shift+M; some fields may be hidden on narrow terminals)
-- Commit detail panel with full message, changed file stats (+/-), and GPG signature status
+- Commit detail panel with full message and changed file stats (+/-)
 - File diff view with syntax highlighting, word-level change emphasis, and hunk-level stage/unstage/discard
 - Files pane: stage/unstage (file, folder, or all), gitignore, archive to `.archive/`, trash untracked files, undo, folder grouping, fuzzy filter, copy path, per-file history
 - Merge-conflict handling: accept ours/theirs, continue/abort a merge, rebase, cherry-pick, or revert
