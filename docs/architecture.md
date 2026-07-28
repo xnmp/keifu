@@ -401,7 +401,15 @@ foreground and dimmed strokes — inspecting a merged commit read greyed-out.
   XOR-hash over base name/tip, every branch's `(name, tip, is_remote,
   is_head)`, and the gh-merged name set) — `maybe_start()` is a no-op when the
   signature hasn't changed, so a worker only spawns when something that could
-  change the classification actually changed.
+  change the classification actually changed. It admits only one worker at a
+  time, so `update_merged_classification()` persists the delivered snapshot
+  before re-kicking it against current inputs; this coalesces a ref/GitHub
+  update that arrived during the prior worker instead of losing it.
+- A watcher event touching `.git` is not by itself evidence that GitHub state
+  changed: no-op fetches rewrite `FETCH_HEAD`. Watcher-driven refresh records
+  the old HEAD and branch tips, then bypasses the 300s GitHub interval only if
+  the refreshed refs actually moved. This preserves the coarse poll for idle
+  repositories while detecting externally fetched squash merges promptly.
 
 **Shift+H** (`Action::ToggleMergedBranches`, mnemonic "Hide merged" — joins
 `Shift+B` filter and `Shift+O` remotes-hidden) flips `App.merged.hide`
