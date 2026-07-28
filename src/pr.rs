@@ -70,7 +70,10 @@ impl ReviewState {
 /// mergeable PR's badge yellow while GitHub is still computing the state (#88).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeState {
-    /// The merge is blocked: `BLOCKED`, `DIRTY` (conflicts), `DRAFT`, `BEHIND`.
+    /// The PR is a draft. Kept distinct from other blockers because its graph
+    /// badge has a dedicated muted style.
+    Draft,
+    /// The merge is blocked: `BLOCKED`, `DIRTY` (conflicts), or `BEHIND`.
     Blocked,
     /// Not blocking: `CLEAN`, `HAS_HOOKS`, `UNSTABLE`, `UNKNOWN`, or missing.
     Clear,
