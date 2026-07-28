@@ -156,7 +156,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("r", "Refresh   o  Open in browser"),
         Blank,
         Header("Search"),
-        Row("/", "Search branches"),
+        Row("Ctrl+P / /", "Search branches"),
         Blank,
         Header("Mouse"),
         Row("Click", "Select commit/file, focus panel"),
@@ -167,10 +167,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Drag divider", "Resize the graph/detail split"),
         Blank,
         Header("Other"),
-        Row(
-            "Ctrl+P / :",
-            "Command palette (commands, branches, commits)",
-        ),
+        Row(":", "Command palette (commands, branches, commits)"),
         Row(
             "Ctrl+, / ,",
             "Settings menu (toggle/edit persisted settings)",
