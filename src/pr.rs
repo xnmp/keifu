@@ -720,6 +720,13 @@ mod tests {
     }
 
     #[test]
+    fn is_draft_marks_unknown_readiness_as_draft() {
+        let pr = one(r#","isDraft":true,"mergeStateStatus":"UNKNOWN""#);
+        assert_eq!(pr.merge_state, MergeState::Draft);
+        assert!(pr.is_merge_blocked());
+    }
+
+    #[test]
     fn merge_state_non_blocking_statuses_map_to_clear() {
         // UNSTABLE (failing/pending checks) and UNKNOWN (still computing) must not
         // block — CI status already expresses UNSTABLE, and UNKNOWN must never turn
