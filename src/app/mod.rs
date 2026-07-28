@@ -971,6 +971,9 @@ pub struct App {
     pub commit_editor_line_offset: u16,
     /// Visible rows in the commit detail pane (updated during render)
     pub commit_detail_visible_rows: u16,
+    /// Whether the commit detail panel wraps long lines. Enabled by default to
+    /// preserve the historical display; this is a session-local view choice.
+    pub commit_detail_word_wrap: bool,
 
     // Commit filter (graph panel Ctrl+F)
     pub commit_filter: String,
