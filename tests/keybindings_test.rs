@@ -686,6 +686,13 @@ fn file_diff_mode_scrolling() {
     );
     assert_eq!(map(key(KeyCode::End)), Some(Action::ScrollToBottom));
     assert_eq!(map(key(KeyCode::Char('h'))), Some(Action::ScrollLeft));
+    assert_eq!(
+        map(key_mod(
+            KeyCode::Char('w'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        )),
+        Some(Action::ToggleDiffWrap),
+    );
     assert_eq!(map(key(KeyCode::Left)), Some(Action::ScrollLeft));
     assert_eq!(map(key(KeyCode::Char('l'))), Some(Action::ScrollRight));
     assert_eq!(map(key(KeyCode::Right)), Some(Action::ScrollRight));
