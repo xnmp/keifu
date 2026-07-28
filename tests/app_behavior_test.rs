@@ -708,6 +708,18 @@ fn commit_detail_go_to_top_resets_scroll() {
     assert_eq!(app.commit_detail_scroll, 0);
 }
 
+#[test]
+fn commit_detail_wrap_toggle_changes_the_detail_view_state() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::CommitDetail;
+
+    assert!(app.commit_detail_word_wrap);
+    app.handle_action(Action::ToggleCommitDetailWrap).unwrap();
+    assert!(!app.commit_detail_word_wrap);
+}
+
 // ── Error toasts (#116) ─────────────────────────────────────────────
 
 #[test]

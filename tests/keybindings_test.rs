@@ -364,6 +364,20 @@ fn commit_detail_ctrl_shortcuts() {
     );
 }
 
+#[test]
+fn ctrl_alt_w_toggles_wrap_only_in_commit_detail() {
+    let chord = key_mod(
+        KeyCode::Char('w'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
+    assert_eq!(
+        map_normal_detail(chord),
+        Some(Action::ToggleCommitDetailWrap)
+    );
+    assert_eq!(map_normal_graph(chord), None);
+    assert_eq!(map_normal_files(chord), None);
+}
+
 // ── Editor mode ─────────────────────────────────────────────────────
 
 #[test]
