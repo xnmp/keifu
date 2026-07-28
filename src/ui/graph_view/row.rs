@@ -22,7 +22,9 @@ use crate::{
     ui::theme::Theme,
 };
 
-use super::badges::{merged_badge, merged_style, pr_for_row, PrBadge, PR_BADGE_ICON};
+use super::badges::{
+    merged_badge, merged_style, pr_for_row, PrBadge, PrBadgeMarker, PR_BADGE_ICON,
+};
 use super::chips::{optimize_branch_display, BranchChip};
 use super::metrics::{display_width, format_date_field, truncate_to_width};
 use super::MERGE_ICON;
@@ -495,7 +497,23 @@ fn layout_row<'a>(
             x_end: (chip_start + display_width(&badge.text)) as u16,
             target: ChipTarget::PrBadge,
         });
-        spans.push(Span::styled(badge.text.clone(), style));
+        if let Some(marker_suffix) = badge.marker.suffix() {
+            let prefix = badge
+                .text
+                .strip_suffix(&marker_suffix)
+                .expect("badge marker suffix matches compact badge text");
+            spans.push(Span::styled(prefix.to_string(), style));
+            let marker_style = if badge.marker == PrBadgeMarker::Approved {
+                Style::default()
+                    .fg(ctx.theme.pr_ci_pass)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                style
+            };
+            spans.push(Span::styled(marker_suffix, marker_style));
+        } else {
+            spans.push(Span::styled(badge.text.clone(), style));
+        }
         spans.push(Span::raw(" "));
     }
 

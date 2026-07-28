@@ -28,6 +28,38 @@ const PR_COMMENT_ICON: char = '\u{f41f}'; // nf-oct-comment
 pub struct PrBadge {
     pub text: String,
     pub color: Color,
+    pub marker: PrBadgeMarker,
+}
+
+/// The review marker appended to an open-PR badge. Kept separate from the
+/// compact text so rendering can give an approved check its semantic color
+/// without changing the CI/merge color of the rest of the badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrBadgeMarker {
+    None,
+    Approved,
+    ChangesRequested,
+}
+
+impl PrBadgeMarker {
+    /// Marker text, including the separator from the PR number.
+    pub(super) fn suffix(self) -> Option<String> {
+        match self {
+            Self::None => None,
+            Self::Approved => Some(format!(" {PR_APPROVED_ICON}")),
+            Self::ChangesRequested => Some(format!(" {PR_CHANGES_ICON}")),
+        }
+    }
+}
+
+impl From<ReviewState> for PrBadgeMarker {
+    fn from(review: ReviewState) -> Self {
+        match review {
+            ReviewState::None => Self::None,
+            ReviewState::Approved => Self::Approved,
+            ReviewState::ChangesRequested => Self::ChangesRequested,
+        }
+    }
 }
 
 /// Badge appended to a branch already merged into the trunk (merge or squash).
@@ -77,6 +109,7 @@ pub(super) fn pr_for_row(
     Some(PrBadge {
         text: pr_badge_text(pr),
         color: pr_badge_color(pr, theme),
+        marker: pr.review.into(),
     })
 }
 
@@ -103,23 +136,16 @@ fn pr_for_row_info<'p>(
     })
 }
 
-/// Compact badge text for an open PR, e.g. ` #12 ✓ ` (approved with outside
-/// comments). Review marker first (approved / changes-requested), then a
-/// comment marker when a non-author has commented.
+/// Compact badge text for an open PR, e.g. ` #12 ✓ `. Review markers supersede
+/// the outside-activity marker because the stronger state already signals that
+/// someone acted on the PR.
 fn pr_badge_text(pr: &PrInfo) -> String {
     let mut s = format!("{} #{}", PR_BADGE_ICON, pr.number);
-    match pr.review {
-        ReviewState::Approved => {
-            s.push(' ');
-            s.push(PR_APPROVED_ICON);
-        }
-        ReviewState::ChangesRequested => {
-            s.push(' ');
-            s.push(PR_CHANGES_ICON);
-        }
-        ReviewState::None => {}
+    let marker = PrBadgeMarker::from(pr.review);
+    if let Some(suffix) = marker.suffix() {
+        s.push_str(&suffix);
     }
-    if pr.outside_activity {
+    if pr.outside_activity && marker == PrBadgeMarker::None {
         s.push(' ');
         s.push(PR_COMMENT_ICON);
     }
@@ -252,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_badge_appends_review_then_comment_markers() {
+    fn pr_badge_uses_review_marker_instead_of_comment_marker() {
         // Plain: no markers.
         let plain = pr_badge_text(&pr_with(1, CiStatus::Pass, ReviewState::None, false));
         assert!(!plain.contains(PR_APPROVED_ICON));
@@ -271,17 +297,26 @@ mod tests {
         assert!(changes.contains(PR_CHANGES_ICON));
         assert!(!changes.contains(PR_APPROVED_ICON));
 
-        // Outside comment → comment glyph, appended after the review marker.
+        // Outside activity with a review marker is already represented by that
+        // stronger marker, so no redundant comment glyph is appended.
         let both = pr_badge_text(&pr_with(12, CiStatus::Pass, ReviewState::Approved, true));
-        assert!(both.contains(PR_APPROVED_ICON) && both.contains(PR_COMMENT_ICON));
-        let check_at = both.find(PR_APPROVED_ICON).unwrap();
-        let comment_at = both.find(PR_COMMENT_ICON).unwrap();
-        assert!(
-            check_at < comment_at,
-            "review marker precedes comment: {both:?}"
-        );
-        // Icon(1)+" #12"(4) + " ✓"(2) + " ⌘"(2) = 9 columns.
-        assert_eq!(display_width(&both), 9);
+        assert!(both.contains(PR_APPROVED_ICON));
+        assert!(!both.contains(PR_COMMENT_ICON));
+        // Icon(1)+" #12"(4) + " ✓"(2) = 7 columns.
+        assert_eq!(display_width(&both), 7);
+
+        let changes = pr_badge_text(&pr_with(
+            12,
+            CiStatus::Pass,
+            ReviewState::ChangesRequested,
+            true,
+        ));
+        assert!(changes.contains(PR_CHANGES_ICON));
+        assert!(!changes.contains(PR_COMMENT_ICON));
+
+        // Without a review marker, outside activity remains visible.
+        let comment_only = pr_badge_text(&pr_with(12, CiStatus::Pass, ReviewState::None, true));
+        assert!(comment_only.contains(PR_COMMENT_ICON));
     }
 
     #[test]
@@ -379,10 +414,9 @@ mod tests {
     }
 
     #[test]
-    fn pr_badge_encodes_approved_and_comment_state() {
-        // #43: the badge for a PR resolved by head commit encodes the approved +
-        // outside-comment markers. Asserts the badge *decision* (text) directly
-        // rather than scanning a full render.
+    fn pr_badge_encodes_approved_without_redundant_comment_state() {
+        // #43: the badge for a PR resolved by head commit encodes the approved
+        // marker, which supersedes the outside-comment marker.
         let theme = Theme::dark();
         let mut approved = pr(1);
         approved.head_oid = Some(oid(5).to_string());
@@ -399,11 +433,7 @@ mod tests {
             "approved glyph present: {:?}",
             badge.text
         );
-        assert!(
-            badge.text.contains(PR_COMMENT_ICON),
-            "comment glyph present: {:?}",
-            badge.text
-        );
+        assert!(!badge.text.contains(PR_COMMENT_ICON), "badge: {badge:?}");
     }
 
     #[test]
