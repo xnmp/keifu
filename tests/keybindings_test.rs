@@ -88,12 +88,32 @@ fn alt_slash_toggles_layout() {
 }
 
 #[test]
-fn ctrl_p_opens_branch_search_from_every_panel() {
+fn global_search_shortcuts_work_from_every_panel() {
     let ctrl_p = key_mod(KeyCode::Char('p'), KeyModifiers::CONTROL);
+    let ctrl_f = key_mod(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    let ctrl_shift_f = key_mod(
+        KeyCode::Char('F'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
 
-    assert_eq!(map_normal_graph(ctrl_p), Some(Action::Search));
-    assert_eq!(map_normal_files(ctrl_p), Some(Action::Search));
-    assert_eq!(map_normal_detail(ctrl_p), Some(Action::Search));
+    assert_eq!(map_normal_graph(ctrl_p), Some(Action::OpenCommandPalette));
+    assert_eq!(map_normal_files(ctrl_p), Some(Action::OpenCommandPalette));
+    assert_eq!(map_normal_detail(ctrl_p), Some(Action::OpenCommandPalette));
+    assert_eq!(map_normal_graph(ctrl_f), Some(Action::Search));
+    assert_eq!(map_normal_files(ctrl_f), Some(Action::Search));
+    assert_eq!(map_normal_detail(ctrl_f), Some(Action::Search));
+    assert_eq!(
+        map_normal_graph(ctrl_shift_f),
+        Some(Action::StartCommitFilter)
+    );
+    assert_eq!(
+        map_normal_files(ctrl_shift_f),
+        Some(Action::StartCommitFilter)
+    );
+    assert_eq!(
+        map_normal_detail(ctrl_shift_f),
+        Some(Action::StartCommitFilter)
+    );
 }
 
 // ── Panel navigation ────────────────────────────────────────────────
@@ -893,9 +913,12 @@ fn commit_filter_keybindings() {
 }
 
 #[test]
-fn ctrl_f_starts_commit_filter() {
+fn ctrl_shift_f_starts_commit_filter() {
     assert_eq!(
-        map_normal_graph(key_mod(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        map_normal_graph(key_mod(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )),
         Some(Action::StartCommitFilter)
     );
 }

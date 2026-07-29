@@ -60,7 +60,7 @@ identical to a human at the terminal.
   layer. Single characters are sent as-is (uppercase implies Shift). Special
   keys: `<enter> <esc> <tab> <backtab> <space> <up> <down> <left> <right>
   <home> <end> <pgup> <pgdn> <backspace> <c-x>` (Ctrl+x), `<a-x>` (Alt+x), and
-  `<c-a-x>` (Ctrl+Alt+x). Graph navigation uses
+  `<c-a-x>` (Ctrl+Alt+x), and `<c-s-x>` (Ctrl+Shift+x). Graph navigation uses
   the arrow keys (`<up>`/`<down>`), `G`/`g` for bottom/top, not `j`/`k`; when
   unsure, open the in-app help with `?`.
 - `mouse` — `kind` is `click`, `right_click`, `scroll_up`, or `scroll_down`;

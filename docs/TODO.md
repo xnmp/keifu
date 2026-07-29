@@ -159,8 +159,9 @@ the optional `gh-image` extension, appends its repository-scoped
 ### [DONE] 2026-07-30 Report Keifu issues from any repository
 The command palette now includes “Keifu: report an issue”, which reuses the
 new-issue and clipboard-image workflow but passes `--repo xnmp/keifu` to both
-the attachment uploader and `gh issue create`. `Ctrl+Alt+P` opens the palette
-without replacing `Ctrl+P` branch search; `:` remains available. `Alt+I`
+the attachment uploader and `gh issue create`. `Ctrl+P` opens the palette,
+`Ctrl+F` searches branches, and `Ctrl+Shift+F` searches commits; `:` remains
+available. `Alt+I`
 opens the current-repository composer directly and `Ctrl+Alt+I` opens the
 Keifu-targeted composer.
 Both new-issue composers soft-wrap long title/body lines and keep the cursor
@@ -355,7 +356,7 @@ root files, grouping off, `SectionHeader` reset between staged/unstaged
 sections) drives the choice in `ui/files_pane.rs`.
 
 ### [DONE] 2026-07-19 Star gap under commit filter
-The "sometimes a small gap beneath the star" report: with a Ctrl+F commit
+The "sometimes a small gap beneath the star" report: with a Ctrl+Shift+F commit
 filter active that excluded HEAD's message, HEAD's row was hidden while the
 always-visible uncommitted row kept its connector (wired against the unfiltered
 node list at build time), leaving a dangling stub under the top marker.

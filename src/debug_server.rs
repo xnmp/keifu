@@ -283,7 +283,7 @@ fn state_json(app: &App) -> Value {
 /// Whitespace-separated tokens; single characters are sent as-is (uppercase
 /// implies Shift), and special keys use angle brackets: <enter> <esc> <tab>
 /// <backtab> <space> <up> <down> <left> <right> <home> <end> <pgup> <pgdn>
-/// <backspace> <c-x> (Ctrl+x)
+/// <backspace> <c-x> (Ctrl+x) <c-s-x> (Ctrl+Shift+x)
 fn parse_key_sequence(input: &str) -> std::result::Result<Vec<KeyEvent>, String> {
     let mut events = Vec::new();
     for token in input.split_whitespace() {
@@ -319,6 +319,18 @@ fn parse_key_token(token: &str) -> std::result::Result<KeyEvent, String> {
             ));
         }
         return Err(format!("invalid ctrl-alt key token: {token}"));
+    }
+
+    // Ctrl+Shift combo, e.g. <c-s-f>.
+    if let Some(c) = inner.strip_prefix("c-s-") {
+        let mut it = c.chars();
+        if let (Some(ch), None) = (it.next(), it.next()) {
+            return Ok(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ));
+        }
+        return Err(format!("invalid ctrl-shift key token: {token}"));
     }
 
     // Alt combo, e.g. <a-i>.
@@ -422,6 +434,16 @@ mod tests {
         assert_eq!(
             events[0].modifiers,
             KeyModifiers::CONTROL | KeyModifiers::ALT
+        );
+    }
+
+    #[test]
+    fn parses_ctrl_shift_combo() {
+        let events = parse_key_sequence("<c-s-f>").unwrap();
+        assert_eq!(events[0].code, KeyCode::Char('f'));
+        assert_eq!(
+            events[0].modifiers,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
         );
     }
 

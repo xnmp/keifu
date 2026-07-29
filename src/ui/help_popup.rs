@@ -159,7 +159,8 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("r", "Refresh   o  Open in browser"),
         Blank,
         Header("Search"),
-        Row("Ctrl+P / /", "Search branches"),
+        Row("Ctrl+F / /", "Search branches"),
+        Row("Ctrl+Shift+F", "Search commits"),
         Blank,
         Header("Mouse"),
         Row("Click", "Select commit/file, focus panel"),
@@ -171,7 +172,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("Other"),
         Row(
-            "Ctrl+Alt+P / :",
+            "Ctrl+P / :",
             "Command palette (commands, branches, commits)",
         ),
         Row(

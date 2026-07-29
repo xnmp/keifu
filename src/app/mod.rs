@@ -421,7 +421,7 @@ pub enum AppMode {
         entries: Vec<FileHistoryEntry>,
         selected: usize,
     },
-    /// Fuzzy command palette (`Ctrl+Alt+P` or `:`): commands, branches, and
+    /// Fuzzy command palette (`Ctrl+P`, `Ctrl+Alt+P`, or `:`): commands, branches, and
     /// commits in one ranked list. Holds the query and selected row.
     CommandPalette {
         query: String,
@@ -1030,7 +1030,7 @@ pub struct App {
     /// preserve the historical display; this is a session-local view choice.
     pub commit_detail_word_wrap: bool,
 
-    // Commit filter (graph panel Ctrl+F)
+    // Commit filter (global Ctrl+Shift+F, displayed in the graph panel)
     pub commit_filter: String,
     pub commit_filter_active: bool,
     pub visible_commit_indices: Vec<usize>,

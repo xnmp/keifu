@@ -1098,7 +1098,7 @@ fn search_workflow() {
 }
 
 #[test]
-fn ctrl_p_search_navigates_confirms_and_cancels_branch_selection() {
+fn ctrl_f_search_navigates_confirms_and_cancels_branch_selection() {
     let (_td, repo) = init_repo();
     commit_file(repo.repo(), "a.txt", "a", "initial");
     {
@@ -1132,15 +1132,15 @@ fn ctrl_p_search_navigates_confirms_and_cancels_branch_selection() {
     app.graph_nav.selected_branch_position = Some(original_position);
     app.graph_nav.graph_list_state.select(Some(original_node));
 
-    let ctrl_p = map_key_to_action(
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+    let ctrl_f = map_key_to_action(
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
         &app.mode,
         app.focused_panel,
         false,
         false,
         false,
     );
-    app.handle_action(ctrl_p.expect("Ctrl+P must open branch search"))
+    app.handle_action(ctrl_f.expect("Ctrl+F must open branch search"))
         .unwrap();
     for character in "feature".chars() {
         app.handle_action(Action::InputChar(character)).unwrap();
@@ -1164,15 +1164,15 @@ fn ctrl_p_search_navigates_confirms_and_cancels_branch_selection() {
 
     app.graph_nav.selected_branch_position = Some(original_position);
     app.graph_nav.graph_list_state.select(Some(original_node));
-    let ctrl_p = map_key_to_action(
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+    let ctrl_f = map_key_to_action(
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
         &app.mode,
         app.focused_panel,
         false,
         false,
         false,
     );
-    app.handle_action(ctrl_p.expect("Ctrl+P must open branch search"))
+    app.handle_action(ctrl_f.expect("Ctrl+F must open branch search"))
         .unwrap();
     for character in "feature".chars() {
         app.handle_action(Action::InputChar(character)).unwrap();
@@ -1381,7 +1381,21 @@ fn commit_menu_filter_no_match_enter_does_nothing() {
     assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
 }
 
-// ── Commit filter (graph panel) ────────────────────────────────────
+// ── Commit filter ──────────────────────────────────────────────────
+
+#[test]
+fn commit_filter_shortcut_moves_focus_to_graph() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    let mut app = make_app(repo);
+    app.focused_panel = FocusedPanel::Files;
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+
+    assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    assert!(app.commit_filter_active);
+    assert!(app.commit_filter.is_empty());
+}
 
 #[test]
 fn commit_filter_navigation_stays_within_matches() {

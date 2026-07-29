@@ -67,7 +67,7 @@ files pane.)
 Graph with uncommitted row + remote branches, commit detail + syntax-highlit
 file diff, amend, copy hash, branch create/checkout/delete, reset
 soft/mixed/hard, cherry-pick/revert/merge/rebase (conflict-blind — see #1),
-stash list/apply/pop/drop as graph nodes, commit filter (Ctrl+F,
+stash list/apply/pop/drop as graph nodes, commit filter (Ctrl+Shift+F,
 message/author/hash), fuzzy branch search (/).
 
 ## Deliberately skipped (terminal-impractical or low value)

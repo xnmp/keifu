@@ -63,6 +63,14 @@ impl App {
                 self.open_keifu_issue_compose();
                 return Ok(());
             }
+            // Commit search is global, but its results live in the graph.
+            Action::StartCommitFilter => {
+                self.focused_panel = FocusedPanel::Graph;
+                self.commit_filter_active = true;
+                self.commit_filter.clear();
+                self.recompute_visible_commits();
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -237,11 +245,6 @@ impl App {
                 } else {
                     self.toast(crate::toast::ToastKind::Info, "Diff not available");
                 }
-            }
-            Action::StartCommitFilter => {
-                self.commit_filter_active = true;
-                self.commit_filter.clear();
-                self.recompute_visible_commits();
             }
             Action::CommitFilterChar(c) => {
                 self.commit_filter.push(c);

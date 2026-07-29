@@ -192,16 +192,26 @@ fn map_normal_mode(
         return map_editor_mode(key);
     }
 
-    // Ctrl+P opens branch quick search; Ctrl+Alt+P and ':' open the command
-    // palette. None interrupts an active text filter.
+    // Ctrl+P opens the command palette, Ctrl+F opens branch quick search, and
+    // Ctrl+Shift+F opens commit search. None interrupts an active text filter.
     if !files_filter_active && !commit_filter_active {
         let ctrl_alt_p = key
             .modifiers
             .contains(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && key.code == KeyCode::Char('p');
+            && matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'p'));
         let ctrl_p = key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
-            && key.code == KeyCode::Char('p');
+            && !key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'p'));
+        let ctrl_shift_f = key
+            .modifiers
+            .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'f'));
+        let ctrl_f = key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && !key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'f'));
         let colon = !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
             && key.code == KeyCode::Char(':');
@@ -209,6 +219,12 @@ fn map_normal_mode(
             return Some(Action::OpenCommandPalette);
         }
         if ctrl_p {
+            return Some(Action::OpenCommandPalette);
+        }
+        if ctrl_shift_f {
+            return Some(Action::StartCommitFilter);
+        }
+        if ctrl_f {
             return Some(Action::Search);
         }
         if colon {
@@ -374,9 +390,6 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
 
         // Space opens file diff for quick access
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::OpenFileDiff),
-
-        // Commit filter
-        (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartCommitFilter),
 
         // Branch filter
         (KeyModifiers::SHIFT, KeyCode::Char('B')) => Some(Action::OpenBranchFilter),
@@ -1121,15 +1134,22 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_alt_p_opens_palette_without_stealing_ctrl_p_from_branch_search() {
+    fn global_search_shortcuts_use_distinct_modifier_chords() {
         let ctrl_alt_p = KeyEvent::new(
             KeyCode::Char('p'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let ctrl_p = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let ctrl_shift_f = KeyEvent::new(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
 
         assert_eq!(map_normal(ctrl_alt_p), Some(Action::OpenCommandPalette));
-        assert_eq!(map_normal(ctrl_p), Some(Action::Search));
+        assert_eq!(map_normal(ctrl_p), Some(Action::OpenCommandPalette));
+        assert_eq!(map_normal(ctrl_f), Some(Action::Search));
+        assert_eq!(map_normal(ctrl_shift_f), Some(Action::StartCommitFilter));
     }
 
     #[test]
