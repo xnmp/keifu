@@ -14,6 +14,7 @@ use std::time::Duration;
 use crate::gh;
 
 const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+const ATTACHMENT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// A pending mutating issue action.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,8 @@ pub enum IssueAction {
     Create {
         title: String,
         body: String,
+        /// Short-lived clipboard image captured by the compose UI.
+        attachment: Option<PathBuf>,
     },
     /// Add a comment to an existing issue.
     Comment {
@@ -221,8 +224,32 @@ fn body_file_path() -> PathBuf {
 }
 
 fn run_action(repo_path: &str, action: &IssueAction) -> Result<String, String> {
+    let result = run_action_inner(repo_path, action);
+    if let IssueAction::Create {
+        attachment: Some(path),
+        ..
+    } = action
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+fn run_action_inner(repo_path: &str, action: &IssueAction) -> Result<String, String> {
+    let prepared_body = match action {
+        IssueAction::Create {
+            body,
+            attachment: Some(path),
+            ..
+        } => Some(body_with_attachment(
+            body,
+            &upload_attachment(repo_path, path)?,
+        )),
+        _ => None,
+    };
+
     // Write the body to a temp file when the action carries one.
-    let body_path = match action.body() {
+    let body_path = match prepared_body.as_deref().or_else(|| action.body()) {
         Some(body) => {
             let path = body_file_path();
             if let Some(parent) = path.parent() {
@@ -251,6 +278,39 @@ fn run_action(repo_path: &str, action: &IssueAction) -> Result<String, String> {
     }
 }
 
+fn upload_attachment(repo_path: &str, path: &std::path::Path) -> Result<String, String> {
+    let Some(path) = path.to_str() else {
+        return Err("Clipboard image path is not valid UTF-8".to_string());
+    };
+    let out = gh::run(repo_path, &["image", path], ATTACHMENT_TIMEOUT)?;
+    if !out.success {
+        let detail = if out.stderr.is_empty() {
+            "gh image failed".to_string()
+        } else {
+            out.stderr
+        };
+        return Err(format!(
+            "Clipboard upload failed; install/configure gh-image \
+             (`gh extension install drogers0/gh-image`): {}",
+            detail.lines().next().unwrap_or("gh image failed")
+        ));
+    }
+    out.stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("github.com/user-attachments/"))
+        .map(str::to_string)
+        .ok_or_else(|| "gh image returned no GitHub attachment URL".to_string())
+}
+
+fn body_with_attachment(body: &str, markdown: &str) -> String {
+    if body.trim().is_empty() {
+        markdown.to_string()
+    } else {
+        format!("{}\n\n{}", body.trim_end(), markdown)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +322,7 @@ mod tests {
         let a = IssueAction::Create {
             title: "Crash on open".to_string(),
             body: "steps".to_string(),
+            attachment: None,
         };
         assert_eq!(a.body(), Some("steps"));
         assert_eq!(
@@ -282,12 +343,14 @@ mod tests {
         let a = IssueAction::Create {
             title: "t".to_string(),
             body: String::new(),
+            attachment: None,
         };
         assert_eq!(a.build_args(None), vec!["issue", "create", "--title", "t"]);
         // Shell-special chars pass through untouched (never a shell).
         let tricky = IssueAction::Create {
             title: "fix: \"q\" & $VAR".to_string(),
             body: String::new(),
+            attachment: None,
         };
         assert_eq!(tricky.build_args(None)[3], "fix: \"q\" & $VAR");
     }
@@ -407,7 +470,8 @@ mod tests {
         assert_eq!(
             IssueAction::Create {
                 title: "t".into(),
-                body: String::new()
+                body: String::new(),
+                attachment: None,
             }
             .describe(),
             "Create issue"
@@ -429,7 +493,8 @@ mod tests {
             success_message(
                 &IssueAction::Create {
                     title: "t".into(),
-                    body: String::new()
+                    body: String::new(),
+                    attachment: None,
                 },
                 "https://github.com/o/r/issues/50\n"
             ),
@@ -463,6 +528,16 @@ mod tests {
                 ""
             ),
             "Updated labels on issue #8"
+        );
+    }
+
+    #[test]
+    fn attachment_markdown_is_appended_without_extra_leading_space() {
+        let image = "![clipboard-image.png](https://github.com/user-attachments/assets/id)";
+        assert_eq!(body_with_attachment("", image), image);
+        assert_eq!(
+            body_with_attachment("Repro steps\n", image),
+            format!("Repro steps\n\n{image}")
         );
     }
 }

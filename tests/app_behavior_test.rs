@@ -493,6 +493,18 @@ fn force_quit_sets_should_quit() {
 }
 
 #[test]
+fn force_quit_waits_for_issue_submission_cleanup() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    app.issue_create_in_flight = true;
+
+    app.handle_action(Action::ForceQuit).unwrap();
+
+    assert!(!app.should_quit);
+}
+
+#[test]
 fn toggle_layout_flips_side_panel() {
     let (_td, repo) = init_repo();
     commit_file(repo.repo(), "a.txt", "a", "first");

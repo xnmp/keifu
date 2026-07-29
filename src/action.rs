@@ -100,6 +100,8 @@ pub enum Action {
     OpenIssueDetail,
     /// Start composing a new issue.
     NewIssue,
+    /// Toggle inclusion of the clipboard image in a new issue.
+    ToggleIssueClipboardImage,
     /// Start composing a comment on the current issue.
     CommentOnIssue,
     /// Close an open issue / reopen a closed one (via Confirm).

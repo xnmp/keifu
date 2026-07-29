@@ -944,20 +944,28 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
     }
 
     // Centered overlay on top of the backdrop.
+    let mut rendered_popup = None;
     match &app.mode {
         AppMode::IssueCompose { purpose } => {
             let popup_area = centered_rect(64, 60, area);
             frame.render_widget(
-                issue_compose::IssueComposeWidget::new(&app.issue_editor, *purpose, theme),
+                issue_compose::IssueComposeWidget::new(
+                    &app.issue_editor,
+                    *purpose,
+                    &app.issue_clipboard_attachment,
+                    app.issue_create_in_flight,
+                    theme,
+                ),
                 popup_area,
             );
             let (row, col) = app.issue_editor.cursor_position();
-            let body = pr_compose::text_area(popup_area);
+            let body = issue_compose::text_area(popup_area, *purpose);
             let cx = body.x + col as u16;
             let cy = body.y + row as u16;
             if cx < body.x + body.width && cy < body.y + body.height {
                 frame.set_cursor_position((cx, cy));
             }
+            rendered_popup = Some(popup_area);
         }
         AppMode::IssueLabelPicker { selected, .. } => {
             if let Some(picker) = &app.issue_label_picker {
@@ -967,6 +975,7 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
                     issue_detail::IssueLabelPickerWidget::new(picker, *selected, theme),
                     popup_area,
                 );
+                rendered_popup = Some(popup_area);
             }
         }
         AppMode::IssueLabelFilter { selected } => {
@@ -977,10 +986,12 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
                     issue_list::IssueLabelFilterWidget::new(picker, *selected, theme),
                     popup_area,
                 );
+                rendered_popup = Some(popup_area);
             }
         }
         _ => {}
     }
+    app.popup_rect = rendered_popup;
 
     let status_bar = StatusBar::new(app, theme);
     app.status_hints = status_bar.hint_regions(status_area);

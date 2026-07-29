@@ -274,6 +274,13 @@ impl App {
 
     fn open_issue_compose(&mut self, purpose: IssueComposePurpose) {
         self.issue_editor = crate::text_editor::TextEditor::new();
+        self.issue_clipboard_attachment = match purpose {
+            IssueComposePurpose::NewIssue => IssueClipboardAttachment {
+                image: crate::clipboard_image::capture(),
+                selected: false,
+            },
+            IssueComposePurpose::Comment { .. } => IssueClipboardAttachment::default(),
+        };
         self.mode = AppMode::IssueCompose { purpose };
     }
 
@@ -291,6 +298,10 @@ impl App {
     }
 
     pub(crate) fn handle_issue_compose_action(&mut self, action: Action) {
+        if self.issue_create_in_flight {
+            self.toast(ToastKind::Info, "Issue submission in progress");
+            return;
+        }
         match action {
             Action::Cancel => {
                 let purpose = match self.mode {
@@ -298,7 +309,20 @@ impl App {
                     _ => return,
                 };
                 self.issue_editor = crate::text_editor::TextEditor::new();
+                self.issue_clipboard_attachment = IssueClipboardAttachment::default();
                 self.mode = Self::compose_return_mode(purpose);
+            }
+            Action::ToggleIssueClipboardImage => {
+                if matches!(
+                    self.mode,
+                    AppMode::IssueCompose {
+                        purpose: IssueComposePurpose::NewIssue
+                    }
+                ) && self.issue_clipboard_attachment.is_available()
+                {
+                    self.issue_clipboard_attachment.selected =
+                        !self.issue_clipboard_attachment.selected;
+                }
             }
             Action::SubmitCompose => self.submit_issue_compose(),
             Action::ExternalEdit => {
@@ -322,13 +346,34 @@ impl App {
                     self.toast(ToastKind::Error, "Issue title can't be empty");
                     return;
                 }
-                // Only discard the buffer + leave compose once the action is
-                // actually accepted; a busy runner keeps the typed text intact.
-                if self.start_issue_action(IssueAction::Create { title, body }, "Creating issue…")
-                {
-                    self.issue_editor = crate::text_editor::TextEditor::new();
-                    self.mode = AppMode::IssueList;
+                // Preserve both the editor and captured image when another
+                // issue mutation is still running.
+                if self.issue_action_runner.is_busy() {
+                    self.toast(ToastKind::Info, "busy: another issue operation in progress");
+                    return;
                 }
+                let attachment = match self.issue_clipboard_attachment.selected_upload_path() {
+                    Ok(path) => path,
+                    Err(error) => {
+                        self.toast(ToastKind::Error, error);
+                        return;
+                    }
+                };
+                // Keep the draft and original clipboard capture visible until
+                // the background upload + issue creation both succeed.
+                if self.start_issue_action(
+                    IssueAction::Create {
+                        title,
+                        body,
+                        attachment,
+                    },
+                    "Creating issue…",
+                ) {
+                    self.issue_create_in_flight = true;
+                }
+                // Only this submitted draft is locked while its worker is in
+                // flight. Poll completion clears on success and leaves the
+                // draft intact and editable on failure.
             }
             IssueComposePurpose::Comment { number } => {
                 let body = text.trim().to_string();
@@ -339,6 +384,7 @@ impl App {
                 if self.start_issue_action(IssueAction::Comment { number, body }, "Adding comment…")
                 {
                     self.issue_editor = crate::text_editor::TextEditor::new();
+                    self.issue_clipboard_attachment = IssueClipboardAttachment::default();
                     self.mode = AppMode::IssueDetail;
                 }
             }
@@ -700,9 +746,26 @@ impl App {
         }
 
         if let Some((action, result)) = self.issue_action_runner.poll() {
+            // A create sets this flag only after it is accepted by the serial
+            // runner, so the next outcome necessarily belongs to that create.
+            // Reset it even if the worker disconnected and returned its
+            // synthetic error action.
+            let completed_create = std::mem::take(&mut self.issue_create_in_flight);
             match result {
                 Ok(stdout) => {
                     self.toast(ToastKind::Success, success_message(&action, &stdout));
+                    if completed_create
+                        && matches!(
+                            self.mode,
+                            AppMode::IssueCompose {
+                                purpose: IssueComposePurpose::NewIssue
+                            }
+                        )
+                    {
+                        self.issue_editor = crate::text_editor::TextEditor::new();
+                        self.issue_clipboard_attachment = IssueClipboardAttachment::default();
+                        self.mode = AppMode::IssueList;
+                    }
                     self.after_issue_action(&action);
                 }
                 Err(e) => self.toast(ToastKind::Error, first_line(&e)),
@@ -1026,7 +1089,8 @@ mod tests {
         assert_eq!(
             issue_action_number(&IssueAction::Create {
                 title: "t".into(),
-                body: String::new()
+                body: String::new(),
+                attachment: None,
             }),
             None
         );

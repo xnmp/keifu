@@ -265,6 +265,8 @@ impl App {
             issue_list: None,
             issue_detail: None,
             issue_editor: crate::text_editor::TextEditor::new(),
+            issue_clipboard_attachment: IssueClipboardAttachment::default(),
+            issue_create_in_flight: false,
             issue_label_picker: None,
             issue_label_filter: None,
             pending_external_edit: None,

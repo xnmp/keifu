@@ -556,6 +556,31 @@ pub enum IssueComposePurpose {
     Comment { number: u64 },
 }
 
+/// Clipboard attachment captured when the new-issue composer opens. Capturing
+/// up front makes availability stable while the user edits and avoids a race
+/// where the clipboard changes between checking the box and submitting.
+#[derive(Default)]
+pub struct IssueClipboardAttachment {
+    pub image: Option<crate::clipboard_image::ClipboardImage>,
+    pub selected: bool,
+}
+
+impl IssueClipboardAttachment {
+    pub fn is_available(&self) -> bool {
+        self.image.is_some()
+    }
+
+    fn selected_upload_path(&self) -> Result<Option<std::path::PathBuf>, String> {
+        if !self.selected {
+            return Ok(None);
+        }
+        self.image
+            .as_ref()
+            .map(|image| image.copy_for_upload())
+            .transpose()
+    }
+}
+
 /// Live label-picker data (on `App`), so the `IssueLabelPicker` mode variant can
 /// stay unit-ish (cursor only). `labels` is the repo's full label set;
 /// `original` is which were on the issue when the picker opened; `chosen` is the
@@ -1091,6 +1116,11 @@ pub struct App {
     pub issue_list: Option<IssueListView>,
     pub issue_detail: Option<IssueDetailView>,
     pub issue_editor: crate::text_editor::TextEditor,
+    pub issue_clipboard_attachment: IssueClipboardAttachment,
+    /// True only while the currently visible new-issue draft is being
+    /// submitted. This is deliberately separate from the shared action
+    /// runner's busy state: unrelated issue mutations must not lock editing.
+    pub issue_create_in_flight: bool,
     pub issue_label_picker: Option<IssueLabelPicker>,
     pub issue_label_filter: Option<IssueLabelFilter>,
 
@@ -1383,8 +1413,17 @@ impl App {
     }
 
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
-        // Ctrl+Q always quits
         if matches!(action, Action::ForceQuit) {
+            // The issue worker owns a private clipboard-image copy. Let it
+            // finish so normal cleanup runs and `gh` cannot outlive Keifu to
+            // create an issue after the UI has exited.
+            if self.issue_create_in_flight {
+                self.toast(
+                    crate::toast::ToastKind::Info,
+                    "Issue submission in progress; wait before quitting",
+                );
+                return Ok(());
+            }
             self.should_quit = true;
             return Ok(());
         }

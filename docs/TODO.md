@@ -149,6 +149,13 @@ uses `App.issue_editor`; `Ctrl+E` in any compose (issue + PR) pops out to
 `$VISUAL`/`$EDITOR` via `src/external_edit.rs` — App only records intent,
 main.rs owns terminal suspend/resume, debug/headless path never suspends.
 
+### [DONE] 2026-07-30 Clipboard image attachments for new issues (issue #141)
+The command-palette new-issue composer now probes and captures a PNG/JPEG/GIF
+from the platform clipboard, shows an opt-in checkbox (Tab/click), and renders
+it disabled when no image is available. Submission uploads selected images via
+the optional `gh-image` extension, appends its repository-scoped
+`user-attachments` Markdown, and only then creates the issue.
+
 ---
 
 ## Remotes & Push

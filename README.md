@@ -44,6 +44,13 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Run inside a Git repository (auto-discovery from current directory)
 - A terminal with Unicode line drawing support and color
 - `git` command in PATH — required for fetch/pull/push, hunk staging, stash, and most other mutating operations
+- `gh` authenticated for GitHub issue and pull-request features
+- Optional clipboard-image issue attachments require a platform clipboard reader
+  (`wl-paste`, `xclip`, `pngpaste`/`osascript`, or PowerShell) and the
+  [`gh-image`](https://github.com/drogers0/gh-image) extension
+  (`gh extension install drogers0/gh-image`). GitHub's attachment upload flow
+  currently requires repository write access even though plain issue creation
+  does not; reporters without it can still submit text-only issues.
 - Rust toolchain (for building from source)
 
 ## Installation
@@ -216,6 +223,9 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 - When multiple branches point to the same commit, the label is collapsed to a single name with a `+N` suffix (e.g., `main +2`).
 - Checking out `origin/xxx` creates or updates a local branch. Upstream is set only when creating a new branch. If the local branch exists but points to a different commit, it is force-updated to match the remote.
 - Remote branches can be deleted directly (`git push <remote> --delete`), behind a confirmation.
+- The command palette's “Issues: new issue” composer detects clipboard images.
+  Tab (or clicking the checkbox) opts into uploading the image with the issue;
+  the checkbox is disabled when the clipboard has no supported image.
 - Fetch/pull/push resolve the remote from the branch's upstream, prompting only when several remotes exist and none can be inferred.
 - Hunk-level staging works on uncommitted changes only; a full 3-way merge editor is not implemented — conflicts are resolved via accept-ours/accept-theirs or your own editor.
 

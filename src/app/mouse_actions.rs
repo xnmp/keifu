@@ -231,6 +231,18 @@ impl App {
     /// select it and activate (Enter-equivalent).
     fn handle_popup_click(&mut self, rect: Rect, col: u16, row: u16) {
         let inner = inner_rect(rect);
+        if matches!(
+            self.mode,
+            AppMode::IssueCompose {
+                purpose: IssueComposePurpose::NewIssue
+            }
+        ) && row == inner.y.saturating_add(1)
+            && col >= inner.x
+            && col < inner.x.saturating_add(inner.width)
+        {
+            let _ = self.handle_action(Action::ToggleIssueClipboardImage);
+            return;
+        }
         let Some(idx) = list_row_index(inner, 0, col, row) else {
             return;
         };

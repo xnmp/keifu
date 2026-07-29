@@ -93,9 +93,7 @@ pub fn map_key_to_action(
         }
         AppMode::IssueList => map_issue_list_mode(key),
         AppMode::IssueDetail => map_issue_detail_mode(key),
-        // The issue-compose editor shares the PR-compose keymap (Ctrl+S submit,
-        // Esc cancel, Enter newline, everything else the editor).
-        AppMode::IssueCompose { .. } => map_pr_compose_mode(key),
+        AppMode::IssueCompose { .. } => map_issue_compose_mode(key),
         AppMode::IssueLabelPicker { .. } => map_issue_label_picker_mode(key),
         AppMode::IssueLabelFilter { .. } => map_issue_label_filter_mode(key),
         AppMode::BranchPicker { .. }
@@ -858,6 +856,19 @@ fn map_pr_compose_mode(key: KeyEvent) -> Option<Action> {
     map_editor_mode(key)
 }
 
+/// Issue compose adds a keyboard-accessible checkbox to the shared editor
+/// controls. Tab toggles clipboard-image inclusion for new issues; the handler
+/// leaves it a harmless no-op for comments.
+fn map_issue_compose_mode(key: KeyEvent) -> Option<Action> {
+    if matches!(
+        (key.modifiers, key.code),
+        (KeyModifiers::NONE, KeyCode::Tab)
+    ) {
+        return Some(Action::ToggleIssueClipboardImage);
+    }
+    map_pr_compose_mode(key)
+}
+
 fn map_ci_checks_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
@@ -1075,6 +1086,15 @@ mod tests {
         // Plain 'e' (no ctrl) types a character, not an external-edit request.
         let plain = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
         assert_eq!(map_pr_compose_mode(plain), Some(Action::EditorChar('e')));
+    }
+
+    #[test]
+    fn issue_compose_tab_toggles_clipboard_image() {
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(
+            map_issue_compose_mode(tab),
+            Some(Action::ToggleIssueClipboardImage)
+        );
     }
 
     #[test]

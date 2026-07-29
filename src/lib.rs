@@ -5,6 +5,7 @@ pub mod app;
 pub mod avatar;
 pub mod avatar_fetch;
 pub mod checks;
+pub mod clipboard_image;
 pub mod config;
 pub mod conflict;
 pub mod debug_server;
