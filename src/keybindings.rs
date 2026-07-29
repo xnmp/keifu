@@ -192,14 +192,22 @@ fn map_normal_mode(
         return map_editor_mode(key);
     }
 
-    // Ctrl+P opens branch quick search from any panel. ':' keeps the command
-    // palette available for vim muscle memory. Neither interrupts a text filter.
+    // Ctrl+P opens branch quick search; Ctrl+Alt+P and ':' open the command
+    // palette. None interrupts an active text filter.
     if !files_filter_active && !commit_filter_active {
-        let ctrl_p =
-            key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p');
+        let ctrl_alt_p = key
+            .modifiers
+            .contains(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && key.code == KeyCode::Char('p');
+        let ctrl_p = key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && key.code == KeyCode::Char('p');
         let colon = !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
             && key.code == KeyCode::Char(':');
+        if ctrl_alt_p {
+            return Some(Action::OpenCommandPalette);
+        }
         if ctrl_p {
             return Some(Action::Search);
         }
@@ -212,8 +220,23 @@ fn map_normal_mode(
             return Some(Action::OpenSettings);
         }
 
-        // Shift+I opens the GitHub issue list from any panel. 'I' is unbound in
-        // every Normal-mode panel scope (lowercase 'i' is Files-only gitignore).
+        // Issue shortcuts work from any panel. Match the most specific chord
+        // first so Ctrl+Alt+I cannot fall through to Alt+I.
+        let ctrl_alt_i = key
+            .modifiers
+            .contains(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && key.code == KeyCode::Char('i');
+        let alt_i = key.modifiers.contains(KeyModifiers::ALT)
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('i');
+        if ctrl_alt_i {
+            return Some(Action::ReportKeifuIssue);
+        }
+        if alt_i {
+            return Some(Action::NewIssue);
+        }
+        // Shift+I opens the issue list. 'I' is unbound in every Normal-mode
+        // panel scope (lowercase 'i' is Files-only gitignore).
         if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Char('I') {
             return Some(Action::OpenIssueList);
         }
@@ -1095,6 +1118,32 @@ mod tests {
             map_issue_compose_mode(tab),
             Some(Action::ToggleIssueClipboardImage)
         );
+    }
+
+    #[test]
+    fn ctrl_alt_p_opens_palette_without_stealing_ctrl_p_from_branch_search() {
+        let ctrl_alt_p = KeyEvent::new(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let ctrl_p = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+
+        assert_eq!(map_normal(ctrl_alt_p), Some(Action::OpenCommandPalette));
+        assert_eq!(map_normal(ctrl_p), Some(Action::Search));
+    }
+
+    #[test]
+    fn issue_shortcuts_distinguish_current_repo_keifu_and_list() {
+        let alt_i = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT);
+        let ctrl_alt_i = KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let shift_i = KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT);
+
+        assert_eq!(map_normal(alt_i), Some(Action::NewIssue));
+        assert_eq!(map_normal(ctrl_alt_i), Some(Action::ReportKeifuIssue));
+        assert_eq!(map_normal(shift_i), Some(Action::OpenIssueList));
     }
 
     #[test]

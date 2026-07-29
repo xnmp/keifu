@@ -142,6 +142,8 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("GitHub Issues"),
         Row("Shift+I", "Open the issue list (from any panel)"),
+        Row("Alt+I", "New issue for the open repository"),
+        Row("Ctrl+Alt+I", "Report an issue against Keifu"),
         Row("Enter", "Open the selected issue's detail"),
         Row("Tab / f", "Cycle status filter (open / closed / all)"),
         Row("t", "Filter by label (checkbox picker)"),
@@ -168,7 +170,10 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Drag divider", "Resize the graph/detail split"),
         Blank,
         Header("Other"),
-        Row(":", "Command palette (commands, branches, commits)"),
+        Row(
+            "Ctrl+Alt+P / :",
+            "Command palette (commands, branches, commits)",
+        ),
         Row(
             "Ctrl+, / ,",
             "Settings menu (toggle/edit persisted settings)",

@@ -421,8 +421,8 @@ pub enum AppMode {
         entries: Vec<FileHistoryEntry>,
         selected: usize,
     },
-    /// Fuzzy command palette (`:`): commands, branches, and commits in one
-    /// ranked list. Holds the query string and the selected row.
+    /// Fuzzy command palette (`Ctrl+Alt+P` or `:`): commands, branches, and
+    /// commits in one ranked list. Holds the query and selected row.
     CommandPalette {
         query: String,
         selected: usize,
@@ -547,13 +547,37 @@ pub enum IssueDetailState {
     Error(String),
 }
 
+pub const KEIFU_GITHUB_REPOSITORY: &str = "xnmp/keifu";
+
+/// Repository selected for a new issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueCreateTarget {
+    CurrentRepository,
+    Keifu,
+}
+
+impl IssueCreateTarget {
+    pub(crate) fn repository(self) -> Option<&'static str> {
+        match self {
+            Self::CurrentRepository => None,
+            Self::Keifu => Some(KEIFU_GITHUB_REPOSITORY),
+        }
+    }
+}
+
 /// What the issue-compose editor is composing. For `NewIssue` the first editor
 /// line is the title and the rest is the body; for `Comment` the whole buffer
 /// is the comment body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueComposePurpose {
-    NewIssue,
+    NewIssue { target: IssueCreateTarget },
     Comment { number: u64 },
+}
+
+impl IssueComposePurpose {
+    pub(crate) fn is_new_issue(self) -> bool {
+        matches!(self, Self::NewIssue { .. })
+    }
 }
 
 /// Clipboard attachment captured when the new-issue composer opens. Capturing
@@ -562,17 +586,23 @@ pub enum IssueComposePurpose {
 #[derive(Default)]
 pub struct IssueClipboardAttachment {
     pub image: Option<crate::clipboard_image::ClipboardImage>,
+    pub uploader_available: bool,
     pub selected: bool,
 }
 
 impl IssueClipboardAttachment {
     pub fn is_available(&self) -> bool {
-        self.image.is_some()
+        self.image.is_some() && self.uploader_available
     }
 
     fn selected_upload_path(&self) -> Result<Option<std::path::PathBuf>, String> {
         if !self.selected {
             return Ok(None);
+        }
+        if !self.uploader_available {
+            return Err("Clipboard image uploader unavailable; install gh-image \
+                 (`gh extension install drogers0/gh-image`)"
+                .to_string());
         }
         self.image
             .as_ref()

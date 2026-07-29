@@ -47,7 +47,9 @@ impl App {
             Action::ToggleUnblockedOnly => self.toggle_unblocked_only(),
             Action::EditIssueLabels => self.open_issue_label_picker(),
             Action::RefreshIssues => self.refresh_issue_list(),
-            Action::NewIssue => self.open_issue_compose(IssueComposePurpose::NewIssue),
+            Action::NewIssue => self.open_issue_compose(IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            }),
             Action::OpenIssueInBrowser => self.open_selected_issue_url(),
             Action::Cancel => {
                 self.issue_list = None;
@@ -275,10 +277,16 @@ impl App {
     fn open_issue_compose(&mut self, purpose: IssueComposePurpose) {
         self.issue_editor = crate::text_editor::TextEditor::new();
         self.issue_clipboard_attachment = match purpose {
-            IssueComposePurpose::NewIssue => IssueClipboardAttachment {
-                image: crate::clipboard_image::capture(),
-                selected: false,
-            },
+            IssueComposePurpose::NewIssue { .. } => {
+                let image = crate::clipboard_image::capture();
+                let uploader_available = image.is_some()
+                    && crate::issue_action::attachment_uploader_available(&self.repo_path);
+                IssueClipboardAttachment {
+                    image,
+                    uploader_available,
+                    selected: false,
+                }
+            }
             IssueComposePurpose::Comment { .. } => IssueClipboardAttachment::default(),
         };
         self.mode = AppMode::IssueCompose { purpose };
@@ -286,13 +294,27 @@ impl App {
 
     /// Open the new-issue compose editor (used by the command palette).
     pub(crate) fn open_new_issue_compose(&mut self) {
-        self.open_issue_compose(IssueComposePurpose::NewIssue);
+        self.open_issue_compose(IssueComposePurpose::NewIssue {
+            target: IssueCreateTarget::CurrentRepository,
+        });
+    }
+
+    /// Open a composer targeting Keifu itself, independent of the current repo.
+    pub(crate) fn open_keifu_issue_compose(&mut self) {
+        self.open_issue_compose(IssueComposePurpose::NewIssue {
+            target: IssueCreateTarget::Keifu,
+        });
     }
 
     /// The mode to return to when a compose is cancelled/finished.
     fn compose_return_mode(purpose: IssueComposePurpose) -> AppMode {
         match purpose {
-            IssueComposePurpose::NewIssue => AppMode::IssueList,
+            IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            } => AppMode::IssueList,
+            IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::Keifu,
+            } => AppMode::Normal,
             IssueComposePurpose::Comment { .. } => AppMode::IssueDetail,
         }
     }
@@ -315,9 +337,7 @@ impl App {
             Action::ToggleIssueClipboardImage => {
                 if matches!(
                     self.mode,
-                    AppMode::IssueCompose {
-                        purpose: IssueComposePurpose::NewIssue
-                    }
+                    AppMode::IssueCompose { purpose } if purpose.is_new_issue()
                 ) && self.issue_clipboard_attachment.is_available()
                 {
                     self.issue_clipboard_attachment.selected =
@@ -340,7 +360,7 @@ impl App {
         };
         let text = self.issue_editor.text.clone();
         match purpose {
-            IssueComposePurpose::NewIssue => {
+            IssueComposePurpose::NewIssue { target } => {
                 let (title, body) = compose_title_body(&text);
                 if title.is_empty() {
                     self.toast(ToastKind::Error, "Issue title can't be empty");
@@ -365,6 +385,7 @@ impl App {
                     IssueAction::Create {
                         title,
                         body,
+                        repository: target.repository().map(str::to_string),
                         attachment,
                     },
                     "Creating issue…",
@@ -754,17 +775,18 @@ impl App {
             match result {
                 Ok(stdout) => {
                     self.toast(ToastKind::Success, success_message(&action, &stdout));
-                    if completed_create
-                        && matches!(
-                            self.mode,
-                            AppMode::IssueCompose {
-                                purpose: IssueComposePurpose::NewIssue
+                    if completed_create {
+                        let return_mode = match self.mode {
+                            AppMode::IssueCompose { purpose } if purpose.is_new_issue() => {
+                                Some(Self::compose_return_mode(purpose))
                             }
-                        )
-                    {
-                        self.issue_editor = crate::text_editor::TextEditor::new();
-                        self.issue_clipboard_attachment = IssueClipboardAttachment::default();
-                        self.mode = AppMode::IssueList;
+                            _ => None,
+                        };
+                        if let Some(return_mode) = return_mode {
+                            self.issue_editor = crate::text_editor::TextEditor::new();
+                            self.issue_clipboard_attachment = IssueClipboardAttachment::default();
+                            self.mode = return_mode;
+                        }
                     }
                     self.after_issue_action(&action);
                 }
@@ -779,6 +801,17 @@ impl App {
     /// After a successful mutation, refetch the affected detail (comment / close
     /// / reopen / labels / assignees) and the list so both reflect the change.
     fn after_issue_action(&mut self, action: &IssueAction) {
+        // An explicitly targeted report belongs to another repository; cached
+        // issue views in this App always belong to the open repository.
+        if matches!(
+            action,
+            IssueAction::Create {
+                repository: Some(_),
+                ..
+            }
+        ) {
+            return;
+        }
         if let Some(number) = issue_action_number(action) {
             self.issue_fetch.invalidate_detail(number);
             if let Some(v) = &mut self.issue_detail {
@@ -1017,6 +1050,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keifu_reports_return_to_normal_instead_of_the_current_repo_issue_list() {
+        assert!(matches!(
+            App::compose_return_mode(IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::Keifu,
+            }),
+            AppMode::Normal
+        ));
+        assert!(matches!(
+            App::compose_return_mode(IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            }),
+            AppMode::IssueList
+        ));
+    }
+
     // ── login parsing ──────────────────────────────────────────────────
 
     #[test]
@@ -1090,6 +1139,7 @@ mod tests {
             issue_action_number(&IssueAction::Create {
                 title: "t".into(),
                 body: String::new(),
+                repository: None,
                 attachment: None,
             }),
             None

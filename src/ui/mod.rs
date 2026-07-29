@@ -958,11 +958,11 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
                 ),
                 popup_area,
             );
-            let (row, col) = app.issue_editor.cursor_position();
             let body = issue_compose::text_area(popup_area, *purpose);
-            let cx = body.x + col as u16;
-            let cy = body.y + row as u16;
-            if cx < body.x + body.width && cy < body.y + body.height {
+            let layout = issue_compose::editor_layout(&app.issue_editor, body.width, body.height);
+            if let Some((col, row)) = layout.cursor {
+                let cx = body.x + col;
+                let cy = body.y + row;
                 frame.set_cursor_position((cx, cy));
             }
             rendered_popup = Some(popup_area);

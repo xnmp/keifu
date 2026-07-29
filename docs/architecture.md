@@ -46,6 +46,18 @@ explicitly selected attachment, and the composer retains the draft for retry.
 GitHub's internal repository-scoped attachment upload requires write access;
 plain issue creation remains available to reporters without it.
 
+**Update (2026-07-30):** Issue creation carries an explicit repository target
+through compose state into infrastructure. Ordinary “Issues: new issue” actions
+leave the target unset so `gh` infers the open repository; “Keifu: report an
+issue” passes `--repo xnmp/keifu` to both `gh image` and `gh issue create`.
+The composer preflights the optional uploader and disables the attachment
+control with an installation hint when `gh-image` is unavailable.
+
+Issue-compose rendering uses one pure wrapped-line layout for both painting and
+cursor placement. Word-boundary wrapping, hard breaks for overlong words, and
+cursor-following vertical scroll are therefore derived from the same byte
+ranges instead of duplicating geometry in the widget and frame renderer.
+
 ## StageStatus Tracking (2026-03-25)
 
 **Decision:** `FileDiffInfo.stage_status` is set during `from_working_tree()` BEFORE the merge scan, and separate `staged_files`/`unstaged_files` vectors are stored alongside the merged `files` list.

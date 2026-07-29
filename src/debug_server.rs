@@ -321,6 +321,15 @@ fn parse_key_token(token: &str) -> std::result::Result<KeyEvent, String> {
         return Err(format!("invalid ctrl-alt key token: {token}"));
     }
 
+    // Alt combo, e.g. <a-i>.
+    if let Some(c) = inner.strip_prefix("a-") {
+        let mut it = c.chars();
+        if let (Some(ch), None) = (it.next(), it.next()) {
+            return Ok(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT));
+        }
+        return Err(format!("invalid alt key token: {token}"));
+    }
+
     if let Some(c) = inner.strip_prefix("c-") {
         // Ctrl + a named special key, e.g. <c-up>.
         let named = match c {
@@ -413,6 +422,15 @@ mod tests {
         assert_eq!(
             events[0].modifiers,
             KeyModifiers::CONTROL | KeyModifiers::ALT
+        );
+    }
+
+    #[test]
+    fn parses_alt_combo() {
+        let events = parse_key_sequence("<a-i>").unwrap();
+        assert_eq!(
+            events,
+            vec![KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT)]
         );
     }
 

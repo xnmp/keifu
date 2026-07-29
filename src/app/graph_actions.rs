@@ -59,6 +59,10 @@ impl App {
                 self.open_new_issue_compose();
                 return Ok(());
             }
+            Action::ReportKeifuIssue => {
+                self.open_keifu_issue_compose();
+                return Ok(());
+            }
             _ => {}
         }
 

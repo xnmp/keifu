@@ -58,7 +58,7 @@ pub enum Action {
     // Commit comparison (graph)
     MarkForCompare,
 
-    // Open the command palette (`:`) from Normal mode
+    // Open the command palette (`Ctrl+Alt+P` or `:`) from Normal mode
     OpenCommandPalette,
 
     // Create / merge a pull request directly (palette shortcuts to the commit
@@ -100,6 +100,8 @@ pub enum Action {
     OpenIssueDetail,
     /// Start composing a new issue.
     NewIssue,
+    /// Report an issue against Keifu itself, regardless of the open repository.
+    ReportKeifuIssue,
     /// Toggle inclusion of the clipboard image in a new issue.
     ToggleIssueClipboardImage,
     /// Start composing a comment on the current issue.

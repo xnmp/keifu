@@ -15,6 +15,15 @@ use crate::gh;
 
 const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 const ATTACHMENT_TIMEOUT: Duration = Duration::from_secs(90);
+const UPLOADER_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Whether the optional `gh-image` extension is callable. Checking the command
+/// itself is more reliable than parsing `gh extension list`, and `--help` does
+/// not access a repository or upload anything.
+pub fn attachment_uploader_available(repo_path: &str) -> bool {
+    gh::run(repo_path, &["image", "--help"], UPLOADER_CHECK_TIMEOUT)
+        .is_ok_and(|output| output.success)
+}
 
 /// A pending mutating issue action.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +32,8 @@ pub enum IssueAction {
     Create {
         title: String,
         body: String,
+        /// Explicit `owner/repo` target. `None` uses the open repository.
+        repository: Option<String>,
         /// Short-lived clipboard image captured by the compose UI.
         attachment: Option<PathBuf>,
     },
@@ -73,8 +84,14 @@ impl IssueAction {
             }
         };
         match self {
-            Self::Create { title, .. } => {
+            Self::Create {
+                title, repository, ..
+            } => {
                 let mut args = vec![s("issue"), s("create"), s("--title"), title.clone()];
+                if let Some(repository) = repository {
+                    args.push(s("--repo"));
+                    args.push(repository.clone());
+                }
                 push_body(&mut args);
                 args
             }
@@ -146,10 +163,16 @@ pub fn parse_created_issue_number(stdout: &str) -> Option<u64> {
 /// Toast text for a successful action, using gh's output when useful.
 pub fn success_message(action: &IssueAction, stdout: &str) -> String {
     match action {
-        IssueAction::Create { .. } => match parse_created_issue_number(stdout) {
-            Some(n) => format!("Created issue #{n}"),
-            None => "Created issue".to_string(),
-        },
+        IssueAction::Create { repository, .. } => {
+            let target = repository
+                .as_deref()
+                .map(|repository| format!(" {repository}"))
+                .unwrap_or_default();
+            match parse_created_issue_number(stdout) {
+                Some(n) => format!("Created{target} issue #{n}"),
+                None => format!("Created{target} issue"),
+            }
+        }
         IssueAction::Comment { number, .. } => format!("Commented on issue #{number}"),
         IssueAction::Close { number } => format!("Closed issue #{number}"),
         IssueAction::Reopen { number } => format!("Reopened issue #{number}"),
@@ -239,11 +262,12 @@ fn run_action_inner(repo_path: &str, action: &IssueAction) -> Result<String, Str
     let prepared_body = match action {
         IssueAction::Create {
             body,
+            repository,
             attachment: Some(path),
             ..
         } => Some(body_with_attachment(
             body,
-            &upload_attachment(repo_path, path)?,
+            &upload_attachment(repo_path, path, repository.as_deref())?,
         )),
         _ => None,
     };
@@ -278,11 +302,16 @@ fn run_action_inner(repo_path: &str, action: &IssueAction) -> Result<String, Str
     }
 }
 
-fn upload_attachment(repo_path: &str, path: &std::path::Path) -> Result<String, String> {
+fn upload_attachment(
+    repo_path: &str,
+    path: &std::path::Path,
+    repository: Option<&str>,
+) -> Result<String, String> {
     let Some(path) = path.to_str() else {
         return Err("Clipboard image path is not valid UTF-8".to_string());
     };
-    let out = gh::run(repo_path, &["image", path], ATTACHMENT_TIMEOUT)?;
+    let args = attachment_args(path, repository);
+    let out = gh::run(repo_path, &args, ATTACHMENT_TIMEOUT)?;
     if !out.success {
         let detail = if out.stderr.is_empty() {
             "gh image failed".to_string()
@@ -301,6 +330,13 @@ fn upload_attachment(repo_path: &str, path: &std::path::Path) -> Result<String, 
         .find(|line| line.contains("github.com/user-attachments/"))
         .map(str::to_string)
         .ok_or_else(|| "gh image returned no GitHub attachment URL".to_string())
+}
+
+fn attachment_args<'a>(path: &'a str, repository: Option<&'a str>) -> Vec<&'a str> {
+    match repository {
+        Some(repository) => vec!["image", path, "--repo", repository],
+        None => vec!["image", path],
+    }
 }
 
 fn body_with_attachment(body: &str, markdown: &str) -> String {
@@ -322,6 +358,7 @@ mod tests {
         let a = IssueAction::Create {
             title: "Crash on open".to_string(),
             body: "steps".to_string(),
+            repository: None,
             attachment: None,
         };
         assert_eq!(a.body(), Some("steps"));
@@ -343,6 +380,7 @@ mod tests {
         let a = IssueAction::Create {
             title: "t".to_string(),
             body: String::new(),
+            repository: None,
             attachment: None,
         };
         assert_eq!(a.build_args(None), vec!["issue", "create", "--title", "t"]);
@@ -350,9 +388,46 @@ mod tests {
         let tricky = IssueAction::Create {
             title: "fix: \"q\" & $VAR".to_string(),
             body: String::new(),
+            repository: None,
             attachment: None,
         };
         assert_eq!(tricky.build_args(None)[3], "fix: \"q\" & $VAR");
+    }
+
+    #[test]
+    fn create_can_target_a_repository_independent_of_the_worktree() {
+        let action = IssueAction::Create {
+            title: "Keifu bug".to_string(),
+            body: "steps".to_string(),
+            repository: Some("xnmp/keifu".to_string()),
+            attachment: None,
+        };
+
+        assert_eq!(
+            action.build_args(Some("/tmp/body.md")),
+            vec![
+                "issue",
+                "create",
+                "--title",
+                "Keifu bug",
+                "--repo",
+                "xnmp/keifu",
+                "--body-file",
+                "/tmp/body.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn attachment_upload_uses_the_same_explicit_repository_target() {
+        assert_eq!(
+            attachment_args("/tmp/image.png", Some("xnmp/keifu")),
+            vec!["image", "/tmp/image.png", "--repo", "xnmp/keifu"]
+        );
+        assert_eq!(
+            attachment_args("/tmp/image.png", None),
+            vec!["image", "/tmp/image.png"]
+        );
     }
 
     #[test]
@@ -471,6 +546,7 @@ mod tests {
             IssueAction::Create {
                 title: "t".into(),
                 body: String::new(),
+                repository: None,
                 attachment: None,
             }
             .describe(),
@@ -494,11 +570,24 @@ mod tests {
                 &IssueAction::Create {
                     title: "t".into(),
                     body: String::new(),
+                    repository: None,
                     attachment: None,
                 },
                 "https://github.com/o/r/issues/50\n"
             ),
             "Created issue #50"
+        );
+        assert_eq!(
+            success_message(
+                &IssueAction::Create {
+                    title: "t".into(),
+                    body: String::new(),
+                    repository: Some("xnmp/keifu".into()),
+                    attachment: None,
+                },
+                "https://github.com/xnmp/keifu/issues/51\n"
+            ),
+            "Created xnmp/keifu issue #51"
         );
         assert_eq!(
             success_message(&IssueAction::Close { number: 8 }, ""),

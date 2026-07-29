@@ -156,6 +156,16 @@ it disabled when no image is available. Submission uploads selected images via
 the optional `gh-image` extension, appends its repository-scoped
 `user-attachments` Markdown, and only then creates the issue.
 
+### [DONE] 2026-07-30 Report Keifu issues from any repository
+The command palette now includes “Keifu: report an issue”, which reuses the
+new-issue and clipboard-image workflow but passes `--repo xnmp/keifu` to both
+the attachment uploader and `gh issue create`. `Ctrl+Alt+P` opens the palette
+without replacing `Ctrl+P` branch search; `:` remains available. `Alt+I`
+opens the current-repository composer directly and `Ctrl+Alt+I` opens the
+Keifu-targeted composer.
+Both new-issue composers soft-wrap long title/body lines and keep the cursor
+visible as the wrapped draft grows beyond the popup height.
+
 ---
 
 ## Remotes & Push

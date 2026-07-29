@@ -233,9 +233,7 @@ impl App {
         let inner = inner_rect(rect);
         if matches!(
             self.mode,
-            AppMode::IssueCompose {
-                purpose: IssueComposePurpose::NewIssue
-            }
+            AppMode::IssueCompose { purpose } if purpose.is_new_issue()
         ) && row == inner.y.saturating_add(1)
             && col >= inner.x
             && col < inner.x.saturating_add(inner.width)

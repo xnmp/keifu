@@ -34,7 +34,9 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Branch tracing (`t`) — selecting a commit highlights its full branch line (first-parent ancestry and descendants) and dims every other lane, the way VSCode does on hover; on by default for branchy graphs
 - Real branch filtering — hiding a branch removes its exclusive commits from the graph, not just its label; filter the picker by branch name or by author (`@name`) and bulk-hide a whole author's branches; `Shift+O` hides all remote-only branches at once (remote refs with no matching local branch), composing with the per-branch filter
 - Compare any two commits
-- Command palette (`:`) — one fuzzy list over commands, branch checkouts, and commit jumps
+- Command palette (`Ctrl+Alt+P` or `:`) — one fuzzy list over commands,
+  branch checkouts, and commit jumps; “Keifu: report an issue” always targets
+  the Keifu repository rather than the repository currently open
 - Session undo (`Ctrl+Z` in the graph) for branch/tag delete, merge, pull, and rename — verified against current state and confirmed before it runs
 - Branch search with fuzzy dropdown UI; commit filter by message/author/hash
 - Full mouse support: click to select and focus, double-click to open, right-click for a context menu, clickable PR/branch chips, scroll-wheel routing, and a drag-resizable graph/detail divider
@@ -195,7 +197,10 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 
 | Key | Action |
 | --- | --- |
-| `:` | Command palette — fuzzy-find over commands, branches (checkout), and commits (jump); ↑↓ to move, Enter to run, Esc to close |
+| `Ctrl+Alt+P` / `:` | Command palette — fuzzy-find over commands, branches (checkout), and commits (jump); ↑↓ to move, Enter to run, Esc to close |
+| `Alt+I` | Compose a new issue for the currently open repository |
+| `Ctrl+Alt+I` | Report an issue against Keifu itself |
+| `Shift+I` | Open the current repository's issue list |
 | `R` | Refresh repository data |
 | `F5` | Full update — fetch all remotes, refetch open PRs, and refresh |
 | `?` | Toggle help |
@@ -225,7 +230,9 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 - Remote branches can be deleted directly (`git push <remote> --delete`), behind a confirmation.
 - The command palette's “Issues: new issue” composer detects clipboard images.
   Tab (or clicking the checkbox) opts into uploading the image with the issue;
-  the checkbox is disabled when the clipboard has no supported image.
+  the checkbox is disabled when the clipboard has no supported image or the
+  required `gh-image` extension is unavailable. Both current-repository and
+  Keifu-targeted issue composers word-wrap long drafts.
 - Fetch/pull/push resolve the remote from the branch's upstream, prompting only when several remotes exist and none can be inferred.
 - Hunk-level staging works on uncommitted changes only; a full 3-way merge editor is not implemented — conflicts are resolved via accept-ours/accept-theirs or your own editor.
 

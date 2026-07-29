@@ -181,6 +181,12 @@ pub fn command_registry() -> Vec<PaletteEntry> {
         entry("Issues: list", Some("I"), Action::OpenIssueList, always),
         entry("Issues: new issue", None, Action::NewIssue, always),
         entry(
+            "Keifu: report an issue",
+            None,
+            Action::ReportKeifuIssue,
+            always,
+        ),
+        entry(
             "Toggle branch tracing",
             Some("t"),
             Action::ToggleTrace,
@@ -372,6 +378,10 @@ mod tests {
         assert!(matches!(
             by_label("Create pull request"),
             Action::CreatePullRequest
+        ));
+        assert!(matches!(
+            by_label("Keifu: report an issue"),
+            Action::ReportKeifuIssue
         ));
     }
 
