@@ -357,7 +357,7 @@ pub enum AppMode {
     IssueList,
     /// A single issue's detail (body + comments). Data on `App.issue_detail`.
     IssueDetail,
-    /// Compose a new issue (title + body) or a comment in `App.issue_editor`.
+    /// Compose/edit an issue (title + body) or a comment in `App.issue_editor`.
     IssueCompose {
         purpose: IssueComposePurpose,
     },
@@ -565,18 +565,23 @@ impl IssueCreateTarget {
     }
 }
 
-/// What the issue-compose editor is composing. For `NewIssue` the first editor
-/// line is the title and the rest is the body; for `Comment` the whole buffer
-/// is the comment body.
+/// What the issue-compose editor is composing. For `NewIssue` and `EditIssue`
+/// the first editor line is the title and the rest is the body; for `Comment`
+/// the whole buffer is the comment body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueComposePurpose {
     NewIssue { target: IssueCreateTarget },
+    EditIssue { number: u64 },
     Comment { number: u64 },
 }
 
 impl IssueComposePurpose {
     pub(crate) fn is_new_issue(self) -> bool {
         matches!(self, Self::NewIssue { .. })
+    }
+
+    pub(crate) fn has_title(self) -> bool {
+        matches!(self, Self::NewIssue { .. } | Self::EditIssue { .. })
     }
 }
 
@@ -1147,9 +1152,9 @@ pub struct App {
     pub issue_detail: Option<IssueDetailView>,
     pub issue_editor: crate::text_editor::TextEditor,
     pub issue_clipboard_attachment: IssueClipboardAttachment,
-    /// True only while the currently visible new-issue draft is being
-    /// submitted. This is deliberately separate from the shared action
-    /// runner's busy state: unrelated issue mutations must not lock editing.
+    /// True while an optimistically closed new-issue submission is still
+    /// running. Kept separate from the shared action runner's busy state so
+    /// force-quit can wait for attachment cleanup without locking a new draft.
     pub issue_create_in_flight: bool,
     pub issue_label_picker: Option<IssueLabelPicker>,
     pub issue_label_filter: Option<IssueLabelFilter>,
@@ -1493,6 +1498,20 @@ impl App {
         // The settings menu opens from any panel in Normal mode.
         if matches!(action, Action::OpenSettings) {
             self.open_settings();
+            return Ok(());
+        }
+        // Issue composers are global overlays. Preserve a live issue
+        // list/detail underneath; opening a repo issue elsewhere prepares its
+        // issue-list destination first.
+        if matches!(action, Action::NewIssue) {
+            if self.issue_list.is_none() {
+                self.open_issue_list();
+            }
+            self.open_new_issue_compose();
+            return Ok(());
+        }
+        if matches!(action, Action::ReportKeifuIssue) {
+            self.open_keifu_issue_compose();
             return Ok(());
         }
         // Mouse actions hit-test the recorded layout regardless of mode.

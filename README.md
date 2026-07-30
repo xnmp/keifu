@@ -126,7 +126,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `Shift+P` | Push current branch (publishes with `-u` if it has no upstream) |
 | `Shift+B` | Branch filter — choose which branches' commits are shown; type to filter by name, or `@name` to filter by branch author (then `Ctrl+O` hides that whole subset) |
 | `Shift+O` | Show/hide remote-only branches — hides remote refs with no matching local branch, and their exclusive commits; persists |
-| `Ctrl+f` | Filter commits by message/author/hash |
+| `Ctrl+Shift+F` | Filter commits by message/author/hash |
 | `m` | Mark a commit, then mark a second to compare them (`Esc` clears) |
 | `o` | Open the selected commit's PR in the browser (needs `gh`; badge shown on commits with an open PR) |
 | `c` | CI check details for the selected commit's PR — list checks and read a failed check's log tail in a popup (needs `gh`) |
@@ -151,7 +151,7 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 | `Delete` | Trash untracked file (recycle bin) |
 | `Ctrl+z` | Undo last file operation |
 | `f` | Toggle folder grouping |
-| `Ctrl+f` | Filter files |
+| `/` | Filter files |
 | `Space` | Open with default app |
 | `y` | Copy file's repo-relative path |
 | `Enter` | Open file diff |
@@ -199,8 +199,8 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
 | Key | Action |
 | --- | --- |
 | `Ctrl+P` / `:` | Command palette — fuzzy-find over commands, branches (checkout), and commits (jump); ↑↓ to move, Enter to run, Esc to close |
-| `Alt+I` | Compose a new issue for the currently open repository |
-| `Ctrl+Alt+I` | Report an issue against Keifu itself |
+| `Alt+I` | Compose a new issue for the currently open repository, from anywhere |
+| `Alt+K` | Report an issue against Keifu itself, from anywhere |
 | `Shift+I` | Open the current repository's issue list |
 | `R` | Refresh repository data |
 | `F5` | Full update — fetch all remotes, refetch open PRs, and refresh |
@@ -233,7 +233,8 @@ The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depend
   Tab (or clicking the checkbox) opts into uploading the image with the issue;
   the checkbox is disabled when the clipboard has no supported image or the
   required `gh-image` extension is unavailable. Both current-repository and
-  Keifu-targeted issue composers word-wrap long drafts.
+  Keifu-targeted issue composers word-wrap long drafts. In issue detail, `e`
+  edits the title/body and `Ctrl+S` saves asynchronously.
 - Fetch/pull/push resolve the remote from the branch's upstream, prompting only when several remotes exist and none can be inferred.
 - Hunk-level staging works on uncommitted changes only; a full 3-way merge editor is not implemented — conflicts are resolved via accept-ours/accept-theirs or your own editor.
 

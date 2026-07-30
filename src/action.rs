@@ -106,6 +106,8 @@ pub enum Action {
     ToggleIssueClipboardImage,
     /// Start composing a comment on the current issue.
     CommentOnIssue,
+    /// Edit the current issue's title and body.
+    EditIssue,
     /// Close an open issue / reopen a closed one (via Confirm).
     ToggleIssueState,
     /// Open the label picker for the current issue.

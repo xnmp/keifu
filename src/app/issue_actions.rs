@@ -1,6 +1,6 @@
-//! GitHub Issues popups: the list, a single issue's detail, composing new
-//! issues/comments, the label picker, assignee edits, and close/reopen. Mirrors
-//! the PR feature's handlers (`ci_checks_actions`, `pr_thread_actions`,
+//! GitHub Issues popups: the list, a single issue's detail, composing and
+//! editing issues/comments, the label picker, assignee edits, and close/reopen.
+//! Mirrors the PR feature's handlers (`ci_checks_actions`, `pr_thread_actions`,
 //! `pr_action_actions`): fetches run in the background and their results fill
 //! the view state; errors render inside the popup (never `AppMode::Error`);
 //! mutating actions run through the shared async runner.
@@ -197,6 +197,7 @@ impl App {
             Action::PageDown => self.issue_detail_scroll(15),
             Action::GoToTop => self.issue_detail_scroll(i32::MIN),
             Action::GoToBottom => self.issue_detail_scroll(i32::MAX),
+            Action::EditIssue => self.open_issue_edit_compose(),
             Action::CommentOnIssue => {
                 if let Some(number) = self.detail_number() {
                     self.open_issue_compose(IssueComposePurpose::Comment { number });
@@ -213,6 +214,19 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Open the title/body editor with the currently loaded issue content.
+    fn open_issue_edit_compose(&mut self) {
+        let Some((number, text)) = self
+            .loaded_detail()
+            .map(|detail| (detail.number, issue_edit_text(&detail.title, &detail.body)))
+        else {
+            self.toast(ToastKind::Info, "Issue details are still loading");
+            return;
+        };
+        self.open_issue_compose(IssueComposePurpose::EditIssue { number });
+        self.issue_editor = crate::text_editor::TextEditor::from_text(&text);
     }
 
     /// The number of the issue whose detail popup is open.
@@ -272,7 +286,7 @@ impl App {
         };
     }
 
-    // ── compose (new issue / comment) ──────────────────────────────────
+    // ── compose (new issue / edit / comment) ───────────────────────────
 
     fn open_issue_compose(&mut self, purpose: IssueComposePurpose) {
         self.issue_editor = crate::text_editor::TextEditor::new();
@@ -287,7 +301,9 @@ impl App {
                     selected: false,
                 }
             }
-            IssueComposePurpose::Comment { .. } => IssueClipboardAttachment::default(),
+            IssueComposePurpose::EditIssue { .. } | IssueComposePurpose::Comment { .. } => {
+                IssueClipboardAttachment::default()
+            }
         };
         self.mode = AppMode::IssueCompose { purpose };
     }
@@ -306,24 +322,7 @@ impl App {
         });
     }
 
-    /// The mode to return to when a compose is cancelled/finished.
-    fn compose_return_mode(purpose: IssueComposePurpose) -> AppMode {
-        match purpose {
-            IssueComposePurpose::NewIssue {
-                target: IssueCreateTarget::CurrentRepository,
-            } => AppMode::IssueList,
-            IssueComposePurpose::NewIssue {
-                target: IssueCreateTarget::Keifu,
-            } => AppMode::Normal,
-            IssueComposePurpose::Comment { .. } => AppMode::IssueDetail,
-        }
-    }
-
     pub(crate) fn handle_issue_compose_action(&mut self, action: Action) {
-        if self.issue_create_in_flight {
-            self.toast(ToastKind::Info, "Issue submission in progress");
-            return;
-        }
         match action {
             Action::Cancel => {
                 let purpose = match self.mode {
@@ -332,7 +331,11 @@ impl App {
                 };
                 self.issue_editor = crate::text_editor::TextEditor::new();
                 self.issue_clipboard_attachment = IssueClipboardAttachment::default();
-                self.mode = Self::compose_return_mode(purpose);
+                self.mode = compose_return_mode(
+                    purpose,
+                    self.issue_list.is_some(),
+                    self.issue_detail.is_some(),
+                );
             }
             Action::ToggleIssueClipboardImage => {
                 if matches!(
@@ -379,8 +382,8 @@ impl App {
                         return;
                     }
                 };
-                // Keep the draft and original clipboard capture visible until
-                // the background upload + issue creation both succeed.
+                // Once accepted, the worker owns the action and any attachment
+                // upload copy, so the composer can close immediately.
                 if self.start_issue_action(
                     IssueAction::Create {
                         title,
@@ -391,10 +394,33 @@ impl App {
                     "Creating issue…",
                 ) {
                     self.issue_create_in_flight = true;
+                    self.issue_editor = crate::text_editor::TextEditor::new();
+                    self.issue_clipboard_attachment = IssueClipboardAttachment::default();
+                    self.mode = compose_return_mode(
+                        purpose,
+                        self.issue_list.is_some(),
+                        self.issue_detail.is_some(),
+                    );
                 }
-                // Only this submitted draft is locked while its worker is in
-                // flight. Poll completion clears on success and leaves the
-                // draft intact and editable on failure.
+            }
+            IssueComposePurpose::EditIssue { number } => {
+                let (title, body) = compose_title_body(&text);
+                if title.is_empty() {
+                    self.toast(ToastKind::Error, "Issue title can't be empty");
+                    return;
+                }
+                if self.start_issue_action(
+                    IssueAction::EditContent {
+                        number,
+                        title,
+                        body,
+                    },
+                    "Saving issue…",
+                ) {
+                    self.issue_editor = crate::text_editor::TextEditor::new();
+                    self.issue_clipboard_attachment = IssueClipboardAttachment::default();
+                    self.mode = AppMode::IssueDetail;
+                }
             }
             IssueComposePurpose::Comment { number } => {
                 let body = text.trim().to_string();
@@ -767,27 +793,13 @@ impl App {
         }
 
         if let Some((action, result)) = self.issue_action_runner.poll() {
-            // A create sets this flag only after it is accepted by the serial
-            // runner, so the next outcome necessarily belongs to that create.
-            // Reset it even if the worker disconnected and returned its
-            // synthetic error action.
-            let completed_create = std::mem::take(&mut self.issue_create_in_flight);
+            // A create sets this flag only after the serial runner accepts it.
+            // Clear it for any outcome, including the runner's synthetic
+            // disconnected error, so force-quit is never left latched.
+            self.issue_create_in_flight = false;
             match result {
                 Ok(stdout) => {
                     self.toast(ToastKind::Success, success_message(&action, &stdout));
-                    if completed_create {
-                        let return_mode = match self.mode {
-                            AppMode::IssueCompose { purpose } if purpose.is_new_issue() => {
-                                Some(Self::compose_return_mode(purpose))
-                            }
-                            _ => None,
-                        };
-                        if let Some(return_mode) = return_mode {
-                            self.issue_editor = crate::text_editor::TextEditor::new();
-                            self.issue_clipboard_attachment = IssueClipboardAttachment::default();
-                            self.mode = return_mode;
-                        }
-                    }
                     self.after_issue_action(&action);
                 }
                 Err(e) => self.toast(ToastKind::Error, first_line(&e)),
@@ -865,6 +877,15 @@ fn compose_title_body(text: &str) -> (String, String) {
     (title, body)
 }
 
+/// Format an existing issue for the shared first-line-title editor.
+fn issue_edit_text(title: &str, body: &str) -> String {
+    if body.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title}\n\n{body}")
+    }
+}
+
 /// Parse comma-separated logins into a de-duplicated, order-preserving list,
 /// dropping blanks and a leading `@`.
 fn parse_logins(input: &str) -> Vec<String> {
@@ -920,6 +941,7 @@ fn issue_action_number(action: &IssueAction) -> Option<u64> {
     match action {
         IssueAction::Create { .. } => None,
         IssueAction::Comment { number, .. }
+        | IssueAction::EditContent { number, .. }
         | IssueAction::Close { number }
         | IssueAction::Reopen { number }
         | IssueAction::EditLabels { number, .. }
@@ -989,10 +1011,70 @@ fn first_line(err: &str) -> String {
     }
 }
 
+/// Resolve the screen beneath an issue composer without storing a modal stack.
+/// Live issue views identify an issue-list/detail origin; otherwise a
+/// repository issue uses its prepared list backdrop and a Keifu report returns
+/// to the normal repository screen.
+fn compose_return_mode(
+    purpose: IssueComposePurpose,
+    issue_list_open: bool,
+    issue_detail_open: bool,
+) -> AppMode {
+    if issue_detail_open
+        || matches!(
+            purpose,
+            IssueComposePurpose::EditIssue { .. } | IssueComposePurpose::Comment { .. }
+        )
+    {
+        return AppMode::IssueDetail;
+    }
+    if issue_list_open
+        || matches!(
+            purpose,
+            IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            }
+        )
+    {
+        return AppMode::IssueList;
+    }
+    AppMode::Normal
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::issue::{IssueDetail, IssueInfo, IssueState};
+    use crate::test_support::git;
+
+    fn test_app() -> (tempfile::TempDir, App) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", "initial"]);
+        let repo = GitRepository::open(dir).expect("open repo");
+        let app = App::from_repo(repo).expect("build app");
+        (tmp, app)
+    }
+
+    fn sample_detail(number: u64, title: &str, body: &str) -> IssueDetail {
+        IssueDetail {
+            number,
+            title: title.into(),
+            state: IssueState::Open,
+            state_reason: None,
+            body: body.into(),
+            author: "ghost".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            labels: vec![],
+            assignees: vec![],
+            comments: vec![],
+            url: String::new(),
+        }
+    }
 
     // ── selection movement ────────────────────────────────────────────
 
@@ -1051,19 +1133,166 @@ mod tests {
     }
 
     #[test]
-    fn keifu_reports_return_to_normal_instead_of_the_current_repo_issue_list() {
+    fn compose_returns_to_the_screen_beneath_the_overlay() {
         assert!(matches!(
-            App::compose_return_mode(IssueComposePurpose::NewIssue {
-                target: IssueCreateTarget::Keifu,
-            }),
+            compose_return_mode(
+                IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::Keifu,
+                },
+                false,
+                false,
+            ),
             AppMode::Normal
         ));
         assert!(matches!(
-            App::compose_return_mode(IssueComposePurpose::NewIssue {
-                target: IssueCreateTarget::CurrentRepository,
-            }),
+            compose_return_mode(
+                IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::CurrentRepository,
+                },
+                true,
+                false,
+            ),
             AppMode::IssueList
         ));
+        assert!(matches!(
+            compose_return_mode(
+                IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::Keifu,
+                },
+                true,
+                true,
+            ),
+            AppMode::IssueDetail
+        ));
+    }
+
+    #[test]
+    fn issue_compose_actions_open_over_issue_modes() {
+        let (_tmp, mut app) = test_app();
+
+        app.mode = AppMode::IssueList;
+        app.handle_action(Action::ReportKeifuIssue).unwrap();
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueCompose {
+                purpose: IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::Keifu,
+                },
+            }
+        ));
+
+        app.mode = AppMode::IssueDetail;
+        app.handle_action(Action::NewIssue).unwrap();
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueCompose {
+                purpose: IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::CurrentRepository,
+                },
+            }
+        ));
+    }
+
+    #[test]
+    fn edit_issue_prefills_content_and_failure_is_an_optimistic_toast() {
+        let (_tmp, mut app) = test_app();
+        app.issue_detail = Some(IssueDetailView {
+            number: 42,
+            state: IssueDetailState::Ready(Box::new(sample_detail(
+                42,
+                "Editable issue",
+                "Original body",
+            ))),
+            scroll: 0,
+            max_scroll: 0,
+        });
+        app.mode = AppMode::IssueDetail;
+
+        app.handle_action(Action::EditIssue).unwrap();
+
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueCompose {
+                purpose: IssueComposePurpose::EditIssue { number: 42 }
+            }
+        ));
+        assert_eq!(app.issue_editor.text, "Editable issue\n\nOriginal body");
+
+        app.issue_editor =
+            crate::text_editor::TextEditor::from_text("Updated title\n\nUpdated body");
+        app.issue_action_runner
+            .complete_next_start_with(Err("permission denied\ndetail".to_string()));
+        app.handle_action(Action::SubmitCompose).unwrap();
+
+        assert!(matches!(app.mode, AppMode::IssueDetail));
+        assert!(app.issue_editor.text.is_empty());
+        assert!(app.issue_action_runner.is_busy());
+
+        assert!(app.update_issue_status());
+        assert!(matches!(app.mode, AppMode::IssueDetail));
+        assert!(app
+            .toasts
+            .visible()
+            .iter()
+            .any(|toast| { toast.kind == ToastKind::Error && toast.text == "permission denied" }));
+    }
+
+    #[test]
+    fn new_issue_submit_closes_immediately_and_failure_is_a_toast() {
+        let (_tmp, mut app) = test_app();
+        app.mode = AppMode::IssueCompose {
+            purpose: IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            },
+        };
+        app.issue_editor =
+            crate::text_editor::TextEditor::from_text("Optimistic title\n\nIssue body");
+        app.issue_action_runner
+            .complete_next_start_with(Err("network unavailable\ndetail".to_string()));
+
+        app.handle_action(Action::SubmitCompose).unwrap();
+
+        assert!(matches!(app.mode, AppMode::IssueList));
+        assert!(app.issue_editor.text.is_empty());
+        assert!(app.issue_create_in_flight);
+        assert!(app.issue_action_runner.is_busy());
+
+        assert!(app.update_issue_status());
+        assert!(!app.issue_create_in_flight);
+        assert!(matches!(app.mode, AppMode::IssueList));
+        assert!(app.toasts.visible().iter().any(|toast| {
+            toast.kind == ToastKind::Error && toast.text == "network unavailable"
+        }));
+    }
+
+    #[test]
+    fn completed_submission_does_not_clobber_a_new_draft() {
+        let (_tmp, mut app) = test_app();
+        app.mode = AppMode::IssueCompose {
+            purpose: IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            },
+        };
+        app.issue_editor = crate::text_editor::TextEditor::from_text("First issue");
+        app.issue_action_runner
+            .complete_next_start_with(Ok("https://github.com/o/r/issues/42\n".to_string()));
+        app.handle_action(Action::SubmitCompose).unwrap();
+
+        app.handle_action(Action::ReportKeifuIssue).unwrap();
+        app.handle_action(Action::EditorChar('N')).unwrap();
+        app.handle_action(Action::EditorChar('e')).unwrap();
+        app.handle_action(Action::EditorChar('w')).unwrap();
+        assert!(app.update_issue_status());
+
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueCompose {
+                purpose: IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::Keifu,
+                },
+            }
+        ));
+        assert_eq!(app.issue_editor.text, "New");
     }
 
     // ── login parsing ──────────────────────────────────────────────────
@@ -1149,6 +1378,14 @@ mod tests {
             Some(5)
         );
         assert_eq!(
+            issue_action_number(&IssueAction::EditContent {
+                number: 7,
+                title: "t".into(),
+                body: "b".into(),
+            }),
+            Some(7)
+        );
+        assert_eq!(
             issue_action_number(&IssueAction::EditLabels {
                 number: 9,
                 add: vec![],
@@ -1187,20 +1424,8 @@ mod tests {
 
     #[test]
     fn detail_state_transitions_loading_to_ready_and_error() {
-        let detail = IssueDetail {
-            number: 7,
-            title: "t".into(),
-            state: IssueState::Closed,
-            state_reason: None,
-            body: String::new(),
-            author: "ghost".into(),
-            created_at: String::new(),
-            updated_at: String::new(),
-            labels: vec![],
-            assignees: vec![],
-            comments: vec![],
-            url: String::new(),
-        };
+        let mut detail = sample_detail(7, "t", "");
+        detail.state = IssueState::Closed;
         match detail_state_from(Ok(detail)) {
             IssueDetailState::Ready(d) => assert_eq!(d.number, 7),
             _ => panic!("expected Ready"),

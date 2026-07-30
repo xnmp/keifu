@@ -53,6 +53,18 @@ pub fn map_key_to_action(
         return Some(Action::ForceQuit);
     }
 
+    // Issue composers are global overlays. Accept either character case
+    // because enhanced terminals may report Shift separately while legacy
+    // terminals encode it in the char.
+    let alt_without_ctrl =
+        key.modifiers.contains(KeyModifiers::ALT) && !key.modifiers.contains(KeyModifiers::CONTROL);
+    if alt_without_ctrl && matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'k')) {
+        return Some(Action::ReportKeifuIssue);
+    }
+    if alt_without_ctrl && matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'i')) {
+        return Some(Action::NewIssue);
+    }
+
     // F12 toggles debug key display
     if key.code == KeyCode::F(12) {
         return Some(Action::ToggleDebugKeys);
@@ -236,21 +248,6 @@ fn map_normal_mode(
             return Some(Action::OpenSettings);
         }
 
-        // Issue shortcuts work from any panel. Match the most specific chord
-        // first so Ctrl+Alt+I cannot fall through to Alt+I.
-        let ctrl_alt_i = key
-            .modifiers
-            .contains(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && key.code == KeyCode::Char('i');
-        let alt_i = key.modifiers.contains(KeyModifiers::ALT)
-            && !key.modifiers.contains(KeyModifiers::CONTROL)
-            && key.code == KeyCode::Char('i');
-        if ctrl_alt_i {
-            return Some(Action::ReportKeifuIssue);
-        }
-        if alt_i {
-            return Some(Action::NewIssue);
-        }
         // Shift+I opens the issue list. 'I' is unbound in every Normal-mode
         // panel scope (lowercase 'i' is Files-only gitignore).
         if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Char('I') {
@@ -484,8 +481,11 @@ fn map_files_mode(key: KeyEvent) -> Option<Action> {
         // Per-file commit history
         (KeyModifiers::NONE, KeyCode::Char('h')) => Some(Action::FileHistory),
 
-        // Start filter mode
-        (KeyModifiers::CONTROL, KeyCode::Char('f')) => Some(Action::StartFilesFilter),
+        // Start the contextual file filter. Ctrl+F remains global branch
+        // search; slash is free in this panel and conventional for filtering.
+        (KeyModifiers::NONE, KeyCode::Char('/')) | (KeyModifiers::SHIFT, KeyCode::Char('/')) => {
+            Some(Action::StartFilesFilter)
+        }
 
         // Esc returns to graph
         (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::FocusGraph),
@@ -823,8 +823,8 @@ fn map_issue_label_filter_mode(key: KeyEvent) -> Option<Action> {
     }
 }
 
-/// Issue detail: j/k scroll, c comment, x close/reopen, l labels, a assignees,
-/// o browser, r refresh, Esc back to the list.
+/// Issue detail: j/k scroll, e edit, c comment, x close/reopen, l labels,
+/// a assignees, o browser, r refresh, Esc back to the list.
 fn map_issue_detail_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
@@ -845,6 +845,7 @@ fn map_issue_detail_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
             Some(Action::GoToBottom)
         }
+        (KeyModifiers::NONE, KeyCode::Char('e')) => Some(Action::EditIssue),
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::CommentOnIssue),
         (KeyModifiers::NONE, KeyCode::Char('x')) => Some(Action::ToggleIssueState),
         (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::EditIssueLabels),
@@ -1155,14 +1156,11 @@ mod tests {
     #[test]
     fn issue_shortcuts_distinguish_current_repo_keifu_and_list() {
         let alt_i = KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT);
-        let ctrl_alt_i = KeyEvent::new(
-            KeyCode::Char('i'),
-            KeyModifiers::CONTROL | KeyModifiers::ALT,
-        );
+        let alt_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT);
         let shift_i = KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT);
 
         assert_eq!(map_normal(alt_i), Some(Action::NewIssue));
-        assert_eq!(map_normal(ctrl_alt_i), Some(Action::ReportKeifuIssue));
+        assert_eq!(map_normal(alt_k), Some(Action::ReportKeifuIssue));
         assert_eq!(map_normal(shift_i), Some(Action::OpenIssueList));
     }
 

@@ -74,6 +74,46 @@ fn ctrl_q_always_force_quits() {
 }
 
 #[test]
+fn issue_shortcuts_are_global_and_case_insensitive() {
+    let alt_i = key_mod(KeyCode::Char('i'), KeyModifiers::ALT);
+    let alt_upper_k = key_mod(KeyCode::Char('K'), KeyModifiers::ALT | KeyModifiers::SHIFT);
+    let ctrl_alt_i = key_mod(
+        KeyCode::Char('i'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
+
+    for mode in [AppMode::IssueList, AppMode::IssueDetail, AppMode::Help] {
+        assert_eq!(
+            map_key_to_action(alt_i, &mode, FocusedPanel::Graph, false, false, false,),
+            Some(Action::NewIssue)
+        );
+        assert_eq!(
+            map_key_to_action(alt_upper_k, &mode, FocusedPanel::Graph, false, false, false,),
+            Some(Action::ReportKeifuIssue)
+        );
+        assert_eq!(
+            map_key_to_action(ctrl_alt_i, &mode, FocusedPanel::Graph, false, false, false,),
+            None
+        );
+    }
+}
+
+#[test]
+fn e_edits_an_issue_from_issue_detail() {
+    assert_eq!(
+        map_key_to_action(
+            key(KeyCode::Char('e')),
+            &AppMode::IssueDetail,
+            FocusedPanel::Graph,
+            false,
+            false,
+            false,
+        ),
+        Some(Action::EditIssue)
+    );
+}
+
+#[test]
 fn f12_toggles_debug() {
     assert_eq!(
         map_normal_graph(key(KeyCode::F(12))),
@@ -312,6 +352,10 @@ fn files_mode_operations() {
     );
     assert_eq!(
         map_normal_files(key_mod(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        Some(Action::Search)
+    );
+    assert_eq!(
+        map_normal_files(key(KeyCode::Char('/'))),
         Some(Action::StartFilesFilter)
     );
     assert_eq!(

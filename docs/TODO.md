@@ -162,7 +162,7 @@ new-issue and clipboard-image workflow but passes `--repo xnmp/keifu` to both
 the attachment uploader and `gh issue create`. `Ctrl+P` opens the palette,
 `Ctrl+F` searches branches, and `Ctrl+Shift+F` searches commits; `:` remains
 available. `Alt+I`
-opens the current-repository composer directly and `Ctrl+Alt+I` opens the
+opens the current-repository composer directly and `Alt+K` opens the
 Keifu-targeted composer.
 Both new-issue composers soft-wrap long title/body lines and keep the cursor
 visible as the wrapped draft grows beyond the popup height.

@@ -21,7 +21,6 @@ pub struct IssueComposeWidget<'a> {
     editor: &'a TextEditor,
     purpose: IssueComposePurpose,
     attachment: &'a IssueClipboardAttachment,
-    submitting: bool,
     theme: &'a Theme,
 }
 
@@ -30,27 +29,26 @@ impl<'a> IssueComposeWidget<'a> {
         editor: &'a TextEditor,
         purpose: IssueComposePurpose,
         attachment: &'a IssueClipboardAttachment,
-        submitting: bool,
         theme: &'a Theme,
     ) -> Self {
         Self {
             editor,
             purpose,
             attachment,
-            submitting,
             theme,
         }
     }
 
-    fn title(&self) -> &'static str {
+    fn title(&self) -> String {
         match self.purpose {
             IssueComposePurpose::NewIssue {
                 target: IssueCreateTarget::CurrentRepository,
-            } => " New Issue ",
+            } => " New Issue ".to_string(),
             IssueComposePurpose::NewIssue {
                 target: IssueCreateTarget::Keifu,
-            } => " Report a Keifu Issue ",
-            IssueComposePurpose::Comment { .. } => " New Comment ",
+            } => " Report a Keifu Issue ".to_string(),
+            IssueComposePurpose::EditIssue { number } => format!(" Edit Issue #{number} "),
+            IssueComposePurpose::Comment { .. } => " New Comment ".to_string(),
         }
     }
 
@@ -62,6 +60,9 @@ impl<'a> IssueComposeWidget<'a> {
             IssueComposePurpose::NewIssue {
                 target: IssueCreateTarget::Keifu,
             } => "Target: xnmp/keifu · first line = title, rest = body:",
+            IssueComposePurpose::EditIssue { .. } => {
+                "First line = title, the rest replaces the issue body:"
+            }
             IssueComposePurpose::Comment { .. } => "Comment body:",
         }
     }
@@ -76,13 +77,13 @@ fn checkbox_label(has_image: bool, uploader_available: bool, selected: bool) -> 
     }
 }
 
-fn compose_hint(purpose: IssueComposePurpose, submitting: bool) -> &'static str {
-    match (purpose, submitting) {
-        (IssueComposePurpose::NewIssue { .. }, true) => " Submitting… please wait ",
-        (IssueComposePurpose::NewIssue { .. }, false) => {
+fn compose_hint(purpose: IssueComposePurpose) -> &'static str {
+    match purpose {
+        IssueComposePurpose::NewIssue { .. } => {
             " Tab toggle image   Ctrl+S submit   Ctrl+E editor   Esc cancel "
         }
-        (IssueComposePurpose::Comment { .. }, _) => " Ctrl+S submit   Ctrl+E editor   Esc cancel ",
+        IssueComposePurpose::EditIssue { .. } => " Ctrl+S save   Ctrl+E editor   Esc cancel ",
+        IssueComposePurpose::Comment { .. } => " Ctrl+S submit   Ctrl+E editor   Esc cancel ",
     }
 }
 
@@ -295,7 +296,7 @@ impl<'a> Widget for IssueComposeWidget<'a> {
 
         // Editor lines.
         let body = self::text_area(area, self.purpose);
-        let is_new = self.purpose.is_new_issue();
+        let has_title = self.purpose.has_title();
         let layout = editor_layout(self.editor, body.width, body.height);
         for (row, line) in layout
             .lines
@@ -304,8 +305,8 @@ impl<'a> Widget for IssueComposeWidget<'a> {
             .take(body.height as usize)
             .enumerate()
         {
-            // Highlight the title line (row 0) for a new issue.
-            let style = if is_new && line.logical_row == 0 {
+            // Highlight the title line for new/edit issue forms.
+            let style = if has_title && line.logical_row == 0 {
                 Style::default()
                     .fg(self.theme.text_primary)
                     .add_modifier(Modifier::BOLD)
@@ -322,7 +323,7 @@ impl<'a> Widget for IssueComposeWidget<'a> {
         }
 
         // Hint (bottom row).
-        let hint = compose_hint(self.purpose, self.submitting);
+        let hint = compose_hint(self.purpose);
         let fy = inner.y + inner.height - 1;
         buf.set_string(
             inner.x,
@@ -367,22 +368,26 @@ mod tests {
             },
         );
         let comment = text_area(popup, IssueComposePurpose::Comment { number: 1 });
+        let edit = text_area(popup, IssueComposePurpose::EditIssue { number: 1 });
         assert_eq!(new_issue.y, comment.y + 1);
         assert_eq!(new_issue.height + 1, comment.height);
+        assert_eq!(edit, comment);
     }
 
     #[test]
-    fn submitted_new_issue_does_not_claim_escape_will_cancel_the_worker() {
-        let hint = compose_hint(
-            IssueComposePurpose::NewIssue {
-                target: IssueCreateTarget::CurrentRepository,
-            },
-            true,
-        );
-        assert!(hint.contains("Submitting"));
-        assert!(!hint.contains("Esc"));
+    fn compose_hints_expose_submit_and_cancel_controls() {
         assert_eq!(
-            compose_hint(IssueComposePurpose::Comment { number: 1 }, true),
+            compose_hint(IssueComposePurpose::NewIssue {
+                target: IssueCreateTarget::CurrentRepository,
+            }),
+            " Tab toggle image   Ctrl+S submit   Ctrl+E editor   Esc cancel "
+        );
+        assert_eq!(
+            compose_hint(IssueComposePurpose::EditIssue { number: 1 }),
+            " Ctrl+S save   Ctrl+E editor   Esc cancel "
+        );
+        assert_eq!(
+            compose_hint(IssueComposePurpose::Comment { number: 1 }),
             " Ctrl+S submit   Ctrl+E editor   Esc cancel "
         );
     }

@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::theme::Theme;
 use crate::action::Action;
-use crate::app::{App, AppMode, FocusedPanel, InputAction};
+use crate::app::{App, AppMode, FocusedPanel, InputAction, IssueComposePurpose};
 
 /// Contextual hint text for the open-PR shortcut, shown when the selected
 /// commit has an open PR. Pure so it can be unit-tested without a terminal.
@@ -487,7 +487,7 @@ impl StatusBar {
                                     Action::ToggleFolderView,
                                 );
                                 hb.hint(
-                                    " ^f ",
+                                    " / ",
                                     key_style,
                                     "filter ",
                                     desc_style,
@@ -736,6 +736,7 @@ impl StatusBar {
             }
             AppMode::IssueDetail => {
                 hb.hint_static(" ↑↓ ", key_style, "scroll ", desc_style);
+                hb.hint(" e ", key_style, "edit ", desc_style, Action::EditIssue);
                 hb.hint(
                     " c ",
                     key_style,
@@ -786,11 +787,15 @@ impl StatusBar {
                 );
                 hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
             }
-            AppMode::IssueCompose { .. } => {
+            AppMode::IssueCompose { purpose } => {
                 hb.hint(
                     " Ctrl+S ",
                     key_style,
-                    "submit ",
+                    if matches!(purpose, IssueComposePurpose::EditIssue { .. }) {
+                        "save "
+                    } else {
+                        "submit "
+                    },
                     desc_style,
                     Action::SubmitCompose,
                 );

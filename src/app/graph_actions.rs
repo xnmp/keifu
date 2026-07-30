@@ -50,19 +50,6 @@ impl App {
                 self.toggle_commit_pane();
                 return Ok(());
             }
-            // Palette shortcut: open (or reuse) the list, then the new-issue
-            // compose on top, so cancelling returns to a populated list.
-            Action::NewIssue => {
-                if self.issue_list.is_none() {
-                    self.open_issue_list();
-                }
-                self.open_new_issue_compose();
-                return Ok(());
-            }
-            Action::ReportKeifuIssue => {
-                self.open_keifu_issue_compose();
-                return Ok(());
-            }
             // Commit search is global, but its results live in the graph.
             Action::StartCommitFilter => {
                 self.focused_panel = FocusedPanel::Graph;

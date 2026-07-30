@@ -73,7 +73,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
             "Shift+H",
             "Hide/dim branches merged into the trunk (incl. squash)",
         ),
-        Row("Ctrl+f", "Filter commits (message/author/hash)"),
+        Row("Ctrl+Shift+F", "Filter commits (message/author/hash)"),
         Row("m", "Mark / compare two commits (Esc clears)"),
         Row(
             "o",
@@ -118,7 +118,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
 
     e.extend([
         Row("f", "Toggle folder grouping"),
-        Row("Ctrl+f", "Filter files"),
+        Row("/", "Filter files"),
         Row("Space", "Open file with default app"),
         Row("y", "Copy file path"),
         Row("Enter", "Open file diff"),
@@ -142,8 +142,8 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("GitHub Issues"),
         Row("Shift+I", "Open the issue list (from any panel)"),
-        Row("Alt+I", "New issue for the open repository"),
-        Row("Ctrl+Alt+I", "Report an issue against Keifu"),
+        Row("Alt+I", "New repo issue (from anywhere)"),
+        Row("Alt+K", "Report a Keifu issue (from anywhere)"),
         Row("Enter", "Open the selected issue's detail"),
         Row("Tab / f", "Cycle status filter (open / closed / all)"),
         Row("t", "Filter by label (checkbox picker)"),
@@ -153,6 +153,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         ),
         Row("l", "Toggle tags on the selected issue"),
         Row("n", "New issue"),
+        Row("e", "Edit title/body (in detail)"),
         Row("c", "Comment (in detail)"),
         Row("x", "Close / reopen (in detail)"),
         Row("a", "Edit assignees (in detail)"),

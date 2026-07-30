@@ -88,7 +88,7 @@ fn issue_bg_is_detail(app: &App) -> bool {
     match &app.mode {
         AppMode::IssueDetail => true,
         AppMode::IssueCompose {
-            purpose: IssueComposePurpose::Comment { .. },
+            purpose: IssueComposePurpose::EditIssue { .. } | IssueComposePurpose::Comment { .. },
         } => true,
         AppMode::IssueLabelPicker { .. } => app.issue_detail.is_some(),
         _ => false,
@@ -953,7 +953,6 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
                     &app.issue_editor,
                     *purpose,
                     &app.issue_clipboard_attachment,
-                    app.issue_create_in_flight,
                     theme,
                 ),
                 popup_area,

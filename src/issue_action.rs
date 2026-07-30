@@ -1,5 +1,5 @@
-//! Mutating issue actions via the `gh` CLI: create, comment, close/reopen, and
-//! edit labels/assignees.
+//! Mutating issue actions via the `gh` CLI: create, edit content, comment,
+//! close/reopen, and edit labels/assignees.
 //!
 //! Command construction is pure (unit-tested). Execution runs on a background
 //! thread through the shared `gh` runner; bodies are passed via `--body-file`
@@ -42,6 +42,12 @@ pub enum IssueAction {
         number: u64,
         body: String,
     },
+    /// Replace an issue's title and body.
+    EditContent {
+        number: u64,
+        title: String,
+        body: String,
+    },
     Close {
         number: u64,
     },
@@ -64,10 +70,12 @@ pub enum IssueAction {
 
 impl IssueAction {
     /// The body text to write to a `--body-file`, or `None` when the action
-    /// takes no body (close/reopen/edit).
+    /// takes no body (close/reopen/metadata edits).
     pub fn body(&self) -> Option<&str> {
         match self {
-            Self::Create { body, .. } | Self::Comment { body, .. } => Some(body),
+            Self::Create { body, .. }
+            | Self::Comment { body, .. }
+            | Self::EditContent { body, .. } => Some(body),
             _ => None,
         }
     }
@@ -100,6 +108,17 @@ impl IssueAction {
                 push_body(&mut args);
                 args
             }
+            Self::EditContent { number, title, .. } => {
+                let mut args = vec![
+                    s("issue"),
+                    s("edit"),
+                    number.to_string(),
+                    s("--title"),
+                    title.clone(),
+                ];
+                push_body(&mut args);
+                args
+            }
             Self::Close { number } => vec![s("issue"), s("close"), number.to_string()],
             Self::Reopen { number } => vec![s("issue"), s("reopen"), number.to_string()],
             Self::EditLabels {
@@ -120,6 +139,7 @@ impl IssueAction {
         match self {
             Self::Create { .. } => "Create issue".to_string(),
             Self::Comment { number, .. } => format!("Comment on issue #{number}"),
+            Self::EditContent { number, .. } => format!("Edit issue #{number}"),
             Self::Close { number } => format!("Close issue #{number}"),
             Self::Reopen { number } => format!("Reopen issue #{number}"),
             Self::EditLabels { number, .. } => format!("Edit labels on issue #{number}"),
@@ -174,6 +194,7 @@ pub fn success_message(action: &IssueAction, stdout: &str) -> String {
             }
         }
         IssueAction::Comment { number, .. } => format!("Commented on issue #{number}"),
+        IssueAction::EditContent { number, .. } => format!("Updated issue #{number}"),
         IssueAction::Close { number } => format!("Closed issue #{number}"),
         IssueAction::Reopen { number } => format!("Reopened issue #{number}"),
         IssueAction::EditLabels { number, .. } => format!("Updated labels on issue #{number}"),
@@ -193,6 +214,8 @@ pub type IssueActionOutcome = (IssueAction, Result<String, String>);
 #[derive(Default)]
 pub struct IssueActionRunner {
     rx: Option<Receiver<IssueActionOutcome>>,
+    #[cfg(test)]
+    next_result: Option<Result<String, String>>,
 }
 
 impl IssueActionRunner {
@@ -212,12 +235,25 @@ impl IssueActionRunner {
             return;
         }
         let (tx, rx) = mpsc::channel();
+        #[cfg(test)]
+        if let Some(result) = self.next_result.take() {
+            let _ = tx.send((action, result));
+            self.rx = Some(rx);
+            return;
+        }
         let path = repo_path.to_string();
         thread::spawn(move || {
             let result = run_action(&path, &action);
             let _ = tx.send((action, result));
         });
         self.rx = Some(rx);
+    }
+
+    /// Arrange a deterministic result for the next action without invoking
+    /// `gh`. Unit tests still exercise the runner's accepted/poll lifecycle.
+    #[cfg(test)]
+    pub(crate) fn complete_next_start_with(&mut self, result: Result<String, String>) {
+        self.next_result = Some(result);
     }
 
     /// Poll for completion; returns the outcome once.
@@ -441,6 +477,30 @@ mod tests {
             a.build_args(Some("/p")),
             vec!["issue", "comment", "42", "--body-file", "/p"]
         );
+    }
+
+    #[test]
+    fn edit_content_args_include_title_and_body_file() {
+        let action = IssueAction::EditContent {
+            number: 42,
+            title: "Updated title".to_string(),
+            body: "Updated body".to_string(),
+        };
+        assert_eq!(action.body(), Some("Updated body"));
+        assert_eq!(
+            action.build_args(Some("/tmp/body.md")),
+            vec![
+                "issue",
+                "edit",
+                "42",
+                "--title",
+                "Updated title",
+                "--body-file",
+                "/tmp/body.md",
+            ]
+        );
+        assert_eq!(action.describe(), "Edit issue #42");
+        assert_eq!(success_message(&action, ""), "Updated issue #42");
     }
 
     #[test]
