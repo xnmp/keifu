@@ -38,6 +38,17 @@ fn help_popup_displays_current_global_and_filter_shortcuts() {
     ] {
         assert!(help.contains(expected), "help popup omitted {expected:?}");
     }
+
+    for (key, description) in [
+        ("Ctrl+Shift+F", "Filter commits (message/author/hash)"),
+        ("/", "Filter files"),
+    ] {
+        assert!(
+            help.lines()
+                .any(|line| line.contains(key) && line.contains(description)),
+            "help popup mismatched {key:?} and {description:?}"
+        );
+    }
 }
 
 #[test]
