@@ -989,8 +989,16 @@ fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_help_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => Some(Action::ToggleHelp),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) => {
+            Some(Action::ToggleHelp)
+        }
+        (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => Some(Action::HelpScrollUp),
+        (KeyModifiers::NONE, KeyCode::Down | KeyCode::Char('j')) => Some(Action::HelpScrollDown),
+        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::HelpPageUp),
+        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::HelpPageDown),
+        (KeyModifiers::NONE, KeyCode::Home) => Some(Action::HelpScrollToTop),
+        (KeyModifiers::NONE, KeyCode::End) => Some(Action::HelpScrollToBottom),
         _ => None,
     }
 }
@@ -1182,6 +1190,33 @@ mod tests {
             false,
             false,
         )
+    }
+
+    #[test]
+    fn help_mode_maps_keyboard_scrolling_without_consuming_close_keys() {
+        let help = AppMode::Help;
+        let map = |code| {
+            map_key_to_action(
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &help,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false,
+            )
+        };
+
+        assert_eq!(map(KeyCode::Up), Some(Action::HelpScrollUp));
+        assert_eq!(map(KeyCode::Char('k')), Some(Action::HelpScrollUp));
+        assert_eq!(map(KeyCode::Down), Some(Action::HelpScrollDown));
+        assert_eq!(map(KeyCode::Char('j')), Some(Action::HelpScrollDown));
+        assert_eq!(map(KeyCode::PageUp), Some(Action::HelpPageUp));
+        assert_eq!(map(KeyCode::PageDown), Some(Action::HelpPageDown));
+        assert_eq!(map(KeyCode::Home), Some(Action::HelpScrollToTop));
+        assert_eq!(map(KeyCode::End), Some(Action::HelpScrollToBottom));
+        assert_eq!(map(KeyCode::Esc), Some(Action::ToggleHelp));
+        assert_eq!(map(KeyCode::Char('q')), Some(Action::ToggleHelp));
+        assert_eq!(map(KeyCode::Char('?')), Some(Action::ToggleHelp));
     }
 
     #[test]

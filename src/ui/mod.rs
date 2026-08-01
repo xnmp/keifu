@@ -579,12 +579,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Popups. Each interactive popup records its rect for mouse hit-testing
     // (click-inside routes, click-outside closes).
+    if matches!(app.mode, AppMode::Help) {
+        let popup = centered_rect(60, 70, area);
+        let inner_width = popup.width.saturating_sub(4);
+        let visible = popup.height.saturating_sub(2) as usize;
+        let content = HelpPopup::content_height(app.is_uncommitted_selected(), &theme, inner_width);
+        app.help_viewport_rows = visible;
+        app.help_max_scroll = content.saturating_sub(visible);
+        app.help_scroll = app.help_scroll.min(app.help_max_scroll);
+    }
     let mut rendered_popup: Option<Rect> = None;
     match &app.mode {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(
-                HelpPopup::new(app.is_uncommitted_selected(), &theme),
+                HelpPopup::new(app.is_uncommitted_selected(), &theme, app.help_scroll),
                 popup_area,
             );
         }
