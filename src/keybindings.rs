@@ -381,8 +381,8 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
-        // Pull / push pairing: lowercase pull, Shift+P push.
-        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Pull),
+        // Pull / push pairing: lowercase l pulls, Shift+P pushes.
+        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::Pull),
         (KeyModifiers::SHIFT, KeyCode::Char('P')) => Some(Action::Push),
 
         // Space opens file diff for quick access

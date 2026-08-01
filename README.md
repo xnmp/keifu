@@ -122,7 +122,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `b` | Create branch at selected commit |
 | `d` | Delete branch (local or remote, behind confirm) |
 | `f` | Fetch (resolves the remote from upstream; prompts if ambiguous) |
-| `p` | Pull (fetch + integrate; honors `pull.rebase`) |
+| `l` | Pull (fetch + integrate; honors `pull.rebase`) |
 | `Shift+P` | Push current branch (publishes with `-u` if it has no upstream) |
 | `Shift+B` | Branch filter — choose which branches' commits are shown; type to filter by name, or `@name` to filter by branch author (then `Ctrl+O` hides that whole subset) |
 | `Shift+O` | Show/hide remote-only branches — hides remote refs with no matching local branch, and their exclusive commits; persists |
