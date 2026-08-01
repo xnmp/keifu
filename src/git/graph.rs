@@ -2702,6 +2702,41 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn squash_link_duplicate_relationship_is_idempotent() {
+        // Local and remote refs commonly name the same surviving branch tip.
+        // Both classifications describe one user-visible squash relationship.
+        let (commits, [s, f1, _t, _z]) = squash_link_fixture();
+        let single = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+        let duplicate = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[(f1, s), (f1, s)],
+        );
+
+        assert_eq!(
+            duplicate.max_lane, single.max_lane,
+            "repeating one squash relationship must not widen the graph"
+        );
+        assert_eq!(duplicate.nodes.len(), single.nodes.len());
+        for (row, (actual, expected)) in duplicate
+            .nodes
+            .iter()
+            .zip(&single.nodes)
+            .enumerate()
+        {
+            assert_eq!(
+                actual.cells, expected.cells,
+                "row {row} must contain exactly the single continuous connector"
+            );
+            assert_eq!(actual.cell_oids, expected.cell_oids);
+        }
+    }
+
     /// #115 repro shape: HEAD sits ON the squash commit `S` with uncommitted
     /// changes. Lanes 0 and 1 are busy above HEAD (children X, Y of S), so the
     /// uncommitted node lands on a farther lane and its horizontal band crosses
