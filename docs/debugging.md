@@ -89,6 +89,25 @@ printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' | nc -q1 127.0.0.1 7167  # Ctrl+Q 
 once nothing is pending to dismiss. Quitting cleanly (not a killed process) is
 what flushes the exit-time `perf summary` to the log.
 
+### Verifying a graph action in the live app
+
+For a graph-panel keybinding that starts an asynchronous operation, query the
+state before and immediately after injecting the key. The focused panel and
+selection should remain unchanged, while the operation-specific state flag
+should become active. For example, this verifies that lowercase `l` routes to
+Pull rather than graph navigation:
+
+```bash
+nohup script -qec "keifu --debug-listen 127.0.0.1:7169" /dev/null &
+printf '%s\n' '{"cmd":"state"}' '{"cmd":"keys","keys":"l"}' '{"cmd":"state"}' \
+  | nc -q1 127.0.0.1 7169
+printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' | nc -q1 127.0.0.1 7169
+```
+
+The post-key state should still report `mode: "normal"`,
+`focused_panel: "graph"`, and the same `selected_index`, while
+`is_pulling` is `true` (or the operation has already completed).
+
 ## Pixel-graph debugging (headless PNG rendering)
 
 The debug server cannot exercise graphics-protocol output. To reproduce
