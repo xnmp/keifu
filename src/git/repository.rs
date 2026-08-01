@@ -260,7 +260,7 @@ impl GitRepository {
         let Ok(names) = self.repo.tag_names(None) else {
             return tags;
         };
-        for name in names.iter().flatten() {
+        for name in names.iter().filter_map(Result::ok).flatten() {
             if let Ok(reference) = self.repo.find_reference(&format!("refs/tags/{name}")) {
                 // peel_to_commit follows annotated tag objects to the commit.
                 if let Ok(commit) = reference.peel_to_commit() {
@@ -278,7 +278,13 @@ impl GitRepository {
     pub fn remotes(&self) -> Vec<String> {
         self.repo
             .remotes()
-            .map(|arr| arr.iter().flatten().map(|s| s.to_string()).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Result::ok)
+                    .flatten()
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -289,7 +295,7 @@ impl GitRepository {
         self.repo
             .find_remote(remote)
             .ok()
-            .and_then(|r| r.url().map(|s| s.to_string()))
+            .and_then(|r| r.url().ok().map(str::to_string))
     }
 
     /// The remote configured for the current branch's upstream, if any
@@ -297,9 +303,9 @@ impl GitRepository {
     /// upstream-less branch.
     pub fn head_upstream_remote(&self) -> Option<String> {
         let head = self.repo.head().ok()?;
-        let refname = head.name()?;
+        let refname = head.name().ok()?;
         let buf = self.repo.branch_upstream_remote(refname).ok()?;
-        buf.as_str().map(|s| s.to_string())
+        buf.as_str().ok().map(str::to_string)
     }
 
     /// Get the current HEAD name
@@ -307,7 +313,7 @@ impl GitRepository {
         self.repo
             .head()
             .ok()
-            .and_then(|h| h.shorthand().map(|s| s.to_string()))
+            .and_then(|h| h.shorthand().ok().map(str::to_string))
     }
 
     /// Check if HEAD is detached

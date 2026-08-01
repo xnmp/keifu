@@ -251,7 +251,12 @@ impl App {
     /// else `None` (no remote configured).
     fn default_push_remote(&self) -> Option<String> {
         let remotes = self.repo.repo().remotes().ok()?;
-        let names: Vec<String> = remotes.iter().flatten().map(|s| s.to_string()).collect();
+        let names: Vec<String> = remotes
+            .iter()
+            .filter_map(Result::ok)
+            .flatten()
+            .map(str::to_string)
+            .collect();
         if names.iter().any(|n| n == "origin") {
             Some("origin".to_string())
         } else {

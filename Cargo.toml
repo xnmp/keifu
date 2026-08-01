@@ -29,7 +29,7 @@ md5 = "0.7"
 
 # Git — network transports (https/ssh, and with them openssl-sys) are
 # unused: fetch/push shell out to the git CLI (see git/operations.rs).
-git2 = { version = "0.19", default-features = false }
+git2 = { version = "0.21", default-features = false }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }

@@ -452,14 +452,14 @@ mod tests {
     fn merge_node(message: &str) -> GraphNode {
         use crate::git::CommitInfo;
         let commit = CommitInfo {
-            oid: git2::Oid::zero(),
+            oid: git2::Oid::ZERO_SHA1,
             short_id: "abc1234".to_string(),
             author_name: "a".to_string(),
             author_email: "a@b".to_string(),
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
+            parent_oids: vec![git2::Oid::ZERO_SHA1; 2], // 2 parents => a merge
         };
         GraphNode {
             commit: Some(commit),

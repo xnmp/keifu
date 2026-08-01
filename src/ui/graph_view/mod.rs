@@ -968,14 +968,14 @@ mod tests {
     fn merge_node(message: &str) -> GraphNode {
         use crate::git::CommitInfo;
         let commit = CommitInfo {
-            oid: git2::Oid::zero(),
+            oid: git2::Oid::ZERO_SHA1,
             short_id: "abc1234".to_string(),
             author_name: "a".to_string(),
             author_email: "a@b".to_string(),
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
+            parent_oids: vec![git2::Oid::ZERO_SHA1; 2], // 2 parents => a merge
         };
         GraphNode {
             commit: Some(commit),
@@ -1158,14 +1158,14 @@ mod tests {
     fn branch_tip_node(message: &str, branch_names: &[&str]) -> GraphNode {
         use crate::git::CommitInfo;
         let commit = CommitInfo {
-            oid: git2::Oid::zero(),
+            oid: git2::Oid::ZERO_SHA1,
             short_id: "abc1234".to_string(),
             author_name: "a".to_string(),
             author_email: "a@b".to_string(),
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            parent_oids: vec![git2::Oid::zero()],
+            parent_oids: vec![git2::Oid::ZERO_SHA1],
         };
         GraphNode {
             commit: Some(commit),
@@ -2051,7 +2051,7 @@ mod tests {
     fn collapse_leaves_non_merge_commits_alone() {
         // A non-merge commit keeps its raw message even with collapse on.
         let mut node = merge_node("real message");
-        node.commit.as_mut().unwrap().parent_oids = vec![git2::Oid::zero()]; // 1 parent
+        node.commit.as_mut().unwrap().parent_oids = vec![git2::Oid::ZERO_SHA1]; // 1 parent
         let model = model_row_with(
             &node,
             &HashMap::new(),

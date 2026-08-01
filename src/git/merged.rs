@@ -1059,21 +1059,21 @@ mod tests {
     #[test]
     fn base_branch_prefers_local_main_then_master_then_head() {
         let bs = vec![
-            local("feature", Oid::zero(), true),
-            local("master", Oid::zero(), false),
-            local("main", Oid::zero(), false),
+            local("feature", Oid::ZERO_SHA1, true),
+            local("master", Oid::ZERO_SHA1, false),
+            local("main", Oid::ZERO_SHA1, false),
         ];
         assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("main"));
 
         let bs = vec![
-            local("feature", Oid::zero(), true),
-            local("master", Oid::zero(), false),
+            local("feature", Oid::ZERO_SHA1, true),
+            local("master", Oid::ZERO_SHA1, false),
         ];
         assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("master"));
 
         let bs = vec![
-            local("feature", Oid::zero(), true),
-            local("dev", Oid::zero(), false),
+            local("feature", Oid::ZERO_SHA1, true),
+            local("dev", Oid::ZERO_SHA1, false),
         ];
         assert_eq!(base_branch(&bs).map(|b| b.name.as_str()), Some("feature"));
 
@@ -2236,7 +2236,7 @@ mod tests {
     fn base_tips_omits_matching_or_absent_remote_trunk() {
         // When local main is up to date (origin/main equal), the remote adds no
         // second tip — behaviour is identical to before.
-        let z = Oid::zero();
+        let z = Oid::ZERO_SHA1;
         let branches = vec![local("main", z, true), remote("origin/main", z)];
         assert_eq!(
             base_tips(&branches, z, "main"),

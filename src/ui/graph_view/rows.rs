@@ -323,14 +323,14 @@ mod tests {
     fn commit_row(cells: Vec<CellType>) -> GraphNode {
         use crate::git::CommitInfo;
         let commit = CommitInfo {
-            oid: git2::Oid::zero(),
+            oid: git2::Oid::ZERO_SHA1,
             short_id: "abc1234".to_string(),
             author_name: "a".to_string(),
             author_email: "a@b".to_string(),
             timestamp: chrono::Local::now(),
             message: "m".to_string(),
             full_message: "m".to_string(),
-            parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
+            parent_oids: vec![git2::Oid::ZERO_SHA1; 2], // 2 parents => a merge
         };
         let mut n = node_with_cells(cells, false);
         n.commit = Some(commit);

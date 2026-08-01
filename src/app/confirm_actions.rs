@@ -344,7 +344,7 @@ mod tests {
             is_head: false,
             is_remote,
             upstream: upstream.map(str::to_string),
-            tip_oid: git2::Oid::zero(),
+            tip_oid: git2::Oid::ZERO_SHA1,
             ahead: 0,
             behind: 0,
         }

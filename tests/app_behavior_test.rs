@@ -133,7 +133,7 @@ fn path_status(repo_dir: &Path, file: &str) -> Status {
     let statuses = repo.statuses(Some(&mut opts)).unwrap();
     statuses
         .iter()
-        .find(|entry| entry.path() == Some(file))
+        .find(|entry| entry.path().ok() == Some(file))
         .map(|entry| entry.status())
         .unwrap_or(Status::CURRENT)
 }

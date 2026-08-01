@@ -143,7 +143,10 @@ fn stage_file_adds_to_index() {
     stage_file(path, "a.txt").unwrap();
 
     let statuses = repo.statuses(None).unwrap();
-    let entry = statuses.iter().find(|e| e.path() == Some("a.txt")).unwrap();
+    let entry = statuses
+        .iter()
+        .find(|e| e.path().ok() == Some("a.txt"))
+        .unwrap();
     assert!(entry.status().intersects(git2::Status::INDEX_MODIFIED));
 }
 
@@ -162,7 +165,10 @@ fn unstage_file_removes_from_index() {
     unstage_file(path, "a.txt").unwrap();
 
     let statuses = repo.statuses(None).unwrap();
-    let entry = statuses.iter().find(|e| e.path() == Some("a.txt")).unwrap();
+    let entry = statuses
+        .iter()
+        .find(|e| e.path().ok() == Some("a.txt"))
+        .unwrap();
     // Should be unstaged (worktree modified) but not in index
     assert!(entry.status().intersects(git2::Status::WT_MODIFIED));
     assert!(!entry.status().intersects(git2::Status::INDEX_MODIFIED));
@@ -181,7 +187,7 @@ fn stage_then_unstage_roundtrip() {
     let before = repo.statuses(None).unwrap();
     let before_status = before
         .iter()
-        .find(|e| e.path() == Some("a.txt"))
+        .find(|e| e.path().ok() == Some("a.txt"))
         .unwrap()
         .status();
 
@@ -193,7 +199,7 @@ fn stage_then_unstage_roundtrip() {
     let after = repo.statuses(None).unwrap();
     let after_status = after
         .iter()
-        .find(|e| e.path() == Some("a.txt"))
+        .find(|e| e.path().ok() == Some("a.txt"))
         .unwrap()
         .status();
     assert_eq!(before_status, after_status);
@@ -214,7 +220,7 @@ fn stage_untracked_file() {
     let statuses = repo.statuses(None).unwrap();
     let entry = statuses
         .iter()
-        .find(|e| e.path() == Some("new.txt"))
+        .find(|e| e.path().ok() == Some("new.txt"))
         .unwrap();
     assert!(entry.status().intersects(git2::Status::INDEX_NEW));
 }
@@ -428,7 +434,10 @@ fn reset_soft_keeps_changes_staged() {
 
     // b.txt should be staged (INDEX_NEW) since we soft-reset past its commit
     let statuses = repo.statuses(None).unwrap();
-    let entry = statuses.iter().find(|e| e.path() == Some("b.txt")).unwrap();
+    let entry = statuses
+        .iter()
+        .find(|e| e.path().ok() == Some("b.txt"))
+        .unwrap();
     assert!(entry.status().intersects(git2::Status::INDEX_NEW));
 }
 
@@ -446,7 +455,10 @@ fn reset_mixed_keeps_changes_unstaged() {
 
     // b.txt should be untracked (WT_NEW) since mixed reset unstages
     let statuses = repo.statuses(None).unwrap();
-    let entry = statuses.iter().find(|e| e.path() == Some("b.txt")).unwrap();
+    let entry = statuses
+        .iter()
+        .find(|e| e.path().ok() == Some("b.txt"))
+        .unwrap();
     assert!(
         entry.status().intersects(git2::Status::WT_NEW),
         "Expected WT_NEW, got {:?}",
@@ -474,7 +486,7 @@ fn reset_hard_discards_all_changes() {
     assert!(!repo.workdir().unwrap().join("b.txt").exists());
 
     let statuses = repo.statuses(None).unwrap();
-    let entry = statuses.iter().find(|e| e.path() == Some("b.txt"));
+    let entry = statuses.iter().find(|e| e.path().ok() == Some("b.txt"));
     assert!(
         entry.is_none(),
         "b.txt should not appear in status after hard reset"

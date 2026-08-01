@@ -199,7 +199,13 @@ pub fn checkout_remote_branch(repo: &Repository, remote_branch: &str) -> Result<
     // resolves correctly instead of failing a hardcoded "origin/" strip.
     let remotes: Vec<String> = repo
         .remotes()
-        .map(|arr| arr.iter().flatten().map(String::from).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Result::ok)
+                .flatten()
+                .map(String::from)
+                .collect()
+        })
         .unwrap_or_default();
     let (_remote, local_name) = crate::git::split_remote_ref(&remotes, remote_branch)
         .context("Invalid remote branch format")?;
@@ -439,7 +445,7 @@ pub fn fast_forward_behind_branches(repo: &Repository) -> FastForwardSummary {
         .head()
         .ok()
         .filter(|h| h.is_branch())
-        .and_then(|h| h.shorthand().map(str::to_string));
+        .and_then(|h| h.shorthand().ok().map(str::to_string));
 
     // Snapshot local branch names first so we don't hold the branches iterator
     // (an immutable repo borrow) across the mutating fast-forwards below.
@@ -1109,7 +1115,7 @@ pub fn restore_files(repo_path: &str, paths: &[String]) -> Result<()> {
 
     for path in paths {
         let is_untracked = statuses.iter().any(|entry| {
-            entry.path() == Some(path)
+            entry.path().ok() == Some(path)
                 && entry
                     .status()
                     .intersects(git2::Status::WT_NEW | git2::Status::INDEX_NEW)
@@ -1757,7 +1763,7 @@ mod tests {
         let merge_commit = repo.repo().find_commit(post_head).unwrap();
         assert_eq!(
             merge_commit.message(),
-            Some("Merge remote-tracking branch 'origin/dev'"),
+            Ok("Merge remote-tracking branch 'origin/dev'"),
             "commit message must follow git's own remote-tracking merge convention"
         );
         assert_eq!(
@@ -1863,7 +1869,7 @@ mod tests {
         let replayed = repo.repo().find_commit(post_head).unwrap();
         assert_eq!(
             replayed.message().map(str::trim),
-            Some(local_commit_msg.as_str()),
+            Ok(local_commit_msg.as_str()),
             "the local commit must be replayed on top, message intact"
         );
         assert_eq!(replayed.parent_count(), 1);
@@ -2042,7 +2048,7 @@ mod tests {
         );
 
         // HEAD is on the new local branch, with the remote-only content present.
-        assert_eq!(repo.head().unwrap().shorthand(), Some("feature"));
+        assert_eq!(repo.head().unwrap().shorthand(), Ok("feature"));
         assert!(local.join("b.txt").exists(), "feature content checked out");
     }
 }

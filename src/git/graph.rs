@@ -1640,14 +1640,14 @@ mod tests {
 
     fn commit_with_parents(n: usize) -> CommitInfo {
         CommitInfo {
-            oid: Oid::zero(),
+            oid: Oid::ZERO_SHA1,
             short_id: "0000000".to_string(),
             author_name: "a".to_string(),
             author_email: "a@b".to_string(),
             timestamp: chrono::Local::now(),
             message: "m".to_string(),
             full_message: "m".to_string(),
-            parent_oids: vec![Oid::zero(); n],
+            parent_oids: vec![Oid::ZERO_SHA1; n],
         }
     }
 

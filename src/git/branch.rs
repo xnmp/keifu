@@ -35,7 +35,7 @@ impl BranchInfo {
                         && repo
                             .head()
                             .ok()
-                            .and_then(|h| h.shorthand().map(|s| s == name))
+                            .and_then(|h| h.shorthand().ok().map(|s| s == name))
                             .unwrap_or(false);
 
                     let upstream_branch = branch.upstream().ok();
