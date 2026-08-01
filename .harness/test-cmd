@@ -1,0 +1,1 @@
+cargo test --test keybindings_test graph_mode_l_pulls -- --exact; test $? -eq 0

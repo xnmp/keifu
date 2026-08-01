@@ -251,6 +251,14 @@ fn graph_mode_branch_navigation() {
 }
 
 #[test]
+fn graph_mode_l_pulls() {
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Char('l'))),
+        Some(Action::Pull)
+    );
+}
+
+#[test]
 fn graph_mode_actions() {
     assert_eq!(
         map_normal_graph(key(KeyCode::Enter)),
