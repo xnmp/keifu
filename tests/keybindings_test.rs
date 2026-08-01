@@ -247,7 +247,7 @@ fn graph_mode_branch_navigation() {
         Some(Action::PrevBranch)
     );
     assert_eq!(map_normal_graph(key(KeyCode::Char('h'))), None);
-    assert_eq!(map_normal_graph(key(KeyCode::Char('l'))), None);
+    assert_eq!(map_normal_graph(key(KeyCode::Char('l'))), Some(Action::Pull));
 }
 
 #[test]
