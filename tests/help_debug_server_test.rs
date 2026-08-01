@@ -90,6 +90,7 @@ fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
         "Ctrl+P / Ctrl+Alt+P / :",
         "Ctrl+, / ,",
         "Ctrl+Shift+F",
+        "l",
         "Filter files",
     ] {
         assert!(screen.contains(expected), "debug dump omitted {expected:?}");
@@ -99,6 +100,14 @@ fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
             .lines()
             .any(|line| line.contains("Ctrl+Shift+F") && line.contains("Filter commits")),
         "debug dump mismatched commit-filter shortcut and description"
+    );
+    assert!(
+        screen.lines().any(|line| {
+            line.split("Pull (fetch + integrate)")
+                .next()
+                .is_some_and(|prefix| prefix.trim_end().ends_with('l'))
+        }),
+        "debug dump mismatched pull shortcut and description"
     );
     assert!(
         screen
