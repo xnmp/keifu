@@ -66,8 +66,19 @@ fn start_app(repo: &Path, port: u16) -> RunningApp {
             pixel_height: 0,
         })
         .unwrap();
-    let mut command = CommandBuilder::new(binary);
-    command.args(["--debug-listen", &format!("127.0.0.1:{port}")]);
+    let address = format!("127.0.0.1:{port}");
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = CommandBuilder::new("cmd.exe");
+        command.args(["/C", binary, "--debug-listen", &address]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = CommandBuilder::new(binary);
+        command.args(["--debug-listen", &address]);
+        command
+    };
     command.cwd(repo);
     let child = pty.slave.spawn_command(command).unwrap();
     drop(pty.slave);
