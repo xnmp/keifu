@@ -13,7 +13,7 @@ use crate::{
     files_pane_state::{section_of, FilesPaneState},
     git::{
         build_graph, extract_hunk_from_working_tree,
-        graph::GraphLayout,
+        graph::{GraphLayout, SquashMergeLine},
         operations::{
             abort_operation, accept_ours, accept_theirs, add_tag, apply_patch_cached,
             apply_patch_cached_reverse, apply_patch_worktree_reverse, checkout_branch,
@@ -1812,23 +1812,16 @@ impl App {
         self.merged.classify.maybe_start(input);
     }
 
-    /// The squash-link edges to feed [`build_graph`]: `(branch_tip, squash_commit)`
+    /// The unique squash-merge lines to feed [`build_graph`]
     /// for each squash-merged branch, but only when the `squash_link_lines` option
     /// is on. Empty (option off) leaves the layout byte-identical. Each branch
     /// name is resolved to its current tip OID; `build_graph` further guards that
     /// both endpoints are loaded before drawing anything (issue #81).
-    pub(crate) fn squash_link_edges(&self) -> Vec<(git2::Oid, git2::Oid)> {
+    pub(crate) fn squash_merge_lines(&self) -> Vec<SquashMergeLine> {
         if !self.config.ui.squash_link_lines {
             return Vec::new();
         }
-        self.merged
-            .squash_targets
-            .iter()
-            .filter_map(|(name, &target)| {
-                let tip = self.branches.iter().find(|b| &b.name == name)?.tip_oid;
-                Some((tip, target))
-            })
-            .collect()
+        SquashMergeLine::from_branch_targets(&self.branches, &self.merged.squash_targets)
     }
 
     /// Recompute the set of base-update ("back-merge") commits (issue #55) from

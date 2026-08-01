@@ -73,6 +73,34 @@ impl SquashMergeLine {
             squash_commit,
         }
     }
+
+    /// Resolve branch-name classifications into unique visual relationships.
+    /// A local ref and its remote-tracking ref can share the same tip and
+    /// squash target; those aliases still describe one line on the graph.
+    pub fn from_branch_targets(
+        branches: &[BranchInfo],
+        targets: &HashMap<String, Oid>,
+    ) -> Vec<Self> {
+        let mut lines: Vec<Self> = targets
+            .iter()
+            .filter_map(|(name, &squash_commit)| {
+                let branch_tip = branches.iter().find(|b| &b.name == name)?.tip_oid;
+                Some(Self::new(branch_tip, squash_commit))
+            })
+            .collect();
+        canonicalize_squash_lines(&mut lines);
+        lines
+    }
+}
+
+fn canonicalize_squash_lines(lines: &mut Vec<SquashMergeLine>) {
+    lines.sort_unstable_by(|a, b| {
+        a.branch_tip
+            .as_bytes()
+            .cmp(b.branch_tip.as_bytes())
+            .then_with(|| a.squash_commit.as_bytes().cmp(b.squash_commit.as_bytes()))
+    });
+    lines.dedup();
 }
 
 impl GraphNode {
@@ -199,7 +227,7 @@ fn head_first_parent_line(
 /// count is unavailable (e.g. collapsed untracked directories).
 /// head_commit_oid: The OID of the commit that HEAD points to (for uncommitted
 /// changes and for anchoring HEAD's first-parent line to lane 0)
-/// squash_links: `(branch_tip, squash_commit)` pairs to draw a muted-grey link
+/// squash_lines: endpoint relationships to draw as muted-grey connectors
 /// line between (issue #81). Empty (the option off) leaves the layout
 /// byte-identical to before — the links are a pure post-pass overlay; see
 /// [`inject_squash_links`]. A pair whose endpoints aren't both loaded is skipped.
@@ -210,7 +238,7 @@ pub fn build_graph(
     stashes: &[super::repository::StashInfo],
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
-    squash_links: &[(Oid, Oid)],
+    squash_lines: &[SquashMergeLine],
 ) -> GraphLayout {
     // Map stash oid -> short label like "stash@{0}"
     let stash_oid_labels: HashMap<Oid, String> = stashes
@@ -690,7 +718,7 @@ pub fn build_graph(
     // Overlay squash-merge link lines last, once every row (including the
     // uncommitted node) is in place, so endpoints are resolved against the final
     // row set (issue #81). A no-op when `squash_links` is empty.
-    inject_squash_links(&mut nodes, &mut max_lane, squash_links);
+    inject_squash_links(&mut nodes, &mut max_lane, squash_lines);
 
     GraphLayout { nodes, max_lane }
 }
@@ -876,8 +904,8 @@ fn insert_uncommitted_node(
 /// than the branch tip it landed (it is created at merge time), so the link may
 /// run in either direction between its two rows. This overlay connects the rows
 /// regardless of their order.
-fn inject_squash_links(nodes: &mut [GraphNode], max_lane: &mut usize, links: &[(Oid, Oid)]) {
-    if links.is_empty() {
+fn inject_squash_links(nodes: &mut [GraphNode], max_lane: &mut usize, lines: &[SquashMergeLine]) {
+    if lines.is_empty() {
         return; // option off (or nothing to link) → layout untouched.
     }
     // oid -> row index, for commit-carrying rows only. Row indices are stable —
@@ -888,10 +916,18 @@ fn inject_squash_links(nodes: &mut [GraphNode], max_lane: &mut usize, links: &[(
         .filter_map(|(i, n)| n.commit.as_ref().map(|c| (c.oid, i)))
         .collect();
 
-    for &(tip, target) in links {
+    // Treat the endpoint pair as the identity of a visual line. This final
+    // normalization keeps layout construction idempotent even if a future
+    // caller bypasses `from_branch_targets` and supplies aliases directly.
+    let mut unique_lines = lines.to_vec();
+    canonicalize_squash_lines(&mut unique_lines);
+    for line in unique_lines {
         // Guard: only draw when BOTH endpoints are loaded (e.g. the branch tip is
         // filtered out when merged branches are hidden, or history is truncated).
-        if let (Some(&r1), Some(&r2)) = (oid_row.get(&tip), oid_row.get(&target)) {
+        if let (Some(&r1), Some(&r2)) = (
+            oid_row.get(&line.branch_tip),
+            oid_row.get(&line.squash_commit),
+        ) {
             if r1 != r2 {
                 draw_squash_link(nodes, max_lane, r1, r2);
             }
@@ -2508,7 +2544,15 @@ mod tests {
     fn squash_link_draws_grey_and_preserves_real_cells() {
         let (commits, [s, f1, _t, _z]) = squash_link_fixture();
         let base = build_graph(&commits, &[], &[], &[], None, None, &[]);
-        let linked = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+        let linked = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[SquashMergeLine::new(f1, s)],
+        );
 
         // The link introduces grey cells; the baseline had none.
         assert!(!has_squash_grey(&base));
@@ -2542,7 +2586,15 @@ mod tests {
     #[test]
     fn squash_link_cells_are_never_traced() {
         let (commits, [s, f1, _t, _z]) = squash_link_fixture();
-        let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+        let layout = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[SquashMergeLine::new(f1, s)],
+        );
 
         // Tracing either the feature or the trunk must leave the grey link dim.
         for sel in [f1, s] {
@@ -2606,7 +2658,15 @@ mod tests {
             ci(b, vec![]),  // shared base
         ];
         let base = build_graph(&commits, &[], &[], &[], None, None, &[]);
-        let linked = build_graph(&commits, &[], &[], &[], None, None, &[(f, s)]);
+        let linked = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[SquashMergeLine::new(f, s)],
+        );
 
         let sr = row_of(&linked, s);
         let fr = row_of(&linked, f);
@@ -2680,7 +2740,15 @@ mod tests {
         // detour. When the connector rides an endpoint's own lane, that endpoint
         // is anchored by its dot and carries no separate curve.)
         let (commits, [s, f1, _t, _z]) = squash_link_fixture();
-        let layout = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+        let layout = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[SquashMergeLine::new(f1, s)],
+        );
 
         let sr = row_of(&layout, s);
         let fr = row_of(&layout, f1);
@@ -2707,7 +2775,15 @@ mod tests {
         // Local and remote refs commonly name the same surviving branch tip.
         // Both classifications describe one user-visible squash relationship.
         let (commits, [s, f1, _t, _z]) = squash_link_fixture();
-        let single = build_graph(&commits, &[], &[], &[], None, None, &[(f1, s)]);
+        let single = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[SquashMergeLine::new(f1, s)],
+        );
         let duplicate = build_graph(
             &commits,
             &[],
@@ -2715,7 +2791,7 @@ mod tests {
             &[],
             None,
             None,
-            &[(f1, s), (f1, s)],
+            &[SquashMergeLine::new(f1, s), SquashMergeLine::new(f1, s)],
         );
 
         assert_eq!(
@@ -2723,12 +2799,7 @@ mod tests {
             "repeating one squash relationship must not widen the graph"
         );
         assert_eq!(duplicate.nodes.len(), single.nodes.len());
-        for (row, (actual, expected)) in duplicate
-            .nodes
-            .iter()
-            .zip(&single.nodes)
-            .enumerate()
-        {
+        for (row, (actual, expected)) in duplicate.nodes.iter().zip(&single.nodes).enumerate() {
             assert_eq!(
                 actual.cells, expected.cells,
                 "row {row} must contain exactly the single continuous connector"
@@ -2756,7 +2827,15 @@ mod tests {
         ];
         let unc = Some(Some(1));
         let base = build_graph(&commits, &[], &[], &[], unc, Some(s), &[]);
-        let linked = build_graph(&commits, &[], &[], &[], unc, Some(s), &[(f, s)]);
+        let linked = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            unc,
+            Some(s),
+            &[SquashMergeLine::new(f, s)],
+        );
 
         let sr = row_of(&linked, s);
         let fr = row_of(&linked, f);
@@ -2844,7 +2923,15 @@ mod tests {
         ];
         let unc = Some(Some(1));
         let base = build_graph(&commits, &[], &[], &[], unc, Some(s), &[]);
-        let linked = build_graph(&commits, &[], &[], &[], unc, Some(s), &[(f, s)]);
+        let linked = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            unc,
+            Some(s),
+            &[SquashMergeLine::new(f, s)],
+        );
 
         let sr = row_of(&linked, s);
         let fr = row_of(&linked, f);
@@ -2908,7 +2995,15 @@ mod tests {
         ];
         let unc = Some(Some(1));
         let base = build_graph(&commits, &[], &[], &[], unc, Some(s), &[]);
-        let linked = build_graph(&commits, &[], &[], &[], unc, Some(s), &[(f, s)]);
+        let linked = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            unc,
+            Some(s),
+            &[SquashMergeLine::new(f, s)],
+        );
 
         let sr = row_of(&linked, s);
         let fr = row_of(&linked, f);
@@ -2946,7 +3041,15 @@ mod tests {
         // A link whose target isn't loaded draws nothing (both-endpoints guard).
         let (commits, [_s, f1, _t, _z]) = squash_link_fixture();
         let bogus = oid(200);
-        let missing = build_graph(&commits, &[], &[], &[], None, None, &[(f1, bogus)]);
+        let missing = build_graph(
+            &commits,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &[SquashMergeLine::new(f1, bogus)],
+        );
         assert!(
             !has_squash_grey(&missing),
             "no link is drawn when an endpoint isn't loaded"
