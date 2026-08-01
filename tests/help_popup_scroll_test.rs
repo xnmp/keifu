@@ -58,12 +58,14 @@ fn draw_clamps_help_scroll_after_context_change_and_resize() {
     assert!(app.help_max_scroll < uncommitted_max);
     assert_eq!(app.help_scroll, app.help_max_scroll);
     assert!(screen(&terminal).contains("Ctrl+Q"));
+    let committed_max = app.help_max_scroll;
 
     // A taller terminal further reduces the maximum; draw clamps the old
     // position and still renders the final entry at the new viewport bottom.
+    terminal.backend_mut().resize(60, 80);
     terminal.resize(Rect::new(0, 0, 60, 80)).unwrap();
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    assert!(app.help_max_scroll < uncommitted_max);
+    assert!(app.help_max_scroll < committed_max);
     assert_eq!(app.help_scroll, app.help_max_scroll);
     assert!(screen(&terminal).contains("Ctrl+Q"));
 }
