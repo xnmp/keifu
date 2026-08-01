@@ -2359,6 +2359,33 @@ mod settings_menu_filter_tests {
     }
 
     #[test]
+    fn help_end_action_renders_the_final_entry_in_a_short_viewport() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let (_tmp, mut app) = test_app();
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        app.handle_action(Action::ToggleHelp).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        assert!(app.help_max_scroll > 0, "short help popup must overflow");
+
+        app.handle_action(Action::HelpScrollToBottom).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(60)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("Ctrl+Q") && screen.contains("anywhere)"));
+    }
+
+    #[test]
     fn typing_narrows_selection_to_the_fuzzy_matching_subset() {
         let (_tmp, mut app) = test_app();
         app.open_settings();

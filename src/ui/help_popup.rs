@@ -266,7 +266,16 @@ impl<'a> Widget for HelpPopup<'a> {
                 .end_symbol(None)
                 .track_style(self.theme.scrollbar_track_style())
                 .thumb_style(self.theme.scrollbar_thumb_style())
-                .render(area, buf, &mut state);
+                .render(
+                    Rect::new(
+                        area.x.saturating_add(area.width.saturating_sub(1)),
+                        area.y.saturating_add(1),
+                        1,
+                        area.height.saturating_sub(2),
+                    ),
+                    buf,
+                    &mut state,
+                );
         }
     }
 }
@@ -382,9 +391,13 @@ mod tests {
         HelpPopup::new(false, &theme, content - inner_height).render(area, &mut bottom);
         let text = rendered_text(&bottom);
         assert!(text.contains("Quit (from anywhere)"));
-        assert!(
-            text.contains("?"),
-            "scrollbar should mark overflow on the right edge"
-        );
+        assert_eq!(bottom[(area.width - 1, 0)].symbol(), "╮");
+        assert_eq!(bottom[(area.width - 1, area.height - 1)].symbol(), "╯");
+        let top_thumb = top[(area.width - 1, 1)].symbol().to_owned();
+        let bottom_thumb = bottom[(area.width - 1, area.height - 2)]
+            .symbol()
+            .to_owned();
+        assert_eq!(top_thumb, "█", "overflow draws a scrollbar thumb");
+        assert_eq!(bottom_thumb, "█", "scrollbar remains visible at the end");
     }
 }
