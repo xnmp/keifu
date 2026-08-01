@@ -1,0 +1,1 @@
+cargo test --test security_audit_test || exit 1
