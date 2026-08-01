@@ -150,14 +150,8 @@ impl App {
         // both-endpoints-loaded guard makes the links inert there; in the default
         // dim mode `squash_targets` fills in with the async classifier and a later
         // rebuild draws them.
-        let squash_links: Vec<(git2::Oid, git2::Oid)> = if config.ui.squash_link_lines {
-            squash_targets
-                .iter()
-                .filter_map(|(name, &target)| {
-                    let tip = branches.iter().find(|b| &b.name == name)?.tip_oid;
-                    Some((tip, target))
-                })
-                .collect()
+        let squash_lines = if config.ui.squash_link_lines {
+            SquashMergeLine::from_branch_targets(&branches, &squash_targets)
         } else {
             Vec::new()
         };
@@ -168,7 +162,7 @@ impl App {
             &stashes,
             uncommitted_count,
             head_commit_oid,
-            &squash_links,
+            &squash_lines,
         );
 
         phase!("build_graph");

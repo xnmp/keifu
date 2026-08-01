@@ -227,6 +227,15 @@ the dot it belongs to. Because `transition_curves` is pure over the cells,
 drawing stays a deterministic function of the `RowSpec`, so the protocol cache
 stays correct. Unicode mode is unchanged (box glyphs can't curve).
 
+**Squash connector identity follows endpoints (2026-08-01, #156).**
+`SquashMergeLine` models the visual relationship as `(branch_tip,
+squash_commit)`, independent of the ref name that discovered it. Local and
+remote-tracking refs can resolve to the same endpoint pair, so
+`from_branch_targets` canonicalizes and deduplicates those aliases before graph
+layout. `inject_squash_links` repeats that normalization at its boundary to
+keep direct callers idempotent: supplying the same relationship twice produces
+the same cells, edge metadata, and graph width as supplying it once.
+
 **Squash link joins the uncommitted band via `TeeDown` (2026-07-22, #115).**
 When HEAD sits on a squash-merge target with uncommitted changes, two layout
 overlays land on the same row: the uncommitted node's horizontal landing band

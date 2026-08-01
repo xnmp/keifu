@@ -3,7 +3,7 @@
 //! Usage: KEIFU_UNCOMMITTED=<n> cargo run --example render_rows -- <repo> <start> <end> <out.png>
 
 use image::RgbaImage;
-use keifu::git::graph::{build_graph, CellType, GraphNode};
+use keifu::git::graph::{build_graph, CellType, GraphNode, SquashMergeLine};
 use keifu::git::GitRepository;
 use keifu::ui::graph_pixels::{build_row_spec, rasterize_row, NeighborRow};
 use keifu::ui::theme::Theme;
@@ -36,7 +36,7 @@ fn main() {
         .and_then(|v| v.parse::<usize>().ok())
         .map(Some);
     // Real squash links, like the app's dim-mode classifier produces.
-    let squash_links: Vec<(git2::Oid, git2::Oid)> = keifu::git::merged::base_branch(&branches)
+    let squash_lines = keifu::git::merged::base_branch(&branches)
         .map(|base| {
             let (_, targets) = keifu::git::merged::classify_merged_branches_with_targets(
                 repo.repo(),
@@ -45,16 +45,10 @@ fn main() {
                 &base.name.clone(),
                 &Default::default(),
             );
-            targets
-                .iter()
-                .filter_map(|(name, &target)| {
-                    let tip = branches.iter().find(|b| &b.name == name)?.tip_oid;
-                    Some((tip, target))
-                })
-                .collect()
+            SquashMergeLine::from_branch_targets(&branches, &targets)
         })
         .unwrap_or_default();
-    eprintln!("squash links: {}", squash_links.len());
+    eprintln!("squash links: {}", squash_lines.len());
     let layout = build_graph(
         &commits,
         &branches,
@@ -62,7 +56,7 @@ fn main() {
         &stashes,
         uncommitted,
         head_oid,
-        &squash_links,
+        &squash_lines,
     );
 
     // Fold connectors into the following commit row, like `fold_rows`.

@@ -24,6 +24,7 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Merged-lane dimming yields to the selected trace.** A selected merged branch must keep its complete path, including its merge arc into the trunk, visible in both Unicode and pixel graph renderers; unrelated merged work remains dimmed.
 - **Settings go through the pure registry** in `src/settings.rs` (no `App` dependency). State-only settings persist via `UiState` to `state.toml`; config-file settings rewrite only touched keys through `toml_edit` so user comments survive.
 - **The unicode and pixel dim/render paths are deliberately parallel implementations** (see comments in `ui/graph_view/`). Do not unify them.
+- **Squash-merge connector identity is its endpoint pair, not a branch name.** Local and remote refs can alias the same tip and target; resolve them through `SquashMergeLine::from_branch_targets` so the graph draws one connector.
 - **Clipboard uses shell tools with an OSC 52 fallback** — no clipboard crate (avoids openssl-sys build breakage).
 - **The full-screen issue list owns mouse hit-testing.** Its content rect must be recorded as the active popup so list-row clicks use the widget's window offset rather than assuming row zero. Issue Detail has no clickable rows.
 
