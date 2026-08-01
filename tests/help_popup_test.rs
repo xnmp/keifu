@@ -8,7 +8,7 @@ fn rendered_help(is_uncommitted: bool) -> String {
     terminal
         .draw(|frame| {
             frame.render_widget(
-                HelpPopup::new(is_uncommitted, &theme),
+                HelpPopup::new(is_uncommitted, &theme, 0),
                 Rect::new(0, 0, 120, 100),
             );
         })
