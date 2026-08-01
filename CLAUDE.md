@@ -25,5 +25,6 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Settings go through the pure registry** in `src/settings.rs` (no `App` dependency). State-only settings persist via `UiState` to `state.toml`; config-file settings rewrite only touched keys through `toml_edit` so user comments survive.
 - **The unicode and pixel dim/render paths are deliberately parallel implementations** (see comments in `ui/graph_view/`). Do not unify them.
 - **Clipboard uses shell tools with an OSC 52 fallback** — no clipboard crate (avoids openssl-sys build breakage).
+- **Issue views own mouse hit-testing while full-screen.** The issue list and detail render as full-screen content, so their content rect must still be recorded as the active popup; list-row clicks then use the widget's window offset rather than assuming row zero.
 
 Fix root causes, not symptoms. Avoid band-aids like stopPropagation, setTimeout, or flags to mask bugs.
