@@ -101,6 +101,10 @@ routes to Pull rather than graph navigation:
 ```bash
 set -euo pipefail
 
+cargo build
+keifu_bin="$PWD/target/debug/keifu"
+test -x "$keifu_bin"
+
 tmp_dir=$(mktemp -d /tmp/keifu-debug.XXXXXX)
 git init -q -b main "$tmp_dir/seed"
 git -C "$tmp_dir/seed" config user.name Harness
@@ -110,7 +114,7 @@ git clone -q --bare "$tmp_dir/seed" "$tmp_dir/remote.git"
 git clone -q "$tmp_dir/remote.git" "$tmp_dir/clone"
 
 (cd "$tmp_dir/clone" && nohup script -qec \
-  "keifu --debug-listen 127.0.0.1:7169" /tmp/keifu-debug.session \
+  "$keifu_bin --debug-listen 127.0.0.1:7169" /tmp/keifu-debug.session \
   >/tmp/keifu-debug.pty 2>&1 &)
 for _ in $(seq 30); do
   nc -z 127.0.0.1 7169 2>/dev/null && break
