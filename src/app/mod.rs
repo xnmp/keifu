@@ -1035,6 +1035,12 @@ pub struct App {
     /// preserve the historical display; this is a session-local view choice.
     pub commit_detail_word_wrap: bool,
 
+    /// Help-sheet viewport state, measured from the current popup geometry on
+    /// every draw so resize and context changes cannot leave it out of range.
+    pub help_scroll: usize,
+    pub help_max_scroll: usize,
+    pub help_viewport_rows: usize,
+
     // Commit filter (global Ctrl+Shift+F, displayed in the graph panel)
     pub commit_filter: String,
     pub commit_filter_active: bool,
@@ -2263,8 +2269,24 @@ impl App {
     }
 
     fn handle_help_action(&mut self, action: Action) {
-        if matches!(action, Action::ToggleHelp | Action::Quit | Action::Cancel) {
-            self.mode = AppMode::Normal;
+        match action {
+            Action::ToggleHelp | Action::Quit | Action::Cancel => self.mode = AppMode::Normal,
+            Action::HelpScrollUp => self.help_scroll = self.help_scroll.saturating_sub(1),
+            Action::HelpScrollDown => {
+                self.help_scroll = (self.help_scroll + 1).min(self.help_max_scroll)
+            }
+            Action::HelpPageUp => {
+                self.help_scroll = self
+                    .help_scroll
+                    .saturating_sub(self.help_viewport_rows.max(1))
+            }
+            Action::HelpPageDown => {
+                self.help_scroll =
+                    (self.help_scroll + self.help_viewport_rows.max(1)).min(self.help_max_scroll)
+            }
+            Action::HelpScrollToTop => self.help_scroll = 0,
+            Action::HelpScrollToBottom => self.help_scroll = self.help_max_scroll,
+            _ => {}
         }
     }
 }
@@ -2304,6 +2326,36 @@ mod settings_menu_filter_tests {
             AppMode::Settings { selected, .. } => *selected,
             other => panic!("expected AppMode::Settings, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn help_actions_reach_the_end_and_clamp_after_viewport_changes() {
+        let (_tmp, mut app) = test_app();
+        app.mode = AppMode::Help;
+        app.help_max_scroll = 40;
+        app.help_viewport_rows = 10;
+
+        app.handle_action(Action::HelpPageDown).unwrap();
+        assert_eq!(app.help_scroll, 10);
+        app.handle_action(Action::HelpScrollToBottom).unwrap();
+        assert_eq!(app.help_scroll, 40);
+
+        // The draw pass applies this same clamp after a resize or a different
+        // context shortens the sheet; subsequent inputs stay in range.
+        app.help_max_scroll = 3;
+        app.help_scroll = app.help_scroll.min(app.help_max_scroll);
+        app.handle_action(Action::HelpScrollDown).unwrap();
+        assert_eq!(app.help_scroll, 3);
+        app.handle_action(Action::HelpPageUp).unwrap();
+        assert_eq!(app.help_scroll, 0);
+
+        app.handle_action(Action::MouseScroll {
+            col: 0,
+            row: 0,
+            down: true,
+        })
+        .unwrap();
+        assert_eq!(app.help_scroll, 1, "wheel scrolling uses the help action");
     }
 
     #[test]

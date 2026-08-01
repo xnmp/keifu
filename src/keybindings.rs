@@ -989,8 +989,16 @@ fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_help_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => Some(Action::ToggleHelp),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) => {
+            Some(Action::ToggleHelp)
+        }
+        (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => Some(Action::HelpScrollUp),
+        (KeyModifiers::NONE, KeyCode::Down | KeyCode::Char('j')) => Some(Action::HelpScrollDown),
+        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::HelpPageUp),
+        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::HelpPageDown),
+        (KeyModifiers::NONE, KeyCode::Home) => Some(Action::HelpScrollToTop),
+        (KeyModifiers::NONE, KeyCode::End) => Some(Action::HelpScrollToBottom),
         _ => None,
     }
 }
