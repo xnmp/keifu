@@ -1,3 +1,5 @@
+#![cfg(not(windows))]
+
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
