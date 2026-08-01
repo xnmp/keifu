@@ -396,7 +396,7 @@ impl App {
         self.all_commits_loaded = self.commits.len() < self.commit_load_limit;
         let tags = self.repo.get_tags();
         let head_commit_oid = self.repo.head_oid();
-        let squash_links = self.squash_link_edges();
+        let squash_lines = self.squash_merge_lines();
         self.graph_layout = build_graph(
             &self.commits,
             &visible_branches,
@@ -404,7 +404,7 @@ impl App {
             &stashes,
             uncommitted_count,
             head_commit_oid,
-            &squash_links,
+            &squash_lines,
         );
         // Invalidate the pixel-graph spec cache: the layout changed.
         self.graph_generation = self.graph_generation.wrapping_add(1);
