@@ -97,3 +97,4 @@ panic = "abort"
 # release builds. tempfile itself comes in via the enabled feature.
 keifu = { path = ".", features = ["test-support"] }
 filetime = "0.2"
+portable-pty = "0.9"
