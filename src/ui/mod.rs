@@ -944,7 +944,13 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
     }
 
     // Centered overlay on top of the backdrop.
-    let mut rendered_popup = None;
+    // Issue list/detail fill the content region rather than using a centered
+    // overlay, but mouse routing still treats them as popups so their rows can
+    // receive clicks instead of falling through to the graph behind them.
+    let mut rendered_popup = match app.mode {
+        AppMode::IssueList | AppMode::IssueDetail => Some(content),
+        _ => None,
+    };
     match &app.mode {
         AppMode::IssueCompose { purpose } => {
             let popup_area = centered_rect(64, 60, area);
