@@ -381,8 +381,8 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
-        // Pull / push pairing: lowercase pull, Shift+P push.
-        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Pull),
+        // Pull / push pairing: lowercase l pulls, Shift+P pushes.
+        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::Pull),
         (KeyModifiers::SHIFT, KeyCode::Char('P')) => Some(Action::Push),
 
         // Space opens file diff for quick access
@@ -989,8 +989,16 @@ fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
 }
 
 fn map_help_mode(key: KeyEvent) -> Option<Action> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => Some(Action::ToggleHelp),
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) => {
+            Some(Action::ToggleHelp)
+        }
+        (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => Some(Action::HelpScrollUp),
+        (KeyModifiers::NONE, KeyCode::Down | KeyCode::Char('j')) => Some(Action::HelpScrollDown),
+        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::HelpPageUp),
+        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::HelpPageDown),
+        (KeyModifiers::NONE, KeyCode::Home) => Some(Action::HelpScrollToTop),
+        (KeyModifiers::NONE, KeyCode::End) => Some(Action::HelpScrollToBottom),
         _ => None,
     }
 }
@@ -1185,13 +1193,40 @@ mod tests {
     }
 
     #[test]
+    fn help_mode_maps_keyboard_scrolling_without_consuming_close_keys() {
+        let help = AppMode::Help;
+        let map = |code| {
+            map_key_to_action(
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &help,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false,
+            )
+        };
+
+        assert_eq!(map(KeyCode::Up), Some(Action::HelpScrollUp));
+        assert_eq!(map(KeyCode::Char('k')), Some(Action::HelpScrollUp));
+        assert_eq!(map(KeyCode::Down), Some(Action::HelpScrollDown));
+        assert_eq!(map(KeyCode::Char('j')), Some(Action::HelpScrollDown));
+        assert_eq!(map(KeyCode::PageUp), Some(Action::HelpPageUp));
+        assert_eq!(map(KeyCode::PageDown), Some(Action::HelpPageDown));
+        assert_eq!(map(KeyCode::Home), Some(Action::HelpScrollToTop));
+        assert_eq!(map(KeyCode::End), Some(Action::HelpScrollToBottom));
+        assert_eq!(map(KeyCode::Esc), Some(Action::ToggleHelp));
+        assert_eq!(map(KeyCode::Char('q')), Some(Action::ToggleHelp));
+        assert_eq!(map(KeyCode::Char('?')), Some(Action::ToggleHelp));
+    }
+
+    #[test]
     fn release_events_produce_no_action() {
         // With keyboard enhancement on, the terminal echoes a Release for every
-        // key. It must not re-fire the binding (here: 'p' → Pull in the graph).
+        // key. It must not re-fire the binding (here: 'l' → Pull in the graph).
         let press =
-            KeyEvent::new_with_kind(KeyCode::Char('p'), KeyModifiers::NONE, KeyEventKind::Press);
+            KeyEvent::new_with_kind(KeyCode::Char('l'), KeyModifiers::NONE, KeyEventKind::Press);
         let release = KeyEvent::new_with_kind(
-            KeyCode::Char('p'),
+            KeyCode::Char('l'),
             KeyModifiers::NONE,
             KeyEventKind::Release,
         );

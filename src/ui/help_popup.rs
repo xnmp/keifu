@@ -5,7 +5,10 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph, Widget},
+    widgets::{
+        Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
+        Wrap,
+    },
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -192,59 +195,106 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
 pub struct HelpPopup<'a> {
     pub is_uncommitted: bool,
     pub theme: &'a Theme,
+    pub scroll: usize,
 }
 
 impl<'a> HelpPopup<'a> {
-    pub fn new(is_uncommitted: bool, theme: &'a Theme) -> Self {
+    pub fn new(is_uncommitted: bool, theme: &'a Theme, scroll: usize) -> Self {
         Self {
             is_uncommitted,
             theme,
+            scroll,
         }
     }
+
+    /// Number of rendered rows after the sheet has wrapped to `inner_width`.
+    /// The draw pass uses this same measurement to clamp scrolling state.
+    pub fn content_height(is_uncommitted: bool, theme: &Theme, inner_width: u16) -> usize {
+        Paragraph::new(lines(is_uncommitted, theme))
+            .wrap(Wrap { trim: false })
+            .line_count(inner_width)
+    }
+}
+
+fn lines(is_uncommitted: bool, theme: &Theme) -> Vec<Line<'static>> {
+    let key_style = Style::default()
+        .fg(theme.help_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme.text_primary);
+    let header_style = Style::default()
+        .fg(theme.help_header)
+        .add_modifier(Modifier::BOLD);
+    let entries = entries(is_uncommitted);
+    let kw = key_column_width(&entries);
+    entries
+        .iter()
+        .map(|entry| match entry {
+            HelpEntry::Header(text) => Line::from(Span::styled(*text, header_style)),
+            HelpEntry::Row(key, desc) => Line::from(vec![
+                Span::styled(format!(" {key:<kw$}"), key_style),
+                Span::styled(*desc, desc_style),
+            ]),
+            HelpEntry::Blank => Line::from(""),
+        })
+        .collect()
 }
 
 impl<'a> Widget for HelpPopup<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let key_style = Style::default()
-            .fg(self.theme.help_key)
-            .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(self.theme.text_primary);
-        let header_style = Style::default()
-            .fg(self.theme.help_header)
-            .add_modifier(Modifier::BOLD);
-
-        let entries = entries(self.is_uncommitted);
-        // Fixed key column sized to the longest key, guaranteeing a ≥ KEY_GAP
-        // gap so keys and descriptions never collide (e.g. "Tab / Shift+Tab").
-        let kw = key_column_width(&entries);
-
-        let lines: Vec<Line> = entries
-            .iter()
-            .map(|entry| match entry {
-                HelpEntry::Header(text) => Line::from(Span::styled(*text, header_style)),
-                HelpEntry::Row(key, desc) => Line::from(vec![
-                    // Leading space indents rows under their section header;
-                    // `{:<kw$}` pads the key so descriptions start at a fixed
-                    // column with a guaranteed gap.
-                    Span::styled(format!(" {key:<kw$}"), key_style),
-                    Span::styled(*desc, desc_style),
-                ]),
-                HelpEntry::Blank => Line::from(""),
-            })
-            .collect();
-
         let block = self.theme.popup_block(" Help ");
-        let paragraph = Paragraph::new(lines).block(block);
-
-        Widget::render(paragraph, area, buf);
+        let inner = block.inner(area);
+        block.render(area, buf);
+        if inner.height == 0 || inner.width == 0 {
+            return;
+        }
+        let content_height = Self::content_height(self.is_uncommitted, self.theme, inner.width);
+        let scroll = self
+            .scroll
+            .min(content_height.saturating_sub(inner.height as usize));
+        Paragraph::new(lines(self.is_uncommitted, self.theme))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll.min(u16::MAX as usize) as u16, 0))
+            .render(inner, buf);
+        if content_height > inner.height as usize && area.height > 2 {
+            let mut state = ScrollbarState::new(content_height)
+                .viewport_content_length(inner.height as usize)
+                .position(scroll);
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_style(self.theme.scrollbar_track_style())
+                .thumb_style(self.theme.scrollbar_thumb_style())
+                .render(
+                    Rect::new(
+                        area.x.saturating_add(area.width.saturating_sub(1)),
+                        area.y.saturating_add(1),
+                        1,
+                        area.height.saturating_sub(2),
+                    ),
+                    buf,
+                    &mut state,
+                );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::buffer::Buffer;
+
+    fn rendered_text(buffer: &Buffer) -> String {
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     #[test]
     fn key_column_leaves_a_gap_after_the_longest_key() {
@@ -322,5 +372,32 @@ mod tests {
         assert!(!text.contains("S-Tab"), "abbreviated modifier remained");
         assert!(!text.contains("C-k"), "abbreviated modifier remained");
         assert!(!text.contains("C-j"), "abbreviated modifier remained");
+    }
+
+    #[test]
+    fn short_viewport_reaches_final_help_entries_and_draws_scrollbar() {
+        let theme = Theme::dark();
+        let area = Rect::new(0, 0, 64, 8);
+        let inner_width = area.width.saturating_sub(4);
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let content = HelpPopup::content_height(false, &theme, inner_width);
+        assert!(content > inner_height, "fixture must overflow the popup");
+
+        let mut top = Buffer::empty(area);
+        HelpPopup::new(false, &theme, 0).render(area, &mut top);
+        assert!(!rendered_text(&top).contains("Quit (from anywhere)"));
+
+        let mut bottom = Buffer::empty(area);
+        HelpPopup::new(false, &theme, content - inner_height).render(area, &mut bottom);
+        let text = rendered_text(&bottom);
+        assert!(text.contains("Quit (from anywhere)"));
+        assert_eq!(bottom[(area.width - 1, 0)].symbol(), "╮");
+        assert_eq!(bottom[(area.width - 1, area.height - 1)].symbol(), "╯");
+        let top_thumb = top[(area.width - 1, 1)].symbol().to_owned();
+        let bottom_thumb = bottom[(area.width - 1, area.height - 2)]
+            .symbol()
+            .to_owned();
+        assert_eq!(top_thumb, "█", "overflow draws a scrollbar thumb");
+        assert_eq!(bottom_thumb, "█", "scrollbar remains visible at the end");
     }
 }

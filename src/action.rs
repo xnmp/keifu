@@ -207,6 +207,18 @@ pub enum Action {
 
     // UI
     ToggleHelp,
+    /// Scroll the help sheet by one rendered row.
+    HelpScrollUp,
+    /// Scroll the help sheet by one rendered row.
+    HelpScrollDown,
+    /// Scroll the help sheet by one viewport.
+    HelpPageUp,
+    /// Scroll the help sheet by one viewport.
+    HelpPageDown,
+    /// Move the help sheet to its first rendered row.
+    HelpScrollToTop,
+    /// Move the help sheet to its final rendered row.
+    HelpScrollToBottom,
     Search,
     Refresh,
     /// F5: fetch all remotes + force PR refetch + refresh (full update).

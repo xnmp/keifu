@@ -370,7 +370,13 @@ impl App {
 
         // Scrollable popups: route the wheel to their up/down.
         if self.mode_scrolls_with_wheel() {
-            let a = if down {
+            let a = if matches!(self.mode, AppMode::Help) {
+                if down {
+                    Action::HelpScrollDown
+                } else {
+                    Action::HelpScrollUp
+                }
+            } else if down {
                 Action::MoveDown
             } else {
                 Action::MoveUp
@@ -409,7 +415,8 @@ impl App {
     fn mode_scrolls_with_wheel(&self) -> bool {
         matches!(
             self.mode,
-            AppMode::CiChecks
+            AppMode::Help
+                | AppMode::CiChecks
                 | AppMode::PrThread
                 | AppMode::CommitMenu { .. }
                 | AppMode::MetadataMenu { .. }

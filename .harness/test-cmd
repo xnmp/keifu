@@ -1,0 +1,1 @@
+cargo test --test issue_158_keybinding_test graph_mode_l_pulls -- --exact; test $? -eq 0

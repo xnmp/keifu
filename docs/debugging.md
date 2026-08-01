@@ -89,6 +89,71 @@ printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' | nc -q1 127.0.0.1 7167  # Ctrl+Q 
 once nothing is pending to dismiss. Quitting cleanly (not a killed process) is
 what flushes the exit-time `perf summary` to the log.
 
+### Verifying a graph action in the live app
+
+For a graph-panel keybinding that starts an asynchronous operation, query the
+state before and immediately after injecting the key. The focused panel and
+selection should remain unchanged, while the operation-specific state flag
+should become active. Use a clean local fixture with a configured upstream so
+the completion result is deterministic. This verifies that lowercase `l`
+routes to Pull rather than graph navigation:
+
+```bash
+set -euo pipefail
+
+cargo build
+keifu_bin="$PWD/target/debug/keifu"
+test -x "$keifu_bin"
+
+tmp_dir=$(mktemp -d /tmp/keifu-debug.XXXXXX)
+git init -q -b main "$tmp_dir/seed"
+git -C "$tmp_dir/seed" config user.name Harness
+git -C "$tmp_dir/seed" config user.email harness@example.com
+git -C "$tmp_dir/seed" commit --allow-empty -qm initial
+git clone -q --bare "$tmp_dir/seed" "$tmp_dir/remote.git"
+git clone -q "$tmp_dir/remote.git" "$tmp_dir/clone"
+
+(cd "$tmp_dir/clone" && nohup script -qec \
+  "$keifu_bin --debug-listen 127.0.0.1:7169" /tmp/keifu-debug.session \
+  >/tmp/keifu-debug.pty 2>&1 &)
+for _ in $(seq 30); do
+  nc -z 127.0.0.1 7169 2>/dev/null && break
+  sleep 1
+done
+nc -z 127.0.0.1 7169
+
+before=$(printf '%s\n' '{"cmd":"state"}' | nc -q1 127.0.0.1 7169)
+immediate=$(printf '%s\n' '{"cmd":"keys","keys":"l"}' '{"cmd":"state"}' \
+  | nc -q1 127.0.0.1 7169 | tail -n 1)
+before_index=$(jq -r '.selected_index' <<<"$before")
+after_index=$(jq -r '.selected_index' <<<"$immediate")
+jq -e '(.mode == "normal" and .focused_panel == "graph")' <<<"$before" >/dev/null
+jq -e '(.mode == "normal" and .focused_panel == "graph")' <<<"$immediate" >/dev/null
+test "$before_index" = "$after_index"
+# A very fast local pull may already be complete in the immediate response;
+# the final state and rendered result below are the completion assertion.
+immediate_started=$(jq -r '.is_pulling' <<<"$immediate")
+
+for _ in $(seq 30); do
+  settled=$(printf '%s\n' '{"cmd":"state"}' | nc -q1 127.0.0.1 7169)
+  jq -e '.is_pulling == false' <<<"$settled" >/dev/null && break
+  sleep 1
+done
+jq -e '.is_pulling == false' <<<"$settled" >/dev/null
+screen=$(printf '%s\n' '{"cmd":"dump","width":120,"height":35}' \
+  | nc -q1 127.0.0.1 7169 | jq -r '.screen')
+grep -Fq 'Pulled' <<<"$screen"
+printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' \
+  | nc -q1 127.0.0.1 7169 >/dev/null
+rm -rf "$tmp_dir"
+```
+
+The assertions prove startup readiness, Normal + Graph focus before and after
+the key, unchanged selection, completion (`is_pulling == false`), and the
+observable successful Pull result (`Pulled` in the rendered screen). The
+immediate response also records whether the async operation was still active
+(`is_pulling == true`) or completed within the request round-trip.
+
 ## Pixel-graph debugging (headless PNG rendering)
 
 The debug server cannot exercise graphics-protocol output. To reproduce
