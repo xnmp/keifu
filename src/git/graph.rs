@@ -56,6 +56,25 @@ pub type CellEdge = (Oid, Oid);
 /// [`GraphNode::cell_oids`].
 pub type CellOids = (Option<CellEdge>, Option<CellEdge>);
 
+/// A visual connector between a squash-merged branch tip and the commit that
+/// landed it. Branch names are deliberately absent: local and remote refs may
+/// name the same relationship, while the graph should draw that relationship
+/// only once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SquashMergeLine {
+    pub branch_tip: Oid,
+    pub squash_commit: Oid,
+}
+
+impl SquashMergeLine {
+    pub fn new(branch_tip: Oid, squash_commit: Oid) -> Self {
+        Self {
+            branch_tip,
+            squash_commit,
+        }
+    }
+}
+
 impl GraphNode {
     /// A merge commit (2+ parents). Stash commits are excluded — their extra
     /// parents are truncated to one at load time, so they never count as merges.
