@@ -2,3 +2,6 @@
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# harness-local control files — never repo state
+.harness/
