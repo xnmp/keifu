@@ -2,11 +2,12 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::Command,
     thread,
     time::{Duration, Instant},
 };
 
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -41,19 +42,45 @@ fn reserve_port() -> u16 {
         .port()
 }
 
-fn start_app(repo: &Path, port: u16) -> Child {
+struct RunningApp {
+    child: Box<dyn Child + Send + Sync>,
+    _master: Box<dyn MasterPty + Send>,
+    reader_thread: thread::JoinHandle<()>,
+}
+
+impl RunningApp {
+    fn wait(mut self) {
+        self.child.wait().unwrap();
+        drop(self._master);
+        self.reader_thread.join().unwrap();
+    }
+}
+
+fn start_app(repo: &Path, port: u16) -> RunningApp {
     let binary = env!("CARGO_BIN_EXE_keifu");
-    let command = format!(
-        "'{}' --debug-listen 127.0.0.1:{port}",
-        binary.replace('\'', "'\\''")
-    );
-    Command::new("script")
-        .args(["-qec", &command, "/dev/null"])
-        .current_dir(repo)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap()
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: 300,
+            cols: 140,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(binary);
+    command.args(["--debug-listen", &format!("127.0.0.1:{port}")]);
+    command.cwd(repo);
+    let child = pty.slave.spawn_command(command).unwrap();
+    drop(pty.slave);
+    let mut reader = pty.master.try_clone_reader().unwrap();
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0; 8192];
+        while matches!(reader.read(&mut buffer), Ok(n) if n > 0) {}
+    });
+    RunningApp {
+        child,
+        _master: pty.master,
+        reader_thread,
+    }
 }
 
 fn request(port: u16, body: &str) -> Value {
@@ -77,7 +104,7 @@ fn request(port: u16, body: &str) -> Value {
 
 fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
     let port = reserve_port();
-    let mut app = start_app(repo, port);
+    let app = start_app(repo, port);
     let key_sequence = if with_uncommitted_file {
         "<home> ?"
     } else {
@@ -88,7 +115,7 @@ fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
         &format!(r#"{{"cmd":"keys","keys":"{key_sequence}"}}"#),
     );
     assert_eq!(keys["ok"], true);
-    let dump = request(port, r#"{"cmd":"dump","width":140,"height":300}"#);
+    let dump = request(port, r#"{"cmd":"dump","width":140,"height":160}"#);
     assert_eq!(dump["ok"], true);
     let screen = dump["screen"].as_str().unwrap().to_owned();
 
@@ -135,7 +162,7 @@ fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
 
     let quit = request(port, r#"{"cmd":"keys","keys":"<c-q>"}"#);
     assert_eq!(quit["ok"], true);
-    app.wait().unwrap();
+    app.wait();
     screen
 }
 
