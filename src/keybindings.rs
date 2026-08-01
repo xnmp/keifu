@@ -990,7 +990,7 @@ fn map_branch_filter_mode(key: KeyEvent) -> Option<Action> {
 
 fn map_help_mode(key: KeyEvent) -> Option<Action> {
     match (key.modifiers, key.code) {
-        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) => {
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('q')) | (_, KeyCode::Char('?')) => {
             Some(Action::ToggleHelp)
         }
         (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => Some(Action::HelpScrollUp),
@@ -1217,6 +1217,17 @@ mod tests {
         assert_eq!(map(KeyCode::Esc), Some(Action::ToggleHelp));
         assert_eq!(map(KeyCode::Char('q')), Some(Action::ToggleHelp));
         assert_eq!(map(KeyCode::Char('?')), Some(Action::ToggleHelp));
+        assert_eq!(
+            map_key_to_action(
+                KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+                &help,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false,
+            ),
+            Some(Action::ToggleHelp)
+        );
     }
 
     #[test]
