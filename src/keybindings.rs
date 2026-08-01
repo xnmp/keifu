@@ -381,8 +381,8 @@ fn map_graph_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::DeleteBranch),
         (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Fetch),
-        // Pull / push pairing: lowercase pull, Shift+P push.
-        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Pull),
+        // Pull / push pairing: lowercase l pulls, Shift+P pushes.
+        (KeyModifiers::NONE, KeyCode::Char('l')) => Some(Action::Pull),
         (KeyModifiers::SHIFT, KeyCode::Char('P')) => Some(Action::Push),
 
         // Space opens file diff for quick access
@@ -1222,11 +1222,11 @@ mod tests {
     #[test]
     fn release_events_produce_no_action() {
         // With keyboard enhancement on, the terminal echoes a Release for every
-        // key. It must not re-fire the binding (here: 'p' → Pull in the graph).
+        // key. It must not re-fire the binding (here: 'l' → Pull in the graph).
         let press =
-            KeyEvent::new_with_kind(KeyCode::Char('p'), KeyModifiers::NONE, KeyEventKind::Press);
+            KeyEvent::new_with_kind(KeyCode::Char('l'), KeyModifiers::NONE, KeyEventKind::Press);
         let release = KeyEvent::new_with_kind(
-            KeyCode::Char('p'),
+            KeyCode::Char('l'),
             KeyModifiers::NONE,
             KeyEventKind::Release,
         );
