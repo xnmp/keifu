@@ -65,7 +65,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("b", "Create new branch"),
         Row("d", "Delete branch"),
         Row("f", "Fetch from remote"),
-        Row("p", "Pull (fetch + integrate)"),
+        Row("l", "Pull (fetch + integrate)"),
         Row("Shift+P", "Push current branch (publishes if no upstream)"),
         Row(
             "Shift+B",

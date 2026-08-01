@@ -40,12 +40,16 @@ fn help_popup_displays_current_global_and_filter_shortcuts() {
     }
 
     for (key, description) in [
+        ("l", "Pull (fetch + integrate)"),
         ("Ctrl+Shift+F", "Filter commits (message/author/hash)"),
         ("/", "Filter files"),
     ] {
         assert!(
-            help.lines()
-                .any(|line| line.contains(key) && line.contains(description)),
+            help.lines().any(|line| {
+                line.split(description)
+                    .next()
+                    .is_some_and(|prefix| prefix.trim_end().ends_with(key))
+            }),
             "help popup mismatched {key:?} and {description:?}"
         );
     }
