@@ -1,1 +1,1 @@
-cargo test --test issue_158_keybinding_test graph_mode_l_pulls -- --exact; test $? -eq 0
+cargo test --test issue_158_keybinding_test graph_mode_l_pulls -- --exact && cargo test --test help_popup_test -- --nocapture; test $? -eq 0
