@@ -1,6 +1,7 @@
 use std::process::Command;
 
 #[test]
+#[ignore = "requires cargo-audit; run through the dedicated audit test command"]
 fn resolved_dependencies_have_no_reported_security_advisories() {
     let output = Command::new("cargo")
         .args(["audit", "--json"])
