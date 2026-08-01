@@ -1185,6 +1185,33 @@ mod tests {
     }
 
     #[test]
+    fn help_mode_maps_keyboard_scrolling_without_consuming_close_keys() {
+        let help = AppMode::Help;
+        let map = |code| {
+            map_key_to_action(
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &help,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false,
+            )
+        };
+
+        assert_eq!(map(KeyCode::Up), Some(Action::HelpScrollUp));
+        assert_eq!(map(KeyCode::Char('k')), Some(Action::HelpScrollUp));
+        assert_eq!(map(KeyCode::Down), Some(Action::HelpScrollDown));
+        assert_eq!(map(KeyCode::Char('j')), Some(Action::HelpScrollDown));
+        assert_eq!(map(KeyCode::PageUp), Some(Action::HelpPageUp));
+        assert_eq!(map(KeyCode::PageDown), Some(Action::HelpPageDown));
+        assert_eq!(map(KeyCode::Home), Some(Action::HelpScrollToTop));
+        assert_eq!(map(KeyCode::End), Some(Action::HelpScrollToBottom));
+        assert_eq!(map(KeyCode::Esc), Some(Action::ToggleHelp));
+        assert_eq!(map(KeyCode::Char('q')), Some(Action::ToggleHelp));
+        assert_eq!(map(KeyCode::Char('?')), Some(Action::ToggleHelp));
+    }
+
+    #[test]
     fn release_events_produce_no_action() {
         // With keyboard enhancement on, the terminal echoes a Release for every
         // key. It must not re-fire the binding (here: 'p' → Pull in the graph).
