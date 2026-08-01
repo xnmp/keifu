@@ -25,5 +25,6 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Settings go through the pure registry** in `src/settings.rs` (no `App` dependency). State-only settings persist via `UiState` to `state.toml`; config-file settings rewrite only touched keys through `toml_edit` so user comments survive.
 - **The unicode and pixel dim/render paths are deliberately parallel implementations** (see comments in `ui/graph_view/`). Do not unify them.
 - **Clipboard uses shell tools with an OSC 52 fallback** — no clipboard crate (avoids openssl-sys build breakage).
+- **git2 string accessors are fallible.** On git2 0.21+, reference names, remote URLs, status paths, and `StringArray` entries validate UTF-8 at the boundary; preserve the existing graceful `Result`/`Option` handling rather than assuming UTF-8.
 
 Fix root causes, not symptoms. Avoid band-aids like stopPropagation, setTimeout, or flags to mask bugs.
