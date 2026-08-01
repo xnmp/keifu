@@ -10,6 +10,12 @@ readme = "README.md"
 keywords = ["git", "tui", "cli", "graph", "visualization"]
 categories = ["command-line-utilities", "development-tools"]
 
+[[test]]
+# The harness recognizes `.test.` names as regression tests. An explicit target
+# keeps the Rust crate name valid while preserving that required filename.
+name = "mouse_popup_regression"
+path = "tests/mouse_popup_regression.test.rs"
+
 [dependencies]
 # TUI
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
