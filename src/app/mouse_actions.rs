@@ -266,7 +266,8 @@ impl App {
 
     /// Map a click to the logical row displayed at that point. Issue list and
     /// label picker rows are windowed around their selection, so their visible
-    /// top row is not necessarily logical row zero.
+    /// top row is not necessarily logical row zero. The row areas deliberately
+    /// exclude the issue-list header and label-picker help footer.
     fn popup_row_index(&self, inner: Rect, col: u16, row: u16) -> Option<usize> {
         match &self.mode {
             AppMode::IssueList => {
