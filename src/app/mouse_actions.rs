@@ -241,19 +241,61 @@ impl App {
             let _ = self.handle_action(Action::ToggleIssueClipboardImage);
             return;
         }
-        let Some(idx) = list_row_index(inner, 0, col, row) else {
-            return;
-        };
         // Only some popups expose click-selectable list rows; others (editors,
         // scroll views) swallow the click without acting.
         let Some(count) = self.popup_row_count() else {
+            return;
+        };
+        let Some(idx) = self.popup_row_index(inner, col, row) else {
             return;
         };
         if idx >= count {
             return;
         }
         if self.set_popup_selected(idx) {
-            let _ = self.handle_action(Action::MenuSelect);
+            // Checkboxes toggle in place, while an issue list row opens its
+            // detail. Other picker rows retain their Enter-equivalent action.
+            let action = match self.mode {
+                AppMode::IssueList => Action::OpenIssueDetail,
+                AppMode::IssueLabelPicker { .. } => Action::ToggleIssueLabel,
+                _ => Action::MenuSelect,
+            };
+            let _ = self.handle_action(action);
+        }
+    }
+
+    /// Map a click to the logical row displayed at that point. Issue list and
+    /// label picker rows are windowed around their selection, so their visible
+    /// top row is not necessarily logical row zero. The row areas deliberately
+    /// exclude the issue-list header and label-picker help footer.
+    fn popup_row_index(&self, inner: Rect, col: u16, row: u16) -> Option<usize> {
+        match &self.mode {
+            AppMode::IssueList => {
+                let view = self.issue_list.as_ref()?;
+                // The issue-list header occupies the first inner row.
+                let list = Rect::new(
+                    inner.x,
+                    inner.y.saturating_add(1),
+                    inner.width,
+                    inner.height.saturating_sub(1),
+                );
+                let first = view
+                    .selected
+                    .saturating_sub((list.height as usize).saturating_sub(1));
+                list_row_index(list, first, col, row)
+            }
+            AppMode::IssueLabelPicker { selected, .. } => {
+                // The final inner row is the help footer, not a label.
+                let list = Rect::new(
+                    inner.x,
+                    inner.y,
+                    inner.width,
+                    inner.height.saturating_sub(1),
+                );
+                let first = selected.saturating_sub((list.height as usize).saturating_sub(1));
+                list_row_index(list, first, col, row)
+            }
+            _ => list_row_index(inner, 0, col, row),
         }
     }
 
@@ -270,6 +312,15 @@ impl App {
             AppMode::RemotePicker { remotes, .. } => Some(remotes.len()),
             AppMode::PrMergePicker { .. } => Some(crate::pr_action::MergeMethod::ALL.len()),
             AppMode::PrReviewPicker { .. } => Some(crate::pr_action::ReviewDecision::ALL.len()),
+            AppMode::IssueList => self.issue_list.as_ref().map(|view| {
+                let empty = std::collections::HashSet::new();
+                view.visible(self.issue_fetch.cached_blocked().unwrap_or(&empty))
+                    .len()
+            }),
+            AppMode::IssueLabelPicker { .. } => self
+                .issue_label_picker
+                .as_ref()
+                .map(|picker| picker.labels.len()),
             _ => None,
         }
     }
@@ -285,6 +336,18 @@ impl App {
             | AppMode::RemotePicker { selected, .. }
             | AppMode::PrMergePicker { selected, .. }
             | AppMode::PrReviewPicker { selected, .. } => {
+                *selected = idx;
+                true
+            }
+            AppMode::IssueList => {
+                if let Some(view) = &mut self.issue_list {
+                    view.selected = idx;
+                    true
+                } else {
+                    false
+                }
+            }
+            AppMode::IssueLabelPicker { selected, .. } => {
                 *selected = idx;
                 true
             }
@@ -377,8 +440,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{App, AppMode, MouseLayout};
+    use crate::app::{App, AppMode, IssueLabelPicker, IssueListState, IssueListView, MouseLayout};
     use crate::git::GitRepository;
+    use crate::issue::{IssueFilter, IssueInfo, IssueLabel, IssueState, IssueViewFilter};
     use crate::test_support::git;
     use ratatui::layout::Rect;
 
@@ -411,6 +475,82 @@ mod tests {
             side_layout: false,
         };
         app
+    }
+
+    fn issue(number: u64) -> IssueInfo {
+        IssueInfo {
+            number,
+            title: format!("issue {number}"),
+            state: IssueState::Open,
+            labels: vec![],
+            assignees: vec![],
+            author: "author".into(),
+            updated_at: String::new(),
+            url: String::new(),
+        }
+    }
+
+    /// A selected issue near the end of a short popup is rendered in a window:
+    /// its first displayed row is not visible-row zero.
+    #[test]
+    fn click_on_windowed_issue_row_opens_the_displayed_issue() {
+        let mut app = app_with_three_commits();
+        app.issue_list = Some(IssueListView {
+            state: IssueListState::Ready((1..=5).map(issue).collect()),
+            selected: 4,
+            filter: IssueFilter::Open,
+            view_filter: IssueViewFilter::default(),
+            scroll: 0,
+            pending_reselect: None,
+        });
+        app.mode = AppMode::IssueList;
+        // Inner height is four: one header row plus three issue rows. With the
+        // selected row at index four, the first displayed issue is index two.
+        app.popup_rect = Some(Rect::new(0, 0, 40, 6));
+
+        app.handle_mouse_action(crate::action::Action::MouseClick { col: 5, row: 2 });
+
+        assert!(matches!(app.mode, AppMode::IssueDetail));
+        assert_eq!(app.issue_detail.as_ref().map(|view| view.number), Some(3));
+    }
+
+    /// The label picker also windows its rows. Clicking the first displayed
+    /// checkbox must toggle that label rather than an earlier hidden one.
+    #[test]
+    fn click_on_windowed_label_row_toggles_the_displayed_label() {
+        let mut app = app_with_three_commits();
+        app.issue_label_picker = Some(IssueLabelPicker {
+            number: 1,
+            labels: (1..=5)
+                .map(|n| IssueLabel {
+                    name: format!("label {n}"),
+                    color: "ffffff".into(),
+                })
+                .collect(),
+            original: vec![false; 5],
+            chosen: vec![false; 5],
+        });
+        app.mode = AppMode::IssueLabelPicker {
+            number: 1,
+            selected: 4,
+        };
+        // Inner height is four: three label rows plus the help footer. With
+        // selection at four, the first displayed label has index two.
+        app.popup_rect = Some(Rect::new(0, 0, 40, 6));
+
+        app.handle_mouse_action(crate::action::Action::MouseClick { col: 5, row: 1 });
+
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueLabelPicker {
+                number: 1,
+                selected: 2
+            }
+        ));
+        assert_eq!(
+            app.issue_label_picker.as_ref().unwrap().chosen,
+            vec![false, false, true, false, false]
+        );
     }
 
     /// Right-clicking a commit row when no menu is open selects that commit
