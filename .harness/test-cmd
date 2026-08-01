@@ -1,1 +1,1 @@
-cargo test --test help_popup_test -- --nocapture || exit 1
+cargo test --test help_popup_test --test help_debug_server_test -- --nocapture || exit 1
