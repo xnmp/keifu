@@ -173,7 +173,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Blank,
         Header("Other"),
         Row(
-            "Ctrl+P / :",
+            "Ctrl+P / Ctrl+Alt+P / :",
             "Command palette (commands, branches, commits)",
         ),
         Row(
