@@ -2794,6 +2794,60 @@ mod tests {
             &[SquashMergeLine::new(f1, s), SquashMergeLine::new(f1, s)],
         );
 
+        let squash_row = row_of(&duplicate, s);
+        let tip_row = row_of(&duplicate, f1);
+        let connector_col = duplicate.nodes[tip_row].lane * 2;
+
+        assert_eq!(squash_row + 1, tip_row, "fixture endpoints are adjacent");
+        assert_eq!(duplicate.nodes[squash_row].commit.as_ref().unwrap().oid, s);
+        assert_eq!(duplicate.nodes[tip_row].commit.as_ref().unwrap().oid, f1);
+        assert!(matches!(
+            duplicate.nodes[squash_row].cells[connector_col],
+            CellType::BranchLeft(SQUASH_LINK_COLOR_INDEX)
+                | CellType::BranchRight(SQUASH_LINK_COLOR_INDEX)
+        ));
+        assert!(matches!(
+            duplicate.nodes[tip_row].cells[connector_col],
+            CellType::Commit(_)
+        ));
+
+        let grey_cells: Vec<_> = duplicate
+            .nodes
+            .iter()
+            .enumerate()
+            .flat_map(|(row, node)| {
+                node.cells
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(col, cell)| {
+                        (cell_color(*cell) == Some(SQUASH_LINK_COLOR_INDEX)).then_some((
+                            row,
+                            col,
+                            *cell,
+                            node.cell_oids[col],
+                        ))
+                    })
+            })
+            .collect();
+        assert_eq!(
+            grey_cells,
+            vec![
+                (
+                    squash_row,
+                    connector_col - 1,
+                    CellType::Horizontal(SQUASH_LINK_COLOR_INDEX),
+                    (None, None),
+                ),
+                (
+                    squash_row,
+                    connector_col,
+                    duplicate.nodes[squash_row].cells[connector_col],
+                    (None, None),
+                ),
+            ],
+            "duplicate aliases produce one exact two-cell connector from the squash commit to the adjacent branch-tip dot"
+        );
+
         assert_eq!(
             duplicate.max_lane, single.max_lane,
             "repeating one squash relationship must not widen the graph"
