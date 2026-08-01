@@ -78,7 +78,15 @@ fn request(port: u16, body: &str) -> Value {
 fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
     let port = reserve_port();
     let mut app = start_app(repo, port);
-    let keys = request(port, r#"{"cmd":"keys","keys":"?"}"#);
+    let key_sequence = if with_uncommitted_file {
+        "<home> ?"
+    } else {
+        "?"
+    };
+    let keys = request(
+        port,
+        &format!(r#"{{"cmd":"keys","keys":"{key_sequence}"}}"#),
+    );
     assert_eq!(keys["ok"], true);
     let dump = request(port, r#"{"cmd":"dump","width":140,"height":300}"#);
     assert_eq!(dump["ok"], true);
