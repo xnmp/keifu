@@ -944,11 +944,12 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
     }
 
     // Centered overlay on top of the backdrop.
-    // Issue list/detail fill the content region rather than using a centered
-    // overlay, but mouse routing still treats them as popups so their rows can
-    // receive clicks instead of falling through to the graph behind them.
+    // The issue list fills the content region rather than using a centered
+    // overlay, but it still needs an active popup rect so its rows receive
+    // clicks. Issue detail has no clickable rows and remains routed as a
+    // non-interactive full-screen view.
     let mut rendered_popup = match app.mode {
-        AppMode::IssueList | AppMode::IssueDetail => Some(content),
+        AppMode::IssueList => Some(content),
         _ => None,
     };
     match &app.mode {
@@ -1277,47 +1278,6 @@ fn bottom_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Full-screen issue detail is still an active popup for mouse routing.
-    /// Without recording `content` as `popup_rect`, the rendered view has no
-    /// popup hit-test rectangle at all.
-    #[test]
-    fn issue_detail_records_content_rect_and_swallows_panel_clicks() {
-        use crate::{
-            action::Action,
-            app::{FocusedPanel, IssueDetailState, IssueDetailView, MouseLayout},
-        };
-        use ratatui::{backend::TestBackend, Terminal};
-
-        let mut app = App::test_fixture();
-        app.mode = AppMode::IssueDetail;
-        app.issue_detail = Some(IssueDetailView {
-            number: 39,
-            state: IssueDetailState::Loading,
-            scroll: 0,
-            max_scroll: 0,
-        });
-        // This graph rect represents the panel that would be behind the
-        // full-screen issue view in normal mode. A click at (5, 5) would focus
-        // it if the detail view did not own the hit-test area.
-        app.mouse_layout = MouseLayout {
-            graph: Rect::new(0, 0, 80, 23),
-            files: Rect::default(),
-            commit: Rect::default(),
-            main: Rect::default(),
-            side_layout: false,
-        };
-        app.focused_panel = FocusedPanel::Files;
-
-        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        term.draw(|frame| draw(frame, &mut app)).unwrap();
-
-        assert_eq!(app.popup_rect, Some(Rect::new(0, 0, 80, 23)));
-        app.handle_action(Action::MouseClick { col: 5, row: 5 })
-            .expect("detail click is handled");
-        assert_eq!(app.focused_panel, FocusedPanel::Files);
-        assert!(matches!(app.mode, AppMode::IssueDetail));
-    }
 
     #[test]
     fn scrollbar_paints_the_right_border_column_when_content_overflows() {

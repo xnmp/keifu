@@ -4,6 +4,7 @@ use keifu::action::Action;
 use keifu::app::{App, AppMode, IssueListState, IssueListView};
 use keifu::issue::{IssueFilter, IssueInfo, IssueState, IssueViewFilter};
 use ratatui::layout::Rect;
+use ratatui::{backend::TestBackend, Terminal};
 
 fn issue(number: u64) -> IssueInfo {
     IssueInfo {
@@ -39,4 +40,31 @@ fn mouse_click_opens_the_visible_row_after_issue_list_windowing() {
 
     assert!(matches!(app.mode, AppMode::IssueDetail));
     assert_eq!(app.issue_detail.as_ref().map(|view| view.number), Some(3));
+}
+
+#[test]
+fn rendering_full_screen_issue_list_enables_clicking_its_windowed_rows() {
+    let mut app = App::test_fixture();
+    app.issue_list = Some(IssueListView {
+        state: IssueListState::Ready((1..=5).map(issue).collect()),
+        selected: 4,
+        filter: IssueFilter::Open,
+        view_filter: IssueViewFilter::default(),
+        scroll: 0,
+        pending_reselect: None,
+    });
+    app.mode = AppMode::IssueList;
+
+    // A six-row terminal leaves two visible issue rows after the bordered
+    // list's header. Rendering must record that full-screen content as the
+    // popup hit-test target before the click arrives.
+    let mut term = Terminal::new(TestBackend::new(40, 6)).expect("test terminal");
+    term.draw(|frame| keifu::ui::draw(frame, &mut app))
+        .expect("render issue list");
+
+    app.handle_action(Action::MouseClick { col: 5, row: 2 })
+        .expect("mouse action should be handled");
+
+    assert!(matches!(app.mode, AppMode::IssueDetail));
+    assert_eq!(app.issue_detail.as_ref().map(|view| view.number), Some(4));
 }
