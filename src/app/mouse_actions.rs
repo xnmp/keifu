@@ -370,8 +370,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{App, AppMode, MouseLayout};
+    use crate::app::{App, AppMode, IssueLabelPicker, IssueListState, IssueListView, MouseLayout};
     use crate::git::GitRepository;
+    use crate::issue::{IssueFilter, IssueInfo, IssueLabel, IssueState, IssueViewFilter};
     use crate::test_support::git;
     use ratatui::layout::Rect;
 
@@ -404,6 +405,82 @@ mod tests {
             side_layout: false,
         };
         app
+    }
+
+    fn issue(number: u64) -> IssueInfo {
+        IssueInfo {
+            number,
+            title: format!("issue {number}"),
+            state: IssueState::Open,
+            labels: vec![],
+            assignees: vec![],
+            author: "author".into(),
+            updated_at: String::new(),
+            url: String::new(),
+        }
+    }
+
+    /// A selected issue near the end of a short popup is rendered in a window:
+    /// its first displayed row is not visible-row zero.
+    #[test]
+    fn click_on_windowed_issue_row_opens_the_displayed_issue() {
+        let mut app = app_with_three_commits();
+        app.issue_list = Some(IssueListView {
+            state: IssueListState::Ready((1..=5).map(issue).collect()),
+            selected: 4,
+            filter: IssueFilter::Open,
+            view_filter: IssueViewFilter::default(),
+            scroll: 0,
+            pending_reselect: None,
+        });
+        app.mode = AppMode::IssueList;
+        // Inner height is four: one header row plus three issue rows. With the
+        // selected row at index four, the first displayed issue is index two.
+        app.popup_rect = Some(Rect::new(0, 0, 40, 6));
+
+        app.handle_mouse_action(crate::action::Action::MouseClick { col: 5, row: 2 });
+
+        assert!(matches!(app.mode, AppMode::IssueDetail));
+        assert_eq!(app.issue_detail.as_ref().map(|view| view.number), Some(3));
+    }
+
+    /// The label picker also windows its rows. Clicking the first displayed
+    /// checkbox must toggle that label rather than an earlier hidden one.
+    #[test]
+    fn click_on_windowed_label_row_toggles_the_displayed_label() {
+        let mut app = app_with_three_commits();
+        app.issue_label_picker = Some(IssueLabelPicker {
+            number: 1,
+            labels: (1..=5)
+                .map(|n| IssueLabel {
+                    name: format!("label {n}"),
+                    color: "ffffff".into(),
+                })
+                .collect(),
+            original: vec![false; 5],
+            chosen: vec![false; 5],
+        });
+        app.mode = AppMode::IssueLabelPicker {
+            number: 1,
+            selected: 4,
+        };
+        // Inner height is four: three label rows plus the help footer. With
+        // selection at four, the first displayed label has index two.
+        app.popup_rect = Some(Rect::new(0, 0, 40, 6));
+
+        app.handle_mouse_action(crate::action::Action::MouseClick { col: 5, row: 1 });
+
+        assert!(matches!(
+            app.mode,
+            AppMode::IssueLabelPicker {
+                number: 1,
+                selected: 2
+            }
+        ));
+        assert_eq!(
+            app.issue_label_picker.as_ref().unwrap().chosen,
+            vec![false, false, true, false, false]
+        );
     }
 
     /// Right-clicking a commit row when no menu is open selects that commit
