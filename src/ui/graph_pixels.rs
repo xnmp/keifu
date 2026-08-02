@@ -1569,6 +1569,11 @@ impl PixelGraphState {
         !self.poisoned
     }
 
+    /// The pixel dimensions of one terminal cell used for rasterization.
+    pub fn cell_size(&self) -> (u16, u16) {
+        self.font_size
+    }
+
     /// Refresh the terminal cell geometry after a resize event. Invalid
     /// measurements retain the current geometry because some terminals report
     /// zero pixel dimensions.
