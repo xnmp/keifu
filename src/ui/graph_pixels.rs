@@ -1569,8 +1569,36 @@ impl PixelGraphState {
         !self.poisoned
     }
 
-    /// Refresh the terminal cell geometry after a resize event.
-    pub fn refresh_font_size(&mut self, _font_size: (u16, u16)) {}
+    /// Refresh the terminal cell geometry after a resize event. Invalid
+    /// measurements retain the current geometry because some terminals report
+    /// zero pixel dimensions.
+    pub fn refresh_font_size(&mut self, font_size: (u16, u16)) {
+        if font_size.0 == 0 || font_size.1 == 0 || font_size == self.font_size {
+            return;
+        }
+
+        let protocol_type = self.picker.protocol_type();
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(font_size);
+        picker.set_protocol_type(protocol_type);
+        self.picker = picker;
+        self.font_size = font_size;
+        self.protocols.clear();
+        self.avatar_protocols.clear();
+    }
+
+    /// Read the terminal's current pixel and cell dimensions after a resize.
+    /// This avoids terminal input queries while the crossterm event reader is
+    /// active.
+    pub fn refresh_font_size_from_terminal(&mut self) {
+        let Ok(size) = crossterm::terminal::window_size() else {
+            return;
+        };
+        if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
+            return;
+        }
+        self.refresh_font_size((size.width / size.columns, size.height / size.rows));
+    }
 
     /// Prepare every protocol referenced by the current frame. Prunes the cache
     /// to the current spec set on overflow (item: bounded, no thrash), then
