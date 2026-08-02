@@ -101,6 +101,13 @@ impl CancellationToken {
             _ => None,
         }
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn rejecting_for_test() -> Self {
+        let token = Self::default();
+        token.0.store(u8::MAX, Ordering::Release);
+        token
+    }
 }
 
 #[cfg(all(test, not(unix)))]
@@ -336,6 +343,21 @@ impl NetworkManager {
                 self.pull_receiver = Some(rx);
             }
         }
+    }
+
+    /// Activate a running operation whose cancellation request is rejected.
+    /// This models platforms without an integrity-safe process-tree primitive.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn activate_uncancellable_for_test(
+        &mut self,
+        operation: NetworkOperation,
+        started_at: Instant,
+    ) {
+        self.activate_for_test(operation, started_at);
+        self.active
+            .as_mut()
+            .expect("activated network operation")
+            .cancellation = CancellationToken::rejecting_for_test();
     }
 
     #[cfg(any(test, feature = "test-support"))]
