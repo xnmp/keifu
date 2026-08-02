@@ -2236,6 +2236,36 @@ mod tests {
     }
 
     #[test]
+    fn startup_query_uses_a_short_deadline_and_preserves_picker_fallbacks() {
+        let mut observed_timeout = None;
+        let unsupported = PixelGraphState::from_startup_query(|options| {
+            observed_timeout = Some(options.timeout);
+            Ok::<_, ()>(Picker::halfblocks())
+        });
+
+        assert_eq!(
+            observed_timeout,
+            Some(std::time::Duration::from_millis(250)),
+            "an unresponsive terminal must reach the Unicode fallback promptly"
+        );
+        assert!(
+            unsupported.is_none(),
+            "the existing unsupported-protocol fallback remains Unicode"
+        );
+
+        let detected = PixelGraphState::from_startup_query(|_| {
+            #[allow(deprecated)]
+            let mut picker = Picker::from_fontsize((10, 20));
+            picker.set_protocol_type(ProtocolType::Kitty);
+            Ok::<_, ()>(picker)
+        });
+        assert!(
+            detected.is_some(),
+            "a detected transparency-preserving protocol remains available"
+        );
+    }
+
+    #[test]
     fn prune_lru_evicts_the_stale_half_at_cap() {
         // Under cap: nothing is pruned regardless of age.
         let mut map: HashMap<RowSpec, u64> = HashMap::new();
