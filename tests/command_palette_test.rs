@@ -170,6 +170,97 @@ fn command_palette_uses_enter_menu_prompt_toast_and_cancellation_flows() {
 }
 
 #[test]
+fn command_palette_contextual_prompts_reject_stale_dispatch_and_bind_commit_targets() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    let first = commit_file(repo.repo(), "a.txt", "a", "first");
+    let second = commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+    let first_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| node.commit.as_ref().is_some_and(|commit| commit.oid == first))
+        .unwrap();
+
+    // The palette row was offered for `second`; changing selection before
+    // MenuSelect must reject Create branch here rather than opening a prompt
+    // whose later confirmation would use `first`.
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Create branch here".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.graph_nav.graph_list_state.select(Some(first_idx));
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert!(app.toasts.visible().iter().any(|toast| {
+        toast.text.contains("Selection or repository state changed")
+    }));
+
+    // Reopen on `second`, then change selection while the branch-name prompt
+    // is open. Confirming must still create the branch at `second`.
+    app.graph_nav.graph_list_state.select(Some(0));
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Create branch here".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: InputAction::CreateBranch,
+            ..
+        }
+    ));
+    app.graph_nav.graph_list_state.select(Some(first_idx));
+    for c in "bound-branch".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::Confirm).unwrap();
+    assert_eq!(
+        app.repo
+            .repo()
+            .find_branch("bound-branch", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .target(),
+        Some(second),
+        "palette branch prompt must retain its original commit target"
+    );
+
+    // Add tag has the same delayed confirmation shape, so it must also use
+    // the selected commit from when the palette action was dispatched.
+    app.graph_nav.graph_list_state.select(Some(0));
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Add tag".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: InputAction::AddTag,
+            ..
+        }
+    ));
+    app.graph_nav.graph_list_state.select(Some(first_idx));
+    for c in "bound-tag".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::Confirm).unwrap();
+    assert_eq!(
+        app.repo
+            .repo()
+            .find_reference("refs/tags/bound-tag")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id(),
+        second,
+        "palette tag prompt must retain its original commit target"
+    );
+}
+
+#[test]
 fn command_palette_uses_enter_menu_preconditions_for_stashes_and_branch_tips() {
     let (td, repo) = init_repo(Seed::Empty);
     let first = commit_file(repo.repo(), "a.txt", "a", "first");
