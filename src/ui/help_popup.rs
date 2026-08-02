@@ -511,10 +511,15 @@ fn effective_bindings(
     keymap.map_or_else(
         || fallback.to_string(),
         |map| {
-            ids.iter()
-                .map(|id| map.display_bindings(id))
-                .collect::<Vec<_>>()
-                .join(" / ")
+            let mut labels = Vec::new();
+            for id in ids {
+                for label in map.display_bindings(id).split(" / ") {
+                    if !labels.iter().any(|existing| existing == label) {
+                        labels.push(label.to_string());
+                    }
+                }
+            }
+            labels.join(" / ")
         },
     )
 }
