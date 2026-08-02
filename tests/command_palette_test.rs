@@ -6,7 +6,7 @@ use std::fs;
 
 use git2::{Repository, Signature};
 use keifu::action::Action;
-use keifu::app::{App, AppMode, InputAction};
+use keifu::app::{App, AppMode, ConfirmAction, InputAction};
 use keifu::git::GitRepository;
 
 use common::{commit_file, init_repo, Seed};
@@ -258,6 +258,39 @@ fn command_palette_contextual_prompts_reject_stale_dispatch_and_bind_commit_targ
         second,
         "palette tag prompt must retain its original commit target"
     );
+}
+
+#[test]
+fn command_palette_reset_submenu_retains_the_validated_commit_target() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    let first = commit_file(repo.repo(), "a.txt", "a", "first");
+    let second = commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Reset to this commit".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::CommitMenu { .. }));
+
+    // The reset submenu is an extra interaction after palette validation.
+    // Changing selection here must not change the OID placed in confirmation.
+    let first_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| node.commit.as_ref().is_some_and(|commit| commit.oid == first))
+        .unwrap();
+    app.graph_nav.graph_list_state.select(Some(first_idx));
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::Confirm {
+            action: ConfirmAction::ResetSoft(oid),
+            ..
+        } if oid == second
+    ));
 }
 
 #[test]
