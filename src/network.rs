@@ -45,6 +45,34 @@ pub struct NetworkStatus {
     pub phase: NetworkPhase,
 }
 
+/// Monotonic transport counters. Any advancing field refreshes the inactivity
+/// deadline; repeated snapshots do not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NetworkProgress {
+    pub bytes: u64,
+    pub objects: u64,
+    pub refs: u64,
+}
+
+/// Terminal failure delivered by a network worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkFailure {
+    Failed(String),
+    Cancelled(CancellationReason),
+}
+
+impl std::fmt::Display for NetworkFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(message) => f.write_str(message),
+            Self::Cancelled(CancellationReason::User) => f.write_str("cancelled"),
+            Self::Cancelled(CancellationReason::InactivityTimeout) => {
+                f.write_str("timed out after 60 seconds without progress")
+            }
+        }
+    }
+}
+
 /// What a background push should do.
 #[derive(Debug, Clone)]
 pub enum PushSpec {
