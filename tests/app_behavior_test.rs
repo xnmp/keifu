@@ -1306,25 +1306,25 @@ fn command_palette_exposes_and_dispatches_available_commit_actions() {
     commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
-    // Every representative category of normal-commit Enter action is directly
-    // discoverable in the command palette, not hidden behind a second menu.
-    for expected in [
-        "Checkout",
-        "Cherry-pick",
-        "Reset to this commit...",
-        "Add tag",
-        "Revert this commit",
-        "Copy commit hash",
-        "Copy commit message",
-    ] {
+    // Every action the normal Enter menu exposes is directly discoverable in
+    // the command palette, not hidden behind a second menu.
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    let expected: Vec<String> = match &app.mode {
+        AppMode::CommitMenu { items, .. } => {
+            items.iter().map(|item| item.label().to_string()).collect()
+        }
+        other => panic!("expected Enter menu, got {other:?}"),
+    };
+    app.handle_action(Action::Cancel).unwrap();
+    for expected in expected {
         let labels: Vec<String> = app
-            .palette_results(expected)
+            .palette_results(&expected)
             .items
             .into_iter()
             .map(|item| item.label)
             .collect();
         assert!(
-            labels.iter().any(|label| label == expected),
+            labels.iter().any(|label| label == &expected),
             "{expected}: {labels:?}"
         );
     }
@@ -1338,6 +1338,19 @@ fn command_palette_exposes_and_dispatches_available_commit_actions() {
         matches!(app.mode, AppMode::Confirm { ref message, .. } if message.starts_with("Cherry-pick commit")),
         "palette dispatch must use the existing Cherry-pick confirmation, got {:?}",
         app.mode
+    );
+
+    // Filtering resets the cursor, and arrow navigation remains constrained
+    // to the matching rows rather than a stale unfiltered index.
+    app.handle_action(Action::Cancel).unwrap();
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "copy".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MoveDown).unwrap();
+    assert!(
+        matches!(app.mode, AppMode::CommandPalette { selected: 1, .. }),
+        "filtered palette selection must advance within the visible copy rows"
     );
 }
 
