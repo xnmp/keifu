@@ -6,11 +6,6 @@ use std::time::{Duration, Instant};
 /// How long a transient status message stays on screen before it clears.
 const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Minimum spacing between CapsLock hint toasts (#106). Without this, holding
-/// a caps-locked key (or just navigating with it on) would spawn a fresh toast
-/// on every keystroke.
-const CAPSLOCK_HINT_COOLDOWN: Duration = Duration::from_secs(30);
-
 /// Pure visibility rule for a status message, so the timeout/stickiness logic is
 /// unit-testable without a clock or a live network op.
 ///
@@ -94,14 +89,19 @@ impl App {
         self.toasts.push(kind, text, std::time::Instant::now());
     }
 
-    /// Nudge the user when a keystroke looks like it was typed with CapsLock on
-    /// (#106) — case-sensitive keybindings otherwise fail silently. No-ops
-    /// while the key was consumed as free text (commit editor, Input mode,
-    /// filters, compose editors, command palette, settings query): uppercase
-    /// is expected there, not a sign of a broken binding. Rate-limited via
-    /// `last_capslock_hint` so a held or repeated key doesn't spam a toast.
+    /// Nudge the user once per reported Caps Lock session (#130). Crossterm's
+    /// keyboard-enhancement protocol attaches this state to compatible key
+    /// events; terminals that omit it leave the state empty and silently take
+    /// this re-arming path. Text-entry contexts deliberately skip the warning.
     pub fn maybe_hint_capslock(&mut self, key: &crossterm::event::KeyEvent) {
-        if !crate::keybindings::looks_like_capslock(key) {
+        if !key
+            .state
+            .contains(crossterm::event::KeyEventState::CAPS_LOCK)
+        {
+            self.capslock_hint_armed = true;
+            return;
+        }
+        if !self.capslock_hint_armed {
             return;
         }
         if crate::keybindings::is_text_editing_context(
@@ -113,16 +113,10 @@ impl App {
         ) {
             return;
         }
-        let now = Instant::now();
-        if let Some(last) = self.last_capslock_hint {
-            if now.duration_since(last) < CAPSLOCK_HINT_COOLDOWN {
-                return;
-            }
-        }
-        self.last_capslock_hint = Some(now);
+        self.capslock_hint_armed = false;
         self.toast(
             crate::toast::ToastKind::Info,
-            "CapsLock appears to be on — keys are case-sensitive",
+            "Caps Lock is on — keys are case-sensitive",
         );
     }
 

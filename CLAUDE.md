@@ -8,6 +8,7 @@ keifu (系譜) is a Rust TUI for git graph visualization — a VSCode-like Git G
 - Never commit directly to `chong-dev`. Branch → PR (`gh pr create --base chong-dev`, body `Closes #N`) → squash merge. Keep `main` fast-forwarded from `chong-dev`.
 - `cargo test` and `cargo clippy` must pass before a PR.
 - Changes with visible TUI behavior get verified in the real app (debug server: `--debug-listen`, see `docs/debugging.md`), not only through unit tests.
+- Caps Lock warnings must use `KeyEvent.state` from Crossterm keyboard enhancement, not character casing; unsupported terminals leave that state empty and intentionally produce no warning.
 - Architectural decisions and gotchas go in `docs/architecture.md` when they land.
 
 ## Architecture
