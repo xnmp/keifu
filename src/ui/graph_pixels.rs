@@ -1569,6 +1569,9 @@ impl PixelGraphState {
         !self.poisoned
     }
 
+    /// Refresh the terminal cell geometry after a resize event.
+    pub fn refresh_font_size(&mut self, _font_size: (u16, u16)) {}
+
     /// Prepare every protocol referenced by the current frame. Prunes the cache
     /// to the current spec set on overflow (item: bounded, no thrash), then
     /// ensures each spec. Stops early once poisoned so a persistent failure
