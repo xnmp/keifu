@@ -1344,13 +1344,37 @@ fn command_palette_exposes_and_dispatches_available_commit_actions() {
     // to the matching rows rather than a stale unfiltered index.
     app.handle_action(Action::Cancel).unwrap();
     app.handle_action(Action::OpenCommandPalette).unwrap();
-    for c in "copy".chars() {
+    for c in "branch".chars() {
         app.handle_action(Action::InputChar(c)).unwrap();
     }
+    let second_visible_label = app.palette_results("branch").items[1].label.clone();
     app.handle_action(Action::MoveDown).unwrap();
     assert!(
         matches!(app.mode, AppMode::CommandPalette { selected: 1, .. }),
         "filtered palette selection must advance within the visible copy rows"
+    );
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(
+        match second_visible_label.as_str() {
+            "Create branch here" => matches!(
+                app.mode,
+                AppMode::Input {
+                    action: InputAction::CreateBranch,
+                    ..
+                }
+            ),
+            "Filter branches" => matches!(app.mode, AppMode::BranchFilter { .. }),
+            "Search branches" => matches!(
+                app.mode,
+                AppMode::Input {
+                    action: InputAction::Search,
+                    ..
+                }
+            ),
+            label if label.starts_with("Checkout ") => matches!(app.mode, AppMode::Confirm { .. }),
+            other => panic!("unexpected second filtered row: {other}"),
+        },
+        "selected filtered row '{second_visible_label}' dispatched the wrong action"
     );
 }
 
