@@ -32,6 +32,7 @@ pub mod perf;
 pub mod pr;
 pub mod pr_action;
 pub mod pr_thread;
+pub mod rebase_plan;
 pub mod search;
 pub mod settings;
 pub mod signature_guarded;
