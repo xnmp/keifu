@@ -134,7 +134,8 @@ Graph.
 
 **How it works:**
 1. `PixelGraphState::new()` (`ui/graph_pixels.rs`) calls
-   `ratatui_image::Picker::from_query_stdio()` once at startup — after raw mode
+   `ratatui_image::Picker::from_query_stdio_with_options()` once at startup with
+   a 250 ms query timeout — after raw mode
    is enabled but before the event loop polls, so crossterm's reader doesn't eat
    the terminal's query reply. It returns `None` (→ Unicode fallback) unless a
    *transparency-preserving* protocol is detected: only **Kitty** and **iTerm2**

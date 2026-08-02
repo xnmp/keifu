@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 use ratatui_image::Resize;
@@ -1539,7 +1540,13 @@ impl PixelGraphState {
             picker.set_protocol_type(pt);
             return Some(Self::from_picker(picker));
         }
-        let picker = Picker::from_query_stdio().ok()?;
+        let picker = Picker::from_query_stdio_with_options(QueryStdioOptions {
+            // Serial consoles and some multiplexers never reply. Bound this
+            // pre-first-frame query while preserving Picker's default probes.
+            timeout: std::time::Duration::from_millis(250),
+            ..QueryStdioOptions::default()
+        })
+        .ok()?;
         if !is_supported_protocol(picker.protocol_type()) {
             return None;
         }
