@@ -239,6 +239,7 @@ impl App {
             compare_marked: None,
             compare_range: None,
             should_quit: false,
+            shutdown_after_network: false,
             pending_refresh: false,
             diff_viewport_height: 40,
             diff_viewport_width: 80,

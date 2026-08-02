@@ -96,7 +96,7 @@ impl App {
                 // Esc first clears a pending mark / active comparison; only quit
                 // when there's nothing to dismiss.
                 if !self.clear_compare() {
-                    self.should_quit = true;
+                    self.request_lifecycle_aware_quit();
                 }
             }
             Action::MarkForCompare => {

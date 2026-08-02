@@ -281,6 +281,7 @@ fn main() -> Result<()> {
         needs_render |= app.update_fetch_status();
         needs_render |= app.update_push_status();
         needs_render |= app.update_pull_status();
+        needs_render |= app.update_shutdown_state();
         needs_render |= app.check_auto_refresh();
         needs_render |= app.poll_fs_watcher();
         needs_render |= app.update_open_prs();

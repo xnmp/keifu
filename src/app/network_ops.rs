@@ -4,6 +4,58 @@ use super::*;
 use crate::toast::ToastKind;
 
 impl App {
+    /// Defer process exit until every network resource owned by the App has
+    /// reached a terminal state. Running Unix transports receive cooperative
+    /// cancellation; cancelling jobs and non-cancellable pull integration are
+    /// polled to completion by the normal event loop.
+    pub(crate) fn request_lifecycle_aware_quit(&mut self) {
+        // The issue worker owns a private clipboard-image copy. Let it finish
+        // so normal cleanup runs and `gh` cannot outlive Keifu to create an
+        // issue after the UI has exited.
+        if self.issue_create_in_flight {
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Issue submission in progress; wait before quitting",
+            );
+            return;
+        }
+        if !self.network.is_busy() {
+            self.should_quit = true;
+            return;
+        }
+        if self.shutdown_after_network {
+            return;
+        }
+
+        let cancellation_requested = self.network.cancel_active(CancellationReason::User);
+        self.shutdown_after_network = true;
+        self.toast(
+            crate::toast::ToastKind::Info,
+            if cancellation_requested {
+                "Cancelling network operation before quitting"
+            } else if self
+                .network
+                .status()
+                .is_some_and(|status| status.phase == crate::network::NetworkPhase::Integrating)
+            {
+                "Waiting for pull integration before quitting"
+            } else {
+                "Waiting for network operation before quitting"
+            },
+        );
+    }
+
+    /// Promote a deferred quit only after the network manager releases its
+    /// lifecycle slot. Called after all three completion receivers are polled.
+    pub fn update_shutdown_state(&mut self) -> bool {
+        if !self.shutdown_after_network || self.network.is_busy() {
+            return false;
+        }
+        self.shutdown_after_network = false;
+        self.should_quit = true;
+        true
+    }
+
     /// Poll progress/inactivity for the active network operation. A timeout
     /// changes the status bar to Cancelling immediately; the terminal toast is
     /// emitted only after the worker actually exits.
@@ -317,6 +369,9 @@ impl App {
     }
 
     pub fn check_auto_refresh(&mut self) -> bool {
+        if self.shutdown_after_network || self.should_quit {
+            return false;
+        }
         if matches!(self.mode, AppMode::FileDiff { .. }) {
             return false;
         }

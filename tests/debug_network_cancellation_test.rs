@@ -23,6 +23,101 @@ fn status_bar_text(app: &App) -> String {
     buffer.content.iter().map(|cell| cell.symbol()).collect()
 }
 
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    assert!(
+        Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .unwrap()
+            .success(),
+        "git {args:?} failed"
+    );
+}
+
+fn start_blocked_integrating_pull() -> (
+    tempfile::TempDir,
+    App,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let remote = root.path().join("remote.git");
+    let local = root.path().join("local");
+    let peer = root.path().join("peer");
+    let release = root.path().join("release-integration");
+    let entered = root.path().join("integration-entered");
+    git(
+        root.path(),
+        &["init", "--bare", "-q", remote.to_str().unwrap()],
+    );
+    git(
+        root.path(),
+        &["init", "-q", "-b", "main", local.to_str().unwrap()],
+    );
+    git(&local, &["config", "user.email", "test@example.com"]);
+    git(&local, &["config", "user.name", "Test"]);
+    std::fs::write(local.join("file.txt"), "initial\n").unwrap();
+    git(&local, &["add", "file.txt"]);
+    git(&local, &["commit", "-qm", "initial"]);
+    git(
+        &local,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&local, &["push", "-qu", "origin", "main"]);
+    git(
+        root.path(),
+        &[
+            "clone",
+            "-q",
+            "--branch",
+            "main",
+            remote.to_str().unwrap(),
+            peer.to_str().unwrap(),
+        ],
+    );
+    git(&peer, &["config", "user.email", "test@example.com"]);
+    git(&peer, &["config", "user.name", "Test"]);
+    std::fs::write(peer.join("file.txt"), "advanced\n").unwrap();
+    git(&peer, &["commit", "-qam", "advance remote"]);
+    git(&peer, &["push", "-q", "origin", "main"]);
+
+    let hook = local.join(".git/hooks/post-merge");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nprintf ready > \"{}\"\ni=0\nwhile [ ! -f \"{}\" ] && [ \"$i\" -lt 500 ]; do i=$((i + 1)); sleep 0.01; done\n",
+            entered.display(),
+            release.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&hook, permissions).unwrap();
+
+    let mut app = App::from_repo(GitRepository::open(&local).unwrap()).unwrap();
+    app.network.start_pull(
+        local.to_str().unwrap(),
+        Some("origin".to_string()),
+        Some("main".to_string()),
+        PullMode::FfOnly,
+        None,
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.network_status().map(|status| status.phase) != Some(NetworkPhase::Integrating)
+        || !entered.exists()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "pull never blocked in integration"
+        );
+        app.update_network_state();
+        thread::sleep(Duration::from_millis(10));
+    }
+    (root, app, local, release)
+}
+
 #[test]
 fn running_job_exposes_cancel_hint_and_cancelling_state_in_the_status_bar() {
     let mut app = App::test_fixture();
@@ -163,6 +258,118 @@ fn inactivity_timeout_stays_visible_until_the_worker_returns_then_toasts() {
         .visible()
         .iter()
         .any(|toast| { toast.text == "Pull timed out after 60 seconds without progress" }));
+}
+
+#[test]
+fn normal_and_forced_quit_wait_for_a_real_inherited_helper_transport() {
+    for action in [Action::Quit, Action::ForceQuit] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        let helper = root.path().join("remote-helper");
+        let helper_pid_log = root.path().join("helper.pid");
+        git(root.path(), &["init", "-q", repo.to_str().unwrap()]);
+        git(&repo, &["config", "protocol.ext.allow", "always"]);
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 setsid sh -c 'printf \"%s\" \"$$\" > \"{}\"; trap \"exit 0\" INT TERM; sleep 8' &\n\
+                 printf 'remote: Counting objects: 50%% (1/2)\\r' >&2\n\
+                 wait\n",
+                helper_pid_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let mut app = App::from_repo(GitRepository::open(&repo).unwrap()).unwrap();
+        let remote = format!("ext::{}", helper.display());
+        app.network
+            .start_fetch(&app.repo_path.clone(), &remote, false, false, None);
+        let start_deadline = Instant::now() + Duration::from_secs(5);
+        while !helper_pid_log.exists() {
+            assert!(
+                Instant::now() < start_deadline,
+                "transport helper never started"
+            );
+            app.update_network_state();
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        app.handle_action(action.clone()).unwrap();
+
+        assert!(!app.should_quit, "quit bypassed the active transport");
+        assert!(app.shutdown_after_network);
+        assert!(app.is_network_busy());
+        let completion_deadline = Instant::now() + Duration::from_secs(8);
+        while !app.should_quit {
+            app.update_network_state();
+            app.update_fetch_status();
+            app.update_shutdown_state();
+            assert!(
+                Instant::now() < completion_deadline,
+                "transport shutdown did not finish"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(!app.is_network_busy());
+        let helper_pid = std::fs::read_to_string(&helper_pid_log).unwrap();
+        assert!(
+            !Command::new("kill")
+                .args(["-0", helper_pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "quit returned before the inherited helper exited"
+        );
+        assert_eq!(
+            app.repo.operation_state(),
+            keifu::git::OperationState::Clean
+        );
+    }
+}
+
+#[test]
+fn normal_and_forced_quit_wait_for_real_pull_integration() {
+    for action in [Action::Quit, Action::ForceQuit] {
+        let (_root, mut app, local, release) = start_blocked_integrating_pull();
+
+        app.handle_action(action.clone()).unwrap();
+
+        assert!(!app.should_quit, "quit bypassed pull integration");
+        assert!(app.shutdown_after_network);
+        assert_eq!(
+            app.network_status().map(|status| status.phase),
+            Some(NetworkPhase::Integrating)
+        );
+        std::fs::write(&release, "release\n").unwrap();
+        let completion_deadline = Instant::now() + Duration::from_secs(5);
+        while !app.should_quit {
+            app.update_network_state();
+            app.update_pull_status();
+            app.update_shutdown_state();
+            assert!(
+                Instant::now() < completion_deadline,
+                "pull integration shutdown did not finish"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(!app.is_network_busy());
+        assert_eq!(
+            app.repo.operation_state(),
+            keifu::git::OperationState::Clean
+        );
+        assert_eq!(
+            std::fs::read_to_string(local.join("file.txt")).unwrap(),
+            "advanced\n"
+        );
+    }
 }
 
 #[test]

@@ -1102,6 +1102,10 @@ pub struct App {
 
     // Flags
     pub should_quit: bool,
+    /// A quit request is waiting for the owned network transport or local pull
+    /// integration to finish. `should_quit` stays false until that lifecycle
+    /// reaches its terminal state.
+    pub shutdown_after_network: bool,
     pub pending_refresh: bool,
     pub diff_viewport_height: u16,
     pub diff_viewport_width: u16,
@@ -1573,17 +1577,7 @@ impl App {
 
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         if matches!(action, Action::ForceQuit) {
-            // The issue worker owns a private clipboard-image copy. Let it
-            // finish so normal cleanup runs and `gh` cannot outlive Keifu to
-            // create an issue after the UI has exited.
-            if self.issue_create_in_flight {
-                self.toast(
-                    crate::toast::ToastKind::Info,
-                    "Issue submission in progress; wait before quitting",
-                );
-                return Ok(());
-            }
-            self.should_quit = true;
+            self.request_lifecycle_aware_quit();
             return Ok(());
         }
         if self.repository_mutation_during_pull_integration(&action) {
