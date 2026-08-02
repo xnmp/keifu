@@ -26,7 +26,9 @@ reopen the palette.
 On a successful revalidation, the palette calls the same
 `execute_menu_item` path as the Enter menu. It does not reimplement Git
 operations, confirmation handling, input prompts, toast reporting, or
-cancellation.
+cancellation. Contextual branch and tag prompts retain the validated commit
+OID until their final confirmation, so a later selection change cannot
+retarget their durable mutation.
 
 ## Failure and concurrency analysis
 
@@ -40,8 +42,8 @@ cancellation.
   commit/branch data into its existing confirmation or input state. A later
   selection change therefore cannot retarget that pending operation. The
   integration test drives the palette through confirmation, prompt, toast, and
-  cancellation states and asserts the original selection remains selected after
-  cancellation.
+  cancellation states, changes selection while branch/tag prompts are open,
+  and asserts those mutations still target the original commit.
 - A crash before `MenuSelect` cannot mutate the repository because building or
   filtering candidates is read-only. A crash after successful dispatch has the
   same failure boundary as the existing Enter-menu path: confirmation and input
@@ -54,4 +56,4 @@ Every new contextual palette operation must be sourced from
 `available_commit_menu_items`, carry the target fingerprint, and execute only
 after revalidation. Tests must use `OpenCommandPalette` and `MenuSelect`, not a
 direct call to the menu executor, for confirmation, prompt, toast,
-cancellation, and stale-selection behavior.
+cancellation, stale-selection behavior, and delayed prompt confirmation.
