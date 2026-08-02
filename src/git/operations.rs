@@ -1761,8 +1761,105 @@ pub fn file_history(repo_path: &str, path: &str, limit: usize) -> Result<Vec<Oid
 mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
-        is_divergent_pull_error, is_https_auth_failure, url_host, AuthUrl, OpOutcome, PullMode,
+        is_divergent_pull_error, is_https_auth_failure, run_network_git_output, url_host, AuthUrl,
+        GitProgressParser, NetworkCommandControl, OpOutcome, PullMode,
     };
+    use crate::network::{CancellationReason, CancellationToken, NetworkFailure};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn progress_parser_counts_remote_prefixed_and_localized_progress() {
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let control = NetworkCommandControl::new(CancellationToken::default(), progress_tx);
+        let mut parser = GitProgressParser::default();
+
+        parser.feed(
+            b"remote: Counting objects: 50% (500/1000)\r",
+            &control,
+        );
+        parser.feed(
+            b"Entfernte Quelle: Empfange Objekte: 25% (250/1000), 2.00 MiB | 1.00 MiB/s\r",
+            &control,
+        );
+
+        let snapshots: Vec<_> = progress_rx.try_iter().collect();
+        let final_progress = snapshots.last().expect("progress snapshot");
+        assert_eq!(final_progress.objects, 750);
+        assert_eq!(final_progress.bytes, 2 * 1024 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_git_child_cancellation_returns_without_waiting_for_inherited_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let helper = tmp.path().join("remote-helper");
+        let config_log = tmp.path().join("config.log");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 git config --get http.lowSpeedLimit > \"{}\"\n\
+                 git config --get http.lowSpeedTime >> \"{}\"\n\
+                 printf 'remote: Counting objects: 50%% (500/1000)\\r' >&2\n\
+                 sleep 3 &\n\
+                 while :; do sleep 1; done\n",
+                config_log.display(),
+                config_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let repo = repo.to_string_lossy().into_owned();
+        let remote = format!("ext::{}", helper.display());
+        let worker = std::thread::spawn(move || {
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            run_network_git_output(
+                &repo,
+                &[
+                    "-c",
+                    "protocol.ext.allow=always",
+                    "fetch",
+                    "--progress",
+                    &remote,
+                ],
+                None,
+                &control,
+            )
+        });
+
+        let progress = progress_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("real Git helper should report measurable progress");
+        assert_eq!(progress.objects, 500);
+        assert!(cancellation.request(CancellationReason::User));
+        let cancelled_at = Instant::now();
+        assert_eq!(
+            worker.join().expect("network worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(1),
+            "cancellation must not wait for a surviving helper that inherited Git's pipes"
+        );
+        assert_eq!(std::fs::read_to_string(config_log).unwrap(), "1\n60\n");
+    }
 
     #[test]
     fn https_auth_failure_detected_but_not_ssh() {

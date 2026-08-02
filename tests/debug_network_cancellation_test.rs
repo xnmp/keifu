@@ -20,12 +20,19 @@ fn status_bar_text(app: &App) -> String {
 #[test]
 fn running_job_exposes_cancel_hint_and_cancelling_state_in_the_status_bar() {
     let mut app = App::test_fixture();
+    for (operation, label) in [
+        (NetworkOperation::Fetch, "Fetching…"),
+        (NetworkOperation::Pull, "Pulling…"),
+        (NetworkOperation::Push, "Pushing…"),
+    ] {
+        app.network.activate_for_test(operation, Instant::now());
+        let running = status_bar_text(&app);
+        assert!(running.contains(label), "status bar: {running:?}");
+        assert!(running.contains("x cancel"), "status bar: {running:?}");
+    }
+
     app.network
         .activate_for_test(NetworkOperation::Fetch, Instant::now());
-
-    let running = status_bar_text(&app);
-    assert!(running.contains("Fetching…"), "status bar: {running:?}");
-    assert!(running.contains("x cancel"), "status bar: {running:?}");
 
     let action = map_active_network_key(
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
