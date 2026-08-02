@@ -294,6 +294,33 @@ fn graph_mode_actions() {
     assert_eq!(map_normal_graph(key(KeyCode::Esc)), Some(Action::Quit));
 }
 
+#[test]
+fn enhanced_keyboard_shift_forms_preserve_bindings_and_editor_text() {
+    // With the Kitty alternate-key flag, Crossterm supplies `G` without the
+    // SHIFT modifier. Without it, terminals report the base `g` plus SHIFT.
+    // Both shapes must retain the user's intended shifted key.
+    assert_eq!(
+        map_normal_graph(key_mod(KeyCode::Char('g'), KeyModifiers::SHIFT)),
+        Some(Action::GoToBottom)
+    );
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Char('G'))),
+        Some(Action::GoToBottom)
+    );
+    assert_eq!(
+        map_normal_graph(key(KeyCode::Char('?'))),
+        Some(Action::ToggleHelp)
+    );
+    assert_eq!(
+        map_editor(key_mod(KeyCode::Char('g'), KeyModifiers::SHIFT)),
+        Some(Action::EditorChar('G'))
+    );
+    assert_eq!(
+        map_editor(key(KeyCode::Char('G'))),
+        Some(Action::EditorChar('G'))
+    );
+}
+
 // ── Files mode ──────────────────────────────────────────────────────
 
 #[test]
