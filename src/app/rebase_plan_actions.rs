@@ -20,17 +20,32 @@ struct PendingInteractiveRebaseUndo {
     commit_count: usize,
 }
 
-pub(super) fn acquire_interactive_rebase_state(git_dir: &Path) -> Result<File> {
+pub(super) struct InteractiveRebaseStateOwner(File);
+
+impl Drop for InteractiveRebaseStateOwner {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+pub(super) fn acquire_interactive_rebase_state(
+    git_dir: &Path,
+) -> Result<InteractiveRebaseStateOwner> {
+    let lock_path = git_dir.join("keifu-interactive-rebase.lock");
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(git_dir.join("keifu-interactive-rebase.lock"))
+        .open(&lock_path)
         .context("Open interactive rebase state lock")?;
-    lock.try_lock_exclusive()
-        .context("Another interactive rebase is starting")?;
-    Ok(lock)
+    lock.try_lock_exclusive().with_context(|| {
+        format!(
+            "Another interactive rebase is starting ({})",
+            lock_path.display()
+        )
+    })?;
+    Ok(InteractiveRebaseStateOwner(lock))
 }
 
 pub(super) fn reconcile_interactive_rebase_state(git_dir: &Path) {
