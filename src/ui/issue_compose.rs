@@ -451,6 +451,23 @@ mod tests {
         editor.insert_char('t');
         assert_eq!(editor.text, "Issue  t");
         assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((8, 0)));
+
+        let mut mid_title = TextEditor::from_text("Issuet");
+        mid_title.cursor = "Issue".len();
+        mid_title.insert_char(' ');
+        assert_eq!(editor_layout(&mid_title, 20, 3).cursor, Some((6, 0)));
+        mid_title.insert_char('x');
+        assert_eq!(mid_title.text, "Issue xt");
+        assert_eq!(editor_layout(&mid_title, 20, 3).cursor, Some((7, 0)));
+
+        let mut body = TextEditor::from_text("Issue\nbody");
+        body.cursor = "Issue\nbo".len();
+        body.insert_char(' ');
+        body.insert_char(' ');
+        assert_eq!(editor_layout(&body, 20, 3).cursor, Some((4, 1)));
+        body.insert_char('t');
+        assert_eq!(body.text, "Issue\nbo  tdy");
+        assert_eq!(editor_layout(&body, 20, 3).cursor, Some((5, 1)));
     }
 
     #[test]
