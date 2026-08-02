@@ -710,3 +710,19 @@ single `gh::run` helper (`src/gh.rs`) for the actual subprocess + timeout.
 A gh-missing / no-remote / timeout failure is surfaced (not mapped to an empty
 value) so the caller latches + reports it once per episode (see *Episode
 latching*) and keeps the last-good data instead of blanking the badges.
+
+## Effective keymap registry (2026-08-03, #157)
+
+Keyboard configuration is resolved once at startup by the pure registry in
+`src/keymap.rs`. The resolver owns public action identifiers, aliases,
+single-key parsing/formatting, context overlap, conflict warnings, and the
+effective bindings displayed by Help and the command palette. The router checks
+configured bindings first and delegates unconfigured actions to the legacy
+maps, which preserves the exact default behavior without duplicating their
+mode/panel precedence. Payload-carrying text insertion and cursor actions stay
+internal rather than becoming compatibility-sensitive public identifiers.
+
+Invalid entries are rejected independently. Their action keeps its defaults;
+other valid entries still apply. Resolver warnings become both tracing events
+and non-blocking startup error toasts. Conflict ordering follows TOML source
+order, so the `toml` dependency must retain `preserve_order`.

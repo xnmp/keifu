@@ -41,3 +41,32 @@ auto_fetch = false
 ```
 
 手動での更新は `R` キー、fetch は `f` キーで引き続き可能です。
+
+## キーボードショートカット
+
+`[keymap]` テーブルでアクションごとのショートカットを置き換えられます。
+未指定のアクションは従来のデフォルトを維持します。各アクションには複数の
+代替キーを指定でき、空の配列は明示的な割り当て解除を表します。
+
+```toml
+[keymap]
+pull = ["Ctrl+Alt+P"]
+open-command-palette = ["Ctrl+P", "Ctrl+Alt+P", "F2"]
+toggle-debug-keys = []
+```
+
+アクション名はコマンドレジストリと共有される安定した kebab-case 識別子です。
+例: `fetch`、`pull`、`push`、`refresh`、`open-commit-menu`、
+`open-command-palette`、`open-settings`、`toggle-help`、`move-up`、
+`move-down`、`menu-select`、`confirm`、`cancel`、`toggle-stage`。
+
+`Ctrl`、`Alt`、`Shift` とその組み合わせ、矢印や `Enter`、`Esc`、
+`PageUp`、`PageDown`、および `F1`〜`F24` を利用できます。1 つの設定は
+単一キーのみで、`Ctrl+K Ctrl+C` のような複数キーのコードは未対応です。
+
+不正なキーや未知のアクションは、その項目だけが拒否され、対象アクションは
+デフォルトを維持します。他の有効な設定は適用され、起動時のエラートーストと
+ログに理由が表示されます。同時に有効なコンテキストで競合した場合は TOML の
+後の項目が優先され、両方のアクション名を含む警告が表示されます。互いに排他的な
+コンテキストでは同じキーを再利用できます。ヘルプとコマンドパレットには、複数
+候補や `Unassigned` を含む実際の割り当てが表示されます。
