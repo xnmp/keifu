@@ -1594,6 +1594,10 @@ impl PixelGraphState {
         let Ok(size) = crossterm::terminal::window_size() else {
             return;
         };
+        self.refresh_font_size_from_window_size(size);
+    }
+
+    fn refresh_font_size_from_window_size(&mut self, size: crossterm::terminal::WindowSize) {
         if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
             return;
         }
@@ -1788,13 +1792,32 @@ mod tests {
         state.sync_frame(std::slice::from_ref(&row));
         assert!(state.get(&row).is_some(), "the initial image is cached");
 
-        state.refresh_font_size((0, 40));
+        state.refresh_font_size_from_window_size(crossterm::terminal::WindowSize {
+            columns: 10,
+            rows: 20,
+            width: 0,
+            height: 400,
+        });
 
         assert_eq!(state.font_size, (CW as u16, CH as u16));
         assert!(
             state.get(&row).is_some(),
             "an unusable resize must retain the last renderable image"
         );
+    }
+
+    #[test]
+    fn terminal_window_size_derives_the_current_cell_geometry() {
+        let mut state = pixel_state((CW as u16, CH as u16));
+
+        state.refresh_font_size_from_window_size(crossterm::terminal::WindowSize {
+            columns: 10,
+            rows: 20,
+            width: 200,
+            height: 800,
+        });
+
+        assert_eq!(state.font_size, (20, 40));
     }
 
     const PAD_X: u32 = PIXEL_LEFT_PAD_CELLS as u32 * CW;

@@ -146,7 +146,10 @@ Graph.
    pixel dimensions from `terminal::window_size()` (without another stdin
    query). A usable change rebuilds the picker and clears image caches so fixed
    iTerm2 dimensions and Kitty placeholders are regenerated for the new font
-   size; unavailable or zero dimensions retain the last valid geometry.
+   size; unavailable or zero dimensions retain the last valid geometry. The
+   headless debug server injects input after the terminal layer and therefore
+   cannot simulate a live font-size change; use a real Kitty terminal for that
+   terminal-specific alignment check.
 2. Each visible row is described by a `RowSpec` — a fully-resolved, hashable list
    of `PixelCell`s (shape + concrete RGB, resolved from the theme; commit dots
    carry `connect_up`/`connect_down` bits computed from whether the adjacent
