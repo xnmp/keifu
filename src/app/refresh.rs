@@ -254,6 +254,9 @@ impl App {
             .path()
             .join("rebase-merge/interactive")
             .exists();
+        if !self.interactive_rebase_in_progress {
+            self.cleanup_interactive_rebase_state();
+        }
 
         self.branches = self.repo.get_branches()?;
         self.remotes = self.repo.remotes();

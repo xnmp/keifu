@@ -184,39 +184,40 @@ impl App {
 
     pub(crate) fn run_interactive_rebase_plan(&mut self, plan: RebasePlan) -> Result<OpOutcome> {
         let state_dir = self.repo.repo().path().join("keifu-interactive-rebase");
-        fs::create_dir_all(&state_dir).context("Create interactive rebase state")?;
-        let mut paths = HashMap::new();
-        for (index, entry) in plan.entries.iter().enumerate() {
-            if entry.action != RebaseAction::Reword {
-                continue;
+        let result = (|| {
+            fs::create_dir_all(&state_dir).context("Create interactive rebase state")?;
+            let mut paths = HashMap::new();
+            for (index, entry) in plan.entries.iter().enumerate() {
+                if entry.action != RebaseAction::Reword {
+                    continue;
+                }
+                let path = state_dir.join(format!("message-{index}-{}", entry.oid));
+                fs::write(
+                    &path,
+                    entry
+                        .reword_message
+                        .as_deref()
+                        .context("Reword action has no message")?,
+                )?;
+                paths.insert(entry.oid, path);
             }
-            let path = state_dir.join(format!("message-{index}-{}", entry.oid));
-            fs::write(
-                &path,
-                entry
-                    .reword_message
-                    .as_deref()
-                    .context("Reword action has no message")?,
-            )?;
-            paths.insert(entry.oid, path);
-        }
-        let todo = plan
-            .to_git_todo(&paths)
-            .map_err(|error| anyhow::anyhow!("Invalid rebase plan: {error:?}"))?;
-        let todo_path = state_dir.join("todo");
-        fs::write(&todo_path, todo)?;
-        let result = rebase_interactive(&self.repo_path, plan.base_oid, &todo_path);
+            let todo = plan
+                .to_git_todo(&paths)
+                .map_err(|error| anyhow::anyhow!("Invalid rebase plan: {error:?}"))?;
+            let todo_path = state_dir.join("todo");
+            fs::write(&todo_path, todo)?;
+            rebase_interactive(&self.repo_path, plan.base_oid, &todo_path)
+        })();
         self.interactive_rebase_in_progress = self
             .repo
             .repo()
             .path()
             .join("rebase-merge/interactive")
             .exists();
-        let outcome = result?;
-        if outcome == OpOutcome::Completed {
-            let _ = fs::remove_dir_all(state_dir);
+        if !self.interactive_rebase_in_progress {
+            let _ = fs::remove_dir_all(&state_dir);
         }
-        Ok(outcome)
+        result
     }
 
     pub(crate) fn cleanup_interactive_rebase_state(&self) {

@@ -152,7 +152,9 @@ impl RebasePlan {
         let mut todo = String::new();
         for entry in self.entries.iter().rev() {
             match entry.action {
-                RebaseAction::Drop => continue,
+                RebaseAction::Drop => {
+                    todo.push_str(&format!("drop {} {}\n", entry.oid, entry.subject));
+                }
                 RebaseAction::Pick | RebaseAction::Reword => {
                     todo.push_str(&format!("pick {} {}\n", entry.oid, entry.subject));
                     if entry.action == RebaseAction::Reword {
