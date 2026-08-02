@@ -313,6 +313,9 @@ existing-code change the design requires.
   pre-marker startup window. After acquiring it, execution also refuses to
   write any todo, message, or undo seed when `.git/rebase-merge/interactive`
   already exists, so another app cannot corrupt a paused run's pending files.
+  Continue and Abort reacquire and retain the lock across their Git command and
+  the post-marker undo/cleanup handoff, so startup reconciliation or a new plan
+  cannot race into the shared directory after Git removes its marker.
 
 ---
 
