@@ -109,6 +109,10 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     open_palette(&mut app, "diff line wrap");
     let before = palette_screen(&app, "diff line wrap");
     assert!(before.contains("Diff line wrap"), "screen was:\n{before}");
+    assert!(
+        before.contains("setting Toggle Diff line wrap"),
+        "setting tag and action must remain visually separated:\n{before}"
+    );
     assert!(before.contains("Off"), "screen was:\n{before}");
     app.handle_action(Action::MenuSelect).unwrap();
     assert!(app.diff_word_wrap);
