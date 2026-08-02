@@ -214,9 +214,18 @@ impl BindingDescriptor {
 
     fn scopes_for_default(&self, binding: KeyBinding) -> Scopes {
         match (self.id, binding.to_string().as_str()) {
-            // These are Graph-only alternatives of an action whose Home
-            // binding is also present in other scrolling contexts.
-            ("go-to-top", "g" | "Ctrl+Home") => GRAPH,
+            ("go-to-top", "g") => GRAPH | PR_THREAD | ISSUE_LIST | ISSUE_DETAIL | CI_CHECKS,
+            ("go-to-top", "Ctrl+Home") => GRAPH,
+            ("cancel", "q") => {
+                MENU | REBASE_PLAN
+                    | PR_THREAD
+                    | ISSUE_LIST
+                    | ISSUE_DETAIL
+                    | ISSUE_LABELS
+                    | CI_CHECKS
+                    | FILE_DIFF
+            }
+            ("confirm", "y") => CONFIRM,
             _ => self.scopes,
         }
     }
@@ -701,6 +710,7 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
                 | SEARCH
                 | CONFIRM
                 | MENU
+                | REBASE_PLAN
                 | SETTINGS
                 | PR_THREAD
                 | ISSUE_LIST

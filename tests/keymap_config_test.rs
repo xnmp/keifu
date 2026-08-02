@@ -362,9 +362,8 @@ fn go_to_top_g_default_conflicts_in_list_and_detail_contexts() {
 
 #[test]
 fn filter_text_q_and_y_do_not_conflict_with_cancel_or_confirm() {
-    let keymap = resolved(
-        "[keymap]\ncommit-filter-backspace = [\"q\"]\nfiles-filter-backspace = [\"y\"]\n",
-    );
+    let keymap =
+        resolved("[keymap]\ncommit-filter-backspace = [\"q\"]\nfiles-filter-backspace = [\"y\"]\n");
     assert!(!keymap.warnings().iter().any(|warning| {
         warning.reason.contains("cancel") || warning.reason.contains("confirm")
     }));
