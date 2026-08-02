@@ -435,9 +435,11 @@ example status-bar visibility) become palette actions without another dispatch
 mapping.
 
 The all-branches checkout command opens `AppMode::BranchPicker` with a fuzzy
-query. Handler navigation, rendering, and mouse row counts all use
-`palette::filter_branch_names`, so `selected` always indexes the filtered list.
-Selection still routes through `checkout_branch_by_name`, retaining the
+query. Picker rows retain their authoritative local/remote bit; a local branch
+whose name resembles a remote ref therefore cannot collide with or be treated
+as the remote row. Handler navigation, rendering, and mouse row counts all use
+`palette::filter_checkout_branches`, so `selected` always indexes the filtered
+list. Selection still routes through `checkout_branch_by_name`, retaining the
 configured-remotes-aware local/tracking-branch behavior.
 
 ## Merged-Branch Classification (2026-07-20)
