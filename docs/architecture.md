@@ -424,6 +424,22 @@ display, fuzzy filtering) stays unit-testable without a TUI.
   event loop starts; changing the config value takes effect only on the next
   launch.
 
+## Command Palette Projections (2026-08-02)
+
+The command palette projects setting actions from `settings::descriptors()`;
+it does not define a second collection of setting accessors. Boolean settings
+and Graph renderer are exposed, their current descriptor-formatted value is
+rendered beside the action, and selection calls the same `commit_setting` path
+as the full settings menu. This means newly registered boolean controls (for
+example status-bar visibility) become palette actions without another dispatch
+mapping.
+
+The all-branches checkout command opens `AppMode::BranchPicker` with a fuzzy
+query. Handler navigation, rendering, and mouse row counts all use
+`palette::filter_branch_names`, so `selected` always indexes the filtered list.
+Selection still routes through `checkout_branch_by_name`, retaining the
+configured-remotes-aware local/tracking-branch behavior.
+
 ## Merged-Branch Classification (2026-07-20)
 
 **Decision:** Whether a branch is merged is a pure domain computation

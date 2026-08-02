@@ -37,6 +37,7 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Launch layouts are session-only.** `--bare` and `--scm` select a layout on
   `App` at startup without writing visibility preferences to `state.toml`; the
   default invocation keeps the complete layout.
+- **Command-palette settings are registry projections, not parallel actions.** Palette rows read/cycle the existing descriptors and call the same `commit_setting` persistence path as `Ctrl+,`; boolean descriptors and Graph renderer are the palette-exposed subset.
 - **The unicode and pixel dim/render paths are deliberately parallel implementations** (see comments in `ui/graph_view/`). Do not unify them.
 - **Pixel graph cell geometry is mutable at runtime.** On terminal resize, derive it from `crossterm::terminal::window_size()` and rebuild the `ratatui_image::Picker` as well as clearing pixel protocol caches: the picker embeds its own font metrics, so changing only `PixelGraphState.font_size` leaves fixed-size image protocols stale.
 - **Squash-merge connector identity is its endpoint pair, not a branch name.** Local and remote refs can alias the same tip and target; resolve them through `SquashMergeLine::from_branch_targets` so the graph draws one connector.
