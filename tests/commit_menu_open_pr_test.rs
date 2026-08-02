@@ -3,9 +3,12 @@
 use keifu::action::Action;
 use keifu::app::{App, AppMode, CommitMenuItem, FocusedPanel};
 use keifu::git::GitRepository;
+use keifu::interval_fetch::IntervalFetch;
 use keifu::pr::{compare_create_url, parse_pr_list, parse_repo_info, PrRepoInfo};
 use keifu::toast::ToastKind;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 mod common;
 use common::{add_bare_origin, commit_file, git_cli, init_repo, Seed};
@@ -121,6 +124,32 @@ fn unknown_open_pr_state_does_not_offer_a_duplicate_pr() {
 }
 
 #[test]
+fn successful_initial_pr_fetch_enables_eligible_action() {
+    let (_working, _origin, path) = repo_with_ahead_feature();
+    let mut app = app_at(&path);
+    app.open_prs_loaded = false;
+    app.pr_fetch = IntervalFetch::new(Duration::ZERO, |_| Ok(HashMap::new()));
+
+    let before = menu_items_for_branch(&mut app, "feature/browser-pr");
+    assert!(!before.contains(&CommitMenuItem::OpenPrInBrowser));
+    app.mode = AppMode::Normal;
+
+    for _ in 0..100 {
+        app.update_open_prs();
+        if app.open_prs_loaded {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        app.open_prs_loaded,
+        "a successful initial PR fetch must make the empty result authoritative"
+    );
+    let after = menu_items_for_branch(&mut app, "feature/browser-pr");
+    assert!(after.contains(&CommitMenuItem::OpenPrInBrowser));
+}
+
+#[test]
 fn activation_opens_authoritative_compare_url_without_compose_or_api() {
     let (_working, _origin, path) = repo_with_ahead_feature();
     git_cli(&path, &["branch", "-D", "feature/browser-pr"]);
@@ -150,6 +179,30 @@ fn activation_opens_authoritative_compare_url_without_compose_or_api() {
 }
 
 #[test]
+fn activation_uses_nonstandard_default_base_from_repo_metadata() {
+    let (_working, _origin, path) = repo_with_ahead_feature();
+    git_cli(&path, &["branch", "develop", "main"]);
+    let mut app = app_at(&path);
+    app.pr_repo_info = Some(PrRepoInfo {
+        url: "https://github.com/example/project".to_string(),
+        default_base: "develop".to_string(),
+    });
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&opened);
+    app.url_opener = Arc::new(move |url| {
+        recorded.lock().unwrap().push(url.to_string());
+        Ok(())
+    });
+
+    activate_browser_action(&mut app, "feature/browser-pr");
+
+    assert_eq!(
+        *opened.lock().unwrap(),
+        vec!["https://github.com/example/project/compare/develop...feature/browser-pr?expand=1"]
+    );
+}
+
+#[test]
 fn opener_failure_is_a_nonblocking_error_toast() {
     let (_working, _origin, path) = repo_with_ahead_feature();
     let mut app = app_at(&path);
@@ -159,8 +212,7 @@ fn opener_failure_is_a_nonblocking_error_toast() {
 
     assert!(matches!(app.mode, AppMode::Normal));
     assert!(app.toasts.visible().iter().any(|toast| {
-        toast.kind == ToastKind::Error
-            && toast.text == "Could not open PR: opener unavailable"
+        toast.kind == ToastKind::Error && toast.text == "Could not open PR: opener unavailable"
     }));
     let before = app.graph_nav.graph_list_state.selected();
     app.handle_action(Action::MoveDown).unwrap();
