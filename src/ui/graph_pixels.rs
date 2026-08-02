@@ -1549,7 +1549,13 @@ impl PixelGraphState {
     where
         F: FnOnce(QueryStdioOptions) -> Result<Picker, E>,
     {
-        let picker = query(QueryStdioOptions::default()).ok()?;
+        let picker = query(QueryStdioOptions {
+            // Serial consoles and some multiplexers never reply. Bound this
+            // pre-first-frame query while preserving Picker's default probes.
+            timeout: std::time::Duration::from_millis(250),
+            ..QueryStdioOptions::default()
+        })
+        .ok()?;
         if !is_supported_protocol(picker.protocol_type()) {
             return None;
         }
