@@ -149,6 +149,10 @@ pub fn editor_layout(editor: &TextEditor, width: u16, height: u16) -> EditorLayo
     let before_cursor = &editor.text[..editor.cursor];
     let cursor_logical_row = before_cursor.matches('\n').count();
     let logical_start = before_cursor.rfind('\n').map_or(0, |index| index + 1);
+    let logical_end = editor.text[logical_start..]
+        .find('\n')
+        .map_or(editor.text.len(), |index| logical_start + index);
+    let cursor_logical_line = &editor.text[logical_start..logical_end];
     let cursor_byte = editor.cursor - logical_start;
     let (mut cursor_visual_row, mut cursor_visual_col) = lines
         .iter()
@@ -163,8 +167,9 @@ pub fn editor_layout(editor: &TextEditor, width: u16, height: u16) -> EditorLayo
             if cursor_byte < line.end_byte || is_last_for_logical_row {
                 let relative = cursor_byte
                     .saturating_sub(line.start_byte)
-                    .min(line.text.len());
-                let col = UnicodeWidthStr::width(&line.text[..relative]);
+                    .min(line.end_byte - line.start_byte);
+                let end = line.start_byte + relative;
+                let col = UnicodeWidthStr::width(&cursor_logical_line[line.start_byte..end]);
                 Some((index, col))
             } else {
                 None
