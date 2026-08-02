@@ -1545,7 +1545,8 @@ impl PixelGraphState {
 
     /// Build pixel graph state from the startup terminal query, keeping the
     /// terminal I/O boundary injectable for deterministic startup tests.
-    fn from_startup_query<F, E>(query: F) -> Option<Self>
+    #[doc(hidden)]
+    pub fn from_startup_query<F, E>(query: F) -> Option<Self>
     where
         F: FnOnce(QueryStdioOptions) -> Result<Picker, E>,
     {
