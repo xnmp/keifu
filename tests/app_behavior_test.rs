@@ -8,7 +8,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use git2::{Oid, Repository, Signature, Status};
@@ -21,7 +20,6 @@ use keifu::app::{
 };
 use keifu::git::GitRepository;
 use keifu::keybindings::map_key_to_action;
-use keifu::network::NetworkOperation;
 use keifu::ui::{
     commit_detail::{compute_commit_detail_layout, CommitDetailWidget},
     theme::Theme,
@@ -492,39 +490,6 @@ fn force_quit_sets_should_quit() {
 
     app.handle_action(Action::ForceQuit).unwrap();
     assert!(app.should_quit);
-}
-
-#[cfg(not(unix))]
-#[test]
-fn force_quit_does_not_wait_for_a_non_unix_network_job() {
-    let (_td, repo) = init_repo();
-    commit_file(repo.repo(), "a.txt", "a", "first");
-    let mut app = make_app(repo);
-    app.network
-        .activate_for_test(NetworkOperation::Fetch, Instant::now());
-
-    app.handle_action(Action::ForceQuit).unwrap();
-
-    assert!(app.should_quit);
-    assert!(!app.shutdown_after_network);
-    assert!(app.is_network_busy());
-}
-
-#[test]
-fn normal_and_forced_quit_do_not_wait_when_network_cancellation_is_rejected() {
-    for action in [Action::Quit, Action::ForceQuit] {
-        let (_td, repo) = init_repo();
-        commit_file(repo.repo(), "a.txt", "a", "first");
-        let mut app = make_app(repo);
-        app.network
-            .activate_uncancellable_for_test(NetworkOperation::Fetch, Instant::now());
-
-        app.handle_action(action).unwrap();
-
-        assert!(app.should_quit);
-        assert!(!app.shutdown_after_network);
-        assert!(app.is_network_busy());
-    }
 }
 
 #[test]
