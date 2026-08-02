@@ -221,18 +221,62 @@ fn process_exists(process: i32) -> std::io::Result<bool> {
 }
 
 #[cfg(unix)]
-fn descendant_processes(root: i32) -> HashSet<i32> {
-    let Ok(mut process_list) = Command::new("ps")
+trait ProcessTableSnapshot: Send + 'static {
+    fn try_snapshot(&mut self) -> std::io::Result<Option<Vec<u8>>>;
+    fn terminate(self);
+}
+
+#[cfg(unix)]
+struct PsProcessTableSnapshot {
+    process_list: Child,
+    output_rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    exited: bool,
+}
+
+#[cfg(unix)]
+impl ProcessTableSnapshot for PsProcessTableSnapshot {
+    fn try_snapshot(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        if !self.exited {
+            match self.process_list.try_wait()? {
+                Some(_) => self.exited = true,
+                None => return Ok(None),
+            }
+        }
+        match self.output_rx.try_recv() {
+            Ok(result) => result.map(Some),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "process-table reader disconnected",
+            )),
+        }
+    }
+
+    fn terminate(mut self) {
+        let _ = self.process_list.kill();
+        thread::spawn(move || {
+            let _ = self.process_list.wait();
+        });
+    }
+}
+
+#[cfg(unix)]
+fn start_process_table_snapshot() -> std::io::Result<PsProcessTableSnapshot> {
+    let mut process_list = Command::new("ps")
         .args(["-e", "-o", "pid=,ppid="])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-    else {
-        return HashSet::from([root]);
-    };
+        .spawn()?;
     let Some(mut stdout) = process_list.stdout.take() else {
-        return HashSet::from([root]);
+        let _ = process_list.kill();
+        thread::spawn(move || {
+            let _ = process_list.wait();
+        });
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "ps stdout was not captured",
+        ));
     };
     let (output_tx, output_rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
@@ -240,27 +284,45 @@ fn descendant_processes(root: i32) -> HashSet<i32> {
         let result = stdout.read_to_end(&mut output).map(|_| output);
         let _ = output_tx.send(result);
     });
-    let deadline = Instant::now() + NETWORK_DESCENDANT_DISCOVERY_TIMEOUT;
+    Ok(PsProcessTableSnapshot {
+        process_list,
+        output_rx,
+        exited: false,
+    })
+}
+
+#[cfg(unix)]
+fn descendant_processes_from_snapshot<S: ProcessTableSnapshot>(
+    root: i32,
+    mut snapshot: S,
+    timeout: Duration,
+) -> HashSet<i32> {
+    let deadline = Instant::now() + timeout;
     loop {
-        match process_list.try_wait() {
-            Ok(Some(_)) => break,
+        match snapshot.try_snapshot() {
+            Ok(Some(output)) => return parse_descendant_processes(root, &output),
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
             }
             Ok(None) | Err(_) => {
-                let _ = process_list.kill();
-                thread::spawn(move || {
-                    let _ = process_list.wait();
-                });
+                snapshot.terminate();
                 return HashSet::from([root]);
             }
         }
     }
-    let Ok(Ok(output)) = output_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-    else {
+}
+
+#[cfg(unix)]
+fn descendant_processes(root: i32) -> HashSet<i32> {
+    let Ok(snapshot) = start_process_table_snapshot() else {
         return HashSet::from([root]);
     };
-    let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(&output)
+    descendant_processes_from_snapshot(root, snapshot, NETWORK_DESCENDANT_DISCOVERY_TIMEOUT)
+}
+
+#[cfg(unix)]
+fn parse_descendant_processes(root: i32, output: &[u8]) -> HashSet<i32> {
+    let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(output)
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -2356,6 +2418,50 @@ mod tests {
             );
             thread::yield_now();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_process_enumeration_falls_back_at_the_discovery_deadline() {
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct PendingSnapshot {
+            attempts: Arc<AtomicUsize>,
+            terminated: Arc<AtomicBool>,
+        }
+
+        impl super::ProcessTableSnapshot for PendingSnapshot {
+            fn try_snapshot(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Ok(None)
+            }
+
+            fn terminate(self) {
+                self.terminated.store(true, Ordering::Release);
+            }
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let terminated = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let descendants = super::descendant_processes_from_snapshot(
+            4242,
+            PendingSnapshot {
+                attempts: attempts.clone(),
+                terminated: terminated.clone(),
+            },
+            Duration::from_millis(40),
+        );
+
+        assert_eq!(descendants, HashSet::from([4242]));
+        assert!(attempts.load(Ordering::Relaxed) >= 2);
+        assert!(terminated.load(Ordering::Acquire));
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "cancellation must continue when process enumeration never completes"
+        );
     }
 
     #[test]
