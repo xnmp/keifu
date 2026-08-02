@@ -3,6 +3,7 @@
 use std::fs;
 
 use keifu::git::operations::{abort_interactive_rebase, rebase_interactive, OpOutcome};
+use keifu::rebase_plan::{PlanEntry, RebaseAction, RebasePlan};
 
 mod common;
 use common::{commit_file, git_cli, init_repo, repo_path, Seed};
@@ -171,4 +172,38 @@ fn reword_message_file_survives_a_conflict_until_continue_reaches_it() {
         reopened.head().unwrap().peel_to_commit().unwrap().summary(),
         Some("renamed after conflict")
     );
+}
+
+#[test]
+fn interactive_rebase_can_drop_the_complete_selected_range() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().target().unwrap();
+    let first = commit_file(repo, "first.txt", "first\n", "first");
+    let second = commit_file(repo, "second.txt", "second\n", "second");
+    let mut entries = vec![
+        PlanEntry::pick(second, "second"),
+        PlanEntry::pick(first, "first"),
+    ];
+    for entry in &mut entries {
+        entry.action = RebaseAction::Drop;
+    }
+    let plan = RebasePlan {
+        base_oid: base,
+        entries,
+    };
+    let todo_path = repo.path().join("all-drop-todo");
+    fs::write(&todo_path, plan.to_git_todo(&Default::default()).unwrap()).unwrap();
+
+    let outcome = rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap();
+
+    assert_eq!(outcome, OpOutcome::Completed);
+    let reopened = git2::Repository::open(repo.workdir().unwrap()).unwrap();
+    assert_eq!(reopened.head().unwrap().target(), Some(base));
+    assert!(git_cli(
+        repo_path(&git_repo),
+        &["log", "--format=%s", &format!("{base}..HEAD")]
+    )
+    .trim()
+    .is_empty());
 }

@@ -265,11 +265,32 @@ mod tests {
         assert_eq!(
             todo,
             format!(
-                "pick {} keep me\npick {} rename me\nexec git commit --amend -F '/tmp/rebase message.txt'\nsquash {} squash me\nfixup {} fixup me\n",
+                "pick {} keep me\npick {} rename me\nexec git commit --amend -F '/tmp/rebase message.txt'\nsquash {} squash me\nfixup {} fixup me\ndrop {} drop me\n",
                 oid(1),
                 oid(2),
                 oid(3),
-                oid(4)
+                oid(4),
+                oid(5)
+            )
+        );
+    }
+
+    #[test]
+    fn rebase_plan_serializes_an_all_drop_plan_as_explicit_drop_commands() {
+        let mut plan = plan();
+        for index in 0..plan.entries.len() {
+            plan.set_action(index, RebaseAction::Drop).unwrap();
+        }
+
+        let todo = plan.to_git_todo(&HashMap::new()).unwrap();
+
+        assert_eq!(
+            todo,
+            format!(
+                "drop {} first\ndrop {} second\ndrop {} third\n",
+                oid(1),
+                oid(2),
+                oid(3)
             )
         );
     }

@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn confirmed_plan_refreshes_history_and_toasts_success() {
-        let (_tmp, mut app, base, _head) = app_with_range();
+        let (tmp, mut app, base, _head) = app_with_range();
         app.start_interactive_rebase(base);
         app.rebase_plan
             .as_mut()
@@ -343,6 +343,27 @@ mod tests {
             toast.kind == crate::toast::ToastKind::Success
                 && toast.text.contains("Rebase completed")
         }));
+        assert!(
+            !tmp.path().join(".git/keifu-interactive-rebase").exists(),
+            "completed rebase must remove durable execution state"
+        );
+    }
+
+    #[test]
+    fn startup_removes_orphaned_interactive_rebase_state() {
+        let (tmp, app, _base, _head) = app_with_range();
+        drop(app);
+        let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("message-0"), "secret rewrite message").unwrap();
+
+        let app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+
+        assert!(!app.interactive_rebase_in_progress);
+        assert!(
+            !state_dir.exists(),
+            "startup must reconcile durable state when Git has no interactive rebase"
+        );
     }
 
     #[test]
@@ -377,9 +398,16 @@ mod tests {
         );
         app.refresh(true).unwrap();
         assert!(app.interactive_rebase_in_progress);
+        let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("message-0"), "durable message").unwrap();
         crate::git::operations::abort_interactive_rebase(&app.repo_path).unwrap();
         app.refresh(true).unwrap();
         assert!(!app.interactive_rebase_in_progress);
+        assert!(
+            !state_dir.exists(),
+            "refresh after an external abort must remove orphaned execution state"
+        );
 
         git(tmp.path(), &["checkout", "-q", "upstream"]);
         std::fs::write(tmp.path().join("f.txt"), "upstream\n").unwrap();
@@ -439,7 +467,15 @@ mod tests {
         assert_eq!(app.conflict_count, 1);
         assert_eq!(app.focused_panel, FocusedPanel::Files);
         assert!(app.get_message().unwrap().contains("Conflicts in 1 file"));
-        crate::git::operations::abort_interactive_rebase(&app.repo_path).unwrap();
+        app.mode = AppMode::Confirm {
+            message: "Abort rebase?".to_string(),
+            action: ConfirmAction::AbortOperation(OperationState::Rebase),
+        };
+        app.handle_action(Action::Confirm).unwrap();
+        assert!(
+            !tmp.path().join(".git/keifu-interactive-rebase").exists(),
+            "app-driven abort must remove durable reword/todo state"
+        );
     }
 
     #[cfg(unix)]
@@ -468,5 +504,9 @@ mod tests {
             toast.kind == crate::toast::ToastKind::Error
                 && toast.text.contains("Interactive rebase failed")
         }));
+        assert!(
+            !tmp.path().join(".git/keifu-interactive-rebase").exists(),
+            "failed start must not retain todo or commit-message content"
+        );
     }
 }
