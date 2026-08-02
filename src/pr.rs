@@ -36,6 +36,16 @@ pub struct OpenPrTarget {
     pub compare_url: String,
 }
 
+/// Parse the repository metadata returned by `gh repo view`.
+pub fn parse_repo_info(_json: &str) -> Result<PrRepoInfo, String> {
+    Err("repository metadata parsing is not implemented".to_string())
+}
+
+/// Build GitHub's compare/create URL for a default base and selected head.
+pub fn compare_create_url(_repo_url: &str, _base: &str, _head: &str) -> String {
+    String::new()
+}
+
 /// Aggregate CI status of a PR's head commit, from `statusCheckRollup`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CiStatus {

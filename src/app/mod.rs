@@ -232,6 +232,8 @@ pub enum CommitMenuItem {
     Prune,
     /// Create a PR from the current branch (open PR compose).
     CreatePr,
+    /// Open GitHub's compare/create page for the selected branch.
+    OpenPrInBrowser,
     /// Merge the open PR on this commit (open merge-method picker).
     MergePr,
     CopyHash,
@@ -272,6 +274,7 @@ impl CommitMenuItem {
             Self::Revert => "Revert this commit",
             Self::Prune => "Prune remote-tracking refs",
             Self::CreatePr => "Create pull request...",
+            Self::OpenPrInBrowser => "Open PR in browser",
             Self::MergePr => "Merge pull request...",
             Self::CopyHash => "Copy commit hash",
             Self::CopyMessage => "Copy commit message",
@@ -1146,6 +1149,7 @@ pub struct App {
     // Open GitHub PRs by head branch name, refreshed in the background via the
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
+    pub pr_repo_info: Option<crate::pr::PrRepoInfo>,
     pub pr_fetch:
         crate::interval_fetch::IntervalFetch<std::collections::HashMap<String, crate::pr::PrInfo>>,
 
