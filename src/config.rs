@@ -761,8 +761,23 @@ mod tests {
         let state_path = state_dir.path().join("state.toml");
 
         // A first launch has no state file and retains the historical visible
-        // status bar. Saving a user's toggle must survive a fresh load.
+        // status bar.
         assert!(UiState::load_from_path(&state_path).status_bar_visible);
+
+        // An existing state file from before the status-bar preference must
+        // keep its recorded settings while the new key defaults to visible.
+        fs::write(
+            &state_path,
+            "side_panel_layout = true\ngraph_split_ratio = 72\nhide_stashes = true\n",
+        )
+        .unwrap();
+        let legacy_state = UiState::load_from_path(&state_path);
+        assert!(legacy_state.status_bar_visible);
+        assert!(legacy_state.side_panel_layout);
+        assert_eq!(legacy_state.graph_split_ratio, 72);
+        assert!(legacy_state.hide_stashes);
+
+        // Saving a user's toggle must survive a fresh load.
         UiState {
             status_bar_visible: false,
             ..UiState::default()
