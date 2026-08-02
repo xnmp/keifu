@@ -35,6 +35,70 @@ impl App {
         can_create_pr(&self.open_prs, &head, self.publishable())
     }
 
+    /// The selected branch's browser compare target when it has commits ahead
+    /// of every locally-known copy of GitHub's default base and no open PR.
+    /// Requiring every base copy prevents a stale local base from offering a PR
+    /// after a fresher remote base already contains the selected branch.
+    pub(crate) fn selected_open_pr_target(&self) -> Option<crate::pr::OpenPrTarget> {
+        if !self.open_prs_loaded {
+            return None;
+        }
+        let info = self.pr_repo_info.as_ref()?;
+        let branch = self.selected_branch()?;
+        let head = if branch.is_remote {
+            self.split_remote_ref(&branch.name)?.1
+        } else {
+            branch.name.clone()
+        };
+        if head == info.default_base || self.open_prs.contains_key(&head) {
+            return None;
+        }
+
+        let mut base_tips = self
+            .branches
+            .iter()
+            .filter_map(|candidate| {
+                let bare = if candidate.is_remote {
+                    self.split_remote_ref(&candidate.name)?.1
+                } else {
+                    candidate.name.clone()
+                };
+                (bare == info.default_base).then_some(candidate.tip_oid)
+            })
+            .collect::<Vec<_>>();
+        base_tips.sort_unstable();
+        base_tips.dedup();
+        if base_tips.is_empty()
+            || !base_tips.iter().all(|base_tip| {
+                self.repo
+                    .repo()
+                    .graph_ahead_behind(branch.tip_oid, *base_tip)
+                    .is_ok_and(|(ahead, _)| ahead > 0)
+            })
+        {
+            return None;
+        }
+
+        Some(crate::pr::OpenPrTarget {
+            head: head.clone(),
+            compare_url: crate::pr::compare_create_url(&info.url, &info.default_base, &head),
+        })
+    }
+
+    pub(crate) fn open_pr_in_browser(&mut self) {
+        let Some(target) = self.selected_open_pr_target() else {
+            return;
+        };
+        if let Err(e) = (self.url_opener)(&target.compare_url) {
+            self.show_error(format!("Could not open PR: {e}"));
+        } else {
+            self.toast(
+                ToastKind::Success,
+                format!("Opening PR for {} in browser", target.head),
+            );
+        }
+    }
+
     /// Whether the selected commit carries an open PR (mergeable target).
     pub(crate) fn selected_commit_has_open_pr(&self) -> bool {
         self.selected_open_pr().is_some()
