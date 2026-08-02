@@ -27,9 +27,10 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Push the `DISAMBIGUATE_ESCAPE_CODES` keyboard-enhancement flag when the
-/// terminal advertises support. This is what lets the terminal encode
-/// Ctrl+punctuation (e.g. Ctrl+,) which the legacy protocol cannot represent, so
-/// crossterm can actually see those key events. Returns whether it was enabled.
+/// terminal advertises support. Alongside unambiguous Ctrl+punctuation, this
+/// tells compatible terminals to include `KeyEventState` such as Caps Lock in
+/// each event, so app-level warnings use the terminal's actual lock state.
+/// Returns whether it was enabled.
 ///
 /// Side effect the callers must account for: with this flag on, the terminal
 /// also delivers `KeyEventKind::Release`/`Repeat` events — `keybindings` filters
@@ -61,12 +62,12 @@ pub fn init() -> Result<Tui> {
         EnableBracketedPaste
     )?;
     // Enable keyboard enhancement after the alternate screen so Ctrl+punctuation
-    // (e.g. Ctrl+,) reaches crossterm. Log the outcome so the user can confirm in
-    // the --log-file whether their terminal supports it.
+    // and reported Caps Lock state reach crossterm. Log the outcome so the user
+    // can confirm in the --log-file whether their terminal supports it.
     let enhanced = push_keyboard_enhancement(&mut stdout)?;
     tracing::info!(
         keyboard_enhancement = enhanced,
-        "terminal keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES)"
+        "terminal keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES, Caps Lock state)"
     );
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
