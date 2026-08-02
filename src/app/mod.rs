@@ -1002,6 +1002,9 @@ pub struct App {
 
     // UI state
     pub graph_nav: GraphNav,
+    /// Contextual rows and their selection identity for the currently open
+    /// command palette. Cleared when the palette closes.
+    pub(crate) command_palette_snapshot: Option<crate::palette::ContextualPaletteSnapshot>,
     pub focused_panel: FocusedPanel,
     /// Files pane subsystem state
     pub files_pane: FilesPaneState,

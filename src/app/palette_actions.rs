@@ -2,17 +2,29 @@
 
 use super::*;
 use crate::palette::{
-    command_registry, rank, Candidate, PaletteAction, PaletteContext, PaletteKind, PaletteResults,
-    PALETTE_CAP,
+    command_registry, rank, Candidate, ContextualPaletteSnapshot, PaletteAction,
+    PaletteCommitTarget, PaletteContext, PaletteKind, PaletteResults, PALETTE_CAP,
 };
 
 impl App {
     /// Open the fuzzy command palette with an empty query.
     pub(crate) fn open_command_palette(&mut self) {
+        self.command_palette_snapshot = Some(ContextualPaletteSnapshot {
+            target: self.palette_commit_target(),
+            items: self.available_commit_menu_items(),
+        });
         self.mode = AppMode::CommandPalette {
             query: String::new(),
             selected: 0,
         };
+    }
+
+    fn palette_commit_target(&self) -> Option<PaletteCommitTarget> {
+        self.selected_commit_node().map(|node| PaletteCommitTarget {
+            oid: node.commit.as_ref().map(|commit| commit.oid),
+            is_stash: node.is_stash,
+            selected_branch: self.selected_branch_name().map(str::to_owned),
+        })
     }
 
     /// The eligibility context that gates which commands the registry offers.
@@ -57,7 +69,17 @@ impl App {
         // unavailable operations out of the palette rather than offering a
         // command that would immediately fail or do nothing.
         let registry_len = out.len();
-        for (i, item) in self.available_commit_menu_items().into_iter().enumerate() {
+        let (items, target) = match self.command_palette_snapshot.as_ref() {
+            Some(snapshot) => (snapshot.items.clone(), snapshot.target.clone()),
+            None => (
+                self.available_commit_menu_items(),
+                self.palette_commit_target(),
+            ),
+        };
+        for (i, item) in items.into_iter().enumerate() {
+            let Some(target) = target.clone() else {
+                continue;
+            };
             let label = item.label().to_string();
             if out.iter().any(|candidate| candidate.label == label) {
                 continue;
@@ -67,7 +89,7 @@ impl App {
                 label: label.clone(),
                 hint: Some("Enter".to_string()),
                 match_text: label,
-                action: PaletteAction::CommitMenuItem(item),
+                action: PaletteAction::CommitMenuItem { item, target },
                 order: registry_len + i,
             });
         }
@@ -171,6 +193,7 @@ impl App {
             }
             Action::Cancel | Action::Quit => {
                 self.mode = AppMode::Normal;
+                self.command_palette_snapshot = None;
             }
             _ => {}
         }
@@ -184,12 +207,23 @@ impl App {
                 // Registry commands act on the graph/repo: close the palette,
                 // focus the graph panel, then dispatch through the normal path.
                 self.mode = AppMode::Normal;
+                self.command_palette_snapshot = None;
                 self.focused_panel = FocusedPanel::Graph;
                 self.handle_action(inner)?;
             }
-            PaletteAction::CommitMenuItem(item) => {
+            PaletteAction::CommitMenuItem { item, target } => {
                 // This is deliberately the Enter-menu executor, so prompts,
                 // confirmations, toasts, and cancellation stay identical.
+                self.command_palette_snapshot = None;
+                if self.palette_commit_target().as_ref() != Some(&target)
+                    || !self.available_commit_menu_items().contains(&item)
+                {
+                    self.mode = AppMode::Normal;
+                    self.show_error(
+                        "Selection or repository state changed; reopen command palette".to_string(),
+                    );
+                    return Ok(());
+                }
                 self.execute_menu_item(item)?;
             }
             PaletteAction::Checkout { name, is_remote } => {
@@ -201,6 +235,7 @@ impl App {
             }
             PaletteAction::JumpToCommit(idx) => {
                 self.mode = AppMode::Normal;
+                self.command_palette_snapshot = None;
                 self.focused_panel = FocusedPanel::Graph;
                 self.select_commit_by_full_idx(idx);
             }
