@@ -10,6 +10,15 @@ use git2::{BranchType, Oid, Repository, Status, StatusOptions};
 use super::askpass::{self, Credentials};
 use super::repository::OperationState;
 
+// Git executes editor values through a shell. `true` is available on Unix and
+// Git Bash, but is not a reliable executable for Git launched from Windows.
+// Use cmd.exe there so CLI operations never wait for an interactive editor.
+#[cfg(windows)]
+const NONINTERACTIVE_GIT_EDITOR: &str = "cmd /c exit 0";
+
+#[cfg(not(windows))]
+const NONINTERACTIVE_GIT_EDITOR: &str = "true";
+
 /// Attach the askpass shim + credential env vars to `cmd` when `creds` is set,
 /// so a retried HTTPS git op authenticates without a terminal prompt. A no-op
 /// when `creds` is `None` (the normal, uncredentialed path).
@@ -108,8 +117,8 @@ fn run_git_allow_conflict_creds(
     cmd.args(args)
         .current_dir(repo_path)
         // Never block the TUI on an editor prompt.
-        .env("GIT_EDITOR", "true")
-        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("GIT_EDITOR", NONINTERACTIVE_GIT_EDITOR)
+        .env("GIT_SEQUENCE_EDITOR", NONINTERACTIVE_GIT_EDITOR)
         // Never block on a credential prompt (see run_git).
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
@@ -150,7 +159,7 @@ pub fn rebase_interactive(repo_path: &str, base_oid: Oid, todo_path: &Path) -> R
         &base_oid.to_string(),
     ])
     .current_dir(repo_path)
-    .env("GIT_EDITOR", "true")
+    .env("GIT_EDITOR", NONINTERACTIVE_GIT_EDITOR)
     .env("GIT_SEQUENCE_EDITOR", sequence_editor)
     .env("GIT_TERMINAL_PROMPT", "0")
     .stdin(Stdio::null());
@@ -1064,8 +1073,8 @@ pub fn continue_interactive_rebase(repo_path: &str) -> Result<OpOutcome> {
     let output = Command::new("git")
         .args(["rebase", "--continue"])
         .current_dir(repo_path)
-        .env("GIT_EDITOR", "true")
-        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("GIT_EDITOR", NONINTERACTIVE_GIT_EDITOR)
+        .env("GIT_SEQUENCE_EDITOR", NONINTERACTIVE_GIT_EDITOR)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .output()
