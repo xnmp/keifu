@@ -225,6 +225,9 @@ impl App {
         };
         match outcome {
             Ok(OpOutcome::Completed) => {
+                if op == OperationState::Rebase && self.interactive_rebase_in_progress {
+                    self.record_completed_interactive_rebase_undo();
+                }
                 self.interactive_rebase_in_progress = false;
                 self.cleanup_interactive_rebase_state();
                 self.refresh(true)?;

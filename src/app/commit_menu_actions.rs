@@ -549,6 +549,9 @@ impl App {
                 }
             }
             CommitMenuItem::InteractiveRebase => {
+                if self.block_if_op_in_progress("rebase") {
+                    return Ok(());
+                }
                 if let Some(oid) = commit_oid {
                     self.start_interactive_rebase(oid);
                 }

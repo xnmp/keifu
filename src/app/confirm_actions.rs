@@ -79,34 +79,9 @@ impl App {
                         op_outcome = Some((outcome, OperationState::Rebase));
                     }
                     ConfirmAction::RunInteractiveRebase(plan) => {
-                        let pre_head = self.repo.head_oid();
-                        let count = plan.entries.len();
-                        let base = plan.base_oid;
                         match self.run_interactive_rebase_plan(plan) {
                             Ok(outcome) => {
                                 op_outcome = Some((outcome, OperationState::Rebase));
-                                if outcome == OpOutcome::Completed {
-                                    if let (Some(pre), Some(post)) =
-                                        (pre_head, self.repo.head_oid())
-                                    {
-                                        if pre != post {
-                                            self.record_undo(crate::undo::UndoEntry {
-                                                description: format!(
-                                                    "Interactive rebase ({count} commits onto {})",
-                                                    short_hash(base)
-                                                ),
-                                                confirm: format!(
-                                                    "Undo: rebase → reset to {}?",
-                                                    short_hash(pre)
-                                                ),
-                                                plan: crate::undo::UndoPlan::ResetHard { to: pre },
-                                                check: crate::undo::UndoCheck::HeadAtCleanTree(
-                                                    post,
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
                             }
                             Err(error) => {
                                 self.mode = AppMode::Normal;

@@ -7,8 +7,18 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use git2::Sort;
+use serde::{Deserialize, Serialize};
 
 use super::*;
+
+const INTERACTIVE_REBASE_UNDO_FILE: &str = "pending-undo.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PendingInteractiveRebaseUndo {
+    pre_head: String,
+    base: String,
+    commit_count: usize,
+}
 
 fn acquire_interactive_rebase_state(git_dir: &Path) -> Result<File> {
     let lock = OpenOptions::new()
@@ -210,11 +220,28 @@ impl App {
     }
 
     pub(crate) fn run_interactive_rebase_plan(&mut self, plan: RebasePlan) -> Result<OpOutcome> {
-        let git_dir = self.repo.repo().path();
-        let _state_owner = acquire_interactive_rebase_state(git_dir)?;
+        let git_dir = self.repo.repo().path().to_path_buf();
+        let _state_owner = acquire_interactive_rebase_state(&git_dir)?;
+        if git_dir.join("rebase-merge/interactive").exists() {
+            bail!("An interactive rebase is already in progress");
+        }
         let state_dir = git_dir.join("keifu-interactive-rebase");
         let result = (|| {
+            if state_dir.exists() {
+                fs::remove_dir_all(&state_dir).context("Remove stale interactive rebase state")?;
+            }
             fs::create_dir_all(&state_dir).context("Create interactive rebase state")?;
+            let pre_head = self.repo.head_oid().context("HEAD has no commit")?;
+            let pending_undo = PendingInteractiveRebaseUndo {
+                pre_head: pre_head.to_string(),
+                base: plan.base_oid.to_string(),
+                commit_count: plan.entries.len(),
+            };
+            fs::write(
+                state_dir.join(INTERACTIVE_REBASE_UNDO_FILE),
+                serde_json::to_vec(&pending_undo)?,
+            )
+            .context("Write interactive rebase undo state")?;
             let mut paths = HashMap::new();
             for (index, entry) in plan.entries.iter().enumerate() {
                 if entry.action != RebaseAction::Reword {
@@ -243,10 +270,53 @@ impl App {
             .path()
             .join("rebase-merge/interactive")
             .exists();
+        if matches!(&result, Ok(OpOutcome::Completed)) {
+            self.record_completed_interactive_rebase_undo();
+        }
         if !self.interactive_rebase_in_progress {
             let _ = fs::remove_dir_all(&state_dir);
         }
         result
+    }
+
+    pub(crate) fn record_completed_interactive_rebase_undo(&mut self) {
+        let path = self
+            .repo
+            .repo()
+            .path()
+            .join("keifu-interactive-rebase")
+            .join(INTERACTIVE_REBASE_UNDO_FILE);
+        if !path.exists() {
+            return;
+        }
+        let entry = (|| -> Result<Option<crate::undo::UndoEntry>> {
+            let pending: PendingInteractiveRebaseUndo =
+                serde_json::from_slice(&fs::read(&path).context("Read rebase undo state")?)
+                    .context("Parse rebase undo state")?;
+            let pre = Oid::from_str(&pending.pre_head).context("Parse pre-rebase HEAD")?;
+            let base = Oid::from_str(&pending.base).context("Parse rebase base")?;
+            let post = self.repo.head_oid().context("HEAD has no commit")?;
+            if pre == post {
+                return Ok(None);
+            }
+            Ok(Some(crate::undo::UndoEntry {
+                description: format!(
+                    "Interactive rebase ({} commits onto {})",
+                    pending.commit_count,
+                    short_hash(base)
+                ),
+                confirm: format!("Undo: rebase → reset to {}?", short_hash(pre)),
+                plan: crate::undo::UndoPlan::ResetHard { to: pre },
+                check: crate::undo::UndoCheck::HeadAtCleanTree(post),
+            }))
+        })();
+        match entry {
+            Ok(Some(entry)) => self.record_undo(entry),
+            Ok(None) => {}
+            Err(error) => self.show_error(format!(
+                "Rebase completed, but undo is unavailable: {error}"
+            )),
+        }
     }
 
     pub(crate) fn cleanup_interactive_rebase_state(&self) {
@@ -551,10 +621,28 @@ mod tests {
         std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
         git(tmp.path(), &["add", "f.txt"]);
         let mut resumed = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        assert!(tmp
+            .path()
+            .join(".git/keifu-interactive-rebase/pending-undo.json")
+            .exists());
         resumed.focused_panel = FocusedPanel::Files;
         resumed.handle_action(Action::ContinueOperation).unwrap();
+        if resumed.interactive_rebase_in_progress {
+            resumed.handle_action(Action::ContinueOperation).unwrap();
+        }
         let rebased_head = resumed.repo.head_oid().unwrap();
         assert_ne!(rebased_head, original_head);
+        assert_eq!(
+            resumed.undo_ledger.len(),
+            1,
+            "toasts: {:?}",
+            resumed
+                .toasts
+                .visible()
+                .iter()
+                .map(|toast| toast.text.as_str())
+                .collect::<Vec<_>>()
+        );
 
         resumed.focused_panel = FocusedPanel::Graph;
         resumed.handle_action(Action::UndoLastOp).unwrap();
@@ -598,7 +686,6 @@ mod tests {
         };
         first_app.handle_action(Action::Confirm).unwrap();
         assert!(first_app.interactive_rebase_in_progress);
-        drop(first_app);
 
         let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
         let message_path = std::fs::read_dir(&state_dir)
@@ -619,17 +706,24 @@ mod tests {
 
         let second_start = second_app.run_interactive_rebase_plan(second_plan);
 
-        assert!(second_start.is_err());
+        assert!(
+            second_start
+                .unwrap_err()
+                .to_string()
+                .contains("already in progress")
+        );
         assert_eq!(
             std::fs::read_to_string(&message_path).unwrap(),
             "original pending message"
         );
         std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
         git(tmp.path(), &["add", "f.txt"]);
-        second_app.focused_panel = FocusedPanel::Files;
-        second_app.handle_action(Action::ContinueOperation).unwrap();
+        first_app.handle_action(Action::ContinueOperation).unwrap();
+        if first_app.interactive_rebase_in_progress {
+            first_app.handle_action(Action::ContinueOperation).unwrap();
+        }
         assert_eq!(
-            second_app
+            first_app
                 .repo
                 .repo()
                 .head()
