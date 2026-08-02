@@ -152,6 +152,37 @@ impl NetworkManager {
         self.is_fetching() || self.is_pushing() || self.is_pulling()
     }
 
+    /// Current operation lifecycle snapshot, when network work is active.
+    pub fn status(&self) -> Option<NetworkStatus> {
+        None
+    }
+
+    /// Record a monotonic worker-progress snapshot at `observed_at`.
+    pub fn record_progress_at(&mut self, _progress: NetworkProgress, _observed_at: Instant) {}
+
+    /// Request timeout cancellation when the current inactivity window has
+    /// elapsed. Returns true only for the transition into cancellation.
+    pub fn check_inactivity_at(&mut self, _now: Instant) -> bool {
+        false
+    }
+
+    /// Request cancellation of the active operation. Returns true only for the
+    /// first request accepted by a running operation.
+    pub fn cancel_active(&mut self, _reason: CancellationReason) -> bool {
+        false
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn active_for_test(_operation: NetworkOperation, _started_at: Instant) -> Self {
+        Self::new()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn activate_for_test(&mut self, _operation: NetworkOperation, _started_at: Instant) {}
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finish_cancelled_for_test(&mut self, _reason: CancellationReason) {}
+
     /// Start a background fetch from `remote`.
     pub fn start_fetch(
         &mut self,
