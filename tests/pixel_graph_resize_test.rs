@@ -1,17 +1,14 @@
 use crossterm::{event::Event, terminal::WindowSize};
 use keifu::ui::graph_pixels::PixelGraphState;
 
-use super::handle_pixel_graph_resize;
-
 #[test]
-fn resize_event_refreshes_the_pixel_graph_cell_geometry() {
+fn resize_event_refreshes_pixel_graph_cell_geometry() {
     std::env::set_var("KEIFU_FORCE_PIXEL", "iterm2");
     let mut state = PixelGraphState::new().expect("forced iTerm2 pixel graph state");
     std::env::remove_var("KEIFU_FORCE_PIXEL");
 
-    handle_pixel_graph_resize(
+    state.refresh_on_resize_event(
         &Event::Resize(100, 40),
-        Some(&mut state),
         Some(WindowSize {
             columns: 100,
             rows: 40,
