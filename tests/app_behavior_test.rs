@@ -1306,16 +1306,28 @@ fn command_palette_exposes_and_dispatches_available_commit_actions() {
     commit_file(repo.repo(), "a.txt", "a", "first");
     let mut app = make_app(repo);
 
-    // Cherry-pick is an available Enter-menu action for a normal commit and
-    // must be directly discoverable in the command palette, not hidden behind
-    // a second menu.
-    let labels: Vec<String> = app
-        .palette_results("Cherry-pick")
-        .items
-        .into_iter()
-        .map(|item| item.label)
-        .collect();
-    assert!(labels.iter().any(|label| label == "Cherry-pick"), "{labels:?}");
+    // Every representative category of normal-commit Enter action is directly
+    // discoverable in the command palette, not hidden behind a second menu.
+    for expected in [
+        "Checkout",
+        "Cherry-pick",
+        "Reset to this commit...",
+        "Add tag",
+        "Revert this commit",
+        "Copy commit hash",
+        "Copy commit message",
+    ] {
+        let labels: Vec<String> = app
+            .palette_results(expected)
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(
+            labels.iter().any(|label| label == expected),
+            "{expected}: {labels:?}"
+        );
+    }
 
     app.handle_action(Action::OpenCommandPalette).unwrap();
     for c in "Cherry-pick".chars() {
@@ -1339,23 +1351,18 @@ fn command_palette_uses_enter_menu_preconditions_for_stashes_and_branch_tips() {
     commit_file(repo.repo(), "b.txt", "b", "second");
     let mut app = make_app(repo);
 
-    // A non-tip commit cannot delete a branch; the palette must omit it just
-    // like the Enter context menu instead of surfacing a dead-end command.
-    let first_idx = app
-        .graph_layout
-        .nodes
-        .iter()
-        .position(|node| node.commit.as_ref().map(|commit| commit.oid) == Some(first))
-        .unwrap();
-    app.graph_nav.graph_list_state.select(Some(first_idx));
-    app.graph_nav.selected_branch_position = None;
+    // The checked-out branch cannot be deleted; the palette must omit that
+    // otherwise valid action instead of surfacing a dead-end command.
     let labels: Vec<String> = app
         .palette_results("Delete branch")
         .items
         .into_iter()
         .map(|item| item.label)
         .collect();
-    assert!(!labels.iter().any(|label| label == "Delete branch"), "{labels:?}");
+    assert!(
+        !labels.iter().any(|label| label == "Delete branch"),
+        "{labels:?}"
+    );
 
     fs::write(td.path().join("a.txt"), "stashed").unwrap();
     {
@@ -1378,9 +1385,20 @@ fn command_palette_uses_enter_menu_preconditions_for_stashes_and_branch_tips() {
         .into_iter()
         .map(|item| item.label)
         .collect();
-    assert!(labels.iter().any(|label| label == "Apply stash"), "{labels:?}");
-    assert!(labels.iter().any(|label| label == "Pop stash (apply + drop)"), "{labels:?}");
-    assert!(!labels.iter().any(|label| label == "Cherry-pick"), "{labels:?}");
+    assert!(
+        labels.iter().any(|label| label == "Apply stash"),
+        "{labels:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label == "Pop stash (apply + drop)"),
+        "{labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label == "Cherry-pick"),
+        "{labels:?}"
+    );
 }
 
 // ── Workflow: Commit Menu on Uncommitted Node → Files Panel ─────────

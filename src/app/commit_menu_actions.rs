@@ -91,29 +91,38 @@ impl App {
         // Keyboard opens the menu centered; a right-click sets `menu_anchor`
         // afterward to place it at the cursor.
         self.menu_anchor = None;
-        let Some(node) = self.selected_commit_node() else {
-            return;
-        };
-
-        if node.is_uncommitted {
+        if self.is_uncommitted_selected() {
             // For uncommitted node, go to files panel
             self.focus_files_pane();
             return;
         }
 
+        let items = self.available_commit_menu_items();
+        if items.is_empty() {
+            return;
+        }
+        self.mode = AppMode::CommitMenu {
+            items,
+            selected: 0,
+            filter: String::new(),
+        };
+    }
+
+    /// The actions Enter can offer for the current graph selection. Keeping
+    /// this as the single availability source lets the command palette expose
+    /// exactly the same context-valid operations without stale duplicates.
+    pub(crate) fn available_commit_menu_items(&self) -> Vec<CommitMenuItem> {
+        let Some(node) = self.selected_commit_node() else {
+            return Vec::new();
+        };
+
         if node.is_stash {
-            let items = vec![
+            return vec![
                 CommitMenuItem::StashApply,
                 CommitMenuItem::StashPop,
                 CommitMenuItem::BranchFromStash,
                 CommitMenuItem::StashDrop,
             ];
-            self.mode = AppMode::CommitMenu {
-                items,
-                selected: 0,
-                filter: String::new(),
-            };
-            return;
         }
 
         let selected_oid = node.commit.as_ref().map(|c| c.oid);
@@ -220,11 +229,7 @@ impl App {
         items.push(CommitMenuItem::CopyHash);
         items.push(CommitMenuItem::CopyMessage);
 
-        self.mode = AppMode::CommitMenu {
-            items,
-            selected: 0,
-            filter: String::new(),
-        };
+        items
     }
 
     /// Local (non-remote) branch names pointing at the selected node.
@@ -467,7 +472,7 @@ impl App {
             .count()
     }
 
-    fn execute_menu_item(&mut self, item: CommitMenuItem) -> Result<()> {
+    pub(crate) fn execute_menu_item(&mut self, item: CommitMenuItem) -> Result<()> {
         self.mode = AppMode::Normal;
 
         let commit_oid = self

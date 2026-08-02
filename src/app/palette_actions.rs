@@ -51,6 +51,26 @@ impl App {
             });
         }
 
+        // Enter-menu operations are context-sensitive: the same builder that
+        // supplies the menu determines which palette rows exist. This keeps
+        // unavailable operations out of the palette rather than offering a
+        // command that would immediately fail or do nothing.
+        let registry_len = out.len();
+        for (i, item) in self.available_commit_menu_items().into_iter().enumerate() {
+            let label = item.label().to_string();
+            if out.iter().any(|candidate| candidate.label == label) {
+                continue;
+            }
+            out.push(Candidate {
+                kind: PaletteKind::Command,
+                label: label.clone(),
+                hint: Some("Enter".to_string()),
+                match_text: label,
+                action: PaletteAction::CommitMenuItem(item),
+                order: registry_len + i,
+            });
+        }
+
         // Branches — "Checkout <name>", remote branches marked with the cloud
         // glyph (same convention as the graph chips). Match on the bare name.
         for b in &self.branches {
@@ -165,6 +185,11 @@ impl App {
                 self.mode = AppMode::Normal;
                 self.focused_panel = FocusedPanel::Graph;
                 self.handle_action(inner)?;
+            }
+            PaletteAction::CommitMenuItem(item) => {
+                // This is deliberately the Enter-menu executor, so prompts,
+                // confirmations, toasts, and cancellation stay identical.
+                self.execute_menu_item(item)?;
             }
             PaletteAction::Checkout { name, is_remote } => {
                 // Route through the existing checkout confirmation.

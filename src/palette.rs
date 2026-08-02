@@ -56,6 +56,9 @@ impl PaletteKind {
 pub enum PaletteAction {
     /// Dispatch an app action (focused on the graph panel).
     Dispatch(Action),
+    /// Run a context-menu action that is currently available for the selected
+    /// graph node. The palette derives these from the same source as Enter.
+    CommitMenuItem(crate::app::CommitMenuItem),
     /// Open the checkout confirmation for a branch. `is_remote` carries the
     /// branch's authoritative remote/local status from its `BranchInfo`.
     Checkout { name: String, is_remote: bool },
