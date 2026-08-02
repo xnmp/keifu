@@ -1798,6 +1798,7 @@ mod tests {
         let repo = tmp.path().join("repo");
         let helper = tmp.path().join("remote-helper");
         let config_log = tmp.path().join("config.log");
+        let helper_pid_log = tmp.path().join("helper.pid");
         std::fs::create_dir(&repo).unwrap();
         assert!(std::process::Command::new("git")
             .args(["init", "-q"])
@@ -1811,11 +1812,13 @@ mod tests {
                 "#!/bin/sh\n\
                  git config --get http.lowSpeedLimit > \"{}\"\n\
                  git config --get http.lowSpeedTime >> \"{}\"\n\
+                 printf '%s' \"$$\" > \"{}\"\n\
                  printf 'remote: Counting objects: 50%% (500/1000)\\r' >&2\n\
-                 sleep 3 &\n\
-                 while :; do sleep 1; done\n",
+                 trap '' INT TERM\n\
+                 sleep 8\n",
                 config_log.display(),
-                config_log.display()
+                config_log.display(),
+                helper_pid_log.display()
             ),
         )
         .unwrap();
@@ -1855,10 +1858,19 @@ mod tests {
             Err(NetworkFailure::Cancelled(CancellationReason::User))
         );
         assert!(
-            cancelled_at.elapsed() < Duration::from_secs(1),
-            "cancellation must not wait for a surviving helper that inherited Git's pipes"
+            cancelled_at.elapsed() < Duration::from_secs(6),
+            "bounded cancellation must stop the Git process group before final escalation"
         );
         assert_eq!(std::fs::read_to_string(config_log).unwrap(), "1\n60\n");
+        let helper_pid = std::fs::read_to_string(helper_pid_log).unwrap();
+        assert!(
+            !Command::new("kill")
+                .args(["-0", helper_pid.trim()])
+                .status()
+                .unwrap()
+                .success(),
+            "the transport helper must not survive cancellation"
+        );
     }
 
     #[test]
@@ -2004,7 +2016,7 @@ mod tests {
         assert_eq!(humanize_git_error("some unexpected failure"), None);
     }
 
-    use super::{fetch_all, fetch_remote};
+    use super::{fetch_all, fetch_remote, fetch_remote_controlled, pull_controlled};
     use crate::test_support::git;
     use git2::{BranchType, Repository};
     use std::process::Command;
@@ -2049,6 +2061,218 @@ mod tests {
         git(dst, &["add", "b.txt"]);
         git(dst, &["commit", "-qm", "advance"]);
         git(dst, &["push", "-q", "origin", branch]);
+    }
+
+    #[cfg(unix)]
+    fn setup_advanced_remote(
+        tmp: &tempfile::TempDir,
+    ) -> (std::path::PathBuf, std::path::PathBuf, git2::Oid, git2::Oid) {
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        let other = tmp.path().join("other");
+        init_bare(&remote);
+        init_repo_with_commit(&local);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&local, &["push", "-qu", "origin", "master"]);
+        let old_oid = Repository::open(&local)
+            .unwrap()
+            .refname_to_id("refs/remotes/origin/master")
+            .unwrap();
+
+        assert!(Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap()
+            .success());
+        git(&other, &["config", "user.email", "t@t.com"]);
+        git(&other, &["config", "user.name", "t"]);
+        std::fs::write(other.join("a.txt"), "advanced").unwrap();
+        git(&other, &["add", "a.txt"]);
+        git(&other, &["commit", "-qm", "advance"]);
+        git(&other, &["push", "-q", "origin", "master"]);
+        let new_oid = Repository::open(&other).unwrap().head().unwrap().target().unwrap();
+        (remote, local, old_oid, new_oid)
+    }
+
+    #[cfg(unix)]
+    fn install_blocking_reference_hook(
+        local: &std::path::Path,
+        marker: &std::path::Path,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let hook = local.join(".git/hooks/reference-transaction");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = prepared ]; then\n\
+                   printf ready > \"{}\"\n\
+                   trap '' INT TERM\n\
+                   sleep 8\n\
+                 fi\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+        hook
+    }
+
+    #[cfg(unix)]
+    fn wait_for_marker(marker: &std::path::Path) {
+        for _ in 0..250 {
+            if marker.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("timed out waiting for Git reference transaction hook");
+    }
+
+    #[cfg(unix)]
+    fn lock_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        fn visit(path: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(path) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "lock") {
+                    found.push(path);
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        visit(root, &mut found);
+        found
+    }
+
+    #[cfg(unix)]
+    fn fresh_control() -> NetworkCommandControl {
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        NetworkCommandControl::new(CancellationToken::default(), progress_tx)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_fetch_preserves_refs_locks_and_allows_a_subsequent_fetch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, old_oid, new_oid) = setup_advanced_remote(&tmp);
+        let marker = tmp.path().join("fetch-prepared");
+        let hook = install_blocking_reference_hook(&local, &marker);
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            let (progress_tx, _progress_rx) = mpsc::channel();
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            fetch_remote_controlled(&local_for_worker, "origin", None, &control)
+        });
+
+        wait_for_marker(&marker);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("fetch worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(
+            repo.refname_to_id("refs/remotes/origin/master").unwrap(),
+            old_oid,
+            "a cancelled prepared transaction must not publish a partial ref update"
+        );
+        assert!(
+            lock_files(&local.join(".git")).is_empty(),
+            "cancellation must not leave stale Git lock files"
+        );
+
+        std::fs::remove_file(hook).unwrap();
+        fetch_remote_controlled(
+            local.to_str().unwrap(),
+            "origin",
+            None,
+            &fresh_control(),
+        )
+        .expect("a later controlled fetch must succeed");
+        assert_eq!(
+            Repository::open(&local)
+                .unwrap()
+                .refname_to_id("refs/remotes/origin/master")
+                .unwrap(),
+            new_oid
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_pull_transfer_leaves_head_clean_and_a_later_pull_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, old_oid, new_oid) = setup_advanced_remote(&tmp);
+        let marker = tmp.path().join("pull-fetch-prepared");
+        let hook = install_blocking_reference_hook(&local, &marker);
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            let (progress_tx, _progress_rx) = mpsc::channel();
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            pull_controlled(
+                &local_for_worker,
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &control,
+            )
+        });
+
+        wait_for_marker(&marker);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("pull worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(repo.head().unwrap().target(), Some(old_oid));
+        assert_eq!(std::fs::read_to_string(local.join("a.txt")).unwrap(), "a");
+        assert!(
+            lock_files(&local.join(".git")).is_empty(),
+            "cancelled pull transfer must not leave stale Git lock files"
+        );
+
+        std::fs::remove_file(hook).unwrap();
+        assert_eq!(
+            pull_controlled(
+                local.to_str().unwrap(),
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &fresh_control(),
+            )
+            .expect("a later controlled pull must succeed"),
+            OpOutcome::Completed
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(repo.head().unwrap().target(), Some(new_oid));
+        assert_eq!(
+            std::fs::read_to_string(local.join("a.txt")).unwrap(),
+            "advanced"
+        );
     }
 
     /// #91: `fetch_all` fetches remotes independently — a broken remote must not
