@@ -92,7 +92,13 @@ ranges instead of duplicating geometry in the widget and frame renderer.
 
 **Conflicted files** carry `StageStatus::Conflicted`. An unmerged path surfaces in *both* the HEAD→index and index→workdir diffs, so both `from_working_tree` and `quick_file_list_for_working_tree` drop it from the staged side and keep one entry on the unstaged side; the files pane groups those into a "Merge Changes" section rendered first (marker `!`).
 
-**Gotcha — rebase abort/continue must use libgit2, not the CLI.** `rebase_branch` starts the rebase via `repo.rebase()`, which writes a `.git/rebase-merge` layout *without* a `git-rebase-todo`. `git rebase --continue/--abort` then fails with "could not open '.git/rebase-merge/git-rebase-todo'". So `abort_operation`/`continue_operation` special-case `Rebase` to `Rebase::abort()` / `open_rebase()+commit()+finish()`. Merge/cherry-pick/revert use `git <op> --abort|--continue` (libgit2's merge writes a CLI-compatible MERGE_HEAD; cherry-pick/revert are CLI-driven throughout). Continue runs with `GIT_EDITOR=true` so it never blocks the TUI.
+**Gotcha — rebase recovery follows its creator.** `rebase_branch` starts an ordinary rebase via `repo.rebase()`, which writes a `.git/rebase-merge` layout *without* a `git-rebase-todo`. `git rebase --continue/--abort` cannot drive that layout, so the ordinary route keeps using `Rebase::abort()` / `open_rebase()+commit()+finish()`. Interactive rebase is deliberately created by `git rebase -i` and has a CLI todo (including `exec` lines), so it must use `git rebase --continue|--abort`. `App::interactive_rebase_in_progress`, recovered from `.git/rebase-merge/interactive` on startup, selects between the drivers. Never collapse these routes based only on `OperationState::Rebase`; that enum intentionally describes the user-facing operation, not its storage format.
+
+## Interactive Rebase (2026-08-02, #25)
+
+**Decision:** Rebase intent is a pure `RebasePlan`, stored newest-first to match the graph and serialized oldest-first to match Git. Every edit is validated before it replaces the displayed plan; squash/fixup cannot become the first retained todo entry through either an action change, drop, or reorder.
+
+The plan lives on `App`, while `AppMode::RebasePlan` carries only its cursor. This preserves the plan when reword input and confirmation temporarily replace the mode. Confirmation materializes a durable todo and reword-message files under `.git/keifu-interactive-rebase`, then `GIT_SEQUENCE_EDITOR` hands that todo to `git rebase -i`. Git owns rewriting, signing, hooks, conflicts, and crash recovery; keifu refreshes and records a guarded hard-reset undo only after completion. State files remain while a CLI rebase is paused and are removed on completion or abort.
 
 **Keys (files pane):** `o` accept ours, `t` accept theirs, `c` continue, `A` abort (behind the Confirm dialog).
 

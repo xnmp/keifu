@@ -1,7 +1,7 @@
 # Interactive rebase — design (issue #25)
 
-Status: **design only**. This document proposes the architecture; no execution
-code ships on this branch. Every claim below is grounded in existing keifu code
+Status: **implemented**. This document records the architecture used by the
+interactive-rebase workflow. Every claim below is grounded in keifu code
 (cited as `path:line`).
 
 Interactive rebase is the one genuinely multi-session feature on the slate, and

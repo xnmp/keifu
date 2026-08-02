@@ -27,7 +27,7 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - File diff view with syntax highlighting, word-level change emphasis, and hunk-level stage/unstage/discard
 - Files pane: stage/unstage (file, folder, or all), gitignore, archive to `.archive/`, trash untracked files, undo, folder grouping, fuzzy filter, copy path, per-file history
 - Merge-conflict handling: accept ours/theirs, continue/abort a merge, rebase, cherry-pick, or revert
-- Git operations: checkout, create/rename/delete branch, merge, rebase, cherry-pick, revert, reset (soft/mixed/hard), tag add/delete/push, stash (apply/pop/drop, staged/all/all+untracked push, branch-from-stash)
+- Git operations: checkout, create/rename/delete branch, merge, rebase, interactive rebase (reorder/reword/squash/fixup/drop), cherry-pick, revert, reset (soft/mixed/hard), tag add/delete/push, stash (apply/pop/drop, staged/all/all+untracked push, branch-from-stash)
 - Fetch/pull/push with multi-remote support, upstream tracking, and one-key publish
 - Toast notifications for background outcomes (fetch/pull/push results, new PRs or CI-status changes) that stack in the top-right and auto-dismiss
 - Open-PR badges: commits whose branch has an open GitHub PR show a `#N` badge, colored by CI status (green pass / yellow pending / red fail, blue if no checks) with review (approved/changes-requested) and outside-comment markers; `o` opens it in the browser, `c` shows CI check details (read a failed check's log without leaving the terminal), and `v` opens the PR conversation (description, comments, reviews, and resolved/open review threads) — all require the `gh` CLI
@@ -118,7 +118,7 @@ Panels: **Graph** → **Files** → **Commit Detail**, cycled with `←`/`→` o
 | `Space` | Open file diff for the selected commit |
 | `]` / `[` | Jump to next/previous commit with a branch label |
 | `^` | Jump to the fork point — the merge base of the selected commit with the main branch (or, if it's on main, with the current branch); "No divergence" on linear history |
-| `Ctrl+Z` | Undo the last reversible operation — branch/tag delete, merge, pull, or rename. Verifies the ref hasn't moved since (drops the entry if it has), confirms with the exact inverse, and never resets a dirty tree. Not covered: push, rebase, stash ops, or anything done outside keifu. (The files panel keeps its own separate Ctrl+Z for file operations.) |
+| `Ctrl+Z` | Undo the last reversible operation — branch/tag delete, merge, interactive rebase, pull, or rename. Verifies the ref hasn't moved since (drops the entry if it has), confirms with the exact inverse, and never resets a dirty tree. Not covered: push, ordinary rebase, stash ops, or anything done outside keifu. (The files panel keeps its own separate Ctrl+Z for file operations.) |
 | `b` | Create branch at selected commit |
 | `d` | Delete branch (local or remote, behind confirm) |
 | `f` | Fetch (resolves the remote from upstream; prompts if ambiguous) |
@@ -137,7 +137,7 @@ PR actions live in the commit actions menu (`Enter`): **Create pull request** (o
 | `<` / `>` | Shrink / widen the graph column width (caps wasted padding from wide history; `…` marks truncated rows; persists) |
 | `t` | Toggle branch tracing — highlight the selected commit's lineage (first-parent ancestry down, descendants up) and dim every other lane; on by default, only active on branchy graphs (> 2 lanes); persists |
 
-The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depending on context: checkout, create/rename/delete branch, merge into current, rebase current onto this, cherry-pick, revert, reset (soft/mixed/hard), add/delete/push tag, push, pull, prune remote-tracking refs, copy hash/message, mark/compare, and — on the uncommitted or a stash node — stash apply/pop/drop and branch-from-stash.
+The **commit actions menu** (`Enter`, fuzzy-filterable by typing) offers, depending on context: checkout, create/rename/delete branch, merge into current, rebase current onto this, interactive rebase of the linear commits above the selected base (reorder/reword/squash/fixup/drop with review confirmation), cherry-pick, revert, reset (soft/mixed/hard), add/delete/push tag, push, pull, prune remote-tracking refs, copy hash/message, mark/compare, and — on the uncommitted or a stash node — stash apply/pop/drop and branch-from-stash.
 
 ### Files panel
 
