@@ -1595,14 +1595,7 @@ impl PixelGraphState {
     /// Read the terminal's current pixel and cell dimensions after a resize.
     /// This avoids terminal input queries while the crossterm event reader is
     /// active.
-    pub fn refresh_font_size_from_terminal(&mut self) {
-        let Ok(size) = crossterm::terminal::window_size() else {
-            return;
-        };
-        self.refresh_font_size_from_window_size(size);
-    }
-
-    fn refresh_font_size_from_window_size(&mut self, size: crossterm::terminal::WindowSize) {
+    pub fn refresh_font_size_from_window_size(&mut self, size: crossterm::terminal::WindowSize) {
         if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
             return;
         }

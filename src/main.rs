@@ -18,6 +18,9 @@ use keifu::{
     tui, ui,
 };
 
+#[cfg(test)]
+mod main_resize_test;
+
 #[derive(Parser)]
 #[command(name = "keifu")]
 #[command(
@@ -94,6 +97,19 @@ fn run_external_edit(
 /// input flood cannot starve rendering entirely.
 const MAX_COALESCED_EVENTS: usize = 64;
 
+fn handle_pixel_graph_resize(
+    event: &crossterm::event::Event,
+    pixel_graph: Option<&mut crate::ui::graph_pixels::PixelGraphState>,
+    window_size: Option<crossterm::terminal::WindowSize>,
+) {
+    if !matches!(event, crossterm::event::Event::Resize(_, _)) {
+        return;
+    }
+    if let (Some(pixel_graph), Some(window_size)) = (pixel_graph, window_size) {
+        pixel_graph.refresh_font_size_from_window_size(window_size);
+    }
+}
+
 /// Route one input event through the same key/mouse/paste mapping the loop has
 /// always used. Returns whether the caller may keep draining buffered events:
 /// `false` after quit is requested (draw/exit promptly) or after an external
@@ -104,9 +120,11 @@ fn handle_input_event(
     event: crossterm::event::Event,
 ) -> Result<bool> {
     if matches!(event, crossterm::event::Event::Resize(_, _)) {
-        if let Some(pixel_graph) = app.pixel_graph.as_mut() {
-            pixel_graph.refresh_font_size_from_terminal();
-        }
+        handle_pixel_graph_resize(
+            &event,
+            app.pixel_graph.as_mut(),
+            crossterm::terminal::window_size().ok(),
+        );
     } else if let Some(key) = get_key_event(&event) {
         if app.debug_keys {
             app.set_message(format!("KEY: code={:?} mod={:?}", key.code, key.modifiers));
