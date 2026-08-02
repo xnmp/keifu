@@ -1476,6 +1476,96 @@ fn commit_filter_selected_commit_still_valid_after_refresh() {
     assert!(commit.message.to_lowercase().contains("fix"));
 }
 
+#[test]
+fn scoped_commit_filter_matches_all_fields_and_keeps_parent_topology() {
+    let (_td, repo) = init_repo();
+    let git_repo = repo.repo();
+    git_repo.config().unwrap().set_str("user.name", "Alice Example").unwrap();
+    git_repo
+        .config()
+        .unwrap()
+        .set_str("user.email", "alice@example.com")
+        .unwrap();
+    fs::create_dir_all(git_repo.workdir().unwrap().join("src")).unwrap();
+    fs::create_dir_all(git_repo.workdir().unwrap().join("docs")).unwrap();
+    commit_file(git_repo, "src/parser.rs", "base", "Initial parser");
+    commit_file(
+        git_repo,
+        "src/parser.rs",
+        "fixed",
+        "Fix Parser Regression",
+    );
+    git_repo.config().unwrap().set_str("user.name", "Bob Example").unwrap();
+    git_repo
+        .config()
+        .unwrap()
+        .set_str("user.email", "bob@example.com")
+        .unwrap();
+    commit_file(git_repo, "docs/guide.md", "guide", "Fix parser notes");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    for c in "message=fix parser; author=ALICE@EXAMPLE.COM; file=src/parser.rs".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+
+    let visible_messages: Vec<_> = app
+        .visible_commit_indices
+        .iter()
+        .filter_map(|&idx| app.graph_layout.nodes[idx].commit.as_ref())
+        .map(|commit| commit.message.as_str())
+        .collect();
+    assert!(visible_messages.contains(&"Fix Parser Regression"));
+    assert!(
+        visible_messages.contains(&"Initial parser"),
+        "the direct match's non-matching parent remains to preserve its graph edge"
+    );
+    assert!(
+        !visible_messages.contains(&"Fix parser notes"),
+        "all populated fields must match, so Bob's docs-only commit is excluded"
+    );
+
+    app.refresh(true).unwrap();
+    let selected = app.graph_nav.selected_node(&app.graph_layout).unwrap();
+    assert!(
+        selected.commit.is_some(),
+        "refresh keeps the graph selection on a visible commit"
+    );
+}
+
+#[test]
+fn scoped_path_filter_is_case_sensitive_and_author_name_is_case_insensitive() {
+    let (_td, repo) = init_repo();
+    let git_repo = repo.repo();
+    git_repo.config().unwrap().set_str("user.name", "Ada Lovelace").unwrap();
+    fs::create_dir_all(git_repo.workdir().unwrap().join("src")).unwrap();
+    commit_file(git_repo, "src/Parser.rs", "one", "Refactor code");
+    let mut app = make_app(repo);
+
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    for c in "author=ada; file=src/parser.rs".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+    assert!(
+        app.visible_commit_indices.is_empty(),
+        "a differently cased Git path must not match"
+    );
+
+    app.handle_action(Action::Cancel).unwrap();
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    for c in "author=ADA; file=Parser.rs".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+    assert_eq!(
+        app.visible_commit_indices
+            .iter()
+            .filter(|&&idx| app.graph_layout.nodes[idx].commit.is_some())
+            .count(),
+        1,
+        "author name matching ignores case while exact-cased path substring matches"
+    );
+}
+
 // ── Word-level editing ─────────────────────────────────────────────
 
 #[test]
