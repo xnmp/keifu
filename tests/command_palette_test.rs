@@ -154,7 +154,11 @@ fn command_palette_uses_enter_menu_prompt_toast_and_cancellation_flows() {
         .graph_layout
         .nodes
         .iter()
-        .position(|node| node.commit.as_ref().is_some_and(|commit| commit.oid == first))
+        .position(|node| {
+            node.commit
+                .as_ref()
+                .is_some_and(|commit| commit.oid == first)
+        })
         .unwrap();
     assert_ne!(first, second);
     app.graph_nav.graph_list_state.select(Some(first_idx));
@@ -179,7 +183,11 @@ fn command_palette_contextual_prompts_reject_stale_dispatch_and_bind_commit_targ
         .graph_layout
         .nodes
         .iter()
-        .position(|node| node.commit.as_ref().is_some_and(|commit| commit.oid == first))
+        .position(|node| {
+            node.commit
+                .as_ref()
+                .is_some_and(|commit| commit.oid == first)
+        })
         .unwrap();
 
     // The palette row was offered for `second`; changing selection before
@@ -192,9 +200,11 @@ fn command_palette_contextual_prompts_reject_stale_dispatch_and_bind_commit_targ
     app.graph_nav.graph_list_state.select(Some(first_idx));
     app.handle_action(Action::MenuSelect).unwrap();
     assert!(matches!(app.mode, AppMode::Normal));
-    assert!(app.toasts.visible().iter().any(|toast| {
-        toast.text.contains("Selection or repository state changed")
-    }));
+    assert!(app
+        .toasts
+        .visible()
+        .iter()
+        .any(|toast| { toast.text.contains("Selection or repository state changed") }));
 
     // Reopen on `second`, then change selection while the branch-name prompt
     // is open. Confirming must still create the branch at `second`.
@@ -280,7 +290,11 @@ fn command_palette_reset_submenu_retains_the_validated_commit_target() {
         .graph_layout
         .nodes
         .iter()
-        .position(|node| node.commit.as_ref().is_some_and(|commit| commit.oid == first))
+        .position(|node| {
+            node.commit
+                .as_ref()
+                .is_some_and(|commit| commit.oid == first)
+        })
         .unwrap();
     app.graph_nav.graph_list_state.select(Some(first_idx));
     app.handle_action(Action::MenuSelect).unwrap();
