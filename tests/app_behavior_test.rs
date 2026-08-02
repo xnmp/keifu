@@ -180,6 +180,28 @@ fn commit_file(repo: &Repository, path: &str, contents: &str, message: &str) -> 
     .unwrap()
 }
 
+fn commit_file_as(
+    repo: &Repository,
+    path: &str,
+    contents: &str,
+    message: &str,
+    name: &str,
+    email: &str,
+) -> Oid {
+    let workdir = repo.workdir().unwrap();
+    fs::write(workdir.join(path), contents).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(path)).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = Signature::now(name, email).unwrap();
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+    let parents: Vec<_> = parent.iter().collect();
+    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
+        .unwrap()
+}
+
 fn make_app(repo: GitRepository) -> keifu::app::App {
     keifu::app::App::from_repo(repo).unwrap()
 }
@@ -1488,12 +1510,16 @@ fn scoped_commit_filter_matches_all_fields_and_keeps_parent_topology() {
         .unwrap();
     fs::create_dir_all(git_repo.workdir().unwrap().join("src")).unwrap();
     fs::create_dir_all(git_repo.workdir().unwrap().join("docs")).unwrap();
-    commit_file(git_repo, "src/parser.rs", "base", "Initial parser");
-    commit_file(
+    commit_file_as(
+        git_repo, "src/parser.rs", "base", "Initial parser", "Alice Example", "alice@example.com",
+    );
+    commit_file_as(
         git_repo,
         "src/parser.rs",
         "fixed",
         "Fix Parser Regression",
+        "Alice Example",
+        "alice@example.com",
     );
     git_repo.config().unwrap().set_str("user.name", "Bob Example").unwrap();
     git_repo
@@ -1501,11 +1527,13 @@ fn scoped_commit_filter_matches_all_fields_and_keeps_parent_topology() {
         .unwrap()
         .set_str("user.email", "bob@example.com")
         .unwrap();
-    commit_file(git_repo, "docs/guide.md", "guide", "Fix parser notes");
+    commit_file_as(
+        git_repo, "docs/guide.md", "guide", "Fix parser notes", "Bob Example", "bob@example.com",
+    );
     let mut app = make_app(repo);
 
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "message=fix parser; author=TEST@EXAMPLE.COM; file=src/parser.rs".chars() {
+    for c in "message=fix parser; author=ALICE@EXAMPLE.COM; file=src/parser.rs".chars() {
         app.handle_action(Action::CommitFilterChar(c)).unwrap();
     }
 
@@ -1546,11 +1574,13 @@ fn scoped_path_filter_is_case_sensitive_and_author_name_is_case_insensitive() {
     let git_repo = repo.repo();
     git_repo.config().unwrap().set_str("user.name", "Ada Lovelace").unwrap();
     fs::create_dir_all(git_repo.workdir().unwrap().join("src")).unwrap();
-    commit_file(git_repo, "src/Parser.rs", "one", "Refactor code");
+    commit_file_as(
+        git_repo, "src/Parser.rs", "one", "Refactor code", "Ada Lovelace", "ada@example.com",
+    );
     let mut app = make_app(repo);
 
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "author=USER; file=src/parser.rs".chars() {
+    for c in "author=ADA; file=src/parser.rs".chars() {
         app.handle_action(Action::CommitFilterChar(c)).unwrap();
     }
     assert!(
@@ -1560,7 +1590,7 @@ fn scoped_path_filter_is_case_sensitive_and_author_name_is_case_insensitive() {
 
     app.handle_action(Action::Cancel).unwrap();
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "author=USER; file=Parser.rs".chars() {
+    for c in "author=ADA; file=Parser.rs".chars() {
         app.handle_action(Action::CommitFilterChar(c)).unwrap();
     }
     assert_eq!(

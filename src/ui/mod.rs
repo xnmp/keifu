@@ -455,7 +455,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // tracing and base-mute off.
         let want_merged_lane_dim =
             app.merged.dim && !app.merged.hide && !app.merged.lane_oids.is_empty();
-        pixel_frame_dim = if trace_active || want_base_mute || want_merged_lane_dim {
+        let want_filter_ancestry_dim = !app.commit_filter.is_empty();
+        pixel_frame_dim = if trace_active
+            || want_base_mute
+            || want_merged_lane_dim
+            || want_filter_ancestry_dim
+        {
             let base = &app.pixel_specs_cache.as_ref().unwrap().4;
             Some(graph_view::dim_pixel_specs_window(
                 app,
