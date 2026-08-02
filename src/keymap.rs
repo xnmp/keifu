@@ -205,6 +205,12 @@ pub struct BindingDescriptor {
 }
 
 impl BindingDescriptor {
+    /// Parsed default shortcuts, exposed for registry-wide contract tests and
+    /// shortcut-aware views that need the curated action inventory.
+    pub fn default_bindings(&self) -> Vec<KeyBinding> {
+        self.parsed_defaults()
+    }
+
     fn parsed_defaults(&self) -> Vec<KeyBinding> {
         self.defaults
             .iter()
