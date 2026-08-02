@@ -1702,6 +1702,7 @@ mod tests {
             timestamp: chrono::Local::now(),
             message: "m".to_string(),
             full_message: "m".to_string(),
+            changed_paths: Vec::new(),
             parent_oids: vec![Oid::zero(); n],
         }
     }

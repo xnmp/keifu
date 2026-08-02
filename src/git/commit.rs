@@ -12,6 +12,9 @@ pub struct CommitInfo {
     pub timestamp: DateTime<Local>,
     pub message: String,
     pub full_message: String,
+    /// Repository-relative paths changed by this commit.  The graph filter
+    /// consumes this source data while deciding which topology to build.
+    pub changed_paths: Vec<String>,
     pub parent_oids: Vec<Oid>,
 }
 
@@ -46,6 +49,7 @@ impl CommitInfo {
             timestamp,
             message,
             full_message,
+            changed_paths: Vec::new(),
             parent_oids,
         }
     }

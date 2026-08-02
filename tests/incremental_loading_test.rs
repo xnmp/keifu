@@ -42,6 +42,7 @@ fn synthetic_commit(i: u32, parents: Vec<u32>) -> CommitInfo {
         timestamp: Local::now(),
         message: format!("commit {i}"),
         full_message: format!("commit {i}"),
+        changed_paths: Vec::new(),
         parent_oids: parents.into_iter().map(oid).collect(),
     }
 }
