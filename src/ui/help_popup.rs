@@ -317,12 +317,8 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         bind!("c", "Comment (in detail)", "comment-on-issue"),
         bind!("x", "Close / reopen (in detail)", "toggle-issue-state"),
         bind!("a", "Edit assignees (in detail)", "edit-issue-assignees"),
-        bind!(
-            "r",
-            "Refresh   o  Open in browser",
-            "refresh-issues",
-            "open-issue-in-browser"
-        ),
+        bind!("r", "Refresh issues", "refresh-issues"),
+        bind!("o", "Open issue in browser", "open-issue-in-browser"),
         Blank,
         Header("Search"),
         bind!("Ctrl+F / /", "Search branches", "search"),

@@ -695,7 +695,12 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
             EDITOR | COMPOSE,
             ["Ctrl+Delete", "Alt+D"]
         ),
-        ("editor-kill-line", EditorKillLine, EDITOR, ["Ctrl+U"]),
+        (
+            "editor-kill-line",
+            EditorKillLine,
+            EDITOR | COMPOSE,
+            ["Ctrl+U"]
+        ),
         (
             "commit-filter-backspace",
             CommitFilterBackspace,
