@@ -149,6 +149,10 @@ pub fn editor_layout(editor: &TextEditor, width: u16, height: u16) -> EditorLayo
     let before_cursor = &editor.text[..editor.cursor];
     let cursor_logical_row = before_cursor.matches('\n').count();
     let logical_start = before_cursor.rfind('\n').map_or(0, |index| index + 1);
+    let logical_end = editor.text[logical_start..]
+        .find('\n')
+        .map_or(editor.text.len(), |index| logical_start + index);
+    let cursor_logical_line = &editor.text[logical_start..logical_end];
     let cursor_byte = editor.cursor - logical_start;
     let (mut cursor_visual_row, mut cursor_visual_col) = lines
         .iter()
@@ -163,8 +167,9 @@ pub fn editor_layout(editor: &TextEditor, width: u16, height: u16) -> EditorLayo
             if cursor_byte < line.end_byte || is_last_for_logical_row {
                 let relative = cursor_byte
                     .saturating_sub(line.start_byte)
-                    .min(line.text.len());
-                let col = UnicodeWidthStr::width(&line.text[..relative]);
+                    .min(line.end_byte - line.start_byte);
+                let end = line.start_byte + relative;
+                let col = UnicodeWidthStr::width(&cursor_logical_line[line.start_byte..end]);
                 Some((index, col))
             } else {
                 None
@@ -431,6 +436,38 @@ mod tests {
         let scrolled = editor_layout(&editor, 6, 2);
         assert_eq!(scrolled.cursor, Some((1, 1)));
         assert!(scrolled.scroll > 0);
+    }
+
+    #[test]
+    fn new_issue_cursor_advances_after_trailing_spaces() {
+        let mut editor = TextEditor::from_text("Issue");
+
+        editor.insert_char(' ');
+        assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((6, 0)));
+
+        editor.insert_char(' ');
+        assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((7, 0)));
+
+        editor.insert_char('t');
+        assert_eq!(editor.text, "Issue  t");
+        assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((8, 0)));
+
+        let mut mid_title = TextEditor::from_text("Issuet");
+        mid_title.cursor = "Issue".len();
+        mid_title.insert_char(' ');
+        assert_eq!(editor_layout(&mid_title, 20, 3).cursor, Some((6, 0)));
+        mid_title.insert_char('x');
+        assert_eq!(mid_title.text, "Issue xt");
+        assert_eq!(editor_layout(&mid_title, 20, 3).cursor, Some((7, 0)));
+
+        let mut body = TextEditor::from_text("Issue\nbody");
+        body.cursor = "Issue\nbo".len();
+        body.insert_char(' ');
+        body.insert_char(' ');
+        assert_eq!(editor_layout(&body, 20, 3).cursor, Some((4, 1)));
+        body.insert_char('t');
+        assert_eq!(body.text, "Issue\nbo  tdy");
+        assert_eq!(editor_layout(&body, 20, 3).cursor, Some((5, 1)));
     }
 
     #[test]
