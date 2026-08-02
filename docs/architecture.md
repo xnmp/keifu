@@ -329,19 +329,23 @@ bounded HTTP low-speed configuration; parsed byte/object/ref advancement starts
 a fresh 60-second inactivity window. The main loop requests cancellation after
 a quiet window, while the contextual `x` binding requests it immediately.
 
-Running/cancelling state renders directly from `NetworkStatus` in the status
-bar (`Fetching…`/`Pulling…`/`Pushing…` with `x cancel`, then `Cancelling…`). It
-is not mirrored into the transient message clock.
+Running/cancelling/integrating state renders directly from `NetworkStatus` in
+the status bar (`Fetching…`/`Pulling…`/`Pushing…` with `x cancel`, then either
+`Cancelling…` or non-cancellable `Integrating pull…`). It is not mirrored into
+the transient message clock.
 
 On Unix, every network Git command starts in a dedicated process group.
 Cancellation sends SIGINT to the group and allows two seconds for Git's
 lockfile and ref-transaction handlers to unwind, then escalates to SIGTERM for
 two seconds and finally SIGKILL with a one-second reap bound. Group signaling
 includes ordinary `git-remote-*`, SSH, credential, and hook children instead of
-orphaning them when only the direct Git PID exits. The cancellation path still
-does not synchronously join pipe readers: a helper that deliberately daemonizes
-into a different group cannot hold the UI worker busy, though its finite
-transport timeout remains responsible for its eventual exit.
+orphaning them when only the direct Git PID exits. Before signaling, the runner
+also snapshots Git's descendant PIDs and signals them individually, covering a
+helper that detached into a different process group. Direct-child reaping uses
+the same polling deadline; if SIGKILL cannot make it observable as exited, an
+eventual reaper thread owns the child while the worker returns a terminal error.
+The cancellation path does not synchronously join pipe readers, so an unrelated
+inherited descriptor cannot hold the UI worker busy after owned processes die.
 
 On non-Unix targets, the standard library provides no equivalent safe
 process-group signaling primitive. Those builds do not advertise the `x`
@@ -351,15 +355,19 @@ This is an explicit integrity tradeoff, covered by platform-gated tests, until
 a native group/job-object implementation exists.
 
 `git pull` is split at the durable-state boundary. Its fetch/ref transaction is
-cancellable, but after that succeeds the local `merge --ff-only`, merge, or
-rebase integration is allowed to finish even if cancellation arrives. This
-prevents escalation from interrupting index/worktree writes or creating a
-half-started merge/rebase. Fetch ref writes remain atomic under Git's own
-transaction machinery. The job remains busy through transfer and any local
+cancellable. The worker then requests an integration barrier; the event loop
+sets `NetworkPhase::Integrating` and gates checkout/reset/commit/stage and other
+repository mutations before acknowledging it. The worker revalidates the
+starting symbolic/detached HEAD identity and OID after that acknowledgement,
+then runs local `merge --ff-only`, merge, or rebase to completion even if a
+cancellation arrives. This prevents integrating into a branch changed during
+fetch and prevents escalation from interrupting index/worktree writes or
+creating a half-started merge/rebase. Fetch ref writes remain atomic under
+Git's transaction machinery. The job remains busy through transfer and local
 integration; only its terminal result clears the slot and emits the outcome
-toast. Regression tests cancel during a prepared ref transaction and require
-clean repository state, no stale lockfiles, unchanged HEAD/worktree for pull,
-and a successful subsequent fetch/pull.
+toast. Regression tests cover prepared ref cancellation, a HEAD change at the
+barrier, App-level checkout gating, clean repository state/no stale locks, and
+successful subsequent network operations.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a
