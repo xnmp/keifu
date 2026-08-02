@@ -122,8 +122,8 @@ pub fn map_key_to_action(
 }
 
 /// Map the contextual cancellation key advertised by the active network job.
-/// This is separate from the ordinary mode map because `x` remains literal
-/// text (and starts commit-message editing) whenever no job is running.
+/// This is separate from the ordinary mode map so it cannot override text
+/// editing contexts or acquire a normal-mode binding when no job is running.
 pub fn map_active_network_key(
     key: KeyEvent,
     mode: &AppMode,

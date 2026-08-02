@@ -386,14 +386,17 @@ repository state/no stale locks, bounded child waiting, detached-helper
 ownership, and successful
 subsequent network operations.
 
-Quit is part of the same ownership lifecycle. Normal quit and ForceQuit set a
-deferred-shutdown latch while a network job is active instead of setting
-`should_quit` immediately. A running cancellable transport receives the normal
-cancellation request; already-cancelling work continues through process-tree
-reaping, and non-cancellable pull integration runs to completion. The event loop
-polls all completion receivers and promotes the latch to `should_quit` only after
-`NetworkManager` releases the busy slot, so dropping `App` cannot orphan a Git
-helper or leave a merge/rebase mutating the repository after the UI exits.
+Quit is part of the same ownership lifecycle wherever shutdown has a bounded
+completion path. On Unix, normal quit and ForceQuit set a deferred-shutdown
+latch for cancellable or already-cancelling transport work, then wait for the
+owned process tree to be reaped. On every platform, non-cancellable pull
+integration defers exit until its durable repository mutation finishes. The
+event loop polls all completion receivers and promotes the latch to
+`should_quit` only after `NetworkManager` releases the busy slot, so dropping
+`App` cannot orphan an owned Git helper or leave a merge/rebase mutating the
+repository after the UI exits. A running non-Unix transport cannot be ended by
+keifu's integrity-safe cancellation path, so Quit and ForceQuit exit immediately
+instead of creating an unbounded wait.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a
