@@ -122,7 +122,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         ),
         bind!(
             "Ctrl+Shift+F",
-            "Filter commits (message/author/hash)",
+            "Filter commits (message/author/file)",
             "start-commit-filter"
         ),
         bind!(

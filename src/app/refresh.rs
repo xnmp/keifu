@@ -359,7 +359,7 @@ impl App {
     ///
     /// Must NOT touch: the selection index or the diff/search caches. May fail
     /// if the revwalk fails.
-    fn rebuild_graph(&mut self) -> Result<()> {
+    pub(crate) fn rebuild_graph(&mut self) -> Result<()> {
         // Hide-stashes filters at the source: an empty slice pushes no stash
         // tips into the revwalk (so stash-only commits vanish) and yields no
         // stash nodes in `build_graph`. When off, the graph is byte-identical.
@@ -406,8 +406,9 @@ impl App {
         let tags = self.repo.get_tags();
         let head_commit_oid = self.repo.head_oid();
         let squash_lines = self.squash_merge_lines();
+        let graph_commits = self.filtered_graph_commits();
         self.graph_layout = build_graph(
-            &self.commits,
+            &graph_commits,
             &visible_branches,
             &tags,
             &stashes,
@@ -423,6 +424,7 @@ impl App {
         // Rebuild branch positions
         self.graph_nav
             .rebuild_branch_positions(&self.graph_layout, &self.repo.remotes());
+        self.recompute_visible_commits();
 
         // Recompute which commits are exclusive to a merged branch's lane, so
         // the "dim merged branches" setting (#108) can grey their rows and graph

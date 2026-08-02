@@ -1096,6 +1096,9 @@ pub struct App {
     pub commit_filter: String,
     pub commit_filter_active: bool,
     pub visible_commit_indices: Vec<usize>,
+    /// OIDs that match the active filter itself, rather than merely being
+    /// retained as ancestry needed to draw the filtered graph.
+    pub commit_filter_matches: std::collections::HashSet<git2::Oid>,
 
     // Search state
     pub search_state: SearchState,

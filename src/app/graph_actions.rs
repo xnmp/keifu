@@ -2,6 +2,57 @@
 
 use super::*;
 
+/// The query accepted by the graph's Ctrl+Shift+F filter entry. Clauses are
+/// separated by semicolons so message text can retain spaces, for example:
+/// `message=fix parser; author=ada; file=src/`.
+#[derive(Default)]
+struct CommitFilterQuery {
+    text: String,
+    message: String,
+    author: String,
+    file: String,
+}
+
+impl CommitFilterQuery {
+    fn parse(input: &str) -> Self {
+        let mut query = Self::default();
+        for clause in input.split(';').map(str::trim).filter(|part| !part.is_empty()) {
+            let Some((field, value)) = clause.split_once('=') else {
+                query.text = clause.to_string();
+                continue;
+            };
+            match field.trim().to_ascii_lowercase().as_str() {
+                "message" | "msg" => query.message = value.trim().to_string(),
+                "author" => query.author = value.trim().to_string(),
+                "file" | "path" => query.file = value.trim().to_string(),
+                _ => query.text = clause.to_string(),
+            }
+        }
+        query
+    }
+
+    fn is_active(&self) -> bool {
+        !self.text.is_empty() || !self.message.is_empty() || !self.author.is_empty() || !self.file.is_empty()
+    }
+
+    fn matches(&self, commit: &crate::git::CommitInfo) -> bool {
+        let text = self.text.to_lowercase();
+        let message = self.message.to_lowercase();
+        let author = self.author.to_lowercase();
+        (text.is_empty()
+            || commit.message.to_lowercase().contains(&text)
+                || commit.author_name.to_lowercase().contains(&text)
+                || commit.author_email.to_lowercase().contains(&text)
+                || commit.short_id.to_lowercase().contains(&text))
+            && (message.is_empty() || commit.full_message.to_lowercase().contains(&message))
+            && (author.is_empty()
+                || commit.author_name.to_lowercase().contains(&author)
+                || commit.author_email.to_lowercase().contains(&author))
+            && (self.file.is_empty()
+                || commit.changed_paths.iter().any(|path| path.contains(&self.file)))
+    }
+}
+
 impl App {
     pub(crate) fn handle_normal_action(&mut self, action: Action) -> Result<()> {
         // Esc targets a lingering error toast before any other meaning (#116):
@@ -55,7 +106,7 @@ impl App {
                 self.focused_panel = FocusedPanel::Graph;
                 self.commit_filter_active = true;
                 self.commit_filter.clear();
-                self.recompute_visible_commits();
+                self.rebuild_graph()?;
                 return Ok(());
             }
             _ => {}
@@ -236,24 +287,24 @@ impl App {
             }
             Action::CommitFilterChar(c) => {
                 self.commit_filter.push(c);
-                self.recompute_visible_commits();
+                self.rebuild_graph()?;
             }
             Action::CommitFilterBackspace => {
                 if !self.commit_filter.is_empty() {
                     self.commit_filter.pop();
-                    self.recompute_visible_commits();
+                    self.rebuild_graph()?;
                 } else {
                     self.commit_filter_active = false;
-                    self.recompute_visible_commits();
+                    self.rebuild_graph()?;
                 }
             }
             Action::InputBackspaceWord if self.commit_filter_active => {
                 crate::text_editor::pop_word(&mut self.commit_filter);
-                self.recompute_visible_commits();
+                self.rebuild_graph()?;
             }
             Action::InputClearLine if self.commit_filter_active => {
                 self.commit_filter.clear();
-                self.recompute_visible_commits();
+                self.rebuild_graph()?;
             }
             Action::Confirm if self.commit_filter_active => {
                 self.commit_filter_active = false;
@@ -261,7 +312,7 @@ impl App {
             Action::Cancel if self.commit_filter_active => {
                 self.commit_filter.clear();
                 self.commit_filter_active = false;
-                self.recompute_visible_commits();
+                self.rebuild_graph()?;
             }
             _ => {}
         }
@@ -489,21 +540,72 @@ impl App {
         let Some(commit) = &node.commit else {
             return false;
         };
-        let query = self.commit_filter.to_lowercase();
-        commit.message.to_lowercase().contains(&query)
-            || commit.author_name.to_lowercase().contains(&query)
-            || commit.short_id.to_lowercase().contains(&query)
+        if self.commit_filter_matches.is_empty() {
+            // Keeps the predicate useful to callers that change the query then
+            // explicitly ask for a recomputation before the next graph rebuild.
+            CommitFilterQuery::parse(&self.commit_filter).matches(commit)
+        } else {
+            self.commit_filter_matches.contains(&commit.oid)
+        }
+    }
+
+    /// Retain every direct match plus its loaded parents. The graph builder sees
+    /// this closure rather than isolated matches, which keeps merge and parent
+    /// edges valid while allowing the renderer to dim the retained ancestors.
+    pub(crate) fn filtered_graph_commits(&mut self) -> Vec<crate::git::CommitInfo> {
+        let query = CommitFilterQuery::parse(&self.commit_filter);
+        if !query.is_active() {
+            self.commit_filter_matches.clear();
+            return self.commits.clone();
+        }
+        self.commit_filter_matches = self
+            .commits
+            .iter()
+            .filter(|commit| query.matches(commit))
+            .map(|commit| commit.oid)
+            .collect();
+        let mut retained = self.commit_filter_matches.clone();
+        // The synthetic working-tree row is connected to HEAD. Preserve that
+        // endpoint even when it is not a direct match so the connector cannot
+        // terminate in a filtered-out row.
+        if self.working_tree_status.is_some() {
+            if let Some(head) = self.repo.head_oid() {
+                retained.insert(head);
+            }
+        }
+        let by_oid: std::collections::HashMap<_, _> =
+            self.commits.iter().map(|commit| (commit.oid, commit)).collect();
+        let mut pending: Vec<_> = retained.iter().copied().collect();
+        while let Some(oid) = pending.pop() {
+            if let Some(commit) = by_oid.get(&oid) {
+                for parent in &commit.parent_oids {
+                    if by_oid.contains_key(parent) && retained.insert(*parent) {
+                        pending.push(*parent);
+                    }
+                }
+            }
+        }
+        self.commits
+            .iter()
+            .filter(|commit| retained.contains(&commit.oid))
+            .cloned()
+            .collect()
     }
 
     pub fn recompute_visible_commits(&mut self) {
-        self.visible_commit_indices = self
-            .graph_layout
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| self.node_passes_commit_filter(node))
-            .map(|(idx, _)| idx)
-            .collect();
+        self.visible_commit_indices = if self.commit_filter_matches.is_empty()
+            && !self.commit_filter.is_empty()
+        {
+            self.graph_layout
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| self.node_passes_commit_filter(node))
+                .map(|(idx, _)| idx)
+                .collect()
+        } else {
+            (0..self.graph_layout.nodes.len()).collect()
+        };
 
         // Ensure selection is within visible range
         if !self.visible_commit_indices.is_empty() {

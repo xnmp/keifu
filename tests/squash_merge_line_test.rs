@@ -21,6 +21,7 @@ fn commit(oid: Oid, parent_oids: Vec<Oid>) -> CommitInfo {
         timestamp: Local.timestamp_opt(0, 0).single().unwrap(),
         message: "test".into(),
         full_message: "test".into(),
+        changed_paths: Vec::new(),
         parent_oids,
     }
 }
