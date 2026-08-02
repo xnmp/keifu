@@ -40,6 +40,9 @@ impl App {
     /// Requiring every base copy prevents a stale local base from offering a PR
     /// after a fresher remote base already contains the selected branch.
     pub(crate) fn selected_open_pr_target(&self) -> Option<crate::pr::OpenPrTarget> {
+        if !self.open_prs_loaded {
+            return None;
+        }
         let info = self.pr_repo_info.as_ref()?;
         let branch = self.selected_branch()?;
         let head = if branch.is_remote {
@@ -86,7 +89,7 @@ impl App {
         let Some(target) = self.selected_open_pr_target() else {
             return;
         };
-        if let Err(e) = open_url(&target.compare_url) {
+        if let Err(e) = (self.url_opener)(&target.compare_url) {
             self.show_error(format!("Could not open PR: {e}"));
         } else {
             self.toast(
