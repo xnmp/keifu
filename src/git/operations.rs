@@ -92,24 +92,21 @@ impl GitProgressParser {
         let refs = u64::from(
             line.contains(" -> ") || line.contains("[new branch]") || line.contains("[new tag]"),
         );
-        let Some((phase, rest)) = line.split_once(':') else {
-            control.report_delta(0, 0, refs);
-            return;
-        };
-        let phase = phase.trim();
-        let transport_phase = matches!(
-            phase,
-            "Enumerating objects"
-                | "Counting objects"
-                | "Compressing objects"
-                | "Receiving objects"
-                | "Resolving deltas"
-                | "Writing objects"
-        );
-        if !transport_phase {
-            control.report_delta(0, 0, refs);
-            return;
-        }
+        // Git may prefix server-side progress with `remote:` and localizes the
+        // human-readable phase name. The stable transport signal is the
+        // `(current/total)` counter, so parse the final colon-delimited segment
+        // without relying on English labels. Keep the final phase segment as
+        // the monotonic-counter key so a new phase starting at zero does not
+        // erase progress accumulated by an earlier one.
+        let (phase, rest) = line
+            .rsplit_once(':')
+            .map(|(phase, rest)| {
+                (
+                    phase.rsplit(':').next().unwrap_or(phase).trim(),
+                    rest,
+                )
+            })
+            .unwrap_or(("transport", line));
 
         let objects = parse_progress_position(rest)
             .map(|position| advancing_delta(&mut self.object_positions, phase, position))
@@ -274,9 +271,9 @@ fn run_network_git_output(
         Ok(output)
     });
 
-    let (status, cancelled) = loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break (status, None),
+            Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
                 let _ = child.kill();
@@ -290,10 +287,16 @@ fn run_network_git_output(
             child.kill().map_err(|error| {
                 NetworkFailure::Failed(format!("Failed to cancel git {subcommand}: {error}"))
             })?;
-            let status = child.wait().map_err(|error| {
+            child.wait().map_err(|error| {
                 NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
             })?;
-            break (status, Some(reason));
+            // Helpers spawned by Git (git-remote-https, ssh, credential
+            // helpers) can inherit these pipes and outlive the direct child.
+            // The direct Git process is reaped above; do not synchronously join
+            // readers that a surviving helper can keep blocked. Detached
+            // readers finish when the inherited descriptors eventually close,
+            // while the manager receives the terminal cancellation promptly.
+            return Err(NetworkFailure::Cancelled(reason));
         }
         thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
     };
@@ -307,9 +310,6 @@ fn run_network_git_output(
         .map_err(|_| NetworkFailure::Failed("git stderr reader panicked".to_string()))?
         .map_err(|e| NetworkFailure::Failed(format!("Failed to read git stderr: {e}")))?;
 
-    if let Some(reason) = cancelled {
-        return Err(NetworkFailure::Cancelled(reason));
-    }
     Ok(std::process::Output {
         status,
         stdout,
