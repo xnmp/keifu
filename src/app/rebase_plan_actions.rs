@@ -827,6 +827,43 @@ mod tests {
         assert!(!state_dir.exists());
     }
 
+    #[test]
+    fn interactive_abort_acquires_state_ownership_before_git_and_cleanup() {
+        let (tmp, mut app, base, original_head) = app_with_conflicting_range();
+        app.start_interactive_rebase(base);
+        app.rebase_plan.as_mut().unwrap().move_down(0).unwrap();
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+        app.handle_action(Action::Confirm).unwrap();
+        assert!(app.interactive_rebase_in_progress);
+        let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
+        let marker = tmp.path().join(".git/rebase-merge/interactive");
+        let state_owner = acquire_interactive_rebase_state(app.repo.repo().path()).unwrap();
+        app.mode = AppMode::Confirm {
+            message: "Abort rebase?".to_string(),
+            action: ConfirmAction::AbortOperation(OperationState::Rebase),
+        };
+
+        let blocked_abort = app.handle_action(Action::Confirm);
+
+        assert!(blocked_abort
+            .unwrap_err()
+            .to_string()
+            .contains("Another interactive rebase is starting"));
+        assert!(marker.exists());
+        assert!(state_dir.exists());
+        drop(state_owner);
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        assert_eq!(app.repo.head_oid(), Some(original_head));
+        assert!(!marker.exists());
+        assert!(!state_dir.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn failed_confirmed_plan_is_a_non_blocking_error_toast() {
