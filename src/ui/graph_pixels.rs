@@ -1540,17 +1540,7 @@ impl PixelGraphState {
             picker.set_protocol_type(pt);
             return Some(Self::from_picker(picker));
         }
-        Self::from_startup_query(Picker::from_query_stdio_with_options)
-    }
-
-    /// Build pixel graph state from the startup terminal query, keeping the
-    /// terminal I/O boundary injectable for deterministic startup tests.
-    #[doc(hidden)]
-    pub fn from_startup_query<F, E>(query: F) -> Option<Self>
-    where
-        F: FnOnce(QueryStdioOptions) -> Result<Picker, E>,
-    {
-        let picker = query(QueryStdioOptions {
+        let picker = Picker::from_query_stdio_with_options(QueryStdioOptions {
             // Serial consoles and some multiplexers never reply. Bound this
             // pre-first-frame query while preserving Picker's default probes.
             timeout: std::time::Duration::from_millis(250),
@@ -2240,36 +2230,6 @@ mod tests {
         // Halfblocks isn't graphics; Sixel drops alpha → black boxes.
         assert!(!is_supported_protocol(ProtocolType::Halfblocks));
         assert!(!is_supported_protocol(ProtocolType::Sixel));
-    }
-
-    #[test]
-    fn startup_query_uses_a_short_deadline_and_preserves_picker_fallbacks() {
-        let mut observed_timeout = None;
-        let unsupported = PixelGraphState::from_startup_query(|options| {
-            observed_timeout = Some(options.timeout);
-            Ok::<_, ()>(Picker::halfblocks())
-        });
-
-        assert_eq!(
-            observed_timeout,
-            Some(std::time::Duration::from_millis(250)),
-            "an unresponsive terminal must reach the Unicode fallback promptly"
-        );
-        assert!(
-            unsupported.is_none(),
-            "the existing unsupported-protocol fallback remains Unicode"
-        );
-
-        let detected = PixelGraphState::from_startup_query(|_| {
-            #[allow(deprecated)]
-            let mut picker = Picker::from_fontsize((10, 20));
-            picker.set_protocol_type(ProtocolType::Kitty);
-            Ok::<_, ()>(picker)
-        });
-        assert!(
-            detected.is_some(),
-            "a detected transparency-preserving protocol remains available"
-        );
     }
 
     #[test]
