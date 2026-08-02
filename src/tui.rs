@@ -30,17 +30,18 @@ static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
 }
 
-/// Push the `DISAMBIGUATE_ESCAPE_CODES` keyboard-enhancement flag when the
-/// terminal advertises support. Alongside unambiguous Ctrl+punctuation, this
-/// tells compatible terminals to include `KeyEventState` such as Caps Lock in
-/// each event, so app-level warnings use the terminal's actual lock state.
-/// Returns whether it was enabled.
+/// Push all keyboard-enhancement flags Keifu needs when the terminal advertises
+/// support. All-key reporting includes `KeyEventState` such as Caps Lock on
+/// text keys, while alternate-key reporting supplies the layout-correct shifted
+/// character instead of only its unshifted base codepoint. Returns whether it
+/// was enabled.
 ///
-/// Side effect the callers must account for: with this flag on, the terminal
-/// also delivers `KeyEventKind::Release`/`Repeat` events — `keybindings` filters
-/// those so bindings don't double-fire.
+/// All keypresses, including modifier-key presses, are encoded as escape
+/// sequences. `keybindings` continues to discard any Release events reported by
+/// terminals that opt into event-type reporting.
 fn push_keyboard_enhancement(stdout: &mut Stdout) -> Result<bool> {
     if matches!(supports_keyboard_enhancement(), Ok(true)) {
         execute!(

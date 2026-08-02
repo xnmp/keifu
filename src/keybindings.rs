@@ -31,6 +31,28 @@ pub fn map_mouse_to_action(mouse: MouseEvent) -> Option<Action> {
     }
 }
 
+/// Canonicalize the two shifted ASCII forms enhanced terminals can report.
+///
+/// With alternate-key reporting, crossterm returns the layout-correct `G` with
+/// no Shift bit; without it, the Kitty protocol reports base `g` plus Shift.
+/// The keybinding table historically uses `G` plus Shift, so normalize either
+/// form at this boundary. Shifted punctuation is deliberately not synthesized:
+/// alternate-key reporting supplies the layout-correct character for it.
+fn normalize_enhanced_shift(mut key: KeyEvent) -> KeyEvent {
+    if !matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT) {
+        return key;
+    }
+    let KeyCode::Char(c) = key.code else {
+        return key;
+    };
+    if key.modifiers == KeyModifiers::SHIFT && c.is_ascii_lowercase() {
+        key.code = KeyCode::Char(c.to_ascii_uppercase());
+    } else if key.modifiers == KeyModifiers::NONE && c.is_ascii_uppercase() {
+        key.modifiers = KeyModifiers::SHIFT;
+    }
+    key
+}
+
 pub fn map_key_to_action(
     key: KeyEvent,
     mode: &AppMode,
@@ -47,6 +69,7 @@ pub fn map_key_to_action(
     if key.kind == KeyEventKind::Release {
         return None;
     }
+    let key = normalize_enhanced_shift(key);
 
     // Ctrl+Q always quits
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
