@@ -4,6 +4,44 @@ use super::*;
 use crate::toast::ToastKind;
 
 impl App {
+    /// Poll progress/inactivity for the active network operation. A timeout
+    /// changes the status bar to Cancelling immediately; the terminal toast is
+    /// emitted only after the worker actually exits.
+    pub fn update_network_state(&mut self) -> bool {
+        self.network.tick()
+    }
+
+    pub fn network_status(&self) -> Option<NetworkStatus> {
+        self.network.status()
+    }
+
+    pub(crate) fn cancel_network_operation(&mut self) {
+        self.network.cancel_active(CancellationReason::User);
+    }
+
+    fn report_network_cancellation(
+        &mut self,
+        operation: NetworkOperation,
+        reason: CancellationReason,
+    ) {
+        self.network.reset_timers();
+        self.clear_progress_message();
+        let operation = match operation {
+            NetworkOperation::Fetch => "Fetch",
+            NetworkOperation::Pull => "Pull",
+            NetworkOperation::Push => "Push",
+        };
+        match reason {
+            CancellationReason::User => {
+                self.toast(ToastKind::Info, format!("{operation} cancelled"));
+            }
+            CancellationReason::InactivityTimeout => self.toast(
+                ToastKind::Error,
+                format!("{operation} timed out after 60 seconds without progress"),
+            ),
+        }
+    }
+
     pub fn update_fetch_status(&mut self) -> bool {
         let Some((result, silent)) = self.network.poll_fetch() else {
             return false;
@@ -65,7 +103,10 @@ impl App {
             // Latch it: report once per failure episode, re-arm on success. A
             // user-initiated fetch keeps the full error dialog. An HTTPS auth
             // failure on a user-initiated fetch opens the credential prompt.
-            Err(e) => {
+            Err(NetworkFailure::Cancelled(reason)) => {
+                self.report_network_cancellation(NetworkOperation::Fetch, reason);
+            }
+            Err(NetworkFailure::Failed(e)) => {
                 // Even on failure, a fetch-all may have *partially* succeeded:
                 // healthy remotes updated their tracking refs on disk while a
                 // broken remote produced the error (issue #91). Refresh first so
@@ -128,7 +169,17 @@ impl App {
                 // merged set (#104) are stale until re-polled.
                 self.force_gh_refresh();
             }
-            Err(e) => {
+            Err(NetworkFailure::Cancelled(reason)) => {
+                if let Some((remote, branch)) = &delete_target {
+                    self.pending_remote_deletions
+                        .remove(&format!("{remote}/{branch}"));
+                    if let Err(error) = self.refresh(true) {
+                        self.report_refresh_error(error);
+                    }
+                }
+                self.report_network_cancellation(NetworkOperation::Push, reason);
+            }
+            Err(NetworkFailure::Failed(e)) => {
                 // An HTTPS auth failure opens the credential prompt and retries
                 // the same op; keep the optimistic hide in place for the retry.
                 if self.try_prompt_credentials(&e, flight) {
@@ -218,7 +269,11 @@ impl App {
                     OpOutcome::Paused => self.show_error("Pull paused unexpectedly".to_string()),
                 }
             }
-            Err(e) => self.handle_pull_error(e, flight),
+            Err(NetworkFailure::Cancelled(reason)) => {
+                self.pre_pull_head = None;
+                self.report_network_cancellation(NetworkOperation::Pull, reason);
+            }
+            Err(NetworkFailure::Failed(e)) => self.handle_pull_error(e, flight),
         }
         true
     }

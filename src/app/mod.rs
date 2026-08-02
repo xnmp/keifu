@@ -32,7 +32,10 @@ use crate::{
         OperationState, StageStatus, WorkingTreeStatus,
     },
     graph_nav::GraphNav,
-    network::{NetworkManager, PushSpec},
+    network::{
+        CancellationReason, NetworkFailure, NetworkManager, NetworkOperation, NetworkStatus,
+        PushSpec,
+    },
     rebase_plan::{RebaseAction, RebasePlan},
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},

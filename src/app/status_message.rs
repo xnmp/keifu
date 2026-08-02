@@ -33,20 +33,9 @@ impl App {
         self.message_sticky = false;
     }
 
-    /// Set a network-progress message ("Pulling…") that persists for the whole
-    /// in-flight operation rather than obeying the plain timeout. Must be
-    /// paired with `clear_progress_message()` on op completion. Only pull uses
-    /// this — fetch and push report their start via a toast instead.
-    pub(crate) fn set_progress_message(&mut self, msg: impl Into<String>) {
-        self.message = Some(msg.into());
-        self.message_time = Some(Instant::now());
-        self.message_sticky = true;
-    }
-
-    /// Clear a sticky progress message once its network op finishes, so it can't
-    /// be revived by a later op flipping the busy flag. No-op for plain messages
-    /// (they self-expire), so an unrelated transient message isn't wiped when a
-    /// background op happens to complete.
+    /// Clear a legacy sticky progress message once network work finishes. New
+    /// network progress renders directly from `NetworkStatus`; this cleanup
+    /// preserves state created by the prior message-backed path.
     pub(crate) fn clear_progress_message(&mut self) {
         if self.message_sticky {
             self.message = None;

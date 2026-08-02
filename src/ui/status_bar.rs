@@ -18,6 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use super::theme::Theme;
 use crate::action::Action;
 use crate::app::{App, AppMode, FocusedPanel, InputAction, IssueComposePurpose};
+use crate::network::{NetworkOperation, NetworkPhase};
 
 /// Contextual hint text for the open-PR shortcut, shown when the selected
 /// commit has an open PR. Pure so it can be unit-tested without a terminal.
@@ -316,6 +317,31 @@ impl StatusBar {
 
         // Key hints (vary by mode).
         match mode {
+            AppMode::Normal if app.network_status().is_some() => {
+                let status = app.network_status().expect("guarded network status");
+                let label = match status.phase {
+                    NetworkPhase::Running => match status.operation {
+                        NetworkOperation::Fetch => "Fetching…",
+                        NetworkOperation::Pull => "Pulling…",
+                        NetworkOperation::Push => "Pushing…",
+                    },
+                    NetworkPhase::Cancelling(_) => "Cancelling…",
+                };
+                let progress_style = Style::default()
+                    .fg(theme.status_key_fg)
+                    .bg(theme.status_busy_bg)
+                    .add_modifier(Modifier::BOLD);
+                hb.span(Span::styled(format!(" {label} "), progress_style));
+                if status.phase == NetworkPhase::Running {
+                    hb.hint(
+                        " x ",
+                        key_style,
+                        "cancel",
+                        desc_style,
+                        Action::CancelNetworkOperation,
+                    );
+                }
+            }
             AppMode::Normal => match app.get_message() {
                 Some(msg) => {
                     let bg = if is_busy {

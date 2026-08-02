@@ -120,6 +120,36 @@ pub fn map_key_to_action(
     }
 }
 
+/// Map the contextual cancellation key advertised by the active network job.
+/// This is separate from the ordinary mode map because `x` remains literal
+/// text (and starts commit-message editing) whenever no job is running.
+pub fn map_active_network_key(
+    key: KeyEvent,
+    mode: &AppMode,
+    focused_panel: FocusedPanel,
+    editing_commit: bool,
+    files_filter_active: bool,
+    commit_filter_active: bool,
+    network_busy: bool,
+) -> Option<Action> {
+    if !network_busy
+        || !matches!(mode, AppMode::Normal)
+        || is_text_editing_context(
+            mode,
+            focused_panel,
+            editing_commit,
+            files_filter_active,
+            commit_filter_active,
+        )
+    {
+        return None;
+    }
+    (key.kind != KeyEventKind::Release
+        && key.modifiers == KeyModifiers::NONE
+        && key.code == KeyCode::Char('x'))
+    .then_some(Action::CancelNetworkOperation)
+}
+
 /// True when a keystroke matches the CapsLock signature: an uppercase letter
 /// arriving WITHOUT the SHIFT modifier (#106). With the keyboard-enhancement
 /// flags active (`DISAMBIGUATE_ESCAPE_CODES`, see `tui::init`) a genuine

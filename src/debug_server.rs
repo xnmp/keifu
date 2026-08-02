@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 
 use crate::{
     app::{App, AppMode, FocusedPanel},
-    keybindings::{map_key_to_action, map_mouse_to_action},
+    keybindings::{map_active_network_key, map_key_to_action, map_mouse_to_action},
     ui,
 };
 
@@ -114,14 +114,26 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
             Ok(events) => {
                 for key in events {
                     app.maybe_hint_capslock(&key);
-                    if let Some(action) = map_key_to_action(
+                    let action = map_active_network_key(
                         key,
                         &app.mode,
                         app.focused_panel,
                         app.editing_commit_message,
                         app.files_pane.files_filter_active,
                         app.commit_filter_active,
-                    ) {
+                        app.is_network_busy(),
+                    )
+                    .or_else(|| {
+                        map_key_to_action(
+                            key,
+                            &app.mode,
+                            app.focused_panel,
+                            app.editing_commit_message,
+                            app.files_pane.files_filter_active,
+                            app.commit_filter_active,
+                        )
+                    });
+                    if let Some(action) = action {
                         if let Err(e) = app.handle_action(action) {
                             app.show_error(format!("{}", e));
                         }
@@ -253,6 +265,16 @@ fn state_json(app: &App) -> Value {
     let selected_branches = selected_node
         .map(|node| node.branch_names.clone())
         .unwrap_or_default();
+    let network_status = app.network_status();
+    let network_operation = network_status.map(|status| match status.operation {
+        crate::network::NetworkOperation::Fetch => "fetch",
+        crate::network::NetworkOperation::Pull => "pull",
+        crate::network::NetworkOperation::Push => "push",
+    });
+    let network_phase = network_status.map(|status| match status.phase {
+        crate::network::NetworkPhase::Running => "running",
+        crate::network::NetworkPhase::Cancelling(_) => "cancelling",
+    });
 
     json!({
         "ok": true,
@@ -268,6 +290,8 @@ fn state_json(app: &App) -> Value {
         "is_fetching": app.is_fetching(),
         "is_pushing": app.is_pushing(),
         "is_pulling": app.is_pulling(),
+        "network_operation": network_operation,
+        "network_phase": network_phase,
         // Settings-menu-managed flags, exposed so tests can assert persistence
         // across restarts.
         "hide_remote_branches": app.hide_remote_branches,

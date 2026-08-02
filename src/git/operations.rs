@@ -1,14 +1,150 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
-use std::io::Write;
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository, Status, StatusOptions};
 
 use super::askpass::{self, Credentials};
 use super::repository::OperationState;
+use crate::network::{CancellationReason, CancellationToken, NetworkFailure, NetworkProgress};
+
+const NETWORK_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const HTTP_LOW_SPEED_BYTES_PER_SECOND: &str = "1";
+const HTTP_LOW_SPEED_SECONDS: &str = "60";
+
+/// Worker-side control for a cancellable Git network subprocess.
+#[derive(Clone)]
+pub(crate) struct NetworkCommandControl {
+    cancellation: CancellationToken,
+    progress_tx: Sender<NetworkProgress>,
+    progress: Arc<Mutex<NetworkProgress>>,
+}
+
+impl NetworkCommandControl {
+    pub(crate) fn new(
+        cancellation: CancellationToken,
+        progress_tx: Sender<NetworkProgress>,
+    ) -> Self {
+        Self {
+            cancellation,
+            progress_tx,
+            progress: Arc::new(Mutex::new(NetworkProgress::default())),
+        }
+    }
+
+    fn cancellation_reason(&self) -> Option<CancellationReason> {
+        self.cancellation.reason()
+    }
+
+    fn report_delta(&self, bytes: u64, objects: u64, refs: u64) {
+        if bytes == 0 && objects == 0 && refs == 0 {
+            return;
+        }
+        let snapshot = {
+            let mut progress = self
+                .progress
+                .lock()
+                .expect("network progress mutex poisoned");
+            progress.bytes = progress.bytes.saturating_add(bytes);
+            progress.objects = progress.objects.saturating_add(objects);
+            progress.refs = progress.refs.saturating_add(refs);
+            *progress
+        };
+        let _ = self.progress_tx.send(snapshot);
+    }
+}
+
+/// Parses Git's forced progress stream. Counters are accumulated across phases
+/// (counting/receiving/resolving/writing), so snapshots never move backwards.
+#[derive(Default)]
+struct GitProgressParser {
+    pending: Vec<u8>,
+    object_positions: HashMap<String, u64>,
+    byte_positions: HashMap<String, u64>,
+}
+
+impl GitProgressParser {
+    fn feed(&mut self, bytes: &[u8], control: &NetworkCommandControl) {
+        self.pending.extend_from_slice(bytes);
+        while let Some(pos) = self.pending.iter().position(|b| matches!(b, b'\r' | b'\n')) {
+            let line = String::from_utf8_lossy(&self.pending[..pos]).into_owned();
+            self.pending.drain(..=pos);
+            self.observe_line(&line, control);
+        }
+    }
+
+    fn finish(&mut self, control: &NetworkCommandControl) {
+        if !self.pending.is_empty() {
+            let line = String::from_utf8_lossy(&self.pending).into_owned();
+            self.pending.clear();
+            self.observe_line(&line, control);
+        }
+    }
+
+    fn observe_line(&mut self, line: &str, control: &NetworkCommandControl) {
+        let refs = u64::from(
+            line.contains(" -> ") || line.contains("[new branch]") || line.contains("[new tag]"),
+        );
+        let Some((phase, rest)) = line.split_once(':') else {
+            control.report_delta(0, 0, refs);
+            return;
+        };
+        let phase = phase.trim();
+        let transport_phase = matches!(
+            phase,
+            "Enumerating objects"
+                | "Counting objects"
+                | "Compressing objects"
+                | "Receiving objects"
+                | "Resolving deltas"
+                | "Writing objects"
+        );
+        if !transport_phase {
+            control.report_delta(0, 0, refs);
+            return;
+        }
+
+        let objects = parse_progress_position(rest)
+            .map(|position| advancing_delta(&mut self.object_positions, phase, position))
+            .unwrap_or(0);
+        let transferred = parse_progress_bytes(rest)
+            .map(|position| advancing_delta(&mut self.byte_positions, phase, position))
+            .unwrap_or(0);
+        control.report_delta(transferred, objects, refs);
+    }
+}
+
+fn advancing_delta(positions: &mut HashMap<String, u64>, phase: &str, next: u64) -> u64 {
+    let previous = positions.insert(phase.to_string(), next).unwrap_or(0);
+    next.saturating_sub(previous)
+}
+
+fn parse_progress_position(text: &str) -> Option<u64> {
+    let open = text.find('(')?;
+    let slash = text[open + 1..].find('/')? + open + 1;
+    text[open + 1..slash].trim().parse().ok()
+}
+
+fn parse_progress_bytes(text: &str) -> Option<u64> {
+    let after_count = text.rsplit_once(')')?.1.trim_start_matches(',').trim();
+    let mut parts = after_count.split_whitespace();
+    let value: f64 = parts.next()?.parse().ok()?;
+    let multiplier = match parts.next()? {
+        "bytes" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((value * multiplier) as u64)
+}
 
 /// Attach the askpass shim + credential env vars to `cmd` when `creds` is set,
 /// so a retried HTTPS git op authenticates without a terminal prompt. A no-op
@@ -74,6 +210,129 @@ fn run_git_creds(
         );
     }
     Ok(output)
+}
+
+/// Run a Git network command with forced progress, bounded HTTP low-speed
+/// handling, and cooperative cancellation. Pipe readers run independently so
+/// a verbose Git child can never deadlock on a full stdout/stderr buffer.
+fn run_network_git_output(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<std::process::Output, NetworkFailure> {
+    let subcommand = args.first().copied().unwrap_or("");
+    let mut cmd = Command::new("git");
+    cmd.args([
+        "-c",
+        &format!("http.lowSpeedLimit={HTTP_LOW_SPEED_BYTES_PER_SECOND}"),
+        "-c",
+        &format!("http.lowSpeedTime={HTTP_LOW_SPEED_SECONDS}"),
+    ])
+    .args(args)
+    .current_dir(repo_path)
+    .env("GIT_TERMINAL_PROMPT", "0")
+    .env("GIT_EDITOR", "true")
+    .env("GIT_SEQUENCE_EDITOR", "true")
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    apply_credentials(&mut cmd, creds).map_err(|e| NetworkFailure::Failed(e.to_string()))?;
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| NetworkFailure::Failed(format!("Failed to execute git {subcommand}: {e}")))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| NetworkFailure::Failed("Failed to capture git stdout".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| NetworkFailure::Failed("Failed to capture git stderr".to_string()))?;
+
+    let stdout_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).map(|_| output)
+    });
+    let progress_control = control.clone();
+    let stderr_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut parser = GitProgressParser::default();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stderr.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    output.extend_from_slice(&chunk[..read]);
+                    parser.feed(&chunk[..read], &progress_control);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        parser.finish(&progress_control);
+        Ok(output)
+    });
+
+    let (status, cancelled) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, None),
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(NetworkFailure::Failed(format!(
+                    "Failed to wait for git {subcommand}: {error}"
+                )));
+            }
+        }
+        if let Some(reason) = control.cancellation_reason() {
+            child.kill().map_err(|error| {
+                NetworkFailure::Failed(format!("Failed to cancel git {subcommand}: {error}"))
+            })?;
+            let status = child.wait().map_err(|error| {
+                NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
+            })?;
+            break (status, Some(reason));
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    };
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| NetworkFailure::Failed("git stdout reader panicked".to_string()))?
+        .map_err(|e| NetworkFailure::Failed(format!("Failed to read git stdout: {e}")))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| NetworkFailure::Failed("git stderr reader panicked".to_string()))?
+        .map_err(|e| NetworkFailure::Failed(format!("Failed to read git stderr: {e}")))?;
+
+    if let Some(reason) = cancelled {
+        return Err(NetworkFailure::Cancelled(reason));
+    }
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn run_network_git_checked(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    let output = run_network_git_output(repo_path, args, creds, control)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(NetworkFailure::Failed(format!(
+        "git {} failed: {}",
+        args.first().unwrap_or(&""),
+        stderr.trim()
+    )))
 }
 
 /// Count unmerged (conflicted) paths in the repo at `repo_path`.
@@ -638,6 +897,20 @@ pub fn fetch_remote(repo_path: &str, remote: &str, creds: Option<&Credentials>) 
     Ok(())
 }
 
+pub(crate) fn fetch_remote_controlled(
+    repo_path: &str,
+    remote: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["fetch", "--progress", "--prune", remote],
+        creds,
+        control,
+    )
+}
+
 /// Fetch from the `origin` remote (thin wrapper over [`fetch_remote`]).
 pub fn fetch_origin(repo_path: &str) -> Result<()> {
     fetch_remote(repo_path, "origin", None)
@@ -682,6 +955,34 @@ pub fn fetch_all(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
         Ok(())
     } else {
         bail!("fetch failed for {}", failures.join("; for "));
+    }
+}
+
+pub(crate) fn fetch_all_controlled(
+    repo_path: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    let remotes = list_remotes(repo_path).map_err(|e| NetworkFailure::Failed(e.to_string()))?;
+    let mut failures = Vec::new();
+    for remote in remotes {
+        match fetch_remote_controlled(repo_path, &remote, creds, control) {
+            Ok(()) => {}
+            Err(NetworkFailure::Failed(error)) => {
+                failures.push(format!("{remote}: {}", error.trim()));
+            }
+            Err(NetworkFailure::Cancelled(reason)) => {
+                return Err(NetworkFailure::Cancelled(reason));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(NetworkFailure::Failed(format!(
+            "fetch failed for {}",
+            failures.join("; for ")
+        )))
     }
 }
 
@@ -735,6 +1036,35 @@ pub fn pull(
         }
     }
     run_git_allow_conflict_creds(repo_path, &args, creds)
+}
+
+pub(crate) fn pull_controlled(
+    repo_path: &str,
+    remote: Option<&str>,
+    branch: Option<&str>,
+    mode: PullMode,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<OpOutcome, NetworkFailure> {
+    let mut args = vec!["pull", "--progress", mode.arg()];
+    if let Some(remote) = remote {
+        args.push(remote);
+        if let Some(branch) = branch {
+            args.push(branch);
+        }
+    }
+    let output = run_network_git_output(repo_path, &args, creds, control)?;
+    if output.status.success() {
+        return Ok(OpOutcome::Completed);
+    }
+    let count = count_conflicts(repo_path);
+    if count > 0 {
+        return Ok(OpOutcome::Conflicts { count });
+    }
+    Err(NetworkFailure::Failed(format!(
+        "git pull failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
 }
 
 /// Whether a `git pull --ff-only` failure is due to divergent branches (offer
@@ -971,6 +1301,14 @@ pub fn push_current(repo_path: &str, creds: Option<&Credentials>) -> Result<()> 
     Ok(())
 }
 
+pub(crate) fn push_current_controlled(
+    repo_path: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(repo_path, &["push", "--progress"], creds, control)
+}
+
 /// Publish `branch` to `remote`, setting it as the branch's upstream
 /// (`git push -u <remote> <branch>`).
 pub fn push_set_upstream(
@@ -983,6 +1321,21 @@ pub fn push_set_upstream(
     Ok(())
 }
 
+pub(crate) fn push_set_upstream_controlled(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["push", "--progress", "-u", remote, branch],
+        creds,
+        control,
+    )
+}
+
 /// Push HEAD to an explicit `remote` **without** changing the branch's upstream
 /// tracking (`git push <remote> HEAD`). Used when the user picks a remote other
 /// than the configured upstream from the push remote-picker.
@@ -993,6 +1346,20 @@ pub fn push_head_to_remote(
 ) -> Result<()> {
     run_git_creds(repo_path, &["push", remote, "HEAD"], creds)?;
     Ok(())
+}
+
+pub(crate) fn push_head_to_remote_controlled(
+    repo_path: &str,
+    remote: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["push", "--progress", remote, "HEAD"],
+        creds,
+        control,
+    )
 }
 
 /// Push current branch to origin (thin wrapper; `git push origin HEAD`).
@@ -1013,6 +1380,21 @@ pub fn push_delete(
 ) -> Result<()> {
     run_git_creds(repo_path, &["push", remote, "--delete", branch], creds)?;
     Ok(())
+}
+
+pub(crate) fn push_delete_controlled(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["push", "--progress", remote, "--delete", branch],
+        creds,
+        control,
+    )
 }
 
 /// Resolve a conflicted path by taking "our" side (stage 2) and staging it.

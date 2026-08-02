@@ -1,13 +1,18 @@
 //! Async network operations: fetch, pull, push with background threading.
 
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    mpsc::{self, Receiver, Sender, TryRecvError},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::RefreshConfig;
 use crate::git::operations::{
-    fetch_all, fetch_remote, pull, push_current, push_delete, push_head_to_remote,
-    push_set_upstream, OpOutcome, PullMode,
+    fetch_all_controlled, fetch_remote_controlled, pull_controlled, push_current_controlled,
+    push_delete_controlled, push_head_to_remote_controlled, push_set_upstream_controlled,
+    NetworkCommandControl, OpOutcome, PullMode,
 };
 use crate::git::Credentials;
 
@@ -61,6 +66,30 @@ pub enum NetworkFailure {
     Cancelled(CancellationReason),
 }
 
+/// Cloneable cooperative-cancellation signal shared with a Git worker.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CancellationToken(Arc<AtomicU8>);
+
+impl CancellationToken {
+    pub(crate) fn request(&self, reason: CancellationReason) -> bool {
+        let encoded = match reason {
+            CancellationReason::User => 1,
+            CancellationReason::InactivityTimeout => 2,
+        };
+        self.0
+            .compare_exchange(0, encoded, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub(crate) fn reason(&self) -> Option<CancellationReason> {
+        match self.0.load(Ordering::Acquire) {
+            1 => Some(CancellationReason::User),
+            2 => Some(CancellationReason::InactivityTimeout),
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for NetworkFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -92,12 +121,22 @@ pub enum PushSpec {
 
 /// Manages async fetch/pull/push operations and auto-refresh timers.
 pub struct NetworkManager {
-    fetch_receiver: Option<Receiver<Result<(), String>>>,
+    fetch_receiver: Option<Receiver<Result<(), NetworkFailure>>>,
     fetch_silent: bool,
-    push_receiver: Option<Receiver<Result<(), String>>>,
-    pull_receiver: Option<Receiver<Result<OpOutcome, String>>>,
+    push_receiver: Option<Receiver<Result<(), NetworkFailure>>>,
+    pull_receiver: Option<Receiver<Result<OpOutcome, NetworkFailure>>>,
+    active: Option<ActiveOperation>,
+    progress_receiver: Option<Receiver<NetworkProgress>>,
     last_refresh_time: Instant,
     last_fetch_time: Instant,
+}
+
+struct ActiveOperation {
+    operation: NetworkOperation,
+    phase: NetworkPhase,
+    last_progress: NetworkProgress,
+    last_progress_at: Instant,
+    cancellation: CancellationToken,
 }
 
 /// Result of polling network operations.
@@ -131,21 +170,29 @@ impl NetworkManager {
             fetch_silent: false,
             push_receiver: None,
             pull_receiver: None,
+            active: None,
+            progress_receiver: None,
             last_refresh_time: now,
             last_fetch_time: now,
         }
     }
 
     pub fn is_fetching(&self) -> bool {
-        self.fetch_receiver.is_some()
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.operation == NetworkOperation::Fetch)
     }
 
     pub fn is_pushing(&self) -> bool {
-        self.push_receiver.is_some()
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.operation == NetworkOperation::Push)
     }
 
     pub fn is_pulling(&self) -> bool {
-        self.pull_receiver.is_some()
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.operation == NetworkOperation::Pull)
     }
 
     pub fn is_busy(&self) -> bool {
@@ -154,34 +201,160 @@ impl NetworkManager {
 
     /// Current operation lifecycle snapshot, when network work is active.
     pub fn status(&self) -> Option<NetworkStatus> {
-        None
+        self.active.as_ref().map(|active| NetworkStatus {
+            operation: active.operation,
+            phase: active.phase,
+        })
     }
 
     /// Record a monotonic worker-progress snapshot at `observed_at`.
-    pub fn record_progress_at(&mut self, _progress: NetworkProgress, _observed_at: Instant) {}
+    pub fn record_progress_at(&mut self, progress: NetworkProgress, observed_at: Instant) {
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        if active.phase != NetworkPhase::Running {
+            return;
+        }
+        let advanced = progress.bytes > active.last_progress.bytes
+            || progress.objects > active.last_progress.objects
+            || progress.refs > active.last_progress.refs;
+        if advanced {
+            active.last_progress.bytes = active.last_progress.bytes.max(progress.bytes);
+            active.last_progress.objects = active.last_progress.objects.max(progress.objects);
+            active.last_progress.refs = active.last_progress.refs.max(progress.refs);
+            active.last_progress_at = observed_at;
+        }
+    }
 
     /// Request timeout cancellation when the current inactivity window has
     /// elapsed. Returns true only for the transition into cancellation.
-    pub fn check_inactivity_at(&mut self, _now: Instant) -> bool {
-        false
+    pub fn check_inactivity_at(&mut self, now: Instant) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        if active.phase != NetworkPhase::Running
+            || now.saturating_duration_since(active.last_progress_at) < NETWORK_INACTIVITY_TIMEOUT
+        {
+            return false;
+        }
+        let reason = CancellationReason::InactivityTimeout;
+        if !active.cancellation.request(reason) {
+            return false;
+        }
+        active.phase = NetworkPhase::Cancelling(reason);
+        true
     }
 
     /// Request cancellation of the active operation. Returns true only for the
     /// first request accepted by a running operation.
-    pub fn cancel_active(&mut self, _reason: CancellationReason) -> bool {
-        false
+    pub fn cancel_active(&mut self, reason: CancellationReason) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
+        if active.phase != NetworkPhase::Running || !active.cancellation.request(reason) {
+            return false;
+        }
+        active.phase = NetworkPhase::Cancelling(reason);
+        true
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn active_for_test(_operation: NetworkOperation, _started_at: Instant) -> Self {
-        Self::new()
+    pub fn active_for_test(operation: NetworkOperation, started_at: Instant) -> Self {
+        let mut manager = Self::new();
+        manager.activate_for_test(operation, started_at);
+        manager
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn activate_for_test(&mut self, _operation: NetworkOperation, _started_at: Instant) {}
+    pub fn activate_for_test(&mut self, operation: NetworkOperation, started_at: Instant) {
+        let cancellation = CancellationToken::default();
+        self.active = Some(ActiveOperation {
+            operation,
+            phase: NetworkPhase::Running,
+            last_progress: NetworkProgress::default(),
+            last_progress_at: started_at,
+            cancellation,
+        });
+        let (_tx, rx) = mpsc::channel();
+        match operation {
+            NetworkOperation::Fetch => self.fetch_receiver = Some(rx),
+            NetworkOperation::Push => self.push_receiver = Some(rx),
+            NetworkOperation::Pull => {
+                let (_tx, rx) = mpsc::channel();
+                self.pull_receiver = Some(rx);
+            }
+        }
+    }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn finish_cancelled_for_test(&mut self, _reason: CancellationReason) {}
+    pub fn finish_cancelled_for_test(&mut self, reason: CancellationReason) {
+        let Some(operation) = self.active.as_ref().map(|active| active.operation) else {
+            return;
+        };
+        match operation {
+            NetworkOperation::Fetch => {
+                let (tx, rx) = mpsc::channel();
+                let _ = tx.send(Err(NetworkFailure::Cancelled(reason)));
+                self.fetch_receiver = Some(rx);
+            }
+            NetworkOperation::Push => {
+                let (tx, rx) = mpsc::channel();
+                let _ = tx.send(Err(NetworkFailure::Cancelled(reason)));
+                self.push_receiver = Some(rx);
+            }
+            NetworkOperation::Pull => {
+                let (tx, rx) = mpsc::channel();
+                let _ = tx.send(Err(NetworkFailure::Cancelled(reason)));
+                self.pull_receiver = Some(rx);
+            }
+        }
+    }
+
+    fn begin_operation(
+        &mut self,
+        operation: NetworkOperation,
+    ) -> (CancellationToken, Sender<NetworkProgress>) {
+        let cancellation = CancellationToken::default();
+        let (progress_tx, progress_rx) = mpsc::channel();
+        self.active = Some(ActiveOperation {
+            operation,
+            phase: NetworkPhase::Running,
+            last_progress: NetworkProgress::default(),
+            last_progress_at: Instant::now(),
+            cancellation: cancellation.clone(),
+        });
+        self.progress_receiver = Some(progress_rx);
+        (cancellation, progress_tx)
+    }
+
+    /// Drain worker progress and transition a stalled operation into automatic
+    /// cancellation. Returns true when the user-visible phase changed.
+    pub fn tick(&mut self) -> bool {
+        self.tick_at(Instant::now())
+    }
+
+    fn tick_at(&mut self, now: Instant) -> bool {
+        let progress: Vec<_> = self
+            .progress_receiver
+            .as_ref()
+            .map(|receiver| receiver.try_iter().collect())
+            .unwrap_or_default();
+        for snapshot in progress {
+            self.record_progress_at(snapshot, now);
+        }
+        self.check_inactivity_at(now)
+    }
+
+    fn finish_operation(&mut self, operation: NetworkOperation) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.operation == operation)
+        {
+            self.active = None;
+            self.progress_receiver = None;
+        }
+    }
 
     /// Start a background fetch from `remote`.
     pub fn start_fetch(
@@ -193,11 +366,12 @@ impl NetworkManager {
         creds: Option<Credentials>,
     ) -> Option<String> {
         let (tx, rx) = mpsc::channel();
+        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Fetch);
+        let control = NetworkCommandControl::new(cancellation, progress_tx);
         let path = repo_path.to_string();
         let remote_owned = remote.to_string();
         thread::spawn(move || {
-            let result =
-                fetch_remote(&path, &remote_owned, creds.as_ref()).map_err(|e| e.to_string());
+            let result = fetch_remote_controlled(&path, &remote_owned, creds.as_ref(), &control);
             let _ = tx.send(result);
         });
         self.fetch_receiver = Some(rx);
@@ -214,9 +388,11 @@ impl NetworkManager {
     /// `poll_fetch` / refresh path as a single-remote fetch.
     pub fn start_fetch_all(&mut self, repo_path: &str, creds: Option<Credentials>) -> String {
         let (tx, rx) = mpsc::channel();
+        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Fetch);
+        let control = NetworkCommandControl::new(cancellation, progress_tx);
         let path = repo_path.to_string();
         thread::spawn(move || {
-            let result = fetch_all(&path, creds.as_ref()).map_err(|e| e.to_string());
+            let result = fetch_all_controlled(&path, creds.as_ref(), &control);
             let _ = tx.send(result);
         });
         self.fetch_receiver = Some(rx);
@@ -232,6 +408,8 @@ impl NetworkManager {
         creds: Option<Credentials>,
     ) -> String {
         let (tx, rx) = mpsc::channel();
+        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Push);
+        let control = NetworkCommandControl::new(cancellation, progress_tx);
         let path = repo_path.to_string();
         let message = match &spec {
             PushSpec::Current => "Pushing...".to_string(),
@@ -243,18 +421,17 @@ impl NetworkManager {
         };
         thread::spawn(move || {
             let result = match spec {
-                PushSpec::Current => push_current(&path, creds.as_ref()),
+                PushSpec::Current => push_current_controlled(&path, creds.as_ref(), &control),
                 PushSpec::Publish { remote, branch } => {
-                    push_set_upstream(&path, &remote, &branch, creds.as_ref())
+                    push_set_upstream_controlled(&path, &remote, &branch, creds.as_ref(), &control)
                 }
                 PushSpec::ToRemote { remote } => {
-                    push_head_to_remote(&path, &remote, creds.as_ref())
+                    push_head_to_remote_controlled(&path, &remote, creds.as_ref(), &control)
                 }
                 PushSpec::Delete { remote, branch } => {
-                    push_delete(&path, &remote, &branch, creds.as_ref())
+                    push_delete_controlled(&path, &remote, &branch, creds.as_ref(), &control)
                 }
-            }
-            .map_err(|e| e.to_string());
+            };
             let _ = tx.send(result);
         });
         self.push_receiver = Some(rx);
@@ -273,20 +450,22 @@ impl NetworkManager {
         creds: Option<Credentials>,
     ) -> String {
         let (tx, rx) = mpsc::channel();
+        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Pull);
+        let control = NetworkCommandControl::new(cancellation, progress_tx);
         let path = repo_path.to_string();
         let message = match &remote {
             Some(r) => format!("Pulling from {r}..."),
             None => "Pulling...".to_string(),
         };
         thread::spawn(move || {
-            let result = pull(
+            let result = pull_controlled(
                 &path,
                 remote.as_deref(),
                 branch.as_deref(),
                 mode,
                 creds.as_ref(),
-            )
-            .map_err(|e| e.to_string());
+                &control,
+            );
             let _ = tx.send(result);
         });
         self.pull_receiver = Some(rx);
@@ -298,42 +477,51 @@ impl NetworkManager {
     /// caller can decide whether to surface success. Silent *errors* are no
     /// longer suppressed here — the caller shows them as a toast rather than the
     /// full error dialog.
-    pub fn poll_fetch(&mut self) -> Option<(Result<(), String>, bool)> {
+    pub fn poll_fetch(&mut self) -> Option<(Result<(), NetworkFailure>, bool)> {
         let rx = self.fetch_receiver.as_ref()?;
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
             // Worker died without reporting; clear state so fetching
             // doesn't stay stuck "in progress" forever.
-            Err(TryRecvError::Disconnected) => Err("fetch worker exited unexpectedly".to_string()),
+            Err(TryRecvError::Disconnected) => Err(NetworkFailure::Failed(
+                "fetch worker exited unexpectedly".to_string(),
+            )),
         };
         let silent = self.fetch_silent;
         self.fetch_receiver = None;
         self.fetch_silent = false;
+        self.finish_operation(NetworkOperation::Fetch);
         Some((result, silent))
     }
 
     /// Poll push receiver for completion.
-    pub fn poll_push(&mut self) -> Option<Result<(), String>> {
+    pub fn poll_push(&mut self) -> Option<Result<(), NetworkFailure>> {
         let rx = self.push_receiver.as_ref()?;
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => Err("push worker exited unexpectedly".to_string()),
+            Err(TryRecvError::Disconnected) => Err(NetworkFailure::Failed(
+                "push worker exited unexpectedly".to_string(),
+            )),
         };
         self.push_receiver = None;
+        self.finish_operation(NetworkOperation::Push);
         Some(result)
     }
 
     /// Poll pull receiver for completion.
-    pub fn poll_pull(&mut self) -> Option<Result<OpOutcome, String>> {
+    pub fn poll_pull(&mut self) -> Option<Result<OpOutcome, NetworkFailure>> {
         let rx = self.pull_receiver.as_ref()?;
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => Err("pull worker exited unexpectedly".to_string()),
+            Err(TryRecvError::Disconnected) => Err(NetworkFailure::Failed(
+                "pull worker exited unexpectedly".to_string(),
+            )),
         };
         self.pull_receiver = None;
+        self.finish_operation(NetworkOperation::Pull);
         Some(result)
     }
 
@@ -381,7 +569,10 @@ impl NetworkManager {
     #[cfg(test)]
     pub(crate) fn complete_fetch_for_test(&mut self, result: Result<(), String>, silent: bool) {
         let (tx, rx) = mpsc::channel();
-        let _ = tx.send(result);
+        let _ = tx.send(result.map_err(NetworkFailure::Failed));
+        if self.active.is_none() {
+            self.activate_for_test(NetworkOperation::Fetch, Instant::now());
+        }
         self.fetch_receiver = Some(rx);
         self.fetch_silent = silent;
     }
@@ -393,7 +584,10 @@ impl NetworkManager {
     #[cfg(test)]
     pub(crate) fn complete_push_for_test(&mut self, result: Result<(), String>) {
         let (tx, rx) = mpsc::channel();
-        let _ = tx.send(result);
+        let _ = tx.send(result.map_err(NetworkFailure::Failed));
+        if self.active.is_none() {
+            self.activate_for_test(NetworkOperation::Push, Instant::now());
+        }
         self.push_receiver = Some(rx);
     }
 }
