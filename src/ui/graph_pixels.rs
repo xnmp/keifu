@@ -1716,6 +1716,45 @@ mod tests {
         solid(CellShape::Pipe, color)
     }
 
+    fn pixel_state(font_size: (u16, u16)) -> PixelGraphState {
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(font_size);
+        picker.set_protocol_type(ProtocolType::Iterm2);
+        PixelGraphState::from_picker(picker)
+    }
+
+    #[test]
+    fn resize_refreshes_cell_geometry_and_invalidates_cached_protocols() {
+        let mut state = pixel_state((CW as u16, CH as u16));
+        let row = spec(vec![pipe([0, 255, 0])]);
+        state.sync_frame(&[row.clone()]);
+        assert!(state.get(&row).is_some(), "the initial image is cached");
+
+        state.refresh_font_size((20, 40));
+
+        assert_eq!(state.font_size, (20, 40));
+        assert!(
+            state.get(&row).is_none(),
+            "a changed cell geometry must regenerate the image payload"
+        );
+    }
+
+    #[test]
+    fn resize_with_zero_cell_geometry_keeps_existing_cached_protocols() {
+        let mut state = pixel_state((CW as u16, CH as u16));
+        let row = spec(vec![pipe([0, 255, 0])]);
+        state.sync_frame(&[row.clone()]);
+        assert!(state.get(&row).is_some(), "the initial image is cached");
+
+        state.refresh_font_size((0, 40));
+
+        assert_eq!(state.font_size, (CW as u16, CH as u16));
+        assert!(
+            state.get(&row).is_some(),
+            "an unusable resize must retain the last renderable image"
+        );
+    }
+
     const PAD_X: u32 = PIXEL_LEFT_PAD_CELLS as u32 * CW;
 
     fn commit(up: bool, down: bool, style: CommitStyle, color: [u8; 3]) -> PixelCell {
