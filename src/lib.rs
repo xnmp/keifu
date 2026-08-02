@@ -21,6 +21,7 @@ pub mod interval_fetch;
 pub mod issue;
 pub mod issue_action;
 pub mod keybindings;
+pub mod keymap;
 pub mod logging;
 pub mod merge_base;
 pub mod merged_branch_fetch;
