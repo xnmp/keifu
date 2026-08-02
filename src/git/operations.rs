@@ -34,6 +34,9 @@ pub enum OpOutcome {
     Completed,
     /// The operation stopped on conflicts; the repo is left in-progress.
     Conflicts { count: usize },
+    /// Git paused without unmerged files (for example a failed interactive
+    /// rebase `exec`/hook). The operation remains continuable/abortable.
+    Paused,
 }
 
 /// Run a git CLI command and return its output, or bail with stderr on failure.
@@ -121,6 +124,13 @@ fn run_git_allow_conflict_creds(
     if count > 0 {
         return Ok(OpOutcome::Conflicts { count });
     }
+    if Repository::open(repo_path)?
+        .path()
+        .join("rebase-merge/interactive")
+        .exists()
+    {
+        return Ok(OpOutcome::Paused);
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     bail!("git {} failed: {}", subcommand, stderr.trim());
 }
@@ -145,6 +155,13 @@ pub fn rebase_interactive(repo_path: &str, base_oid: Oid, todo_path: &Path) -> R
     let count = count_conflicts(repo_path);
     if count > 0 {
         return Ok(OpOutcome::Conflicts { count });
+    }
+    if Repository::open(repo_path)?
+        .path()
+        .join("rebase-merge/interactive")
+        .exists()
+    {
+        return Ok(OpOutcome::Paused);
     }
     bail!(
         "git rebase failed: {}",
@@ -545,6 +562,7 @@ fn fast_forward_one_behind(
             OpOutcome::Conflicts { .. } => {
                 bail!("unexpected conflicts fast-forwarding '{name}'")
             }
+            OpOutcome::Paused => bail!("unexpected paused fast-forward for '{name}'"),
         }
     } else {
         // Pure ref update: retarget the local branch to the upstream tip. No
@@ -1037,7 +1055,33 @@ pub fn abort_interactive_rebase(repo_path: &str) -> Result<()> {
 
 /// Continue a CLI-authored interactive rebase after its conflicts are staged.
 pub fn continue_interactive_rebase(repo_path: &str) -> Result<OpOutcome> {
-    run_git_allow_conflict(repo_path, &["rebase", "--continue"])
+    let output = Command::new("git")
+        .args(["rebase", "--continue"])
+        .current_dir(repo_path)
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .context("Failed to execute git rebase --continue")?;
+    if output.status.success() {
+        return Ok(OpOutcome::Completed);
+    }
+    let count = count_conflicts(repo_path);
+    if count > 0 {
+        return Ok(OpOutcome::Conflicts { count });
+    }
+    if Repository::open(repo_path)?
+        .path()
+        .join("rebase-merge/interactive")
+        .exists()
+    {
+        return Ok(OpOutcome::Paused);
+    }
+    bail!(
+        "git rebase failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
 }
 
 /// Continue the in-progress operation after conflicts are resolved.

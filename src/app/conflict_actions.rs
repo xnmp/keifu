@@ -128,6 +128,9 @@ impl App {
                 self.focus_conflict_files();
                 self.set_message(Self::stash_conflict_guidance(gerund, count));
             }
+            OpOutcome::Paused => {
+                self.toast(crate::toast::ToastKind::Error, "Stash operation paused");
+            }
         }
         Ok(())
     }
@@ -144,6 +147,13 @@ impl App {
             OpOutcome::Conflicts { count } => {
                 self.focus_conflict_files();
                 self.set_message(Self::conflict_guidance(count));
+            }
+            OpOutcome::Paused => {
+                self.toast(
+                    crate::toast::ToastKind::Error,
+                    "Interactive rebase paused — fix the hook/exec error, then Continue (c) or Abort (A)",
+                );
+                self.set_message("Interactive rebase paused — Continue (c) to retry, or Abort (A)");
             }
         }
     }
@@ -224,6 +234,13 @@ impl App {
                 self.refresh(true)?;
                 self.focus_conflict_files();
                 self.set_message(Self::conflict_guidance(count));
+            }
+            Ok(OpOutcome::Paused) => {
+                self.refresh(true)?;
+                self.toast(
+                    crate::toast::ToastKind::Error,
+                    "Interactive rebase is still paused — fix the hook/exec error, then retry Continue (c) or Abort (A)",
+                );
             }
             Err(e) => {
                 self.refresh(true)?;

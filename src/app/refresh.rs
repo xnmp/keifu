@@ -248,6 +248,12 @@ impl App {
         // count so the status bar and conflict keybindings stay accurate.
         self.op_state = self.repo.operation_state();
         self.conflict_count = self.repo.conflicted_count();
+        self.interactive_rebase_in_progress = self
+            .repo
+            .repo()
+            .path()
+            .join("rebase-merge/interactive")
+            .exists();
 
         self.branches = self.repo.get_branches()?;
         self.remotes = self.repo.remotes();

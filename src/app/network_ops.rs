@@ -215,6 +215,7 @@ impl App {
                         self.focus_conflict_files();
                         self.set_message(Self::conflict_guidance(count));
                     }
+                    OpOutcome::Paused => self.show_error("Pull paused unexpectedly".to_string()),
                 }
             }
             Err(e) => self.handle_pull_error(e, flight),

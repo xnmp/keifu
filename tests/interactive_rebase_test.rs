@@ -100,3 +100,75 @@ fn conflicted_interactive_rebase_can_be_aborted_back_to_the_original_head() {
         "two\n"
     );
 }
+
+#[test]
+fn non_conflict_interactive_stop_remains_recoverable() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().target().unwrap();
+    let first = commit_file(repo, "first.txt", "first\n", "first");
+    let todo_path = repo.path().join("paused-todo");
+    fs::write(
+        &todo_path,
+        format!("pick {first} first\nexec git rev-parse --verify refs/heads/does-not-exist\n"),
+    )
+    .unwrap();
+
+    let outcome = rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap();
+
+    assert_eq!(outcome, OpOutcome::Paused);
+    assert!(repo.path().join("rebase-merge/interactive").exists());
+    abort_interactive_rebase(repo_path(&git_repo)).unwrap();
+    assert_eq!(repo.head().unwrap().target(), Some(first));
+}
+
+#[test]
+fn reword_message_file_survives_a_conflict_until_continue_reaches_it() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().target().unwrap();
+    fs::write(repo.workdir().unwrap().join("tracked.txt"), "one\n").unwrap();
+    git_cli(repo_path(&git_repo), &["add", "tracked.txt"]);
+    git_cli(repo_path(&git_repo), &["commit", "-m", "one"]);
+    fs::write(repo.workdir().unwrap().join("tracked.txt"), "two\n").unwrap();
+    git_cli(repo_path(&git_repo), &["add", "tracked.txt"]);
+    git_cli(repo_path(&git_repo), &["commit", "-m", "two"]);
+    let second = repo.head().unwrap().target().unwrap();
+    let third = commit_file(repo, "third.txt", "third\n", "third");
+    let state_dir = repo.path().join("keifu-interactive-rebase");
+    fs::create_dir_all(&state_dir).unwrap();
+    let message_path = state_dir.join("message-third");
+    fs::write(&message_path, "renamed after conflict\n").unwrap();
+    let todo_path = state_dir.join("todo");
+    fs::write(
+        &todo_path,
+        format!(
+            "pick {second} two\npick {third} third\nexec git commit --amend -F '{}'\n",
+            message_path.display()
+        ),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap(),
+        OpOutcome::Conflicts { count: 1 }
+    ));
+    assert_eq!(
+        fs::read_to_string(&message_path).unwrap(),
+        "renamed after conflict\n"
+    );
+    // Simulate a later session resolving the conflict and reaching the pending
+    // reword step; the operations layer carries no in-memory todo state.
+    fs::write(repo.workdir().unwrap().join("tracked.txt"), "two\n").unwrap();
+    git_cli(repo_path(&git_repo), &["add", "tracked.txt"]);
+
+    let outcome =
+        keifu::git::operations::continue_interactive_rebase(repo_path(&git_repo)).unwrap();
+
+    assert_eq!(outcome, OpOutcome::Completed);
+    let reopened = git2::Repository::open(repo.workdir().unwrap()).unwrap();
+    assert_eq!(
+        reopened.head().unwrap().peel_to_commit().unwrap().summary(),
+        Some("renamed after conflict")
+    );
+}

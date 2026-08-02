@@ -232,7 +232,7 @@ fn rebase_summary(plan: &RebasePlan) -> String {
             .count()
     };
     format!(
-        "Rebase {} commits onto {}?\n\nreword {}, squash {}, fixup {}, drop {}\n\nThis rewrites commit history.",
+        "Rebase {} commits onto {}?\nActions: reword {}, squash {}, fixup {}, drop {}\nWARNING: this rewrites commit history.",
         plan.entries.len(),
         short_hash(plan.base_oid),
         count(RebaseAction::Reword),
@@ -309,5 +309,164 @@ mod tests {
         app.handle_action(Action::Cancel).unwrap();
         assert!(matches!(app.mode, AppMode::Normal));
         assert_eq!(app.repo.head_oid(), Some(head));
+    }
+
+    #[test]
+    fn confirmed_plan_refreshes_history_and_toasts_success() {
+        let (_tmp, mut app, base, _head) = app_with_range();
+        app.start_interactive_rebase(base);
+        app.rebase_plan
+            .as_mut()
+            .unwrap()
+            .set_reword_message(0, "renamed two")
+            .unwrap();
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert_eq!(
+            app.repo
+                .repo()
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .summary(),
+            Some("renamed two")
+        );
+        assert!(app.toasts.visible().iter().any(|toast| {
+            toast.kind == crate::toast::ToastKind::Success
+                && toast.text.contains("Rebase completed")
+        }));
+    }
+
+    #[test]
+    fn refresh_switches_from_cli_to_libgit2_rebase_recovery_in_one_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        git(tmp.path(), &["config", "user.name", "Test User"]);
+        git(tmp.path(), &["config", "user.email", "test@example.com"]);
+        std::fs::write(tmp.path().join("f.txt"), "base\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "base"]);
+        git(tmp.path(), &["branch", "upstream"]);
+        let repo = git2::Repository::open(tmp.path()).unwrap();
+        let base = repo.head().unwrap().target().unwrap();
+        std::fs::write(tmp.path().join("f.txt"), "main\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "main"]);
+        let main_head = repo.head().unwrap().target().unwrap();
+        let todo = repo.path().join("pause-todo");
+        std::fs::write(
+            &todo,
+            format!(
+                "pick {main_head} main\nexec git rev-parse --verify refs/heads/does-not-exist\n"
+            ),
+        )
+        .unwrap();
+        let mut app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+
+        assert_eq!(
+            crate::git::operations::rebase_interactive(&app.repo_path, base, &todo).unwrap(),
+            OpOutcome::Paused
+        );
+        app.refresh(true).unwrap();
+        assert!(app.interactive_rebase_in_progress);
+        crate::git::operations::abort_interactive_rebase(&app.repo_path).unwrap();
+        app.refresh(true).unwrap();
+        assert!(!app.interactive_rebase_in_progress);
+
+        git(tmp.path(), &["checkout", "-q", "upstream"]);
+        std::fs::write(tmp.path().join("f.txt"), "upstream\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "upstream"]);
+        git(tmp.path(), &["checkout", "-q", "main"]);
+        app.refresh(true).unwrap();
+        assert!(matches!(
+            rebase_branch(app.repo.repo(), "upstream", git2::BranchType::Local).unwrap(),
+            OpOutcome::Conflicts { .. }
+        ));
+        app.refresh(true).unwrap();
+        assert_eq!(app.op_state, OperationState::Rebase);
+        assert!(!app.interactive_rebase_in_progress);
+        app.mode = AppMode::Confirm {
+            message: "Abort rebase?".to_string(),
+            action: ConfirmAction::AbortOperation(OperationState::Rebase),
+        };
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        assert_eq!(app.repo.head_oid(), Some(main_head));
+        assert_eq!(app.op_state, OperationState::Clean);
+    }
+
+    #[test]
+    fn confirmed_conflicting_plan_enters_the_existing_conflict_workflow() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        git(tmp.path(), &["config", "user.name", "Test User"]);
+        git(tmp.path(), &["config", "user.email", "test@example.com"]);
+        std::fs::write(tmp.path().join("f.txt"), "base\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "base"]);
+        let repo = git2::Repository::open(tmp.path()).unwrap();
+        let base = repo.head().unwrap().target().unwrap();
+        std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "one"]);
+        std::fs::write(tmp.path().join("f.txt"), "two\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "two"]);
+        drop(repo);
+        let mut app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        app.start_interactive_rebase(base);
+        app.rebase_plan.as_mut().unwrap().move_down(0).unwrap();
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        assert_eq!(app.op_state, OperationState::Rebase);
+        assert!(app.interactive_rebase_in_progress);
+        assert_eq!(app.conflict_count, 1);
+        assert_eq!(app.focused_panel, FocusedPanel::Files);
+        assert!(app.get_message().unwrap().contains("Conflicts in 1 file"));
+        crate::git::operations::abort_interactive_rebase(&app.repo_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_confirmed_plan_is_a_non_blocking_error_toast() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (tmp, mut app, base, head) = app_with_range();
+        let hook = tmp.path().join(".git/hooks/pre-rebase");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+        app.start_interactive_rebase(base);
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert_eq!(app.repo.head_oid(), Some(head));
+        assert!(app.toasts.visible().iter().any(|toast| {
+            toast.kind == crate::toast::ToastKind::Error
+                && toast.text.contains("Interactive rebase failed")
+        }));
     }
 }
