@@ -331,15 +331,28 @@ a quiet window, while the contextual `x` binding requests it immediately.
 
 Running/cancelling state renders directly from `NetworkStatus` in the status
 bar (`Fetching…`/`Pulling…`/`Pushing…` with `x cancel`, then `Cancelling…`). It
-is not mirrored into the transient message clock. Cancellation is cooperative
-at the worker boundary: the Git runner observes the shared token, terminates
-and reaps its direct child, and reports a typed cancellation reason. It must not
-join stdout/stderr readers on that cancellation path: transport helpers such as
-`git-remote-https` or `ssh` can inherit those pipes and briefly outlive Git,
-which would otherwise wedge the worker in `Cancelling…` even after Git exited.
-The job remains busy until the direct child's terminal result arrives; only
-then does the app clear the slot and emit one outcome toast. Hard isolation of
-an independently surviving helper remains a separate concern.
+is not mirrored into the transient message clock.
+
+On Unix, every network Git command starts in a dedicated process group.
+Cancellation sends SIGINT to the group and allows two seconds for Git's
+lockfile and ref-transaction handlers to unwind, then escalates to SIGTERM for
+two seconds and finally SIGKILL with a one-second reap bound. Group signaling
+includes ordinary `git-remote-*`, SSH, credential, and hook children instead of
+orphaning them when only the direct Git PID exits. The cancellation path still
+does not synchronously join pipe readers: a helper that deliberately daemonizes
+into a different group cannot hold the UI worker busy, though its finite
+transport timeout remains responsible for its eventual exit.
+
+`git pull` is split at the durable-state boundary. Its fetch/ref transaction is
+cancellable, but after that succeeds the local `merge --ff-only`, merge, or
+rebase integration is allowed to finish even if cancellation arrives. This
+prevents escalation from interrupting index/worktree writes or creating a
+half-started merge/rebase. Fetch ref writes remain atomic under Git's own
+transaction machinery. The job remains busy through transfer and any local
+integration; only its terminal result clears the slot and emits the outcome
+toast. Regression tests cancel during a prepared ref transaction and require
+clean repository state, no stale lockfiles, unchanged HEAD/worktree for pull,
+and a successful subsequent fetch/pull.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a
