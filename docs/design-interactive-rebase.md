@@ -276,8 +276,11 @@ existing-code change the design requires.
 
 ## 4. Safety integration (reuses the reflog-undo work)
 
-- **Pre-rebase snapshot into the `UndoLedger`.** Before running, capture
-  `pre = self.repo.head_oid()`. On `OpOutcome::Completed` with HEAD moved, record
+- **Pre-rebase snapshot into durable execution state.** Before running, capture
+  `pre = self.repo.head_oid()` with the plan count/base under
+  `.git/keifu-interactive-rebase`. This seed survives conflicts, pauses, and an
+  app relaunch. On `OpOutcome::Completed` with HEAD moved — whether returned by
+  the initial run or a later Continue — consume it before cleanup and record
   the *same* entry shape the merge/pull undos already use
   (`confirm_actions.rs`, merge arm; `src/undo.rs`):
 
@@ -305,6 +308,11 @@ existing-code change the design requires.
   There is nothing to undo — so we record an undo entry **only on `Completed`**,
   never on abort. (Same principle as recording merge undo only on
   `OpOutcome::Completed`, `confirm_actions.rs`.)
+
+- **An active marker forbids new materialization.** The Keifu lock protects the
+  pre-marker startup window. After acquiring it, execution also refuses to
+  write any todo, message, or undo seed when `.git/rebase-merge/interactive`
+  already exists, so another app cannot corrupt a paused run's pending files.
 
 ---
 
