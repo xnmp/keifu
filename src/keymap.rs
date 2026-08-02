@@ -222,6 +222,9 @@ impl BindingDescriptor {
         match (self.id, binding.to_string().as_str()) {
             ("go-to-top", "g") => GRAPH | PR_THREAD | ISSUE_LIST | ISSUE_DETAIL | CI_CHECKS,
             ("go-to-top", "Ctrl+Home") => GRAPH,
+            ("go-to-bottom", "Shift+G") => {
+                GRAPH | PR_THREAD | ISSUE_LIST | ISSUE_DETAIL | CI_CHECKS
+            }
             ("cancel", "q") => {
                 MENU | REBASE_PLAN
                     | PR_THREAD
@@ -502,11 +505,11 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
             NORMAL,
             ["Ctrl+P", "Ctrl+Alt+P", ":"]
         ),
-        ("search", Search, GRAPH, ["Ctrl+F", "/"]),
+        ("search", Search, NORMAL, ["Ctrl+F", "/"]),
         (
             "start-commit-filter",
             StartCommitFilter,
-            GRAPH,
+            NORMAL,
             ["Ctrl+Shift+F"]
         ),
         ("open-settings", OpenSettings, NORMAL, ["Ctrl+,", ","]),
@@ -540,7 +543,8 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
                 | ISSUE_LABELS
                 | CI_CHECKS
                 | BRANCH_FILTER
-                | PALETTE,
+                | PALETTE
+                | COMMIT_FILTER,
             ["Up", "k"]
         ),
         (
@@ -558,7 +562,8 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
                 | ISSUE_LABELS
                 | CI_CHECKS
                 | BRANCH_FILTER
-                | PALETTE,
+                | PALETTE
+                | COMMIT_FILTER,
             ["Down", "j"]
         ),
         (
@@ -681,13 +686,13 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
         (
             "editor-backspace-word",
             EditorBackspaceWord,
-            EDITOR,
+            EDITOR | COMPOSE,
             ["Ctrl+Backspace", "Alt+Backspace"]
         ),
         (
             "editor-delete-word",
             EditorDeleteWord,
-            EDITOR,
+            EDITOR | COMPOSE,
             ["Ctrl+Delete", "Alt+D"]
         ),
         ("editor-kill-line", EditorKillLine, EDITOR, ["Ctrl+U"]),
