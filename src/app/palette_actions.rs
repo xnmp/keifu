@@ -19,12 +19,13 @@ impl App {
     fn palette_context(&self) -> PaletteContext {
         let has_selected_commit = self
             .selected_commit_node()
-            .and_then(|n| n.commit.as_ref())
-            .is_some();
+            .is_some_and(|node| node.commit.is_some() && !node.is_stash && !node.is_uncommitted);
         PaletteContext {
             has_selected_commit,
-            can_create_pr: self.can_offer_create_pr(),
-            selected_has_open_pr: self.selected_commit_has_open_pr(),
+            // PR actions are commit-contextual too; a stash's synthetic
+            // commit payload must not make ordinary registry actions appear.
+            can_create_pr: has_selected_commit && self.can_offer_create_pr(),
+            selected_has_open_pr: has_selected_commit && self.selected_commit_has_open_pr(),
             can_load_more: !self.all_commits_loaded,
             can_undo: !self.undo_ledger.is_empty(),
         }

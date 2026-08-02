@@ -116,6 +116,13 @@ impl App {
             return Vec::new();
         };
 
+        // Enter switches an uncommitted selection to the Files pane instead
+        // of opening a commit menu. The palette shares this builder, so it
+        // must likewise expose no commit actions for that node.
+        if node.is_uncommitted {
+            return Vec::new();
+        }
+
         if node.is_stash {
             return vec![
                 CommitMenuItem::StashApply,
