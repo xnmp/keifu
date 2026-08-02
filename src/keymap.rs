@@ -181,7 +181,6 @@ fn key_name(code: KeyCode) -> String {
         KeyCode::PageDown => "PageDown".into(),
         KeyCode::F(number) => format!("F{number}"),
         KeyCode::Char(' ') => "Space".into(),
-        KeyCode::Char(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase().to_string(),
         KeyCode::Char(c) => c.to_string(),
         other => format!("{other:?}"),
     }
