@@ -28,16 +28,28 @@ impl App {
         }
 
         let cancellation_requested = self.network.cancel_active(CancellationReason::User);
+        let phase = self.network.status().map(|status| status.phase);
+        let shutdown_is_bounded = cancellation_requested
+            || phase.is_some_and(|phase| {
+                matches!(
+                    phase,
+                    crate::network::NetworkPhase::Cancelling(_)
+                        | crate::network::NetworkPhase::Integrating
+                )
+            });
+        if !shutdown_is_bounded {
+            // Non-Unix transports have no integrity-safe process-tree
+            // cancellation primitive. Do not turn Quit/ForceQuit into an
+            // unbounded wait for a transport keifu cannot terminate.
+            self.should_quit = true;
+            return;
+        }
         self.shutdown_after_network = true;
         self.toast(
             crate::toast::ToastKind::Info,
             if cancellation_requested {
                 "Cancelling network operation before quitting"
-            } else if self
-                .network
-                .status()
-                .is_some_and(|status| status.phase == crate::network::NetworkPhase::Integrating)
-            {
+            } else if phase == Some(crate::network::NetworkPhase::Integrating) {
                 "Waiting for pull integration before quitting"
             } else {
                 "Waiting for network operation before quitting"
