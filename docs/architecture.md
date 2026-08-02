@@ -343,6 +343,13 @@ does not synchronously join pipe readers: a helper that deliberately daemonizes
 into a different group cannot hold the UI worker busy, though its finite
 transport timeout remains responsible for its eventual exit.
 
+On non-Unix targets, the standard library provides no equivalent safe
+process-group signaling primitive. Those builds do not advertise the `x`
+binding and reject manual/inactivity cancellation instead of force-killing the
+direct Git child; HTTP low-speed bounds still terminate stalled HTTP transport.
+This is an explicit integrity tradeoff, covered by platform-gated tests, until
+a native group/job-object implementation exists.
+
 `git pull` is split at the durable-state boundary. Its fetch/ref transaction is
 cancellable, but after that succeeds the local `merge --ff-only`, merge, or
 rebase integration is allowed to finish even if cancellation arrives. This
