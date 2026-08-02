@@ -19,6 +19,23 @@ const PR_FETCH_INTERVAL: Duration = Duration::from_secs(300);
 /// Hard cap on a single `gh` invocation so a hung CLI can't leak a thread.
 const GH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// GitHub repository metadata needed to offer browser-based PR creation.
+///
+/// Both values come from `gh repo view`, so the default base is GitHub's
+/// authoritative setting rather than a local `main`/`master` convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrRepoInfo {
+    pub url: String,
+    pub default_base: String,
+}
+
+/// A selected branch that can be opened on GitHub's compare/create page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPrTarget {
+    pub head: String,
+    pub compare_url: String,
+}
+
 /// Aggregate CI status of a PR's head commit, from `statusCheckRollup`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CiStatus {
