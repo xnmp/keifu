@@ -938,6 +938,7 @@ dependencies = [
  "git2",
  "image",
  "keifu",
+ "libc",
  "md5",
  "notify",
  "portable-pty",

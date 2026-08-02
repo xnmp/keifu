@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc::Sender, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository, Status, StatusOptions};
@@ -16,6 +16,9 @@ use super::repository::OperationState;
 use crate::network::{CancellationReason, CancellationToken, NetworkFailure, NetworkProgress};
 
 const NETWORK_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const NETWORK_INTERRUPT_GRACE: Duration = Duration::from_secs(2);
+const NETWORK_TERMINATE_GRACE: Duration = Duration::from_secs(2);
+const NETWORK_KILL_REAP_GRACE: Duration = Duration::from_secs(1);
 const HTTP_LOW_SPEED_BYTES_PER_SECOND: &str = "1";
 const HTTP_LOW_SPEED_SECONDS: &str = "60";
 
@@ -100,12 +103,7 @@ impl GitProgressParser {
         // erase progress accumulated by an earlier one.
         let (phase, rest) = line
             .rsplit_once(':')
-            .map(|(phase, rest)| {
-                (
-                    phase.rsplit(':').next().unwrap_or(phase).trim(),
-                    rest,
-                )
-            })
+            .map(|(phase, rest)| (phase.rsplit(':').next().unwrap_or(phase).trim(), rest))
             .unwrap_or(("transport", line));
 
         let objects = parse_progress_position(rest)
@@ -141,6 +139,148 @@ fn parse_progress_bytes(text: &str) -> Option<u64> {
         _ => return None,
     };
     Some((value * multiplier) as u64)
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group: i32, signal: i32) -> std::io::Result<()> {
+    // SAFETY: `process_group` is the positive PID returned by the Child API,
+    // negated only for POSIX process-group signaling. No pointers are involved.
+    let result = unsafe { libc::kill(-process_group, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(unix)]
+fn process_group_exists(process_group: i32) -> std::io::Result<bool> {
+    // SAFETY: signal 0 performs existence/permission checking only.
+    let result = unsafe { libc::kill(-process_group, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_network_process_group(
+    child: &mut Child,
+    process_group: i32,
+    direct_child_reaped: &mut bool,
+    grace: Duration,
+    subcommand: &str,
+) -> Result<bool, NetworkFailure> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if !*direct_child_reaped {
+            match child.try_wait() {
+                Ok(Some(_)) => *direct_child_reaped = true,
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(NetworkFailure::Failed(format!(
+                        "Failed to wait for git {subcommand}: {error}"
+                    )))
+                }
+            }
+        }
+        let group_exists = process_group_exists(process_group).map_err(|error| {
+            NetworkFailure::Failed(format!(
+                "Failed to inspect git {subcommand} process group: {error}"
+            ))
+        })?;
+        if *direct_child_reaped && !group_exists {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    }
+}
+
+/// Stop the complete Git transport process group without jumping directly to
+/// SIGKILL. Git receives SIGINT first so its lockfile/ref transaction handlers
+/// can abort cleanly; SIGTERM and SIGKILL are bounded fallbacks for wedged or
+/// signal-ignoring helpers. Pull integration is deliberately outside this
+/// runner, so escalation cannot interrupt index/worktree mutation.
+#[cfg(unix)]
+fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), NetworkFailure> {
+    let process_group = i32::try_from(child.id()).map_err(|_| {
+        NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
+    })?;
+    let mut direct_child_reaped = false;
+
+    signal_process_group(process_group, libc::SIGINT).map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to interrupt git {subcommand}: {error}"))
+    })?;
+    if wait_for_network_process_group(
+        child,
+        process_group,
+        &mut direct_child_reaped,
+        NETWORK_INTERRUPT_GRACE,
+        subcommand,
+    )? {
+        return Ok(());
+    }
+
+    signal_process_group(process_group, libc::SIGTERM).map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to terminate git {subcommand}: {error}"))
+    })?;
+    if wait_for_network_process_group(
+        child,
+        process_group,
+        &mut direct_child_reaped,
+        NETWORK_TERMINATE_GRACE,
+        subcommand,
+    )? {
+        return Ok(());
+    }
+
+    signal_process_group(process_group, libc::SIGKILL).map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to kill git {subcommand}: {error}"))
+    })?;
+    if !direct_child_reaped {
+        child.wait().map_err(|error| {
+            NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
+        })?;
+        direct_child_reaped = true;
+    }
+    if !wait_for_network_process_group(
+        child,
+        process_group,
+        &mut direct_child_reaped,
+        NETWORK_KILL_REAP_GRACE,
+        subcommand,
+    )? {
+        return Err(NetworkFailure::Failed(format!(
+            "git {subcommand} helper process did not exit after cancellation"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), NetworkFailure> {
+    // std does not expose a portable soft-signal/process-group API. Keep the
+    // fallback bounded and always reap the direct child; durable pull
+    // integration still runs outside the cancellable subprocess on all hosts.
+    child.kill().map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to cancel git {subcommand}: {error}"))
+    })?;
+    child.wait().map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
+    })?;
+    Ok(())
 }
 
 /// Attach the askpass shim + credential env vars to `cmd` when `creds` is set,
@@ -234,6 +374,14 @@ fn run_network_git_output(
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // A dedicated process group lets cancellation reach Git transport
+        // helpers as well as the direct `git` child, without touching keifu's
+        // own process group.
+        cmd.process_group(0);
+    }
     apply_credentials(&mut cmd, creds).map_err(|e| NetworkFailure::Failed(e.to_string()))?;
 
     let mut child = cmd
@@ -276,26 +424,19 @@ fn run_network_git_output(
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = terminate_network_process(&mut child, subcommand);
                 return Err(NetworkFailure::Failed(format!(
                     "Failed to wait for git {subcommand}: {error}"
                 )));
             }
         }
         if let Some(reason) = control.cancellation_reason() {
-            child.kill().map_err(|error| {
-                NetworkFailure::Failed(format!("Failed to cancel git {subcommand}: {error}"))
-            })?;
-            child.wait().map_err(|error| {
-                NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
-            })?;
+            terminate_network_process(&mut child, subcommand)?;
             // Helpers spawned by Git (git-remote-https, ssh, credential
-            // helpers) can inherit these pipes and outlive the direct child.
-            // The direct Git process is reaped above; do not synchronously join
-            // readers that a surviving helper can keep blocked. Detached
-            // readers finish when the inherited descriptors eventually close,
-            // while the manager receives the terminal cancellation promptly.
+            // helpers) can daemonize away from the original process group and
+            // retain these pipes. Do not synchronously join readers on the
+            // cancellation path; a detached reader cannot hold the UI busy and
+            // finishes when any escaped helper eventually closes the pipe.
             return Err(NetworkFailure::Cancelled(reason));
         }
         thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
@@ -1046,25 +1187,36 @@ pub(crate) fn pull_controlled(
     creds: Option<&Credentials>,
     control: &NetworkCommandControl,
 ) -> Result<OpOutcome, NetworkFailure> {
-    let mut args = vec!["pull", "--progress", mode.arg()];
+    // Keep the cancellable boundary around network transfer only. `git pull`
+    // combines fetch with durable index/worktree integration; interrupting that
+    // combined command can leave a half-started merge/rebase or stale locks.
+    // Fetch updates refs transactionally, then the local integration command is
+    // allowed to finish once started even if cancellation arrives meanwhile.
+    let mut fetch_args = vec!["fetch", "--progress"];
     if let Some(remote) = remote {
-        args.push(remote);
+        fetch_args.push(remote);
         if let Some(branch) = branch {
-            args.push(branch);
+            fetch_args.push(branch);
         }
     }
-    let output = run_network_git_output(repo_path, &args, creds, control)?;
-    if output.status.success() {
-        return Ok(OpOutcome::Completed);
+    let output = run_network_git_output(repo_path, &fetch_args, creds, control)?;
+    if !output.status.success() {
+        return Err(NetworkFailure::Failed(format!(
+            "git pull failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
-    let count = count_conflicts(repo_path);
-    if count > 0 {
-        return Ok(OpOutcome::Conflicts { count });
+    if let Some(reason) = control.cancellation_reason() {
+        return Err(NetworkFailure::Cancelled(reason));
     }
-    Err(NetworkFailure::Failed(format!(
-        "git pull failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
+
+    let integration_args: &[&str] = match mode {
+        PullMode::FfOnly => &["merge", "--ff-only", "FETCH_HEAD"],
+        PullMode::Merge => &["merge", "--no-edit", "FETCH_HEAD"],
+        PullMode::Rebase => &["rebase", "FETCH_HEAD"],
+    };
+    run_git_allow_conflict_creds(repo_path, integration_args, None)
+        .map_err(|error| NetworkFailure::Failed(format!("git pull failed: {error}")))
 }
 
 /// Whether a `git pull --ff-only` failure is due to divergent branches (offer
@@ -1774,10 +1926,7 @@ mod tests {
         let control = NetworkCommandControl::new(CancellationToken::default(), progress_tx);
         let mut parser = GitProgressParser::default();
 
-        parser.feed(
-            b"remote: Counting objects: 50% (500/1000)\r",
-            &control,
-        );
+        parser.feed(b"remote: Counting objects: 50% (500/1000)\r", &control);
         parser.feed(
             b"Entfernte Quelle: Empfange Objekte: 25% (250/1000), 2.00 MiB | 1.00 MiB/s\r",
             &control,
@@ -1866,6 +2015,8 @@ mod tests {
         assert!(
             !Command::new("kill")
                 .args(["-0", helper_pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .unwrap()
                 .success(),
@@ -2095,7 +2246,12 @@ mod tests {
         git(&other, &["add", "a.txt"]);
         git(&other, &["commit", "-qm", "advance"]);
         git(&other, &["push", "-q", "origin", "master"]);
-        let new_oid = Repository::open(&other).unwrap().head().unwrap().target().unwrap();
+        let new_oid = Repository::open(&other)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
         (remote, local, old_oid, new_oid)
     }
 
@@ -2147,7 +2303,10 @@ mod tests {
                 let path = entry.path();
                 if path.is_dir() {
                     visit(&path, found);
-                } else if path.extension().is_some_and(|extension| extension == "lock") {
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "lock")
+                {
                     found.push(path);
                 }
             }
@@ -2199,13 +2358,8 @@ mod tests {
         );
 
         std::fs::remove_file(hook).unwrap();
-        fetch_remote_controlled(
-            local.to_str().unwrap(),
-            "origin",
-            None,
-            &fresh_control(),
-        )
-        .expect("a later controlled fetch must succeed");
+        fetch_remote_controlled(local.to_str().unwrap(), "origin", None, &fresh_control())
+            .expect("a later controlled fetch must succeed");
         assert_eq!(
             Repository::open(&local)
                 .unwrap()
@@ -2273,6 +2427,64 @@ mod tests {
             std::fs::read_to_string(local.join("a.txt")).unwrap(),
             "advanced"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_pull_integration_waits_for_clean_completion() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, _old_oid, new_oid) = setup_advanced_remote(&tmp);
+        let marker = tmp.path().join("post-merge-running");
+        let hook = local.join(".git/hooks/post-merge");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n\
+                 printf ready > \"{}\"\n\
+                 sleep 1\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            let (progress_tx, _progress_rx) = mpsc::channel();
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            pull_controlled(
+                &local_for_worker,
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &control,
+            )
+        });
+
+        wait_for_marker(&marker);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("pull worker panicked"),
+            Ok(OpOutcome::Completed),
+            "once index/worktree integration starts, cancellation must wait for its clean exit"
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(repo.head().unwrap().target(), Some(new_oid));
+        assert_eq!(
+            std::fs::read_to_string(local.join("a.txt")).unwrap(),
+            "advanced"
+        );
+        assert!(lock_files(&local.join(".git")).is_empty());
+        fetch_remote_controlled(local.to_str().unwrap(), "origin", None, &fresh_control())
+            .expect("a subsequent controlled network operation must succeed");
     }
 
     /// #91: `fetch_all` fetches remotes independently — a broken remote must not
