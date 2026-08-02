@@ -313,14 +313,6 @@ fn descendant_processes_from_snapshot<S: ProcessTableSnapshot>(
 }
 
 #[cfg(unix)]
-fn descendant_processes(root: i32) -> HashSet<i32> {
-    let Ok(snapshot) = start_process_table_snapshot() else {
-        return HashSet::from([root]);
-    };
-    descendant_processes_from_snapshot(root, snapshot, NETWORK_DESCENDANT_DISCOVERY_TIMEOUT)
-}
-
-#[cfg(unix)]
 fn parse_descendant_processes(root: i32, output: &[u8]) -> HashSet<i32> {
     let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(output)
         .lines()
@@ -497,14 +489,33 @@ fn wait_for_network_process_group(
 /// signal-ignoring helpers. Pull integration is deliberately outside this
 /// runner, so escalation cannot interrupt index/worktree mutation.
 #[cfg(unix)]
-fn terminate_network_process(mut child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+fn terminate_network_process(child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+    terminate_network_process_with_snapshot(
+        child,
+        subcommand,
+        start_process_table_snapshot().ok(),
+        NETWORK_DESCENDANT_DISCOVERY_TIMEOUT,
+    )
+}
+
+#[cfg(unix)]
+fn terminate_network_process_with_snapshot<S: ProcessTableSnapshot>(
+    mut child: Child,
+    subcommand: &str,
+    snapshot: Option<S>,
+    discovery_timeout: Duration,
+) -> Result<(), NetworkFailure> {
     let process_group = i32::try_from(child.id()).map_err(|_| {
         NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
     })?;
     // Snapshot the full descendant tree before signaling. This retains explicit
     // ownership of helpers that called setsid()/setpgid() and escaped Git's
     // process group while remaining descendants of the launched command.
-    let owned_processes = descendant_processes(process_group);
+    let owned_processes = snapshot
+        .map(|snapshot| {
+            descendant_processes_from_snapshot(process_group, snapshot, discovery_timeout)
+        })
+        .unwrap_or_else(|| HashSet::from([process_group]));
     let mut direct_child_reaped = false;
 
     signal_network_processes(process_group, &owned_processes, libc::SIGINT).map_err(|error| {
@@ -2422,8 +2433,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn pending_process_enumeration_falls_back_at_the_discovery_deadline() {
-        use std::collections::HashSet;
+    fn cancellation_proceeds_when_process_enumeration_misses_its_deadline() {
+        use std::os::unix::process::CommandExt;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::sync::Arc;
 
@@ -2445,21 +2456,38 @@ mod tests {
 
         let attempts = Arc::new(AtomicUsize::new(0));
         let terminated = Arc::new(AtomicBool::new(false));
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("enumeration-timeout-child-ready");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "trap 'exit 0' INT; printf ready > \"{}\"; sleep 8",
+                marker.display()
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let child = command.spawn().unwrap();
+        wait_for_marker(&marker);
+
         let started = Instant::now();
-        let descendants = super::descendant_processes_from_snapshot(
-            4242,
-            PendingSnapshot {
+        super::terminate_network_process_with_snapshot(
+            child,
+            "test-child",
+            Some(PendingSnapshot {
                 attempts: attempts.clone(),
                 terminated: terminated.clone(),
-            },
+            }),
             Duration::from_millis(40),
-        );
+        )
+        .unwrap();
 
-        assert_eq!(descendants, HashSet::from([4242]));
         assert!(attempts.load(Ordering::Relaxed) >= 2);
         assert!(terminated.load(Ordering::Acquire));
         assert!(
-            started.elapsed() < Duration::from_millis(150),
+            started.elapsed() < Duration::from_secs(1),
             "cancellation must continue when process enumeration never completes"
         );
     }
