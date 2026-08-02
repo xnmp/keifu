@@ -101,13 +101,25 @@ impl App {
                         op_outcome = Some((outcome, OperationState::Revert));
                     }
                     ConfirmAction::AbortOperation(op) => {
-                        if op == OperationState::Rebase && self.interactive_rebase_in_progress {
+                        let cli_interactive_rebase =
+                            op == OperationState::Rebase && self.interactive_rebase_in_progress;
+                        let state_owner = if cli_interactive_rebase {
+                            Some(
+                                super::rebase_plan_actions::acquire_interactive_rebase_state(
+                                    self.repo.repo().path(),
+                                )?,
+                            )
+                        } else {
+                            None
+                        };
+                        if cli_interactive_rebase {
                             crate::git::operations::abort_interactive_rebase(&self.repo_path)?;
                             self.interactive_rebase_in_progress = false;
                             self.cleanup_interactive_rebase_state();
                         } else {
                             abort_operation(&self.repo_path, op)?;
                         }
+                        drop(state_owner);
                         self.refresh(true)?;
                         self.toast(
                             crate::toast::ToastKind::Success,

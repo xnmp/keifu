@@ -20,7 +20,7 @@ struct PendingInteractiveRebaseUndo {
     commit_count: usize,
 }
 
-fn acquire_interactive_rebase_state(git_dir: &Path) -> Result<File> {
+pub(super) fn acquire_interactive_rebase_state(git_dir: &Path) -> Result<File> {
     let lock = OpenOptions::new()
         .read(true)
         .write(true)

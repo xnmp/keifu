@@ -218,27 +218,41 @@ impl App {
             self.toast(crate::toast::ToastKind::Info, "No operation in progress");
             return Ok(());
         }
-        let outcome = if op == OperationState::Rebase && self.interactive_rebase_in_progress {
+        let cli_interactive_rebase =
+            op == OperationState::Rebase && self.interactive_rebase_in_progress;
+        let state_owner = if cli_interactive_rebase {
+            Some(
+                super::rebase_plan_actions::acquire_interactive_rebase_state(
+                    self.repo.repo().path(),
+                )?,
+            )
+        } else {
+            None
+        };
+        let outcome = if cli_interactive_rebase {
             crate::git::operations::continue_interactive_rebase(&self.repo_path)
         } else {
             continue_operation(&self.repo_path, op)
         };
         match outcome {
             Ok(OpOutcome::Completed) => {
-                if op == OperationState::Rebase && self.interactive_rebase_in_progress {
+                if cli_interactive_rebase {
                     self.record_completed_interactive_rebase_undo();
                 }
                 self.interactive_rebase_in_progress = false;
                 self.cleanup_interactive_rebase_state();
+                drop(state_owner);
                 self.refresh(true)?;
                 self.toast(crate::toast::ToastKind::Success, op_completed_message(op));
             }
             Ok(OpOutcome::Conflicts { count }) => {
+                drop(state_owner);
                 self.refresh(true)?;
                 self.focus_conflict_files();
                 self.set_message(Self::conflict_guidance(count));
             }
             Ok(OpOutcome::Paused) => {
+                drop(state_owner);
                 self.refresh(true)?;
                 self.toast(
                     crate::toast::ToastKind::Error,
@@ -246,6 +260,7 @@ impl App {
                 );
             }
             Err(e) => {
+                drop(state_owner);
                 self.refresh(true)?;
                 self.show_error(format!("Continue failed: {e}"));
             }
