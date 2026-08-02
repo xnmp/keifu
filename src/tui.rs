@@ -26,6 +26,11 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// a double restore can't underflow the terminal's flag stack.
 static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Keyboard protocol features Keifu relies on while its TUI owns the terminal.
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+}
+
 /// Push the `DISAMBIGUATE_ESCAPE_CODES` keyboard-enhancement flag when the
 /// terminal advertises support. Alongside unambiguous Ctrl+punctuation, this
 /// tells compatible terminals to include `KeyEventState` such as Caps Lock in
@@ -39,7 +44,7 @@ fn push_keyboard_enhancement(stdout: &mut Stdout) -> Result<bool> {
     if matches!(supports_keyboard_enhancement(), Ok(true)) {
         execute!(
             stdout,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
         )?;
         KEYBOARD_ENHANCEMENT_ACTIVE.store(true, Ordering::SeqCst);
         Ok(true)
