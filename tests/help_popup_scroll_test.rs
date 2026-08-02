@@ -100,8 +100,14 @@ fn wheel_scrolls_only_inside_the_rendered_help_popup() {
     .unwrap();
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
     let rendered = screen(&terminal);
-    assert!(app.help_scroll > 0, "wheel over Help advances its visible rows");
-    assert!(!rendered.contains("Navigation"), "the first help row scrolled out");
+    assert!(
+        app.help_scroll > 0,
+        "wheel over Help advances its visible rows"
+    );
+    assert!(
+        !rendered.contains("Navigation"),
+        "the first help row scrolled out"
+    );
     assert_eq!(app.graph_nav.graph_list_state.selected(), selected_before);
 
     app.handle_action(Action::ToggleHelp).unwrap();

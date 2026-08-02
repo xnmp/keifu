@@ -369,6 +369,15 @@ impl App {
             return;
         }
 
+        // Help is a modal sheet: only wheel events over its rendered bounds
+        // belong to it. This preserves the popup boundary rather than treating
+        // a wheel event anywhere on the screen as Help navigation.
+        if matches!(self.mode, AppMode::Help)
+            && !self.popup_rect.is_some_and(|rect| point_in(rect, col, row))
+        {
+            return;
+        }
+
         // Scrollable popups: route the wheel to their up/down.
         if self.mode_scrolls_with_wheel() {
             let a = if matches!(self.mode, AppMode::Help) {
