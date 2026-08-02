@@ -494,6 +494,63 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_plan_refuses_an_external_commit_after_review() {
+        let (tmp, mut app, base, _reviewed_head) = app_with_range();
+        app.start_interactive_rebase(base);
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+        std::fs::write(tmp.path().join("external.txt"), "external\n").unwrap();
+        git(tmp.path(), &["add", "external.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "external"]);
+        let external_head = git2::Repository::open(tmp.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        let live_repo = git2::Repository::open(tmp.path()).unwrap();
+        assert_eq!(live_repo.head().unwrap().target(), Some(external_head));
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert!(app.toasts.visible().iter().any(|toast| {
+            toast.kind == crate::toast::ToastKind::Error
+                && toast.text.contains("HEAD changed since the plan was reviewed")
+        }));
+        assert!(!tmp.path().join(".git/keifu-interactive-rebase").exists());
+    }
+
+    #[test]
+    fn confirmed_plan_refuses_a_branch_switch_after_review() {
+        let (tmp, mut app, base, reviewed_head) = app_with_range();
+        app.start_interactive_rebase(base);
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+        git(tmp.path(), &["checkout", "-q", "-b", "other"]);
+
+        app.handle_action(Action::Confirm).unwrap();
+
+        let live_repo = git2::Repository::open(tmp.path()).unwrap();
+        assert_eq!(live_repo.head().unwrap().name(), Some("refs/heads/other"));
+        assert_eq!(live_repo.head().unwrap().target(), Some(reviewed_head));
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert!(app.toasts.visible().iter().any(|toast| {
+            toast.kind == crate::toast::ToastKind::Error
+                && toast
+                    .text
+                    .contains("Branch changed since the plan was reviewed")
+        }));
+        assert!(!tmp.path().join(".git/keifu-interactive-rebase").exists());
+    }
+
+    #[test]
     fn startup_removes_orphaned_interactive_rebase_state() {
         let (tmp, app, _base, _head) = app_with_range();
         drop(app);

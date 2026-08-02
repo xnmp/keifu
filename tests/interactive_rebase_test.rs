@@ -209,3 +209,42 @@ fn interactive_rebase_can_drop_the_complete_selected_range() {
     .trim()
     .is_empty());
 }
+
+#[test]
+fn interactive_rebase_drops_a_commit_that_becomes_empty_during_replay() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().target().unwrap();
+    let first = commit_file(repo, "same.txt", "same\n", "add once");
+    git_cli(repo_path(&git_repo), &["rm", "same.txt"]);
+    git_cli(repo_path(&git_repo), &["commit", "-m", "remove"]);
+    let removed = repo.head().unwrap().target().unwrap();
+    let repeated = commit_file(repo, "same.txt", "same\n", "add again");
+    let todo_path = repo.path().join("empty-replay-todo");
+    fs::write(
+        &todo_path,
+        format!(
+            "pick {first} add once\ndrop {removed} remove\npick {repeated} add again\n"
+        ),
+    )
+    .unwrap();
+
+    let outcome = rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap();
+
+    assert_eq!(outcome, OpOutcome::Completed);
+    let reopened = git2::Repository::open(repo.workdir().unwrap()).unwrap();
+    assert!(!reopened.path().join("rebase-merge/interactive").exists());
+    assert_eq!(
+        git_cli(
+            repo_path(&git_repo),
+            &["log", "--format=%s", &format!("{base}..HEAD")]
+        )
+        .lines()
+        .collect::<Vec<_>>(),
+        ["add once"]
+    );
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("same.txt")).unwrap(),
+        "same\n"
+    );
+}
