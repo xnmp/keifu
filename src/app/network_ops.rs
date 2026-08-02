@@ -318,6 +318,7 @@ impl App {
         }
         // Arm after the first successful fill so the startup population is quiet.
         self.pr_toasts_armed = true;
+        self.open_prs_loaded = true;
         self.open_prs = prs;
         // The base-update-merge set (issue #55) is derived from the open PRs, so
         // recompute it now that they changed (guarded by its own signature).
