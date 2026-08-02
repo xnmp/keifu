@@ -188,7 +188,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if matches!(app.mode, AppMode::FileDiff { .. }) {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(status_bar_height(app)),
+            ])
             .split(area);
 
         // Update viewport dimensions for scroll calculations (minus borders)
@@ -239,9 +242,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             diff_pos,
         );
 
-        let status_bar = StatusBar::new(app, &theme);
-        app.status_hints = status_bar.hint_regions(vertical[1]);
-        frame.render_widget(status_bar, vertical[1]);
+        render_status_bar(frame, app, &theme, vertical[1]);
         // Toasts sit on top of the full-screen diff view too.
         render_toasts(frame, app, &theme);
         return;
@@ -258,7 +259,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Vertical split: main area + status bar (1 row)
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(status_bar_height(app)),
+        ])
         .split(area);
 
     let main_area = vertical[0];
@@ -535,9 +539,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.commit_detail_scroll as usize,
     );
 
-    let status_bar = StatusBar::new(app, &theme);
-    app.status_hints = status_bar.hint_regions(status_area);
-    frame.render_widget(status_bar, status_area);
+    render_status_bar(frame, app, &theme, status_area);
 
     // Show cursor when editing commit message
     if app.editing_commit_message && app.focused_panel == crate::app::FocusedPanel::CommitDetail {
@@ -583,7 +585,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let popup = centered_rect(60, 70, area);
         let inner_width = popup.width.saturating_sub(4);
         let visible = popup.height.saturating_sub(2) as usize;
-        let content = HelpPopup::content_height(app.is_uncommitted_selected(), &theme, inner_width);
+        let content = HelpPopup::content_height(
+            app.is_uncommitted_selected(),
+            app.status_bar_visible,
+            &theme,
+            inner_width,
+        );
         app.help_viewport_rows = visible;
         app.help_max_scroll = content.saturating_sub(visible);
         app.help_scroll = app.help_scroll.min(app.help_max_scroll);
@@ -593,7 +600,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(
-                HelpPopup::new(app.is_uncommitted_selected(), &theme, app.help_scroll),
+                HelpPopup::with_status_bar_visibility(
+                    app.is_uncommitted_selected(),
+                    app.status_bar_visible,
+                    &theme,
+                    app.help_scroll,
+                ),
                 popup_area,
             );
             rendered_popup = Some(popup_area);
@@ -910,7 +922,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(status_bar_height(app)),
+        ])
         .split(area);
     let content = vertical[0];
     let status_area = vertical[1];
@@ -1009,9 +1024,7 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
     }
     app.popup_rect = rendered_popup;
 
-    let status_bar = StatusBar::new(app, theme);
-    app.status_hints = status_bar.hint_regions(status_area);
-    frame.render_widget(status_bar, status_area);
+    render_status_bar(frame, app, theme, status_area);
     render_toasts(frame, app, theme);
 }
 
@@ -1021,11 +1034,22 @@ const TOAST_HEIGHT: u16 = 3;
 const TOAST_MAX_WIDTH: u16 = 44;
 /// Blank rows/columns kept between toasts, the screen edge, and the status bar.
 const TOAST_MARGIN: u16 = 1;
-/// Rows reserved at the bottom of the screen for the status bar. Every screen
-/// `render_toasts` is called from (main view, full-screen diff, issue screen)
-/// lays out its status bar as a `Constraint::Length(1)` row spanning the full
-/// frame width, so toasts anchor above that fixed strip.
-const STATUS_BAR_HEIGHT: u16 = 1;
+/// Height of the shared status bar in the current layout.
+fn status_bar_height(app: &App) -> u16 {
+    u16::from(app.status_bar_visible)
+}
+
+/// Render the shared status bar only when enabled, clearing stale mouse hints
+/// when its row is returned to the active screen.
+fn render_status_bar(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
+    if !app.status_bar_visible {
+        app.status_hints.clear();
+        return;
+    }
+    let status_bar = StatusBar::new(app, theme);
+    app.status_hints = status_bar.hint_regions(area);
+    frame.render_widget(status_bar, area);
+}
 
 /// Compute the rect for the toast at `slot` (0 = nearest the bottom-right
 /// corner, i.e. the newest toast; increasing `slot` stacks upward), given the
@@ -1034,7 +1058,7 @@ const STATUS_BAR_HEIGHT: u16 = 1;
 /// reserved status-bar strip would run past the top margin. Pure function of
 /// its inputs — no rendering — so placement math is unit-testable without a
 /// terminal.
-fn toast_slot_rect(area: Rect, slot: u16) -> Option<Rect> {
+fn toast_slot_rect(area: Rect, slot: u16, status_height: u16) -> Option<Rect> {
     let width = TOAST_MAX_WIDTH.min(area.width.saturating_sub(TOAST_MARGIN * 2));
     if width < 8 {
         return None;
@@ -1042,7 +1066,7 @@ fn toast_slot_rect(area: Rect, slot: u16) -> Option<Rect> {
     // Space from the bottom of the frame to the bottom edge of this slot's
     // box: the status bar row, a margin above it, then `slot` full boxes
     // already stacked below this one.
-    let bottom_offset = STATUS_BAR_HEIGHT
+    let bottom_offset = status_height
         .saturating_add(TOAST_MARGIN)
         .saturating_add(slot.saturating_mul(TOAST_HEIGHT));
     let needed = bottom_offset
@@ -1067,7 +1091,7 @@ fn render_toasts(frame: &mut Frame, app: &App, theme: &Theme) {
     // Newest nearest the corner: iterate newest → oldest, stacking upward from
     // just above the status bar.
     for (i, toast) in toasts.iter().rev().enumerate() {
-        let Some(rect) = toast_slot_rect(area, i as u16) else {
+        let Some(rect) = toast_slot_rect(area, i as u16, status_bar_height(app)) else {
             break;
         };
 
@@ -1365,7 +1389,7 @@ mod tests {
     #[test]
     fn toast_anchors_to_bottom_right_clear_of_the_status_bar() {
         let area = Rect::new(0, 0, 80, 24);
-        let rect = toast_slot_rect(area, 0).expect("plenty of room in an 80x24 screen");
+        let rect = toast_slot_rect(area, 0, 1).expect("plenty of room in an 80x24 screen");
 
         // Right-aligned.
         assert!(
@@ -1382,7 +1406,7 @@ mod tests {
             rect.y > area.height / 2,
             "toast should live in the bottom half of the screen: {rect:?}"
         );
-        let status_bar_row = area.height - STATUS_BAR_HEIGHT;
+        let status_bar_row = area.height - 1;
         assert!(
             rect.y + rect.height <= status_bar_row,
             "toast box (bottom {}) must not cover the status bar row ({status_bar_row}): {rect:?}",
@@ -1393,9 +1417,9 @@ mod tests {
     #[test]
     fn toast_slots_stack_upward_without_overlapping() {
         let area = Rect::new(0, 0, 80, 24);
-        let newest = toast_slot_rect(area, 0).unwrap();
-        let older = toast_slot_rect(area, 1).unwrap();
-        let oldest = toast_slot_rect(area, 2).unwrap();
+        let newest = toast_slot_rect(area, 0, 1).unwrap();
+        let older = toast_slot_rect(area, 1, 1).unwrap();
+        let oldest = toast_slot_rect(area, 2, 1).unwrap();
 
         // Each older toast sits strictly above the one nearer the corner.
         assert!(
@@ -1417,14 +1441,14 @@ mod tests {
         // Not enough rows for even one 3-row toast plus its margins and the
         // status bar strip.
         let area = Rect::new(0, 0, 80, 4);
-        assert_eq!(toast_slot_rect(area, 0), None);
+        assert_eq!(toast_slot_rect(area, 0, 1), None);
     }
 
     #[test]
     fn toast_slot_rect_none_on_a_too_narrow_terminal() {
         // Height is generous but width can't fit even the minimum toast body.
         let area = Rect::new(0, 0, 6, 24);
-        assert_eq!(toast_slot_rect(area, 0), None);
+        assert_eq!(toast_slot_rect(area, 0, 1), None);
     }
 
     #[test]
@@ -1433,11 +1457,11 @@ mod tests {
         // top margin(1) + box(3) + margin(1) + status bar(1) = 6 rows.
         let area = Rect::new(0, 0, 80, 6);
         assert!(
-            toast_slot_rect(area, 0).is_some(),
+            toast_slot_rect(area, 0, 1).is_some(),
             "first slot fits exactly"
         );
         assert_eq!(
-            toast_slot_rect(area, 1),
+            toast_slot_rect(area, 1, 1),
             None,
             "a second stacked toast has no remaining room"
         );

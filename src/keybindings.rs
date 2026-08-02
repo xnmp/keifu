@@ -999,6 +999,7 @@ fn map_help_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::HelpPageDown),
         (KeyModifiers::NONE, KeyCode::Home) => Some(Action::HelpScrollToTop),
         (KeyModifiers::NONE, KeyCode::End) => Some(Action::HelpScrollToBottom),
+        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::ToggleStatusBar),
         _ => None,
     }
 }

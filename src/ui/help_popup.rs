@@ -20,6 +20,8 @@ enum HelpEntry {
     Header(&'static str),
     /// A `(key, description)` binding row.
     Row(&'static str, &'static str),
+    /// The status-bar control, whose label reports the current setting value.
+    StatusBar,
     /// Vertical spacer between sections.
     Blank,
 }
@@ -35,6 +37,7 @@ fn key_column_width(entries: &[HelpEntry]) -> usize {
         .iter()
         .filter_map(|e| match e {
             HelpEntry::Row(key, _) => Some(UnicodeWidthStr::width(*key)),
+            HelpEntry::StatusBar => Some(UnicodeWidthStr::width("s")),
             _ => None,
         })
         .max()
@@ -45,7 +48,7 @@ fn key_column_width(entries: &[HelpEntry]) -> usize {
 /// The help entries for the current context (uncommitted adds the staging and
 /// merge-conflict rows). Order matches the on-screen sections.
 fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
-    use HelpEntry::{Blank, Header, Row};
+    use HelpEntry::{Blank, Header, Row, StatusBar};
     let mut e = vec![
         Header("Navigation"),
         Row("↑ / ↓", "Move up/down"),
@@ -57,6 +60,7 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Shift+G / End", "Go to bottom"),
         Row("@", "Jump to HEAD"),
         Row("Esc", "Return to graph / stop editing / quit (from graph)"),
+        StatusBar,
         Blank,
         Header("Graph Panel"),
         Row("Enter", "Open actions menu"),
@@ -194,14 +198,25 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
 
 pub struct HelpPopup<'a> {
     pub is_uncommitted: bool,
+    pub status_bar_visible: bool,
     pub theme: &'a Theme,
     pub scroll: usize,
 }
 
 impl<'a> HelpPopup<'a> {
     pub fn new(is_uncommitted: bool, theme: &'a Theme, scroll: usize) -> Self {
+        Self::with_status_bar_visibility(is_uncommitted, true, theme, scroll)
+    }
+
+    pub fn with_status_bar_visibility(
+        is_uncommitted: bool,
+        status_bar_visible: bool,
+        theme: &'a Theme,
+        scroll: usize,
+    ) -> Self {
         Self {
             is_uncommitted,
+            status_bar_visible,
             theme,
             scroll,
         }
@@ -209,14 +224,19 @@ impl<'a> HelpPopup<'a> {
 
     /// Number of rendered rows after the sheet has wrapped to `inner_width`.
     /// The draw pass uses this same measurement to clamp scrolling state.
-    pub fn content_height(is_uncommitted: bool, theme: &Theme, inner_width: u16) -> usize {
-        Paragraph::new(lines(is_uncommitted, theme))
+    pub fn content_height(
+        is_uncommitted: bool,
+        status_bar_visible: bool,
+        theme: &Theme,
+        inner_width: u16,
+    ) -> usize {
+        Paragraph::new(lines(is_uncommitted, status_bar_visible, theme))
             .wrap(Wrap { trim: false })
             .line_count(inner_width)
     }
 }
 
-fn lines(is_uncommitted: bool, theme: &Theme) -> Vec<Line<'static>> {
+fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<Line<'static>> {
     let key_style = Style::default()
         .fg(theme.help_key)
         .add_modifier(Modifier::BOLD);
@@ -234,6 +254,16 @@ fn lines(is_uncommitted: bool, theme: &Theme) -> Vec<Line<'static>> {
                 Span::styled(format!(" {key:<kw$}"), key_style),
                 Span::styled(*desc, desc_style),
             ]),
+            HelpEntry::StatusBar => Line::from(vec![
+                Span::styled(format!(" {:<kw$}", "s"), key_style),
+                Span::styled(
+                    format!(
+                        "Toggle status bar ({})",
+                        if status_bar_visible { "On" } else { "Off" }
+                    ),
+                    desc_style,
+                ),
+            ]),
             HelpEntry::Blank => Line::from(""),
         })
         .collect()
@@ -249,14 +279,23 @@ impl<'a> Widget for HelpPopup<'a> {
         if inner.height == 0 || inner.width == 0 {
             return;
         }
-        let content_height = Self::content_height(self.is_uncommitted, self.theme, inner.width);
+        let content_height = Self::content_height(
+            self.is_uncommitted,
+            self.status_bar_visible,
+            self.theme,
+            inner.width,
+        );
         let scroll = self
             .scroll
             .min(content_height.saturating_sub(inner.height as usize));
-        Paragraph::new(lines(self.is_uncommitted, self.theme))
-            .wrap(Wrap { trim: false })
-            .scroll((scroll.min(u16::MAX as usize) as u16, 0))
-            .render(inner, buf);
+        Paragraph::new(lines(
+            self.is_uncommitted,
+            self.status_bar_visible,
+            self.theme,
+        ))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll.min(u16::MAX as usize) as u16, 0))
+        .render(inner, buf);
         if content_height > inner.height as usize && area.height > 2 {
             let mut state = ScrollbarState::new(content_height)
                 .viewport_content_length(inner.height as usize)
@@ -380,15 +419,16 @@ mod tests {
         let area = Rect::new(0, 0, 64, 8);
         let inner_width = area.width.saturating_sub(4);
         let inner_height = area.height.saturating_sub(2) as usize;
-        let content = HelpPopup::content_height(false, &theme, inner_width);
+        let content = HelpPopup::content_height(false, true, &theme, inner_width);
         assert!(content > inner_height, "fixture must overflow the popup");
 
         let mut top = Buffer::empty(area);
-        HelpPopup::new(false, &theme, 0).render(area, &mut top);
+        HelpPopup::with_status_bar_visibility(false, true, &theme, 0).render(area, &mut top);
         assert!(!rendered_text(&top).contains("Quit (from anywhere)"));
 
         let mut bottom = Buffer::empty(area);
-        HelpPopup::new(false, &theme, content - inner_height).render(area, &mut bottom);
+        HelpPopup::with_status_bar_visibility(false, true, &theme, content - inner_height)
+            .render(area, &mut bottom);
         let text = rendered_text(&bottom);
         assert!(text.contains("Quit (from anywhere)"));
         assert_eq!(bottom[(area.width - 1, 0)].symbol(), "╮");

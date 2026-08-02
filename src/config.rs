@@ -124,7 +124,7 @@ impl Config {
             return Self::default();
         };
 
-        fs::read_to_string(&path)
+        fs::read_to_string(path)
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
@@ -337,6 +337,9 @@ pub struct UiState {
     pub hide_files_pane: bool,
     /// Hide the commit-detail pane entirely (#116). Off by default.
     pub hide_commit_pane: bool,
+    /// Whether the shared status bar is rendered. On by default to preserve
+    /// the historical layout and keep its existing hints available.
+    pub status_bar_visible: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -356,6 +359,7 @@ impl Default for UiState {
             hide_stashes: false,
             hide_files_pane: false,
             hide_commit_pane: false,
+            status_bar_visible: true,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -370,10 +374,14 @@ impl UiState {
         let Some(path) = Self::state_path() else {
             return Self::default();
         };
+        Self::load_from_path(&path)
+    }
+
+    fn load_from_path(path: &std::path::Path) -> Self {
         if !path.exists() {
             return Self::default();
         }
-        fs::read_to_string(&path)
+        fs::read_to_string(path)
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
@@ -383,11 +391,15 @@ impl UiState {
         let Some(path) = Self::state_path() else {
             return;
         };
+        self.save_to_path(&path);
+    }
+
+    fn save_to_path(&self, path: &std::path::Path) {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(content) = toml::to_string(self) {
-            let _ = fs::write(&path, content);
+            let _ = fs::write(path, content);
         }
     }
 }
@@ -581,6 +593,7 @@ mod tests {
             hide_stashes: false,
             hide_files_pane: true,
             hide_commit_pane: false,
+            status_bar_visible: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -740,6 +753,43 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
         assert!(restored.hide_stashes);
+    }
+
+    #[test]
+    fn status_bar_visibility_defaults_on_and_persists_to_a_state_file() {
+        let state_dir = tempfile::tempdir().unwrap();
+        let state_path = state_dir.path().join("state.toml");
+
+        // A first launch has no state file and retains the historical visible
+        // status bar.
+        assert!(UiState::load_from_path(&state_path).status_bar_visible);
+
+        // An existing state file from before the status-bar preference must
+        // keep its recorded settings while the new key defaults to visible.
+        fs::write(
+            &state_path,
+            "side_panel_layout = true\ngraph_split_ratio = 72\nhide_stashes = true\n",
+        )
+        .unwrap();
+        let legacy_state = UiState::load_from_path(&state_path);
+        assert!(legacy_state.status_bar_visible);
+        assert!(legacy_state.side_panel_layout);
+        assert_eq!(legacy_state.graph_split_ratio, 72);
+        assert!(legacy_state.hide_stashes);
+
+        // Saving a user's toggle must survive a fresh load.
+        UiState {
+            status_bar_visible: false,
+            ..UiState::default()
+        }
+        .save_to_path(&state_path);
+
+        let saved = fs::read_to_string(&state_path).unwrap();
+        assert!(saved.contains("status_bar_visible = false"));
+        assert!(
+            !UiState::load_from_path(&state_path).status_bar_visible,
+            "a fresh UI state must retain the hidden status bar preference"
+        );
     }
 
     #[test]

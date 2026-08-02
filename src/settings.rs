@@ -543,6 +543,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             hide_commit_pane,
             hide_commit_pane
         ),
+        state_bool!(
+            "Show status bar",
+            Interface,
+            None,
+            status_bar_visible,
+            status_bar_visible
+        ),
         SettingDescriptor {
             label: "Theme",
             group: Interface,
@@ -624,6 +631,7 @@ mod tests {
             hide_stashes: true,
             hide_files_pane: true,
             hide_commit_pane: true,
+            status_bar_visible: false,
             metadata_columns: MetadataColumns {
                 author: false,
                 hash: false,

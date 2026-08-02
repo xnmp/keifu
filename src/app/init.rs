@@ -277,6 +277,7 @@ impl App {
             side_panel_layout: ui_state.side_panel_layout,
             hide_files_pane: ui_state.hide_files_pane,
             hide_commit_pane: ui_state.hide_commit_pane,
+            status_bar_visible: ui_state.status_bar_visible,
             hide_remote_branches: ui_state.hide_remote_branches,
             hide_stashes: ui_state.hide_stashes,
             merged: MergedState {

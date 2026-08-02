@@ -1213,6 +1213,10 @@ pub struct App {
     /// Hide the commit-detail pane entirely (#116). Persisted in `UiState`.
     pub hide_commit_pane: bool,
 
+    /// Whether the shared status bar is rendered. Persisted in `UiState` and
+    /// controlled from the Help menu and Settings.
+    pub status_bar_visible: bool,
+
     /// When true, remote-only branches (remote refs with no matching local
     /// branch) are hidden from the graph — their labels and their exclusive
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.
@@ -2264,6 +2268,10 @@ impl App {
     fn handle_help_action(&mut self, action: Action) {
         match action {
             Action::ToggleHelp | Action::Quit | Action::Cancel => self.mode = AppMode::Normal,
+            Action::ToggleStatusBar => {
+                self.status_bar_visible = !self.status_bar_visible;
+                self.save_ui_state();
+            }
             Action::HelpScrollUp => self.help_scroll = self.help_scroll.saturating_sub(1),
             Action::HelpScrollDown => {
                 self.help_scroll = (self.help_scroll + 1).min(self.help_max_scroll)
