@@ -94,6 +94,82 @@ fn command_palette_exposes_and_dispatches_available_commit_actions() {
 }
 
 #[test]
+fn command_palette_uses_enter_menu_prompt_toast_and_cancellation_flows() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    let first = commit_file(repo.repo(), "a.txt", "a", "first");
+    let second = commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+    let selected_before = app.graph_nav.graph_list_state.selected();
+
+    // Palette selection reaches the same branch-name prompt as Enter.
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Create branch here".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::Input {
+            action: InputAction::CreateBranch,
+            ..
+        }
+    ));
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+
+    // Palette selection reaches the same copy result toast as Enter. The
+    // clipboard backend may differ in headless CI, but both outcomes report a
+    // toast and leave the user in the graph.
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Copy commit hash".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert!(
+        !app.toasts.visible().is_empty(),
+        "palette copy action must report its existing outcome as a toast"
+    );
+
+    // Cancellation after the palette's existing confirmation returns to the
+    // same graph selection without creating a Git operation.
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Cherry-pick".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::Confirm { .. }));
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert_eq!(app.graph_nav.graph_list_state.selected(), selected_before);
+
+    // A refresh or navigation can replace the graph selection after the
+    // palette opens. MenuSelect must refuse the stale contextual row instead
+    // of applying Cherry-pick to the newly selected commit.
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Cherry-pick".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    let first_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| node.commit.as_ref().is_some_and(|commit| commit.oid == first))
+        .unwrap();
+    assert_ne!(first, second);
+    app.graph_nav.graph_list_state.select(Some(first_idx));
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert!(
+        app.toasts
+            .visible()
+            .iter()
+            .any(|toast| toast.text.contains("Selection or repository state changed")),
+        "stale palette dispatch must be rejected with an error toast"
+    );
+}
+
+#[test]
 fn command_palette_uses_enter_menu_preconditions_for_stashes_and_branch_tips() {
     let (td, repo) = init_repo(Seed::Empty);
     let first = commit_file(repo.repo(), "a.txt", "a", "first");
