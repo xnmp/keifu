@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -8,7 +11,7 @@ use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
 use keifu::action::Action;
 use keifu::app::{App, AppMode, ConfirmAction, FocusedPanel};
 use keifu::debug_server::{handle_request, DebugRequest};
-use keifu::git::GitRepository;
+use keifu::git::{operations::PullMode, GitRepository};
 use keifu::keybindings::map_active_network_key;
 use keifu::network::{CancellationReason, NetworkOperation, NetworkPhase};
 use keifu::ui::{status_bar::StatusBar, theme::Theme};
@@ -130,43 +133,84 @@ fn inactivity_timeout_stays_visible_until_the_worker_returns_then_toasts() {
 }
 
 #[test]
-fn integrating_pull_blocks_checkout_through_the_app_action_seam() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.email", "test@example.com"],
-        vec!["config", "user.name", "Test"],
-    ] {
-        assert!(std::process::Command::new("git")
-            .args(args)
-            .current_dir(repo_dir.path())
-            .status()
-            .unwrap()
-            .success());
+fn integrating_pull_blocks_checkout_through_the_real_manager_and_app_seam() {
+    fn git(cwd: &std::path::Path, args: &[&str]) {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .status()
+                .unwrap()
+                .success(),
+            "git {args:?} failed"
+        );
     }
-    std::fs::write(repo_dir.path().join("file.txt"), "initial").unwrap();
-    assert!(std::process::Command::new("git")
-        .args(["add", "file.txt"])
-        .current_dir(repo_dir.path())
-        .status()
-        .unwrap()
-        .success());
-    assert!(std::process::Command::new("git")
-        .args(["commit", "-qm", "initial"])
-        .current_dir(repo_dir.path())
-        .status()
-        .unwrap()
-        .success());
-    let mut app = App::from_repo(GitRepository::open(repo_dir.path()).unwrap()).unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let remote = root.path().join("remote.git");
+    let local = root.path().join("local");
+    let peer = root.path().join("peer");
+    git(
+        root.path(),
+        &["init", "--bare", "-q", remote.to_str().unwrap()],
+    );
+    git(
+        root.path(),
+        &["init", "-q", "-b", "main", local.to_str().unwrap()],
+    );
+    git(&local, &["config", "user.email", "test@example.com"]);
+    git(&local, &["config", "user.name", "Test"]);
+    std::fs::write(local.join("file.txt"), "initial\n").unwrap();
+    git(&local, &["add", "file.txt"]);
+    git(&local, &["commit", "-qm", "initial"]);
+    git(
+        &local,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&local, &["push", "-qu", "origin", "main"]);
+    git(
+        root.path(),
+        &[
+            "clone",
+            "-q",
+            "--branch",
+            "main",
+            remote.to_str().unwrap(),
+            peer.to_str().unwrap(),
+        ],
+    );
+    git(&peer, &["config", "user.email", "test@example.com"]);
+    git(&peer, &["config", "user.name", "Test"]);
+    std::fs::write(peer.join("file.txt"), "advanced\n").unwrap();
+    git(&peer, &["commit", "-qam", "advance remote"]);
+    git(&peer, &["push", "-q", "origin", "main"]);
+    git(&local, &["branch", "other"]);
+
+    let hook = local.join(".git/hooks/post-merge");
+    std::fs::write(&hook, "#!/bin/sh\nsleep 1\n").unwrap();
+    let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&hook, permissions).unwrap();
+
+    let mut app = App::from_repo(GitRepository::open(&local).unwrap()).unwrap();
     let original_head = app.repo.head_oid();
     let original_name = app.repo.head_name();
-    assert!(std::process::Command::new("git")
-        .args(["branch", "other"])
-        .current_dir(&app.repo_path)
-        .status()
-        .unwrap()
-        .success());
-    app.network.activate_integrating_pull_for_test();
+    app.network.start_pull(
+        local.to_str().unwrap(),
+        Some("origin".to_string()),
+        Some("main".to_string()),
+        PullMode::FfOnly,
+        None,
+    );
+    let integration_deadline = Instant::now() + Duration::from_secs(5);
+    while app.network_status().map(|status| status.phase) != Some(NetworkPhase::Integrating) {
+        assert!(
+            Instant::now() < integration_deadline,
+            "pull never entered integration"
+        );
+        app.update_network_state();
+        thread::sleep(Duration::from_millis(10));
+    }
     app.mode = AppMode::Confirm {
         message: "Checkout branch 'other'?".to_string(),
         action: ConfirmAction::Checkout {
@@ -177,10 +221,30 @@ fn integrating_pull_blocks_checkout_through_the_app_action_seam() {
 
     app.handle_action(Action::Confirm).unwrap();
 
-    assert_eq!(app.repo.head_oid(), original_head);
     assert_eq!(app.repo.head_name(), original_name);
     assert!(matches!(app.mode, AppMode::Confirm { .. }));
     assert!(app.toasts.visible().iter().any(|toast| {
         toast.text == "Pull integration in progress; wait before changing the repository"
     }));
+
+    app.mode = AppMode::Normal;
+    let completion_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.update_network_state();
+        if app.update_pull_status() {
+            break;
+        }
+        assert!(Instant::now() < completion_deadline, "pull never completed");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_ne!(app.repo.head_oid(), original_head);
+    assert_eq!(app.repo.head_name().as_deref(), Some("main"));
+    assert_eq!(
+        std::fs::read_to_string(local.join("file.txt")).unwrap(),
+        "advanced\n"
+    );
+    assert_eq!(
+        app.repo.operation_state(),
+        keifu::git::OperationState::Clean
+    );
 }

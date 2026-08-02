@@ -19,6 +19,7 @@ const NETWORK_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const NETWORK_INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 const NETWORK_TERMINATE_GRACE: Duration = Duration::from_secs(2);
 const NETWORK_KILL_REAP_GRACE: Duration = Duration::from_secs(1);
+const NETWORK_DESCENDANT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(200);
 const HTTP_LOW_SPEED_BYTES_PER_SECOND: &str = "1";
 const HTTP_LOW_SPEED_SECONDS: &str = "60";
 
@@ -221,10 +222,45 @@ fn process_exists(process: i32) -> std::io::Result<bool> {
 
 #[cfg(unix)]
 fn descendant_processes(root: i32) -> HashSet<i32> {
-    let Ok(output) = Command::new("ps").args(["-e", "-o", "pid=,ppid="]).output() else {
+    let Ok(mut process_list) = Command::new("ps")
+        .args(["-e", "-o", "pid=,ppid="])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
         return HashSet::from([root]);
     };
-    let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(&output.stdout)
+    let Some(mut stdout) = process_list.stdout.take() else {
+        return HashSet::from([root]);
+    };
+    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout.read_to_end(&mut output).map(|_| output);
+        let _ = output_tx.send(result);
+    });
+    let deadline = Instant::now() + NETWORK_DESCENDANT_DISCOVERY_TIMEOUT;
+    loop {
+        match process_list.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+            }
+            Ok(None) | Err(_) => {
+                let _ = process_list.kill();
+                thread::spawn(move || {
+                    let _ = process_list.wait();
+                });
+                return HashSet::from([root]);
+            }
+        }
+    }
+    let Ok(Ok(output)) = output_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    else {
+        return HashSet::from([root]);
+    };
+    let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(&output)
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -242,6 +278,85 @@ fn descendant_processes(root: i32) -> HashSet<i32> {
         if owned.len() == before {
             return owned;
         }
+    }
+}
+
+#[cfg(unix)]
+trait DirectChildReaper: Send + 'static {
+    fn try_reap(&mut self) -> std::io::Result<bool>;
+    fn reap_blocking(&mut self);
+}
+
+#[cfg(unix)]
+impl DirectChildReaper for Child {
+    fn try_reap(&mut self) -> std::io::Result<bool> {
+        self.try_wait().map(|status| status.is_some())
+    }
+
+    fn reap_blocking(&mut self) {
+        let _ = self.wait();
+    }
+}
+
+/// Reap until `deadline`, then transfer ownership to an eventual reaper. This
+/// keeps cancellation terminal even if the platform's child wait wedges after
+/// the final signal.
+#[cfg(unix)]
+fn reap_direct_child_until<R: DirectChildReaper>(
+    mut child: R,
+    deadline: Instant,
+    subcommand: &str,
+) -> Result<bool, NetworkFailure> {
+    loop {
+        match child.try_reap() {
+            Ok(true) => return Ok(true),
+            Ok(false) if Instant::now() < deadline => {
+                thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+            }
+            Ok(false) => {
+                thread::spawn(move || child.reap_blocking());
+                return Ok(false);
+            }
+            Err(error) => {
+                return Err(NetworkFailure::Failed(format!(
+                    "Failed to wait for git {subcommand}: {error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_owned_processes(
+    process_group: i32,
+    owned_processes: &HashSet<i32>,
+    deadline: Instant,
+    subcommand: &str,
+) -> Result<bool, NetworkFailure> {
+    loop {
+        let group_exists = process_group_exists(process_group).map_err(|error| {
+            NetworkFailure::Failed(format!(
+                "Failed to inspect git {subcommand} process group: {error}"
+            ))
+        })?;
+        let owned_exists = owned_processes
+            .iter()
+            .filter(|process| **process != process_group)
+            .try_fold(false, |exists, process| {
+                process_exists(*process).map(|current| exists || current)
+            })
+            .map_err(|error| {
+                NetworkFailure::Failed(format!(
+                    "Failed to inspect git {subcommand} helper: {error}"
+                ))
+            })?;
+        if !group_exists && !owned_exists {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
     }
 }
 
@@ -361,19 +476,13 @@ fn terminate_network_process(mut child: Child, subcommand: &str) -> Result<(), N
     signal_network_processes(process_group, &owned_processes, libc::SIGKILL).map_err(|error| {
         NetworkFailure::Failed(format!("Failed to kill git {subcommand}: {error}"))
     })?;
-    if !wait_for_network_process_group(
-        &mut child,
-        process_group,
-        &owned_processes,
-        &mut direct_child_reaped,
-        NETWORK_KILL_REAP_GRACE,
-        subcommand,
-    )? {
-        if !direct_child_reaped {
-            thread::spawn(move || {
-                let _ = child.wait();
-            });
-        }
+    let final_deadline = Instant::now() + NETWORK_KILL_REAP_GRACE;
+    if !reap_direct_child_until(child, final_deadline, subcommand)? {
+        return Err(NetworkFailure::Failed(format!(
+            "git {subcommand} direct child did not exit within the cancellation deadline"
+        )));
+    }
+    if !wait_for_owned_processes(process_group, &owned_processes, final_deadline, subcommand)? {
         return Err(NetworkFailure::Failed(format!(
             "git {subcommand} process tree did not exit within the cancellation deadline"
         )));
@@ -2199,6 +2308,54 @@ mod tests {
                     + Duration::from_secs(1),
             "direct-child reaping must not exceed the documented escalation deadline"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wedged_direct_child_wait_is_detached_at_the_reap_deadline() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        struct WedgedReaper {
+            eventual_reap_started: Arc<AtomicBool>,
+        }
+
+        impl super::DirectChildReaper for WedgedReaper {
+            fn try_reap(&mut self) -> std::io::Result<bool> {
+                Ok(false)
+            }
+
+            fn reap_blocking(&mut self) {
+                self.eventual_reap_started.store(true, Ordering::Release);
+                thread::sleep(Duration::from_millis(250));
+            }
+        }
+
+        let eventual_reap_started = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let reaped = super::reap_direct_child_until(
+            WedgedReaper {
+                eventual_reap_started: eventual_reap_started.clone(),
+            },
+            Instant::now() + Duration::from_millis(40),
+            "test-child",
+        )
+        .unwrap();
+
+        assert!(!reaped);
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "terminal cancellation must not block on the eventual child reaper"
+        );
+        let observation_deadline = Instant::now() + Duration::from_millis(100);
+        while !eventual_reap_started.load(Ordering::Acquire) {
+            assert!(
+                Instant::now() < observation_deadline,
+                "the detached reaper never took ownership"
+            );
+            thread::yield_now();
+        }
     }
 
     #[test]
