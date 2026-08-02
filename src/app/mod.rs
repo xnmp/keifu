@@ -1672,6 +1672,15 @@ impl App {
         Ok(())
     }
 
+    /// Production event-loop dispatch: surface action failures as red toasts
+    /// and consume the error so the UI remains interactive. Keyboard, mouse,
+    /// debug-server input, and observable tests all share this exact seam.
+    pub fn dispatch_action(&mut self, action: Action) {
+        if let Err(error) = self.handle_action(action) {
+            self.show_error(error.to_string());
+        }
+    }
+
     /// Report a one-shot error as a red toast (#116): visible without blocking
     /// input, long-TTL so it isn't missed, dismissible early with Esc. Never a
     /// modal — the status bar stays reserved for sticky state (conflicts,

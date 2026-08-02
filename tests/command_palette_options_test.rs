@@ -7,10 +7,7 @@ use common::{add_bare_origin, commit_file, current_branch, git_cli, init_repo, r
 use keifu::action::Action;
 use keifu::app::{App, AppMode};
 use keifu::config::{Config, GraphRenderer, UiState};
-use keifu::git::{
-    operations::{checkout_branch, create_branch, delete_branch},
-    GitRepository,
-};
+use keifu::git::operations::{checkout_branch, create_branch, delete_branch};
 use keifu::palette::filter_checkout_branches;
 use keifu::toast::ToastKind;
 use keifu::ui::dialog::BranchPickerWidget;
@@ -109,8 +106,54 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
 
     let mut app = App::from_repo(git_repo).unwrap();
 
-    // The established command registry remains searchable.
-    open_palette(&mut app, "refresh");
+    // The graph's existing Checkout action preserves the same authoritative
+    // identity when a local branch looks like a remote-tracking ref.
+    for _ in 0..app.graph_layout.nodes.len() {
+        let labels = app.selected_node_branches();
+        if labels.contains(&"origin/remote-work") && labels.contains(&"topic-00") {
+            break;
+        }
+        app.handle_action(Action::MoveDown).unwrap();
+    }
+    let selected_labels = app.selected_node_branches();
+    assert!(selected_labels.contains(&"origin/remote-work"));
+    assert!(selected_labels.contains(&"topic-00"));
+    app.handle_action(Action::OpenCommitMenu).unwrap();
+    type_text(&mut app, "checkout");
+    app.handle_action(Action::MenuSelect).unwrap();
+    type_text(&mut app, "origin/remote-work");
+    let graph_matches = match &app.mode {
+        AppMode::BranchPicker {
+            branches, query, ..
+        } => filter_checkout_branches(branches, query),
+        other => panic!("expected graph checkout picker, got {other:?}"),
+    };
+    assert_eq!(graph_matches.len(), 1);
+    assert!(!graph_matches[0].is_remote);
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
+    assert_eq!(
+        Repository::open(&path).unwrap().head().unwrap().shorthand(),
+        Some("origin/remote-work"),
+        "graph checkout must not reinterpret a local slash-name as remote"
+    );
+
+    // Existing commands remain keyboard-navigable, searchable, and executable.
+    // Create a ref behind the app's back so Refresh has a user-visible effect.
+    let external_repo = Repository::open(&path).unwrap();
+    create_branch(&external_repo, "fresh-after-start", initial).unwrap();
+    assert!(!app
+        .branches
+        .iter()
+        .any(|branch| branch.name == "fresh-after-start"));
+    open_palette(&mut app, "");
+    app.handle_action(Action::MoveDown).unwrap();
+    assert!(matches!(
+        app.mode,
+        AppMode::CommandPalette { selected: 1, .. }
+    ));
+    app.handle_action(Action::MoveUp).unwrap();
+    type_text(&mut app, "refresh");
     assert!(app
         .palette_results("refresh")
         .items
@@ -118,6 +161,10 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
         .any(|item| item.label == "Refresh"));
     app.handle_action(Action::MenuSelect).unwrap();
     assert!(matches!(app.mode, AppMode::Normal));
+    assert!(app
+        .branches
+        .iter()
+        .any(|branch| branch.name == "fresh-after-start"));
 
     // Checkout is a command that opens a dedicated, searchable branch picker.
     open_palette(&mut app, "checkout");
@@ -189,9 +236,7 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
         .unwrap()
         .delete()
         .unwrap();
-    if let Err(error) = app.handle_action(Action::MenuSelect) {
-        app.show_error(error.to_string());
-    }
+    app.dispatch_action(Action::MenuSelect);
     assert!(matches!(app.mode, AppMode::Normal));
     let error_toast = app.toasts.visible().last().expect("checkout error toast");
     assert_eq!(error_toast.kind, ToastKind::Error);
@@ -226,15 +271,13 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     assert!(renderer_after.contains("unicode"));
     assert_eq!(Config::load().ui.graph_renderer, GraphRenderer::Unicode);
 
-    // Reconstruct the application with preferences loaded from disk and prove
+    // Reconstruct the application through its production startup path and prove
     // the reopened user-facing palette reports the persisted values.
     drop(app);
-    let mut reloaded = App::from_repo_with_preferences(
-        GitRepository::open(&path).unwrap(),
-        Config::load(),
-        UiState::load(),
-    )
-    .unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&path).unwrap();
+    let mut reloaded = App::new().unwrap();
+    std::env::set_current_dir(original_dir).unwrap();
     open_palette(&mut reloaded, "diff line wrap");
     let persisted_wrap = palette_screen(&reloaded, "diff line wrap");
     assert!(

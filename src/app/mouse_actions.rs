@@ -260,7 +260,9 @@ impl App {
                 AppMode::IssueLabelPicker { .. } => Action::ToggleIssueLabel,
                 _ => Action::MenuSelect,
             };
-            let _ = self.handle_action(action);
+            if let Err(error) = self.handle_action(action) {
+                self.show_error(error.to_string());
+            }
         }
     }
 
@@ -306,6 +308,14 @@ impl App {
                 );
                 let first = selected.saturating_sub((list.height as usize).saturating_sub(1));
                 list_row_index(list, first, col, row)
+            }
+            AppMode::BranchDeletePicker { selected, .. }
+            | AppMode::TagPicker { selected, .. }
+            | AppMode::RemotePicker { selected, .. } => {
+                // These pickers share BranchPickerWidget's selection-following
+                // window but have no query header.
+                let first = selected.saturating_sub((inner.height as usize).saturating_sub(1));
+                list_row_index(inner, first, col, row)
             }
             _ => list_row_index(inner, 0, col, row),
         }
@@ -576,6 +586,20 @@ mod tests {
             app.issue_label_picker.as_ref().unwrap().chosen,
             vec![false, false, true, false, false]
         );
+    }
+
+    /// Non-searchable branch-style pickers share the windowed renderer. Their
+    /// hit-testing must apply the same first-row offset.
+    #[test]
+    fn windowed_branch_picker_click_maps_to_displayed_row() {
+        let mut app = app_with_three_commits();
+        app.mode = AppMode::BranchDeletePicker {
+            branches: (0..6).map(|n| format!("branch-{n}")).collect(),
+            selected: 5,
+        };
+        // Four visible inner rows with selection at five means logical row two
+        // is rendered at the first visible row.
+        assert_eq!(app.popup_row_index(Rect::new(1, 1, 38, 4), 5, 1), Some(2));
     }
 
     /// Right-clicking a commit row when no menu is open selects that commit

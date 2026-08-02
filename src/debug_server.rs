@@ -126,9 +126,7 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
                         app.commit_filter_active,
                         &app.keymap,
                     ) {
-                        if let Err(e) = app.handle_action(action) {
-                            app.show_error(format!("{}", e));
-                        }
+                        app.dispatch_action(action);
                     }
                 }
                 json!({"ok": true})
@@ -153,9 +151,7 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
                 modifiers: KeyModifiers::NONE,
             };
             if let Some(action) = map_mouse_to_action(event) {
-                if let Err(e) = app.handle_action(action) {
-                    app.show_error(format!("{}", e));
-                }
+                app.dispatch_action(action);
             }
             json!({"ok": true})
         }

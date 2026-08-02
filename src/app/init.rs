@@ -48,21 +48,6 @@ impl App {
         Self::build(repo, Config::default(), ui_state, fs_watcher, None, None)
     }
 
-    /// Build a fresh test app from explicitly reloaded durable preferences.
-    /// Integration tests use this to prove a setting survives process-style
-    /// reconstruction without changing the production startup API.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn from_repo_with_preferences(
-        repo: GitRepository,
-        config: Config,
-        ui_state: UiState,
-    ) -> Result<Self> {
-        let repo_path = repo.path.clone();
-        let fs_watcher = crate::watcher::FsWatcher::new(std::path::Path::new(&repo_path));
-        Self::build(repo, config, ui_state, fs_watcher, None, None)
-    }
-
     /// Shared constructor: loads repo data and assembles the App.
     fn build(
         mut repo: GitRepository,
