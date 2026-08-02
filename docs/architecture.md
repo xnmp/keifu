@@ -328,6 +328,9 @@ merged-branch set is not wiped), so a transient gh error can't blank the badges.
 
 ## Settings Registry (2026-07-20)
 
+UiState schema additions and their backwards-compatibility requirements are
+recorded in [ADR 0001](adr/0001-ui-state-schema-evolution.md).
+
 **Decision:** `Ctrl+,` settings menu is backed by a descriptor registry
 (`src/settings.rs::descriptors()`) that is the single source of truth for what
 settings exist and how they behave. There is no separate `SettingsModel`
