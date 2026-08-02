@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use image::{DynamicImage, RgbaImage};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 use ratatui_image::Resize;
@@ -1539,7 +1540,16 @@ impl PixelGraphState {
             picker.set_protocol_type(pt);
             return Some(Self::from_picker(picker));
         }
-        let picker = Picker::from_query_stdio().ok()?;
+        Self::from_startup_query(Picker::from_query_stdio_with_options)
+    }
+
+    /// Build pixel graph state from the startup terminal query, keeping the
+    /// terminal I/O boundary injectable for deterministic startup tests.
+    fn from_startup_query<F, E>(query: F) -> Option<Self>
+    where
+        F: FnOnce(QueryStdioOptions) -> Result<Picker, E>,
+    {
+        let picker = query(QueryStdioOptions::default()).ok()?;
         if !is_supported_protocol(picker.protocol_type()) {
             return None;
         }
