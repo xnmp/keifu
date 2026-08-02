@@ -5,6 +5,26 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEvent, MouseEvent, MouseEventKind};
 
+use crate::ui::graph_pixels::PixelGraphState;
+
+/// Route terminal resize measurements into the pixel-graph renderer. The
+/// measurement callback is invoked only for resize events, so event consumers
+/// can supply the terminal query without touching stdin or querying per key.
+pub fn dispatch_pixel_graph_resize<F>(
+    event: &Event,
+    pixel_graph: Option<&mut PixelGraphState>,
+    window_size: F,
+) where
+    F: FnOnce() -> Option<crossterm::terminal::WindowSize>,
+{
+    if !matches!(event, Event::Resize(_, _)) {
+        return;
+    }
+    if let (Some(pixel_graph), Some(window_size)) = (pixel_graph, window_size()) {
+        pixel_graph.refresh_font_size_from_window_size(window_size);
+    }
+}
+
 /// Poll for events with a custom timeout.
 pub fn poll_event_with_timeout(timeout: Duration) -> Result<Option<Event>> {
     if event::poll(timeout)? {

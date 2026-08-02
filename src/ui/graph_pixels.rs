@@ -1602,20 +1602,6 @@ impl PixelGraphState {
         self.refresh_font_size((size.width / size.columns, size.height / size.rows));
     }
 
-    /// Apply a terminal resize event using the window dimensions captured by
-    /// the event loop. Other events and unavailable measurements leave the
-    /// current geometry untouched.
-    pub fn refresh_on_resize_event<F>(&mut self, event: &crossterm::event::Event, window_size: F)
-    where
-        F: FnOnce() -> Option<crossterm::terminal::WindowSize>,
-    {
-        if matches!(event, crossterm::event::Event::Resize(_, _)) {
-            if let Some(window_size) = window_size() {
-                self.refresh_font_size_from_window_size(window_size);
-            }
-        }
-    }
-
     /// Prepare every protocol referenced by the current frame. Prunes the cache
     /// to the current spec set on overflow (item: bounded, no thrash), then
     /// ensures each spec. Stops early once poisoned so a persistent failure
