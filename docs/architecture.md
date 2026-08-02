@@ -349,6 +349,9 @@ seam; if SIGKILL cannot make the child observable as exited, an eventual reaper
 thread owns it while the worker returns a terminal error.
 The cancellation path does not synchronously join pipe readers, so an unrelated
 inherited descriptor cannot hold the UI worker busy after owned processes die.
+Normal Git exit also drains stdout/stderr through channels with a one-second
+shared deadline; a detached helper retaining a descriptor therefore produces a
+terminal error instead of wedging the network slot.
 
 On non-Unix targets, the standard library provides no equivalent safe
 process-group signaling primitive. Those builds do not advertise the `x`
@@ -366,11 +369,14 @@ then runs local `merge --ff-only`, merge, or rebase to completion even if a
 cancellation arrives. This prevents integrating into a branch changed during
 fetch and prevents escalation from interrupting index/worktree writes or
 creating a half-started merge/rebase. Fetch ref writes remain atomic under
-Git's transaction machinery. The job remains busy through transfer and local
-integration; only its terminal result clears the slot and emits the outcome
-toast. Regression tests cover prepared ref cancellation, a HEAD change at the
-barrier, the real worker/manager/App checkout gate, clean repository state/no
-stale locks, bounded child waiting, detached-helper ownership, and successful
+Git's transaction machinery. If cancellation wins the race before the barrier
+acknowledgement, the manager returns that cancellation reason to the worker so
+the normal cancellation toast is preserved. The job remains busy through
+transfer and local integration; only its terminal result clears the slot and
+emits the outcome toast. Regression tests cover prepared ref cancellation, a
+HEAD change at the barrier, the real worker/manager/App checkout gate, clean
+repository state/no stale locks, bounded child waiting, detached-helper
+ownership, and successful
 subsequent network operations.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
