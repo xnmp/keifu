@@ -1,0 +1,1 @@
+cargo test --test status_bar_visibility_test || false
