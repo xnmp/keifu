@@ -979,6 +979,24 @@ mod tests {
     use super::*;
     use ratatui::style::Style;
 
+    #[cfg(not(unix))]
+    #[test]
+    fn running_network_status_omits_cancel_hint_without_group_signaling() {
+        let mut app = App::test_fixture();
+        app.network.activate_for_test(
+            crate::network::NetworkOperation::Fetch,
+            std::time::Instant::now(),
+        );
+        let area = Rect::new(0, 0, 120, 1);
+        let mut buffer = Buffer::empty(area);
+
+        StatusBar::new(&app, &Theme::dark()).render(area, &mut buffer);
+
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("Fetching…"), "status bar: {text:?}");
+        assert!(!text.contains("x cancel"), "status bar: {text:?}");
+    }
+
     #[test]
     fn pr_hint_shown_only_when_a_pr_exists() {
         assert_eq!(pr_hint_label(Some(12)).as_deref(), Some("open PR #12"));

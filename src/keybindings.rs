@@ -1179,6 +1179,24 @@ fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
 mod tests {
     use super::*;
 
+    #[cfg(not(unix))]
+    #[test]
+    fn active_network_x_is_not_advertised_as_cancellation_without_group_signaling() {
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(
+            map_active_network_key(
+                key,
+                &AppMode::Normal,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false,
+                true,
+            ),
+            None
+        );
+    }
+
     #[test]
     fn compose_maps_ctrl_e_to_external_edit() {
         let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
