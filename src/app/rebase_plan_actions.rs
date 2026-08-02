@@ -247,6 +247,7 @@ impl App {
         if git_dir.join("rebase-merge/interactive").exists() {
             bail!("An interactive rebase is already in progress");
         }
+        self.validate_interactive_rebase_source(&plan)?;
         let state_dir = git_dir.join("keifu-interactive-rebase");
         let result = (|| {
             if state_dir.exists() {
@@ -299,6 +300,28 @@ impl App {
             let _ = fs::remove_dir_all(&state_dir);
         }
         result
+    }
+
+    /// Re-open Git state while owning the execution lock: long-lived libgit2
+    /// handles may not observe refs changed by another process while the plan
+    /// overlay was open.
+    fn validate_interactive_rebase_source(&self, plan: &RebasePlan) -> Result<()> {
+        let repo = git2::Repository::open(&self.repo_path).context("Reopen repository")?;
+        if repo.state() != git2::RepositoryState::Clean {
+            bail!("Repository operation changed since the plan was reviewed");
+        }
+        let head = repo.head().context("Read current branch")?;
+        if head.name() != Some(plan.source_branch_ref.as_str()) {
+            bail!("Branch changed since the plan was reviewed");
+        }
+        let head_oid = head.peel_to_commit().context("Resolve current HEAD")?.id();
+        if head_oid != plan.source_head_oid {
+            bail!("HEAD changed since the plan was reviewed");
+        }
+        if !crate::git::operations::is_working_tree_clean(&repo)? {
+            bail!("Working tree changed since the plan was reviewed");
+        }
+        Ok(())
     }
 
     pub(crate) fn record_completed_interactive_rebase_undo(&mut self) {
@@ -519,7 +542,9 @@ mod tests {
         assert!(matches!(app.mode, AppMode::Normal));
         assert!(app.toasts.visible().iter().any(|toast| {
             toast.kind == crate::toast::ToastKind::Error
-                && toast.text.contains("HEAD changed since the plan was reviewed")
+                && toast
+                    .text
+                    .contains("HEAD changed since the plan was reviewed")
         }));
         assert!(!tmp.path().join(".git/keifu-interactive-rebase").exists());
     }

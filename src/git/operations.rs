@@ -142,7 +142,7 @@ fn run_git_allow_conflict_creds(
 pub fn rebase_interactive(repo_path: &str, base_oid: Oid, todo_path: &Path) -> Result<OpOutcome> {
     let sequence_editor = format!("cp -- {}", crate::rebase_plan::shell_quote(todo_path));
     let mut cmd = Command::new("git");
-    cmd.args(["rebase", "-i", &base_oid.to_string()])
+    cmd.args(["rebase", "-i", "--empty=drop", &base_oid.to_string()])
         .current_dir(repo_path)
         .env("GIT_EDITOR", "true")
         .env("GIT_SEQUENCE_EDITOR", sequence_editor)

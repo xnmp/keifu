@@ -223,9 +223,7 @@ fn interactive_rebase_drops_a_commit_that_becomes_empty_during_replay() {
     let todo_path = repo.path().join("empty-replay-todo");
     fs::write(
         &todo_path,
-        format!(
-            "pick {first} add once\ndrop {removed} remove\npick {repeated} add again\n"
-        ),
+        format!("pick {first} add once\ndrop {removed} remove\npick {repeated} add again\n"),
     )
     .unwrap();
 
