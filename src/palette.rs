@@ -11,6 +11,25 @@ use fuzzy_matcher::FuzzyMatcher;
 
 use crate::action::Action;
 
+/// Identity of the graph context from which a contextual palette row was
+/// offered. It is captured when the palette opens and revalidated immediately
+/// before a Git-affecting Enter-menu operation executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteCommitTarget {
+    pub oid: Option<git2::Oid>,
+    pub is_stash: bool,
+    pub selected_branch: Option<String>,
+}
+
+/// Contextual rows visible for one command-palette session. Keeping the rows
+/// alongside their target makes a refresh or navigation change detectable at
+/// dispatch time instead of silently retargeting an operation.
+#[derive(Debug, Clone)]
+pub struct ContextualPaletteSnapshot {
+    pub target: Option<PaletteCommitTarget>,
+    pub items: Vec<crate::app::CommitMenuItem>,
+}
+
 /// Maximum results rendered; the rest are summarised as "…N more".
 pub const PALETTE_CAP: usize = 15;
 
@@ -56,6 +75,12 @@ impl PaletteKind {
 pub enum PaletteAction {
     /// Dispatch an app action (focused on the graph panel).
     Dispatch(Action),
+    /// Run a context-menu action that is currently available for the selected
+    /// graph node. The palette derives these from the same source as Enter.
+    CommitMenuItem {
+        item: crate::app::CommitMenuItem,
+        target: PaletteCommitTarget,
+    },
     /// Open the checkout confirmation for a branch. `is_remote` carries the
     /// branch's authoritative remote/local status from its `BranchInfo`.
     Checkout { name: String, is_remote: bool },

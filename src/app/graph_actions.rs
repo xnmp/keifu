@@ -204,6 +204,7 @@ impl App {
                 self.toggle_merged_branches()?;
             }
             Action::CreateBranch => {
+                self.input_commit_target = None;
                 self.mode = AppMode::Input {
                     title: "New Branch Name".to_string(),
                     input: String::new(),

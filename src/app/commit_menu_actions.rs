@@ -91,29 +91,45 @@ impl App {
         // Keyboard opens the menu centered; a right-click sets `menu_anchor`
         // afterward to place it at the cursor.
         self.menu_anchor = None;
-        let Some(node) = self.selected_commit_node() else {
-            return;
-        };
-
-        if node.is_uncommitted {
+        if self.is_uncommitted_selected() {
             // For uncommitted node, go to files panel
             self.focus_files_pane();
             return;
         }
 
+        let items = self.available_commit_menu_items();
+        if items.is_empty() {
+            return;
+        }
+        self.mode = AppMode::CommitMenu {
+            items,
+            selected: 0,
+            filter: String::new(),
+        };
+    }
+
+    /// The actions Enter can offer for the current graph selection. Keeping
+    /// this as the single availability source lets the command palette expose
+    /// exactly the same context-valid operations without stale duplicates.
+    pub(crate) fn available_commit_menu_items(&self) -> Vec<CommitMenuItem> {
+        let Some(node) = self.selected_commit_node() else {
+            return Vec::new();
+        };
+
+        // Enter switches an uncommitted selection to the Files pane instead
+        // of opening a commit menu. The palette shares this builder, so it
+        // must likewise expose no commit actions for that node.
+        if node.is_uncommitted {
+            return Vec::new();
+        }
+
         if node.is_stash {
-            let items = vec![
+            return vec![
                 CommitMenuItem::StashApply,
                 CommitMenuItem::StashPop,
                 CommitMenuItem::BranchFromStash,
                 CommitMenuItem::StashDrop,
             ];
-            self.mode = AppMode::CommitMenu {
-                items,
-                selected: 0,
-                filter: String::new(),
-            };
-            return;
         }
 
         let selected_oid = node.commit.as_ref().map(|c| c.oid);
@@ -224,11 +240,7 @@ impl App {
         items.push(CommitMenuItem::CopyHash);
         items.push(CommitMenuItem::CopyMessage);
 
-        self.mode = AppMode::CommitMenu {
-            items,
-            selected: 0,
-            filter: String::new(),
-        };
+        items
     }
 
     /// Local (non-remote) branch names pointing at the selected node.
@@ -422,6 +434,7 @@ impl App {
                 };
             }
             Action::Cancel | Action::Quit => {
+                self.reset_commit_target = None;
                 self.mode = AppMode::Normal;
             }
             _ => {}
@@ -471,7 +484,7 @@ impl App {
             .count()
     }
 
-    fn execute_menu_item(&mut self, item: CommitMenuItem) -> Result<()> {
+    pub(crate) fn execute_menu_item(&mut self, item: CommitMenuItem) -> Result<()> {
         self.mode = AppMode::Normal;
 
         let commit_oid = self
@@ -482,6 +495,7 @@ impl App {
         match item {
             CommitMenuItem::Checkout => self.do_checkout()?,
             CommitMenuItem::CreateBranch => {
+                self.input_commit_target = commit_oid;
                 self.mode = AppMode::Input {
                     title: "New Branch Name".to_string(),
                     input: String::new(),
@@ -557,7 +571,10 @@ impl App {
                 }
             }
             CommitMenuItem::Reset => {
-                // Open reset submenu
+                // Reset is selected in a second menu interaction. Keep this
+                // OID from the validated palette/Enter action so a refresh or
+                // navigation change cannot retarget the destructive reset.
+                self.reset_commit_target = commit_oid;
                 self.mode = AppMode::CommitMenu {
                     items: vec![
                         CommitMenuItem::ResetSoft,
@@ -569,7 +586,7 @@ impl App {
                 };
             }
             CommitMenuItem::ResetSoft => {
-                if let Some(oid) = commit_oid {
+                if let Some(oid) = self.reset_commit_target.take().or(commit_oid) {
                     self.mode = AppMode::Confirm {
                         message: format!("Reset (soft) to {}?", short_hash(oid)),
                         action: ConfirmAction::ResetSoft(oid),
@@ -577,7 +594,7 @@ impl App {
                 }
             }
             CommitMenuItem::ResetMixed => {
-                if let Some(oid) = commit_oid {
+                if let Some(oid) = self.reset_commit_target.take().or(commit_oid) {
                     self.mode = AppMode::Confirm {
                         message: format!("Reset (mixed) to {}?", short_hash(oid)),
                         action: ConfirmAction::ResetMixed(oid),
@@ -585,7 +602,7 @@ impl App {
                 }
             }
             CommitMenuItem::ResetHard => {
-                if let Some(oid) = commit_oid {
+                if let Some(oid) = self.reset_commit_target.take().or(commit_oid) {
                     self.mode = AppMode::Confirm {
                         message: format!(
                             "Reset (HARD) to {}? This will discard changes!",
@@ -613,6 +630,7 @@ impl App {
                 }
             }
             CommitMenuItem::AddTag => {
+                self.input_commit_target = commit_oid;
                 self.mode = AppMode::Input {
                     title: "Tag Name".to_string(),
                     input: String::new(),

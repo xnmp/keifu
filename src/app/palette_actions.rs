@@ -2,29 +2,42 @@
 
 use super::*;
 use crate::palette::{
-    command_registry, rank, Candidate, PaletteAction, PaletteContext, PaletteKind, PaletteResults,
-    PALETTE_CAP,
+    command_registry, rank, Candidate, ContextualPaletteSnapshot, PaletteAction,
+    PaletteCommitTarget, PaletteContext, PaletteKind, PaletteResults, PALETTE_CAP,
 };
 
 impl App {
     /// Open the fuzzy command palette with an empty query.
     pub(crate) fn open_command_palette(&mut self) {
+        self.command_palette_snapshot = Some(ContextualPaletteSnapshot {
+            target: self.palette_commit_target(),
+            items: self.available_commit_menu_items(),
+        });
         self.mode = AppMode::CommandPalette {
             query: String::new(),
             selected: 0,
         };
     }
 
+    fn palette_commit_target(&self) -> Option<PaletteCommitTarget> {
+        self.selected_commit_node().map(|node| PaletteCommitTarget {
+            oid: node.commit.as_ref().map(|commit| commit.oid),
+            is_stash: node.is_stash,
+            selected_branch: self.selected_branch_name().map(str::to_owned),
+        })
+    }
+
     /// The eligibility context that gates which commands the registry offers.
     fn palette_context(&self) -> PaletteContext {
         let has_selected_commit = self
             .selected_commit_node()
-            .and_then(|n| n.commit.as_ref())
-            .is_some();
+            .is_some_and(|node| node.commit.is_some() && !node.is_stash && !node.is_uncommitted);
         PaletteContext {
             has_selected_commit,
-            can_create_pr: self.can_offer_create_pr(),
-            selected_has_open_pr: self.selected_commit_has_open_pr(),
+            // PR actions are commit-contextual too; a stash's synthetic
+            // commit payload must not make ordinary registry actions appear.
+            can_create_pr: has_selected_commit && self.can_offer_create_pr(),
+            selected_has_open_pr: has_selected_commit && self.selected_commit_has_open_pr(),
             can_load_more: !self.all_commits_loaded,
             can_undo: !self.undo_ledger.is_empty(),
         }
@@ -48,6 +61,43 @@ impl App {
                 match_text: e.label.to_string(),
                 action: PaletteAction::Dispatch(e.action),
                 order: i,
+            });
+        }
+
+        // Enter-menu operations are context-sensitive: the same builder that
+        // supplies the menu determines which palette rows exist. This keeps
+        // unavailable operations out of the palette rather than offering a
+        // command that would immediately fail or do nothing.
+        let registry_len = out.len();
+        let (items, target) = match self.command_palette_snapshot.as_ref() {
+            Some(snapshot) => (snapshot.items.clone(), snapshot.target.clone()),
+            None => (
+                self.available_commit_menu_items(),
+                self.palette_commit_target(),
+            ),
+        };
+        for (i, item) in items.into_iter().enumerate() {
+            let Some(target) = target.clone() else {
+                continue;
+            };
+            let label = item.label().to_string();
+            let contextual_action = PaletteAction::CommitMenuItem { item, target };
+            if let Some(candidate) = out.iter_mut().find(|candidate| candidate.label == label) {
+                // Contextual rows supersede same-labelled registry shortcuts.
+                // In particular, Create branch here and Pull must retain the
+                // palette-open target fingerprint rather than dispatching a
+                // current-selection action directly.
+                candidate.hint = Some("Enter".to_string());
+                candidate.action = contextual_action;
+                continue;
+            }
+            out.push(Candidate {
+                kind: PaletteKind::Command,
+                label: label.clone(),
+                hint: Some("Enter".to_string()),
+                match_text: label,
+                action: contextual_action,
+                order: registry_len + i,
             });
         }
 
@@ -150,6 +200,7 @@ impl App {
             }
             Action::Cancel | Action::Quit => {
                 self.mode = AppMode::Normal;
+                self.command_palette_snapshot = None;
             }
             _ => {}
         }
@@ -163,8 +214,24 @@ impl App {
                 // Registry commands act on the graph/repo: close the palette,
                 // focus the graph panel, then dispatch through the normal path.
                 self.mode = AppMode::Normal;
+                self.command_palette_snapshot = None;
                 self.focused_panel = FocusedPanel::Graph;
                 self.handle_action(inner)?;
+            }
+            PaletteAction::CommitMenuItem { item, target } => {
+                // This is deliberately the Enter-menu executor, so prompts,
+                // confirmations, toasts, and cancellation stay identical.
+                self.command_palette_snapshot = None;
+                if self.palette_commit_target().as_ref() != Some(&target)
+                    || !self.available_commit_menu_items().contains(&item)
+                {
+                    self.mode = AppMode::Normal;
+                    self.show_error(
+                        "Selection or repository state changed; reopen command palette".to_string(),
+                    );
+                    return Ok(());
+                }
+                self.execute_menu_item(item)?;
             }
             PaletteAction::Checkout { name, is_remote } => {
                 // Route through the existing checkout confirmation.
@@ -175,6 +242,7 @@ impl App {
             }
             PaletteAction::JumpToCommit(idx) => {
                 self.mode = AppMode::Normal;
+                self.command_palette_snapshot = None;
                 self.focused_panel = FocusedPanel::Graph;
                 self.select_commit_by_full_idx(idx);
             }
