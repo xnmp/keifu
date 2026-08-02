@@ -62,3 +62,90 @@ pub enum PlanEditError {
     OutOfBounds,
     NoPreviousCommit,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn oid(n: u8) -> Oid {
+        Oid::from_bytes(&[n; 20]).unwrap()
+    }
+
+    fn plan() -> RebasePlan {
+        RebasePlan {
+            base_oid: oid(9),
+            entries: vec![
+                PlanEntry::pick(oid(3), "third"),
+                PlanEntry::pick(oid(2), "second"),
+                PlanEntry::pick(oid(1), "first"),
+            ],
+        }
+    }
+
+    #[test]
+    fn rebase_plan_reorders_displayed_commits_without_losing_actions() {
+        let mut plan = plan();
+        plan.set_action(0, RebaseAction::Squash).unwrap();
+
+        plan.move_down(0).unwrap();
+
+        assert_eq!(plan.entries[0].subject, "second");
+        assert_eq!(plan.entries[1].subject, "third");
+        assert_eq!(plan.entries[1].action, RebaseAction::Squash);
+        assert!(plan.is_valid());
+    }
+
+    #[test]
+    fn rebase_plan_rejects_actions_and_edits_that_remove_the_squash_target() {
+        let mut plan = plan();
+        assert_eq!(
+            plan.set_action(2, RebaseAction::Fixup),
+            Err(PlanEditError::NoPreviousCommit)
+        );
+        assert_eq!(plan.entries[2].action, RebaseAction::Pick);
+
+        plan.set_action(1, RebaseAction::Squash).unwrap();
+        assert_eq!(
+            plan.set_action(2, RebaseAction::Drop),
+            Err(PlanEditError::NoPreviousCommit)
+        );
+        assert_eq!(plan.entries[2].action, RebaseAction::Pick);
+        assert!(plan.is_valid());
+    }
+
+    #[test]
+    fn rebase_plan_serializes_the_displayed_actions_in_git_replay_order() {
+        let mut plan = RebasePlan {
+            base_oid: oid(9),
+            entries: vec![
+                PlanEntry::pick(oid(5), "drop me"),
+                PlanEntry::pick(oid(4), "fixup me"),
+                PlanEntry::pick(oid(3), "squash me"),
+                PlanEntry::pick(oid(2), "rename me"),
+                PlanEntry::pick(oid(1), "keep me"),
+            ],
+        };
+        plan.set_action(0, RebaseAction::Drop).unwrap();
+        plan.set_action(1, RebaseAction::Fixup).unwrap();
+        plan.set_action(2, RebaseAction::Squash).unwrap();
+        plan.set_reword_message(3, "replacement\n\nbody").unwrap();
+        let message_path = PathBuf::from("/tmp/rebase message.txt");
+        let paths = HashMap::from([(oid(2), message_path)]);
+
+        let todo = plan.to_git_todo(&paths).unwrap();
+
+        assert_eq!(
+            todo,
+            format!(
+                "pick {} keep me\npick {} rename me\nexec git commit --amend -F '/tmp/rebase message.txt'\nsquash {} squash me\nfixup {} fixup me\n",
+                oid(1),
+                oid(2),
+                oid(3),
+                oid(4)
+            )
+        );
+    }
+}
