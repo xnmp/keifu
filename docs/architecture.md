@@ -333,10 +333,13 @@ Running/cancelling state renders directly from `NetworkStatus` in the status
 bar (`Fetching…`/`Pulling…`/`Pushing…` with `x cancel`, then `Cancelling…`). It
 is not mirrored into the transient message clock. Cancellation is cooperative
 at the worker boundary: the Git runner observes the shared token, terminates
-and reaps its child, and reports a typed cancellation reason. The job remains
-busy until that terminal result arrives; only then does the app clear the slot
-and emit one outcome toast. Hard isolation of a worker that cannot reap its Git
-child remains a separate concern.
+and reaps its direct child, and reports a typed cancellation reason. It must not
+join stdout/stderr readers on that cancellation path: transport helpers such as
+`git-remote-https` or `ssh` can inherit those pipes and briefly outlive Git,
+which would otherwise wedge the worker in `Cancelling…` even after Git exited.
+The job remains busy until the direct child's terminal result arrives; only
+then does the app clear the slot and emit one outcome toast. Hard isolation of
+an independently surviving helper remains a separate concern.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a
