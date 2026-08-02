@@ -150,6 +150,36 @@ fn successful_initial_pr_fetch_enables_eligible_action() {
 }
 
 #[test]
+fn failed_initial_pr_fetch_keeps_empty_result_non_authoritative() {
+    let (_working, _origin, path) = repo_with_ahead_feature();
+    let mut app = app_at(&path);
+    app.open_prs_loaded = false;
+    app.pr_fetch = IntervalFetch::new(Duration::ZERO, |_| Err("not authenticated".to_string()));
+
+    for _ in 0..100 {
+        app.update_open_prs();
+        if app.refresh_latches.pr_fetch {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(
+        app.refresh_latches.pr_fetch,
+        "the injected PR fetch failure should be observed"
+    );
+    assert!(
+        !app.open_prs_loaded,
+        "a failed initial fetch must not make the empty PR map authoritative"
+    );
+    let items = menu_items_for_branch(&mut app, "feature/browser-pr");
+    assert!(
+        !items.contains(&CommitMenuItem::OpenPrInBrowser),
+        "a failed fetch must not authorize a possibly duplicate PR action"
+    );
+}
+
+#[test]
 fn activation_opens_authoritative_compare_url_without_compose_or_api() {
     let (_working, _origin, path) = repo_with_ahead_feature();
     git_cli(&path, &["branch", "-D", "feature/browser-pr"]);
