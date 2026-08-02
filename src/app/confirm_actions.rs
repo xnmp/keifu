@@ -78,6 +78,45 @@ impl App {
                         let outcome = rebase_branch(self.repo.repo(), &name, branch_type)?;
                         op_outcome = Some((outcome, OperationState::Rebase));
                     }
+                    ConfirmAction::RunInteractiveRebase(plan) => {
+                        let pre_head = self.repo.head_oid();
+                        let count = plan.entries.len();
+                        let base = plan.base_oid;
+                        match self.run_interactive_rebase_plan(plan) {
+                            Ok(outcome) => {
+                                op_outcome = Some((outcome, OperationState::Rebase));
+                                if outcome == OpOutcome::Completed {
+                                    if let (Some(pre), Some(post)) =
+                                        (pre_head, self.repo.head_oid())
+                                    {
+                                        if pre != post {
+                                            self.record_undo(crate::undo::UndoEntry {
+                                                description: format!(
+                                                    "Interactive rebase ({count} commits onto {})",
+                                                    short_hash(base)
+                                                ),
+                                                confirm: format!(
+                                                    "Undo: rebase → reset to {}?",
+                                                    short_hash(pre)
+                                                ),
+                                                plan: crate::undo::UndoPlan::ResetHard { to: pre },
+                                                check: crate::undo::UndoCheck::HeadAtCleanTree(
+                                                    post,
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                self.mode = AppMode::Normal;
+                                self.rebase_plan = None;
+                                self.show_error(format!("Interactive rebase failed: {error}"));
+                                return Ok(());
+                            }
+                        }
+                        self.rebase_plan = None;
+                    }
                     ConfirmAction::CherryPick(oid) => {
                         let outcome = cherry_pick(&self.repo_path, oid)?;
                         op_outcome = Some((outcome, OperationState::CherryPick));
@@ -87,7 +126,13 @@ impl App {
                         op_outcome = Some((outcome, OperationState::Revert));
                     }
                     ConfirmAction::AbortOperation(op) => {
-                        abort_operation(&self.repo_path, op)?;
+                        if op == OperationState::Rebase && self.interactive_rebase_in_progress {
+                            crate::git::operations::abort_interactive_rebase(&self.repo_path)?;
+                            self.interactive_rebase_in_progress = false;
+                            self.cleanup_interactive_rebase_state();
+                        } else {
+                            abort_operation(&self.repo_path, op)?;
+                        }
                         self.refresh(true)?;
                         self.toast(
                             crate::toast::ToastKind::Success,
@@ -253,6 +298,9 @@ impl App {
                 } = confirm_action
                 {
                     self.reopen_file_diff_for_path(&file_path, scroll_offset)?;
+                } else if matches!(confirm_action, ConfirmAction::RunInteractiveRebase(_)) {
+                    self.rebase_plan = None;
+                    self.mode = AppMode::Normal;
                 } else {
                     self.mode = AppMode::Normal;
                 }

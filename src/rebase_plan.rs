@@ -5,6 +5,8 @@
 //! reviewable and testable before any command runs.
 
 use git2::Oid;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// An action applied to one commit in an interactive rebase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +63,129 @@ pub struct RebasePlan {
 pub enum PlanEditError {
     OutOfBounds,
     NoPreviousCommit,
+    MissingRewordMessage,
+    MissingMessageFile,
+}
+
+impl RebasePlan {
+    /// Whether every combining action has an earlier, retained Git todo entry.
+    pub fn is_valid(&self) -> bool {
+        let mut has_previous = false;
+        for entry in self.entries.iter().rev() {
+            match entry.action {
+                RebaseAction::Drop => {}
+                RebaseAction::Squash | RebaseAction::Fixup if !has_previous => return false,
+                _ => has_previous = true,
+            }
+        }
+        true
+    }
+
+    pub fn set_action(&mut self, index: usize, action: RebaseAction) -> Result<(), PlanEditError> {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return Err(PlanEditError::OutOfBounds);
+        };
+        let old_action = entry.action;
+        let old_message = entry.reword_message.take();
+        entry.action = action;
+        if self.is_valid() {
+            Ok(())
+        } else {
+            let entry = &mut self.entries[index];
+            entry.action = old_action;
+            entry.reword_message = old_message;
+            Err(PlanEditError::NoPreviousCommit)
+        }
+    }
+
+    pub fn set_reword_message(
+        &mut self,
+        index: usize,
+        message: impl Into<String>,
+    ) -> Result<(), PlanEditError> {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return Err(PlanEditError::OutOfBounds);
+        };
+        let message = message.into();
+        if message.trim().is_empty() {
+            return Err(PlanEditError::MissingRewordMessage);
+        }
+        entry.action = RebaseAction::Reword;
+        entry.reword_message = Some(message);
+        Ok(())
+    }
+
+    pub fn move_up(&mut self, index: usize) -> Result<usize, PlanEditError> {
+        if index == 0 || index >= self.entries.len() {
+            return Err(PlanEditError::OutOfBounds);
+        }
+        self.swap_if_valid(index, index - 1)?;
+        Ok(index - 1)
+    }
+
+    pub fn move_down(&mut self, index: usize) -> Result<usize, PlanEditError> {
+        if index + 1 >= self.entries.len() {
+            return Err(PlanEditError::OutOfBounds);
+        }
+        self.swap_if_valid(index, index + 1)?;
+        Ok(index + 1)
+    }
+
+    fn swap_if_valid(&mut self, left: usize, right: usize) -> Result<(), PlanEditError> {
+        self.entries.swap(left, right);
+        if self.is_valid() {
+            Ok(())
+        } else {
+            self.entries.swap(left, right);
+            Err(PlanEditError::NoPreviousCommit)
+        }
+    }
+
+    /// Serialize newest-first display entries into Git's oldest-first todo.
+    pub fn to_git_todo(
+        &self,
+        message_paths: &HashMap<Oid, PathBuf>,
+    ) -> Result<String, PlanEditError> {
+        if !self.is_valid() {
+            return Err(PlanEditError::NoPreviousCommit);
+        }
+        let mut todo = String::new();
+        for entry in self.entries.iter().rev() {
+            match entry.action {
+                RebaseAction::Drop => continue,
+                RebaseAction::Pick | RebaseAction::Reword => {
+                    todo.push_str(&format!("pick {} {}\n", entry.oid, entry.subject));
+                    if entry.action == RebaseAction::Reword {
+                        if entry.reword_message.is_none() {
+                            return Err(PlanEditError::MissingRewordMessage);
+                        }
+                        let path = message_paths
+                            .get(&entry.oid)
+                            .ok_or(PlanEditError::MissingMessageFile)?;
+                        todo.push_str(&format!(
+                            "exec git commit --amend -F {}\n",
+                            shell_quote(path)
+                        ));
+                    }
+                }
+                RebaseAction::Squash | RebaseAction::Fixup => {
+                    todo.push_str(&format!(
+                        "{} {} {}\n",
+                        entry.action.label(),
+                        entry.oid,
+                        entry.subject
+                    ));
+                }
+            }
+        }
+        Ok(todo)
+    }
+}
+
+/// Quote a path for the POSIX shell used by Git's editor/exec handling.
+pub fn shell_quote(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    format!("'{}'", text.replace('\'', "'\"'\"'"))
 }
 
 #[cfg(test)]

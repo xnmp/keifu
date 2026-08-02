@@ -22,10 +22,10 @@ use crate::{
             create_lightweight_tag, delete_branch, delete_tag, extract_auth_url,
             get_last_commit_message, humanize_git_error, is_annotated_tag,
             is_dirty_worktree_pull_error, is_divergent_pull_error, is_https_auth_failure,
-            merge_branch, prune_remote, push_tag, rebase_branch, rename_branch, reset_hard_checked,
-            reset_to_commit, restore_files, revert_commit, stage_all, stage_file, stash_all,
-            stash_apply, stash_branch, stash_drop, stash_pop, stash_staged, unstage_all,
-            unstage_file, url_host, OpOutcome, PullMode, ResetMode,
+            merge_branch, prune_remote, push_tag, rebase_branch, rebase_interactive, rename_branch,
+            reset_hard_checked, reset_to_commit, restore_files, revert_commit, stage_all,
+            stage_file, stash_all, stash_apply, stash_branch, stash_drop, stash_pop, stash_staged,
+            unstage_all, unstage_file, url_host, OpOutcome, PullMode, ResetMode,
         },
         remote_only_branch_names, render_hunk_patch, short_hash, BranchInfo, CommitDiffInfo,
         CommitInfo, Credentials, FileChangeKind, FileDiffContent, FileDiffInfo, GitRepository,
@@ -33,6 +33,7 @@ use crate::{
     },
     graph_nav::GraphNav,
     network::{NetworkManager, PushSpec},
+    rebase_plan::{RebaseAction, RebasePlan},
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
 };
@@ -57,6 +58,7 @@ mod network_ops;
 mod palette_actions;
 mod pr_action_actions;
 mod pr_thread_actions;
+mod rebase_plan_actions;
 mod refresh;
 mod remote_ops;
 mod search_ops;
@@ -217,6 +219,7 @@ pub enum CommitMenuItem {
     MergeIntoCurrent,
     CherryPick,
     Rebase,
+    InteractiveRebase,
     RenameBranch,
     Reset,
     ResetSoft,
@@ -257,6 +260,7 @@ impl CommitMenuItem {
             Self::MergeIntoCurrent => "Merge into current branch",
             Self::CherryPick => "Cherry-pick",
             Self::Rebase => "Rebase current branch onto this",
+            Self::InteractiveRebase => "Rebase commits above this…",
             Self::RenameBranch => "Rename branch",
             Self::Reset => "Reset to this commit...",
             Self::ResetSoft => "Soft (keep changes staged)",
@@ -313,6 +317,10 @@ pub enum AppMode {
         items: Vec<CommitMenuItem>,
         selected: usize,
         filter: String,
+    },
+    /// Edit the plan held in `App::rebase_plan` before any history is changed.
+    RebasePlan {
+        cursor: usize,
     },
     /// Checkbox menu to toggle which metadata columns show on commit rows.
     MetadataMenu {
@@ -706,6 +714,9 @@ pub enum InputAction {
     /// Second step of the HTTPS credential prompt: enter the password/token.
     /// Rendered masked.
     AuthPassword,
+    RebaseReword {
+        index: usize,
+    },
 }
 
 /// A network op that can be re-issued with credentials after an auth-failure
@@ -793,6 +804,7 @@ pub enum ConfirmAction {
         name: String,
         is_remote: bool,
     },
+    RunInteractiveRebase(RebasePlan),
     CherryPick(Oid),
     Revert(Oid),
     ResetSoft(Oid),
@@ -1057,6 +1069,12 @@ pub struct App {
     // indicator and the conflict-resolution keybindings.
     pub op_state: OperationState,
     pub conflict_count: usize,
+    /// Editable history-rewrite intent, kept outside `AppMode` so reword input
+    /// and confirmation overlays cannot discard it.
+    pub rebase_plan: Option<RebasePlan>,
+    /// Distinguishes a CLI interactive rebase from the existing libgit2 rebase
+    /// because their on-disk recovery formats require different drivers.
+    pub interactive_rebase_in_progress: bool,
 
     // Diff caching subsystem
     pub diff_cache: DiffCache,
@@ -1539,6 +1557,7 @@ impl App {
             AppMode::Input { .. } => self.handle_input_action(action)?,
             AppMode::Confirm { .. } => self.handle_confirm_action(action)?,
             AppMode::CommitMenu { .. } => self.handle_commit_menu_action(action)?,
+            AppMode::RebasePlan { .. } => self.handle_rebase_plan_action(action)?,
             AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
             AppMode::Settings { .. } => self.handle_settings_action(action)?,
             AppMode::PullDivergence { .. } => self.handle_pull_divergence_action(action),

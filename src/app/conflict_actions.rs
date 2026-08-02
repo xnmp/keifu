@@ -208,8 +208,15 @@ impl App {
             self.toast(crate::toast::ToastKind::Info, "No operation in progress");
             return Ok(());
         }
-        match continue_operation(&self.repo_path, op) {
+        let outcome = if op == OperationState::Rebase && self.interactive_rebase_in_progress {
+            crate::git::operations::continue_interactive_rebase(&self.repo_path)
+        } else {
+            continue_operation(&self.repo_path, op)
+        };
+        match outcome {
             Ok(OpOutcome::Completed) => {
+                self.interactive_rebase_in_progress = false;
+                self.cleanup_interactive_rebase_state();
                 self.refresh(true)?;
                 self.toast(crate::toast::ToastKind::Success, op_completed_message(op));
             }

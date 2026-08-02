@@ -141,6 +141,8 @@ impl App {
         let initial_message_time = initial_message.as_ref().map(|_| now);
         let op_state = repo.operation_state();
         let conflict_count = repo.conflicted_count();
+        let interactive_rebase_in_progress =
+            repo.repo().path().join("rebase-merge/interactive").exists();
         let uncommitted_count = working_tree_status
             .as_ref()
             .map(|s| s.accurate_file_count());
@@ -227,6 +229,8 @@ impl App {
             working_tree_status,
             op_state,
             conflict_count,
+            rebase_plan: None,
+            interactive_rebase_in_progress,
             diff_cache: DiffCache::new(),
             compare_marked: None,
             compare_range: None,

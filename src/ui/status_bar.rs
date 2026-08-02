@@ -604,6 +604,12 @@ impl StatusBar {
                 );
                 hb.hint(" Esc ", key_style, "back", desc_style, Action::Cancel);
             }
+            AppMode::RebasePlan { .. } => {
+                hb.hint_static(" j/k ", key_style, "navigate ", desc_style);
+                hb.hint_static(" J/K ", key_style, "reorder ", desc_style);
+                hb.hint(" Enter ", key_style, "review ", desc_style, Action::Confirm);
+                hb.hint(" Esc ", key_style, "cancel", desc_style, Action::Cancel);
+            }
             AppMode::CommitMenu { .. }
             | AppMode::BranchPicker { .. }
             | AppMode::BranchDeletePicker { .. }
@@ -875,6 +881,7 @@ impl StatusBar {
             AppMode::Input { .. } => Some(" INPUT "),
             AppMode::Confirm { .. } => Some(" CONFIRM "),
             AppMode::CommitMenu { .. } => Some(" MENU "),
+            AppMode::RebasePlan { .. } => Some(" REBASE PLAN "),
             AppMode::MetadataMenu { .. } => Some(" COLUMNS "),
             AppMode::Settings { .. } => Some(" SETTINGS "),
             AppMode::PullDivergence { .. } => Some(" PULL "),

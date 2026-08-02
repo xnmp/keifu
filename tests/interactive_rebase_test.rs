@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use keifu::git::operations::{rebase_interactive, OpOutcome};
+use keifu::git::operations::{abort_interactive_rebase, rebase_interactive, OpOutcome};
 
 mod common;
 use common::{commit_file, git_cli, init_repo, repo_path, Seed};
@@ -44,4 +44,59 @@ fn interactive_rebase_executes_the_authored_order_and_actions() {
     );
     assert!(!repo.workdir().unwrap().join("dropped.txt").exists());
     assert_ne!(repo.head().unwrap().target(), Some(dropped));
+}
+
+#[test]
+fn interactive_rebase_squash_combines_the_commits_and_messages() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().peel_to_commit().unwrap().id();
+    let first = commit_file(repo, "first.txt", "first\n", "first subject");
+    let second = commit_file(repo, "second.txt", "second\n", "second subject");
+    let todo_path = repo.path().join("squash-todo");
+    fs::write(
+        &todo_path,
+        format!("pick {first} first subject\nsquash {second} second subject\n"),
+    )
+    .unwrap();
+
+    let outcome = rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap();
+
+    assert_eq!(outcome, OpOutcome::Completed);
+    let messages = git_cli(
+        repo_path(&git_repo),
+        &["log", "--format=%B%x00", &format!("{base}..HEAD")],
+    );
+    assert_eq!(messages.matches('\0').count(), 1);
+    assert!(messages.contains("first subject"));
+    assert!(messages.contains("second subject"));
+}
+
+#[test]
+fn conflicted_interactive_rebase_can_be_aborted_back_to_the_original_head() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().peel_to_commit().unwrap().id();
+    fs::write(repo.workdir().unwrap().join("tracked.txt"), "one\n").unwrap();
+    git_cli(repo_path(&git_repo), &["add", "tracked.txt"]);
+    git_cli(repo_path(&git_repo), &["commit", "-m", "one"]);
+    let first = repo.head().unwrap().target().unwrap();
+    fs::write(repo.workdir().unwrap().join("tracked.txt"), "two\n").unwrap();
+    git_cli(repo_path(&git_repo), &["add", "tracked.txt"]);
+    git_cli(repo_path(&git_repo), &["commit", "-m", "two"]);
+    let second = repo.head().unwrap().target().unwrap();
+    let original_head = second;
+    let todo_path = repo.path().join("conflict-todo");
+    fs::write(&todo_path, format!("pick {second} two\npick {first} one\n")).unwrap();
+
+    let outcome = rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap();
+
+    assert!(matches!(outcome, OpOutcome::Conflicts { count: 1 }));
+    assert!(repo.path().join("rebase-merge/interactive").exists());
+    abort_interactive_rebase(repo_path(&git_repo)).unwrap();
+    assert_eq!(repo.head().unwrap().target(), Some(original_head));
+    assert_eq!(
+        fs::read_to_string(repo.workdir().unwrap().join("tracked.txt")).unwrap(),
+        "two\n"
+    );
 }

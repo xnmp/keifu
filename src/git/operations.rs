@@ -125,6 +125,33 @@ fn run_git_allow_conflict_creds(
     bail!("git {} failed: {}", subcommand, stderr.trim());
 }
 
+/// Execute an authored interactive-rebase todo through Git's CLI.
+///
+/// Git still owns the rewrite, signing, hooks, and crash-recovery state. The
+/// supplied todo must remain available while a conflicted rebase is paused.
+pub fn rebase_interactive(repo_path: &str, base_oid: Oid, todo_path: &Path) -> Result<OpOutcome> {
+    let sequence_editor = format!("cp -- {}", crate::rebase_plan::shell_quote(todo_path));
+    let mut cmd = Command::new("git");
+    cmd.args(["rebase", "-i", &base_oid.to_string()])
+        .current_dir(repo_path)
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", sequence_editor)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null());
+    let output = cmd.output().context("Failed to execute git rebase -i")?;
+    if output.status.success() {
+        return Ok(OpOutcome::Completed);
+    }
+    let count = count_conflicts(repo_path);
+    if count > 0 {
+        return Ok(OpOutcome::Conflicts { count });
+    }
+    bail!(
+        "git rebase failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+}
+
 /// Run a git CLI command, feeding `stdin_bytes` to its standard input.
 /// Used for commands that read a patch from stdin (`git apply`).
 fn run_git_with_stdin(
@@ -999,6 +1026,18 @@ pub fn abort_operation(repo_path: &str, op: OperationState) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Abort a CLI-authored interactive rebase without disturbing the existing
+/// libgit2 rebase recovery route.
+pub fn abort_interactive_rebase(repo_path: &str) -> Result<()> {
+    run_git(repo_path, &["rebase", "--abort"])?;
+    Ok(())
+}
+
+/// Continue a CLI-authored interactive rebase after its conflicts are staged.
+pub fn continue_interactive_rebase(repo_path: &str) -> Result<OpOutcome> {
+    run_git_allow_conflict(repo_path, &["rebase", "--continue"])
 }
 
 /// Continue the in-progress operation after conflicts are resolved.

@@ -173,6 +173,10 @@ impl App {
             }
         }
 
+        if selected_oid.is_some_and(|base| self.interactive_rebase_eligible(base)) {
+            items.push(CommitMenuItem::InteractiveRebase);
+        }
+
         if has_branch {
             if let Some(branch) = self.selected_branch() {
                 if !branch.is_head {
@@ -542,6 +546,11 @@ impl App {
                             },
                         };
                     }
+                }
+            }
+            CommitMenuItem::InteractiveRebase => {
+                if let Some(oid) = commit_oid {
+                    self.start_interactive_rebase(oid);
                 }
             }
             CommitMenuItem::Reset => {
