@@ -600,7 +600,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(
-                HelpPopup::new(
+                HelpPopup::with_status_bar_visibility(
                     app.is_uncommitted_selected(),
                     app.status_bar_visible,
                     &theme,

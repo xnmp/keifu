@@ -204,7 +204,11 @@ pub struct HelpPopup<'a> {
 }
 
 impl<'a> HelpPopup<'a> {
-    pub fn new(
+    pub fn new(is_uncommitted: bool, theme: &'a Theme, scroll: usize) -> Self {
+        Self::with_status_bar_visibility(is_uncommitted, true, theme, scroll)
+    }
+
+    pub fn with_status_bar_visibility(
         is_uncommitted: bool,
         status_bar_visible: bool,
         theme: &'a Theme,
@@ -419,11 +423,12 @@ mod tests {
         assert!(content > inner_height, "fixture must overflow the popup");
 
         let mut top = Buffer::empty(area);
-        HelpPopup::new(false, true, &theme, 0).render(area, &mut top);
+        HelpPopup::with_status_bar_visibility(false, true, &theme, 0).render(area, &mut top);
         assert!(!rendered_text(&top).contains("Quit (from anywhere)"));
 
         let mut bottom = Buffer::empty(area);
-        HelpPopup::new(false, true, &theme, content - inner_height).render(area, &mut bottom);
+        HelpPopup::with_status_bar_visibility(false, true, &theme, content - inner_height)
+            .render(area, &mut bottom);
         let text = rendered_text(&bottom);
         assert!(text.contains("Quit (from anywhere)"));
         assert_eq!(bottom[(area.width - 1, 0)].symbol(), "╮");
