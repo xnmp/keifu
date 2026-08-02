@@ -1298,6 +1298,91 @@ fn commit_menu_for_regular_commit() {
     assert!(matches!(app.mode, AppMode::Normal));
 }
 
+// ── Command palette mirrors the Enter context menu ──────────────────
+
+#[test]
+fn command_palette_exposes_and_dispatches_available_commit_actions() {
+    let (_td, repo) = init_repo();
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+
+    // Cherry-pick is an available Enter-menu action for a normal commit and
+    // must be directly discoverable in the command palette, not hidden behind
+    // a second menu.
+    let labels: Vec<String> = app
+        .palette_results("Cherry-pick")
+        .items
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert!(labels.iter().any(|label| label == "Cherry-pick"), "{labels:?}");
+
+    app.handle_action(Action::OpenCommandPalette).unwrap();
+    for c in "Cherry-pick".chars() {
+        app.handle_action(Action::InputChar(c)).unwrap();
+    }
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(
+        matches!(app.mode, AppMode::Confirm { ref message, .. } if message.starts_with("Cherry-pick commit")),
+        "palette dispatch must use the existing Cherry-pick confirmation, got {:?}",
+        app.mode
+    );
+}
+
+#[test]
+fn command_palette_uses_enter_menu_preconditions_for_stashes_and_branch_tips() {
+    let (td, repo) = init_repo();
+    let first = commit_file(repo.repo(), "a.txt", "a", "first");
+    repo.repo()
+        .branch("feature", &repo.repo().find_commit(first).unwrap(), false)
+        .unwrap();
+    commit_file(repo.repo(), "b.txt", "b", "second");
+    let mut app = make_app(repo);
+
+    // A non-tip commit cannot delete a branch; the palette must omit it just
+    // like the Enter context menu instead of surfacing a dead-end command.
+    let first_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| node.commit.as_ref().map(|commit| commit.oid) == Some(first))
+        .unwrap();
+    app.graph_nav.graph_list_state.select(Some(first_idx));
+    app.graph_nav.selected_branch_position = None;
+    let labels: Vec<String> = app
+        .palette_results("Delete branch")
+        .items
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert!(!labels.iter().any(|label| label == "Delete branch"), "{labels:?}");
+
+    fs::write(td.path().join("a.txt"), "stashed").unwrap();
+    {
+        let mut git = Repository::open(td.path()).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        git.stash_save(&sig, "wip", None).unwrap();
+    }
+    app.refresh(true).unwrap();
+    let stash_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| node.is_stash)
+        .expect("a stash node is present");
+    app.graph_nav.graph_list_state.select(Some(stash_idx));
+
+    let labels: Vec<String> = app
+        .palette_results("stash")
+        .items
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert!(labels.iter().any(|label| label == "Apply stash"), "{labels:?}");
+    assert!(labels.iter().any(|label| label == "Pop stash (apply + drop)"), "{labels:?}");
+    assert!(!labels.iter().any(|label| label == "Cherry-pick"), "{labels:?}");
+}
+
 // ── Workflow: Commit Menu on Uncommitted Node → Files Panel ─────────
 
 #[test]
