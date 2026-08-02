@@ -124,6 +124,61 @@ fn non_conflict_interactive_stop_remains_recoverable() {
 }
 
 #[test]
+fn failed_reword_exec_is_retried_by_continue() {
+    let (_td, git_repo) = init_repo(Seed::TrackedFile);
+    let repo = git_repo.repo();
+    let base = repo.head().unwrap().target().unwrap();
+    let first = commit_file(repo, "first.txt", "first\n", "original message");
+    let state_dir = repo.path().join("keifu-interactive-rebase-test");
+    fs::create_dir_all(&state_dir).unwrap();
+    let message_path = state_dir.join("reword-message");
+    fs::write(&message_path, "authored replacement\n").unwrap();
+    let todo_path = state_dir.join("todo");
+    fs::write(
+        &todo_path,
+        format!(
+            "pick {first} original message\nexec git commit --amend -F {}\n",
+            keifu::rebase_plan::shell_quote(&message_path)
+        ),
+    )
+    .unwrap();
+
+    let hook = repo.path().join("hooks/commit-msg");
+    let failed_once = repo.path().join("reword-hook-failed-once");
+    fs::write(
+        &hook,
+        "#!/bin/sh\nif test ! -f .git/reword-hook-failed-once; then\n  touch .git/reword-hook-failed-once\n  exit 1\nfi\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&hook, permissions).unwrap();
+    }
+
+    let initial = rebase_interactive(repo_path(&git_repo), base, &todo_path).unwrap();
+
+    assert_eq!(initial, OpOutcome::Paused);
+    assert!(failed_once.exists());
+    assert_eq!(
+        repo.head().unwrap().peel_to_commit().unwrap().summary(),
+        Some("original message")
+    );
+
+    let continued =
+        keifu::git::operations::continue_interactive_rebase(repo_path(&git_repo)).unwrap();
+
+    assert_eq!(continued, OpOutcome::Completed);
+    let reopened = git2::Repository::open(repo.workdir().unwrap()).unwrap();
+    assert_eq!(
+        reopened.head().unwrap().peel_to_commit().unwrap().summary(),
+        Some("authored replacement")
+    );
+}
+
+#[test]
 fn reword_message_file_survives_a_conflict_until_continue_reaches_it() {
     let (_td, git_repo) = init_repo(Seed::TrackedFile);
     let repo = git_repo.repo();
