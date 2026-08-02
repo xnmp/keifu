@@ -189,7 +189,7 @@ it doesn't implement the feature.
    a coreutil already assumed present (keifu already shell-outs to `xclip`/`curl`
    etc. and targets Unix). The op function is a sibling of the existing ones:
    `rebase_interactive(repo_path, base_oid, todo_path) -> Result<OpOutcome>` via
-   `git rebase -i --empty=drop <base>`.
+   `git rebase -i --empty=drop --reschedule-failed-exec <base>`.
 
 2. **Conflicts + abort + continue are already wired for this exact state.**
    `operation_state()` maps `RebaseInteractive → OperationState::Rebase`
@@ -271,6 +271,7 @@ existing-code change the design requires.
 | **Range contains a merge commit** | **Block** in v1 (no `--rebase-merges`): "Range contains a merge commit; not supported." Detect via `is_merge`. |
 | **Branch already pushed upstream** | **Warn, don't block.** The summary confirm notes the force-push implication, computed from `BranchInfo.upstream/ahead/behind`. Rewriting is the user's call. |
 | **Empty commit produced** (e.g. drop leaves a redundant patch) | Pass `--empty=drop` explicitly so Git drops it and completes instead of stopping for a choice the recovery UI does not offer. |
+| **Reword amend hook/exec fails** | Git pauses and retains the failed `exec` because the initial command passes `--reschedule-failed-exec`; after the user fixes the cause, Continue retries the authored amend instead of silently keeping the old message. |
 | **Branch, HEAD, operation, or worktree changes while reviewing** | The plan retains the displayed full branch ref and HEAD OID. Confirmation reopens the repository and revalidates both plus raw Git operation state and worktree cleanliness under the execution lock, before writing execution state; mismatch is a non-blocking error and no rewrite starts. |
 
 ---
