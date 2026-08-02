@@ -757,8 +757,11 @@ mod tests {
         resumed.handle_action(Action::Confirm).unwrap();
 
         assert_eq!(resumed.repo.head_oid(), Some(original_head));
+        assert!(crate::git::operations::is_working_tree_clean(resumed.repo.repo()).unwrap());
         assert_eq!(
-            std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            std::fs::read_to_string(tmp.path().join("f.txt"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "two\n"
         );
     }
