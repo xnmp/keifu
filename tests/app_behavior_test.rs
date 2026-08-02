@@ -1580,7 +1580,7 @@ fn scoped_path_filter_is_case_sensitive_and_author_name_is_case_insensitive() {
     let mut app = make_app(repo);
 
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "author=ADA; file=src/parser.rs".chars() {
+    for c in "author=LOVELACE; file=src/parser.rs".chars() {
         app.handle_action(Action::CommitFilterChar(c)).unwrap();
     }
     assert!(
@@ -1590,7 +1590,7 @@ fn scoped_path_filter_is_case_sensitive_and_author_name_is_case_insensitive() {
 
     app.handle_action(Action::Cancel).unwrap();
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "author=ADA; file=Parser.rs".chars() {
+    for c in "author=LOVELACE; file=Parser.rs".chars() {
         app.handle_action(Action::CommitFilterChar(c)).unwrap();
     }
     assert_eq!(
