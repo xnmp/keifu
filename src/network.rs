@@ -40,6 +40,8 @@ pub enum CancellationReason {
     InactivityTimeout,
 }
 
+pub(crate) type PullIntegrationAcknowledgement = Sender<Result<(), CancellationReason>>;
+
 /// Lifecycle phase exposed to the status bar while an operation is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkPhase {
@@ -160,7 +162,7 @@ pub struct NetworkManager {
     pull_receiver: Option<Receiver<Result<OpOutcome, NetworkFailure>>>,
     active: Option<ActiveOperation>,
     progress_receiver: Option<Receiver<NetworkProgress>>,
-    integration_receiver: Option<Receiver<Sender<()>>>,
+    integration_receiver: Option<Receiver<PullIntegrationAcknowledgement>>,
     last_refresh_time: Instant,
     last_fetch_time: Instant,
 }
@@ -372,7 +374,7 @@ impl NetworkManager {
     ) -> (
         CancellationToken,
         Sender<NetworkProgress>,
-        Sender<Sender<()>>,
+        Sender<PullIntegrationAcknowledgement>,
     ) {
         let cancellation = CancellationToken::default();
         let (progress_tx, progress_rx) = mpsc::channel();
@@ -412,12 +414,18 @@ impl NetworkManager {
         let mut integration_started = false;
         for acknowledge in integration_barriers {
             if let Some(active) = self.active.as_mut() {
-                if active.operation == NetworkOperation::Pull
-                    && active.phase == NetworkPhase::Running
-                {
-                    active.phase = NetworkPhase::Integrating;
-                    integration_started = true;
-                    let _ = acknowledge.send(());
+                if active.operation == NetworkOperation::Pull {
+                    match active.phase {
+                        NetworkPhase::Running => {
+                            active.phase = NetworkPhase::Integrating;
+                            integration_started = true;
+                            let _ = acknowledge.send(Ok(()));
+                        }
+                        NetworkPhase::Cancelling(reason) => {
+                            let _ = acknowledge.send(Err(reason));
+                        }
+                        NetworkPhase::Integrating => {}
+                    }
                 }
             }
         }
@@ -677,5 +685,36 @@ impl NetworkManager {
             self.activate_for_test(NetworkOperation::Push, Instant::now());
         }
         self.push_receiver = Some(rx);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod pull_integration_race_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_before_barrier_acknowledgement_keeps_its_reason() {
+        let mut manager = NetworkManager::new();
+        let (cancellation, progress_tx, integration_tx) =
+            manager.begin_operation(NetworkOperation::Pull);
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
+        assert!(manager.cancel_active(CancellationReason::User));
+
+        let worker = thread::spawn(move || control.begin_pull_integration());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !worker.is_finished() {
+            manager.tick();
+            assert!(
+                Instant::now() < deadline,
+                "cancelled integration barrier was never acknowledged"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        assert_eq!(
+            worker.join().unwrap(),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
     }
 }

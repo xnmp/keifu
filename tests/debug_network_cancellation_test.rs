@@ -76,37 +76,58 @@ fn running_job_exposes_cancel_hint_and_cancelling_state_in_the_status_bar() {
 }
 
 #[test]
-fn cancellation_completion_toasts_once_releases_busy_and_allows_a_later_op() {
-    let mut app = App::test_fixture();
-    app.network
-        .activate_for_test(NetworkOperation::Fetch, Instant::now());
-    app.handle_action(Action::CancelNetworkOperation).unwrap();
-    app.network
-        .finish_cancelled_for_test(CancellationReason::User);
+fn each_cancellation_completion_toasts_once_and_allows_a_production_restart() {
+    for (operation, label) in [
+        (NetworkOperation::Fetch, "Fetch"),
+        (NetworkOperation::Pull, "Pull"),
+        (NetworkOperation::Push, "Push"),
+    ] {
+        let mut app = App::test_fixture();
+        app.network.activate_for_test(operation, Instant::now());
+        app.handle_action(Action::CancelNetworkOperation).unwrap();
+        app.network
+            .finish_cancelled_for_test(CancellationReason::User);
 
-    assert!(app.update_fetch_status());
-    assert!(!app.is_network_busy());
-    let cancellation_toasts = app
-        .toasts
-        .visible()
-        .iter()
-        .filter(|toast| toast.text == "Fetch cancelled")
-        .count();
-    assert_eq!(cancellation_toasts, 1);
-    assert!(!app.update_fetch_status());
-    assert_eq!(
-        app.toasts
-            .visible()
-            .iter()
-            .filter(|toast| toast.text == "Fetch cancelled")
-            .count(),
-        1,
-        "polling after completion must not report the outcome twice"
-    );
+        let completed = match operation {
+            NetworkOperation::Fetch => app.update_fetch_status(),
+            NetworkOperation::Pull => app.update_pull_status(),
+            NetworkOperation::Push => app.update_push_status(),
+        };
+        assert!(completed);
+        assert!(!app.is_network_busy());
+        let expected_toast = format!("{label} cancelled");
+        assert_eq!(
+            app.toasts
+                .visible()
+                .iter()
+                .filter(|toast| toast.text == expected_toast)
+                .count(),
+            1
+        );
+        let completed_again = match operation {
+            NetworkOperation::Fetch => app.update_fetch_status(),
+            NetworkOperation::Pull => app.update_pull_status(),
+            NetworkOperation::Push => app.update_push_status(),
+        };
+        assert!(!completed_again);
+        assert_eq!(
+            app.toasts
+                .visible()
+                .iter()
+                .filter(|toast| toast.text == expected_toast)
+                .count(),
+            1,
+            "polling after {label} completion must not report the outcome twice"
+        );
 
-    app.network
-        .activate_for_test(NetworkOperation::Push, Instant::now());
-    assert!(app.is_pushing(), "a later network operation can start");
+        let repo_path = app.repo_path.clone();
+        app.network
+            .start_fetch(&repo_path, "origin", false, false, None);
+        assert!(
+            app.is_fetching(),
+            "a production network operation can start after {label} cancellation"
+        );
+    }
 }
 
 #[test]

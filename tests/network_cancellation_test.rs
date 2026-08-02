@@ -9,36 +9,56 @@ use keifu::network::{
 
 #[test]
 fn measurable_progress_refreshes_the_sixty_second_inactivity_window() {
-    let started = Instant::now();
-    let mut network = NetworkManager::active_for_test(NetworkOperation::Fetch, started);
+    for (field, progress) in [
+        (
+            "bytes",
+            NetworkProgress {
+                bytes: 1_024,
+                ..NetworkProgress::default()
+            },
+        ),
+        (
+            "objects",
+            NetworkProgress {
+                objects: 2,
+                ..NetworkProgress::default()
+            },
+        ),
+        (
+            "refs",
+            NetworkProgress {
+                refs: 1,
+                ..NetworkProgress::default()
+            },
+        ),
+    ] {
+        let started = Instant::now();
+        let mut network = NetworkManager::active_for_test(NetworkOperation::Fetch, started);
 
-    assert!(!network.check_inactivity_at(started + Duration::from_secs(59)));
-    network.record_progress_at(
-        NetworkProgress {
-            bytes: 1_024,
-            objects: 2,
-            refs: 1,
-        },
-        started + Duration::from_secs(59),
-    );
+        assert!(!network.check_inactivity_at(started + Duration::from_secs(59)));
+        network.record_progress_at(progress, started + Duration::from_secs(59));
 
-    assert!(!network.check_inactivity_at(
-        started + Duration::from_secs(59) + NETWORK_INACTIVITY_TIMEOUT - Duration::from_millis(1)
-    ));
-    assert!(
-        network.check_inactivity_at(started + Duration::from_secs(59) + NETWORK_INACTIVITY_TIMEOUT)
-    );
-    assert_eq!(
-        network.status(),
-        Some(NetworkStatus {
-            operation: NetworkOperation::Fetch,
-            phase: NetworkPhase::Cancelling(CancellationReason::InactivityTimeout),
-        })
-    );
-    assert!(
-        network.is_busy(),
-        "cancelling remains busy until the worker exits"
-    );
+        assert!(
+            !network.check_inactivity_at(
+                started + Duration::from_secs(59) + NETWORK_INACTIVITY_TIMEOUT
+                    - Duration::from_millis(1)
+            ),
+            "{field} progress did not refresh inactivity"
+        );
+        assert!(network
+            .check_inactivity_at(started + Duration::from_secs(59) + NETWORK_INACTIVITY_TIMEOUT));
+        assert_eq!(
+            network.status(),
+            Some(NetworkStatus {
+                operation: NetworkOperation::Fetch,
+                phase: NetworkPhase::Cancelling(CancellationReason::InactivityTimeout),
+            })
+        );
+        assert!(
+            network.is_busy(),
+            "cancelling remains busy until the worker exits"
+        );
+    }
 }
 
 #[test]

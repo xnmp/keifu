@@ -13,13 +13,17 @@ use git2::{BranchType, Oid, Repository, Status, StatusOptions};
 
 use super::askpass::{self, Credentials};
 use super::repository::OperationState;
-use crate::network::{CancellationReason, CancellationToken, NetworkFailure, NetworkProgress};
+use crate::network::{
+    CancellationReason, CancellationToken, NetworkFailure, NetworkProgress,
+    PullIntegrationAcknowledgement,
+};
 
 const NETWORK_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const NETWORK_INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 const NETWORK_TERMINATE_GRACE: Duration = Duration::from_secs(2);
 const NETWORK_KILL_REAP_GRACE: Duration = Duration::from_secs(1);
 const NETWORK_DESCENDANT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(200);
+const NETWORK_PIPE_DRAIN_GRACE: Duration = Duration::from_secs(1);
 const HTTP_LOW_SPEED_BYTES_PER_SECOND: &str = "1";
 const HTTP_LOW_SPEED_SECONDS: &str = "60";
 
@@ -28,7 +32,7 @@ const HTTP_LOW_SPEED_SECONDS: &str = "60";
 pub(crate) struct NetworkCommandControl {
     cancellation: CancellationToken,
     progress_tx: Sender<NetworkProgress>,
-    integration_tx: Option<Sender<Sender<()>>>,
+    integration_tx: Option<Sender<PullIntegrationAcknowledgement>>,
     progress: Arc<Mutex<NetworkProgress>>,
 }
 
@@ -49,7 +53,7 @@ impl NetworkCommandControl {
     pub(crate) fn with_integration(
         cancellation: CancellationToken,
         progress_tx: Sender<NetworkProgress>,
-        integration_tx: Sender<Sender<()>>,
+        integration_tx: Sender<PullIntegrationAcknowledgement>,
     ) -> Self {
         Self {
             cancellation,
@@ -83,7 +87,7 @@ impl NetworkCommandControl {
     /// Synchronize the worker's durable pull-integration boundary with the App
     /// event loop. The manager enters `Integrating` before acknowledging, so
     /// repository-mutating actions are gated before this method returns.
-    fn begin_pull_integration(&self) -> Result<(), NetworkFailure> {
+    pub(crate) fn begin_pull_integration(&self) -> Result<(), NetworkFailure> {
         let Some(integration_tx) = &self.integration_tx else {
             return Ok(());
         };
@@ -91,9 +95,12 @@ impl NetworkCommandControl {
         integration_tx.send(acknowledge_tx).map_err(|_| {
             NetworkFailure::Failed("Pull integration manager disconnected".to_string())
         })?;
-        acknowledge_rx.recv().map_err(|_| {
-            NetworkFailure::Failed("Pull integration was not acknowledged".to_string())
-        })
+        acknowledge_rx
+            .recv()
+            .map_err(|_| {
+                NetworkFailure::Failed("Pull integration was not acknowledged".to_string())
+            })?
+            .map_err(NetworkFailure::Cancelled)
     }
 }
 
@@ -688,12 +695,15 @@ fn run_network_git_output(
         .take()
         .ok_or_else(|| NetworkFailure::Failed("Failed to capture git stderr".to_string()))?;
 
-    let stdout_reader = thread::spawn(move || {
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
         let mut output = Vec::new();
-        stdout.read_to_end(&mut output).map(|_| output)
+        let result = stdout.read_to_end(&mut output).map(|_| output);
+        let _ = stdout_tx.send(result);
     });
     let progress_control = control.clone();
-    let stderr_reader = thread::spawn(move || {
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
         let mut output = Vec::new();
         let mut parser = GitProgressParser::default();
         let mut chunk = [0_u8; 4096];
@@ -704,11 +714,14 @@ fn run_network_git_output(
                     output.extend_from_slice(&chunk[..read]);
                     parser.feed(&chunk[..read], &progress_control);
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    let _ = stderr_tx.send(Err(error));
+                    return;
+                }
             }
         }
         parser.finish(&progress_control);
-        Ok(output)
+        let _ = stderr_tx.send(Ok(output));
     });
 
     let status = loop {
@@ -734,20 +747,50 @@ fn run_network_git_output(
         thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
     };
 
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| NetworkFailure::Failed("git stdout reader panicked".to_string()))?
-        .map_err(|e| NetworkFailure::Failed(format!("Failed to read git stdout: {e}")))?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| NetworkFailure::Failed("git stderr reader panicked".to_string()))?
-        .map_err(|e| NetworkFailure::Failed(format!("Failed to read git stderr: {e}")))?;
+    let drain_deadline = Instant::now() + NETWORK_PIPE_DRAIN_GRACE;
+    let stdout = collect_network_pipe(&stdout_rx, drain_deadline, control, subcommand, "stdout")?;
+    let stderr = collect_network_pipe(&stderr_rx, drain_deadline, control, subcommand, "stderr")?;
 
     Ok(std::process::Output {
         status,
         stdout,
         stderr,
     })
+}
+
+fn collect_network_pipe(
+    receiver: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    deadline: Instant,
+    control: &NetworkCommandControl,
+    subcommand: &str,
+    stream: &str,
+) -> Result<Vec<u8>, NetworkFailure> {
+    loop {
+        match receiver.try_recv() {
+            Ok(result) => {
+                return result.map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to read git {subcommand} {stream}: {error}"
+                    ))
+                })
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(NetworkFailure::Failed(format!(
+                    "git {subcommand} {stream} reader exited unexpectedly"
+                )))
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if let Some(reason) = control.cancellation_reason() {
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        if Instant::now() >= deadline {
+            return Err(NetworkFailure::Failed(format!(
+                "git {subcommand} {stream} pipe did not close within the drain deadline"
+            )));
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    }
 }
 
 fn run_network_git_checked(
@@ -2349,6 +2392,85 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn normal_git_exit_does_not_wait_forever_for_a_helper_owned_stderr_pipe() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let helper = tmp.path().join("remote-helper");
+        let helper_pid_log = tmp.path().join("helper.pid");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 setsid sh -c 'exec </dev/null >/dev/null; printf \"%s\" \"$$\" > \"{}\"; sleep 2' &\n\
+                 exit 1\n",
+                helper_pid_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let control = NetworkCommandControl::new(CancellationToken::default(), progress_tx);
+        let remote = format!("ext::{}", helper.display());
+        let started = Instant::now();
+        let result = run_network_git_output(
+            repo.to_str().unwrap(),
+            &[
+                "-c",
+                "protocol.ext.allow=always",
+                "fetch",
+                "--progress",
+                &remote,
+            ],
+            None,
+            &control,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(NetworkFailure::Failed(ref error))
+                    if error.contains("stderr pipe did not close within the drain deadline")
+            ),
+            "unexpected result: {result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "reader collection exceeded its deadline"
+        );
+        wait_for_marker(&helper_pid_log);
+        let helper_pid = std::fs::read_to_string(&helper_pid_log).unwrap();
+        let helper_deadline = Instant::now() + Duration::from_secs(3);
+        while Command::new("kill")
+            .args(["-0", helper_pid.trim()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            assert!(
+                Instant::now() < helper_deadline,
+                "finite inherited-pipe helper did not exit"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn final_escalation_has_a_direct_child_reap_deadline() {
@@ -2981,7 +3103,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("pull should request its integration lifecycle gate");
         git(&local, &["checkout", "-qb", "other"]);
-        acknowledge.send(()).unwrap();
+        acknowledge.send(Ok(())).unwrap();
 
         let error = worker
             .join()
