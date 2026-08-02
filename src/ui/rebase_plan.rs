@@ -92,6 +92,8 @@ mod tests {
         second.action = RebaseAction::Squash;
         let plan = RebasePlan {
             base_oid: oid(9),
+            source_branch_ref: "refs/heads/main".into(),
+            source_head_oid: oid(2),
             entries: vec![
                 second,
                 crate::rebase_plan::PlanEntry::pick(oid(1), "first commit"),

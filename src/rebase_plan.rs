@@ -55,6 +55,9 @@ impl PlanEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebasePlan {
     pub base_oid: Oid,
+    /// Exact branch reference and commit the user reviewed when opening the plan.
+    pub source_branch_ref: String,
+    pub source_head_oid: Oid,
     pub entries: Vec<PlanEntry>,
 }
 
@@ -204,6 +207,8 @@ mod tests {
     fn plan() -> RebasePlan {
         RebasePlan {
             base_oid: oid(9),
+            source_branch_ref: "refs/heads/main".into(),
+            source_head_oid: oid(3),
             entries: vec![
                 PlanEntry::pick(oid(3), "third"),
                 PlanEntry::pick(oid(2), "second"),
@@ -247,6 +252,8 @@ mod tests {
     fn rebase_plan_serializes_the_displayed_actions_in_git_replay_order() {
         let mut plan = RebasePlan {
             base_oid: oid(9),
+            source_branch_ref: "refs/heads/main".into(),
+            source_head_oid: oid(5),
             entries: vec![
                 PlanEntry::pick(oid(5), "drop me"),
                 PlanEntry::pick(oid(4), "fixup me"),

@@ -96,7 +96,12 @@ impl App {
         if !crate::git::operations::is_working_tree_clean(repo)? {
             bail!("Commit or stash changes before rebasing");
         }
-        let head = self.repo.head_oid().context("HEAD has no commit")?;
+        let head_ref = repo.head().context("Read current branch")?;
+        let source_branch_ref = head_ref
+            .name()
+            .context("Current branch has no reference name")?
+            .to_owned();
+        let head = head_ref.target().context("HEAD has no commit")?;
         let mut walk = repo.revwalk()?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
         walk.push(head)?;
@@ -118,6 +123,8 @@ impl App {
         }
         Ok(RebasePlan {
             base_oid: base,
+            source_branch_ref,
+            source_head_oid: head,
             entries,
         })
     }

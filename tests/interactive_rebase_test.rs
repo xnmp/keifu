@@ -190,6 +190,8 @@ fn interactive_rebase_can_drop_the_complete_selected_range() {
     }
     let plan = RebasePlan {
         base_oid: base,
+        source_branch_ref: "refs/heads/main".into(),
+        source_head_oid: second,
         entries,
     };
     let todo_path = repo.path().join("all-drop-todo");
