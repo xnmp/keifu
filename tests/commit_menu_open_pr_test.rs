@@ -180,6 +180,86 @@ fn failed_initial_pr_fetch_keeps_empty_result_non_authoritative() {
 }
 
 #[test]
+fn repo_metadata_fetch_transitions_drive_menu_and_keep_last_good_value() {
+    let (_working, _origin, path) = repo_with_ahead_feature();
+    let mut app = app_at(&path);
+    app.pr_repo_info = None;
+    app.pr_repo_fetch =
+        IntervalFetch::new(Duration::ZERO, |_| Err("metadata unavailable".to_string()));
+
+    for _ in 0..100 {
+        app.update_pr_repo_info();
+        if app.refresh_latches.pr_repo_fetch {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.refresh_latches.pr_repo_fetch);
+    assert!(app.pr_repo_info.is_none());
+    let unknown = menu_items_for_branch(&mut app, "feature/browser-pr");
+    assert!(!unknown.contains(&CommitMenuItem::OpenPrInBrowser));
+    app.mode = AppMode::Normal;
+
+    let expected = PrRepoInfo {
+        url: "https://github.com/example/project".to_string(),
+        default_base: "main".to_string(),
+    };
+    let fetched = expected.clone();
+    app.pr_repo_fetch = IntervalFetch::new(Duration::ZERO, move |_| Ok(fetched.clone()));
+    for _ in 0..100 {
+        app.update_pr_repo_info();
+        if app.pr_repo_info.as_ref() == Some(&expected) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.pr_repo_info.as_ref(), Some(&expected));
+    assert!(!app.refresh_latches.pr_repo_fetch);
+    let loaded = menu_items_for_branch(&mut app, "feature/browser-pr");
+    assert!(loaded.contains(&CommitMenuItem::OpenPrInBrowser));
+    app.mode = AppMode::Normal;
+
+    app.pr_repo_fetch = IntervalFetch::new(Duration::ZERO, |_| {
+        Err("metadata refresh failed".to_string())
+    });
+    for _ in 0..100 {
+        app.update_pr_repo_info();
+        if app.refresh_latches.pr_repo_fetch {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.refresh_latches.pr_repo_fetch);
+    assert_eq!(
+        app.pr_repo_info.as_ref(),
+        Some(&expected),
+        "a refresh failure must retain the last-good repository metadata"
+    );
+    let last_good = menu_items_for_branch(&mut app, "feature/browser-pr");
+    assert!(last_good.contains(&CommitMenuItem::OpenPrInBrowser));
+}
+
+#[test]
+fn branch_strictly_behind_default_base_does_not_display_action() {
+    let (_working, _origin, path) = repo_with_ahead_feature();
+    git_cli(&path, &["branch", "behind-base", "main"]);
+    commit_file(
+        GitRepository::open(&path).unwrap().repo(),
+        "base.txt",
+        "advance",
+        "advance base",
+    );
+    let mut app = app_at(&path);
+
+    let items = menu_items_for_branch(&mut app, "behind-base");
+
+    assert!(
+        !items.contains(&CommitMenuItem::OpenPrInBrowser),
+        "a branch whose tip is an ancestor of the base is not ahead, got {items:?}"
+    );
+}
+
+#[test]
 fn activation_opens_authoritative_compare_url_without_compose_or_api() {
     let (_working, _origin, path) = repo_with_ahead_feature();
     git_cli(&path, &["branch", "-D", "feature/browser-pr"]);
@@ -278,5 +358,13 @@ fn compare_url_preselects_default_base_and_slash_head() {
             "feature/browser-pr",
         ),
         "https://github.com/example/project/compare/release/next...feature/browser-pr?expand=1"
+    );
+    assert_eq!(
+        compare_create_url(
+            "https://github.com/example/project",
+            "release&next",
+            "feature#browser",
+        ),
+        "https://github.com/example/project/compare/release%26next...feature%23browser?expand=1"
     );
 }
