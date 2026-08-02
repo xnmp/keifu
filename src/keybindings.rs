@@ -36,19 +36,17 @@ pub fn map_mouse_to_action(mouse: MouseEvent) -> Option<Action> {
 /// With alternate-key reporting, crossterm returns the layout-correct `G` with
 /// no Shift bit; without it, the Kitty protocol reports base `g` plus Shift.
 /// The keybinding table historically uses `G` plus Shift, so normalize either
-/// form at this boundary. Shifted punctuation is deliberately not synthesized:
-/// alternate-key reporting supplies the layout-correct character for it.
+/// form at this boundary while retaining companion modifiers such as Ctrl and
+/// Alt. Shifted punctuation is deliberately not synthesized: alternate-key
+/// reporting supplies the layout-correct character for it.
 fn normalize_enhanced_shift(mut key: KeyEvent) -> KeyEvent {
-    if !matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT) {
-        return key;
-    }
     let KeyCode::Char(c) = key.code else {
         return key;
     };
-    if key.modifiers == KeyModifiers::SHIFT && c.is_ascii_lowercase() {
+    if key.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
         key.code = KeyCode::Char(c.to_ascii_uppercase());
-    } else if key.modifiers == KeyModifiers::NONE && c.is_ascii_uppercase() {
-        key.modifiers = KeyModifiers::SHIFT;
+    } else if !key.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_uppercase() {
+        key.modifiers.insert(KeyModifiers::SHIFT);
     }
     key
 }
