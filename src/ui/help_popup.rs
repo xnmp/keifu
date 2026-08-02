@@ -511,6 +511,9 @@ fn effective_bindings(
     keymap.map_or_else(
         || fallback.to_string(),
         |map| {
+            if !ids.iter().any(|id| map.is_overridden(id)) {
+                return fallback.to_string();
+            }
             let mut labels = Vec::new();
             for id in ids {
                 for label in map.display_bindings(id).split(" / ") {
