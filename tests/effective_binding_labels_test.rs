@@ -111,3 +111,19 @@ quit = ["F13"]
         );
     }
 }
+
+#[test]
+fn help_issue_actions_do_not_embed_stale_shortcuts_in_prose() {
+    let table = "refresh-issues = [\"F20\"]\nopen-issue-in-browser = [\"F21\"]"
+        .parse::<toml::Table>()
+        .unwrap();
+    let help = rendered_help(&ResolvedKeymap::from_table(&table));
+
+    assert!(help
+        .lines()
+        .any(|line| line.contains("F20") && line.contains("Refresh issues")));
+    assert!(help
+        .lines()
+        .any(|line| line.contains("F21") && line.contains("Open issue in browser")));
+    assert!(!help.contains("Refresh   o  Open in browser"));
+}

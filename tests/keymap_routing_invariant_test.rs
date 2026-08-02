@@ -257,14 +257,21 @@ fn every_legacy_action_remains_reachable_where_its_default_was_routed() {
         let keymap = ResolvedKeymap::from_table(&table);
         for context in &contexts {
             let was_routed = descriptor.default_bindings().into_iter().any(|binding| {
-                map_key_to_action(
-                    KeyEvent::new(binding.code, binding.modifiers),
-                    &context.mode,
-                    context.panel,
-                    context.editing_commit,
-                    context.files_filter_active,
-                    context.commit_filter_active,
-                ) == Some(descriptor.action.clone())
+                let mut codes = vec![binding.code];
+                if let KeyCode::Char(character) = binding.code {
+                    codes.push(KeyCode::Char(character.to_ascii_lowercase()));
+                    codes.push(KeyCode::Char(character.to_ascii_uppercase()));
+                }
+                codes.into_iter().any(|code| {
+                    map_key_to_action(
+                        KeyEvent::new(code, binding.modifiers),
+                        &context.mode,
+                        context.panel,
+                        context.editing_commit,
+                        context.files_filter_active,
+                        context.commit_filter_active,
+                    ) == Some(descriptor.action.clone())
+                })
             });
             if was_routed
                 && map_key_to_action_with_keymap(
