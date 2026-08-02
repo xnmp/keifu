@@ -1115,11 +1115,9 @@ pub struct App {
     // Status message with auto-clear
     pub message: Option<String>,
     pub message_time: Option<std::time::Instant>,
-    /// Whether the current message is a network-progress message ("Pulling…")
-    /// that should stay visible for the whole in-flight op, versus a plain
-    /// transient status message that strictly obeys the 5s timeout. Progress
-    /// messages are cleared on op completion so they can never be resurrected
-    /// by a later, unrelated network op.
+    /// Legacy sticky-message discriminator. Active network progress now renders
+    /// directly from `NetworkStatus`; retaining this keeps the plain-message
+    /// visibility rule and old state fixtures stable.
     pub message_sticky: bool,
 
     // Once-per-episode latches for periodically-retried refresh errors (see

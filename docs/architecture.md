@@ -313,12 +313,30 @@ falls through to its usual quit/cancel meaning; info/success toasts never
 intercept Esc.
 
 **Status bar** stays reserved for state a user should be able to glance at any
-time: sticky network progress (`set_progress_message()` marks a message
-sticky; it persists for the whole in-flight op and is explicitly cleared on
-completion — a plain, non-sticky message instead self-expires after 5s and is
-never resurrected by later background activity, fixing an earlier "stale
-message re-flashes when a silent auto-fetch runs" bug), merge-conflict
-guidance, latched periodic errors, and the chips described below.
+time: network progress derived directly from the active `NetworkStatus`,
+merge-conflict guidance, latched periodic errors, and the chips described
+below. Plain messages self-expire after 5s and are never resurrected by later
+background activity, fixing an earlier "stale message re-flashes when a silent
+auto-fetch runs" bug.
+
+### Cancellable network jobs (2026-08-02, #34)
+
+Fetch, pull, and push remain Git CLI subprocesses: libgit2 networking stays
+disabled to avoid reintroducing the `openssl-sys` dependency. `NetworkManager`
+owns the one active job's operation, phase, latest monotonic progress snapshot,
+inactivity deadline, and cancellation token. Git runs with `--progress` and
+bounded HTTP low-speed configuration; parsed byte/object/ref advancement starts
+a fresh 60-second inactivity window. The main loop requests cancellation after
+a quiet window, while the contextual `x` binding requests it immediately.
+
+Running/cancelling state renders directly from `NetworkStatus` in the status
+bar (`Fetching…`/`Pulling…`/`Pushing…` with `x cancel`, then `Cancelling…`). It
+is not mirrored into the transient message clock. Cancellation is cooperative
+at the worker boundary: the Git runner observes the shared token, terminates
+and reaps its child, and reports a typed cancellation reason. The job remains
+busy until that terminal result arrives; only then does the app clear the slot
+and emit one outcome toast. Hard isolation of a worker that cannot reap its Git
+child remains a separate concern.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a
