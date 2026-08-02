@@ -419,8 +419,6 @@ pub enum AppMode {
     },
     BranchPicker {
         branches: Vec<crate::palette::CheckoutBranch>,
-        /// Fuzzy branch-name query; empty shows the complete local+remote list.
-        query: String,
         selected: usize,
     },
     BranchDeletePicker {
@@ -1054,6 +1052,9 @@ pub struct App {
     /// Contextual rows and their selection identity for the currently open
     /// command palette. Cleared when the palette closes.
     pub(crate) command_palette_snapshot: Option<crate::palette::ContextualPaletteSnapshot>,
+    /// Fuzzy query for the checkout picker. Kept on `App` so extending the
+    /// picker preserves the established `AppMode::BranchPicker` shape.
+    pub(crate) checkout_picker_query: String,
     /// Commit identity captured when a contextual branch/tag prompt opens.
     /// Normal keyboard prompts leave this `None` and retain their historical
     /// current-selection behavior.

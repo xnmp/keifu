@@ -556,9 +556,9 @@ impl App {
                 self.checkout_branch_by_name(&branch.name, branch.is_remote)?;
             }
             _ => {
+                self.checkout_picker_query.clear();
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query: String::new(),
                     selected: 0,
                 };
             }

@@ -868,11 +868,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         // Issue modes render full-screen via `draw_issue_screen` (early return
         // above), so they never reach this popup match.
-        AppMode::BranchPicker {
-            branches,
-            query,
-            selected,
-        } => {
+        AppMode::BranchPicker { branches, selected } => {
+            let query = &app.checkout_picker_query;
             let filtered: Vec<String> = crate::palette::filter_checkout_branches(branches, query)
                 .into_iter()
                 .map(|branch| {

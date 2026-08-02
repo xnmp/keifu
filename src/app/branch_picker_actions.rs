@@ -3,6 +3,11 @@
 use super::*;
 
 impl App {
+    /// Current fuzzy checkout-picker query, empty when the full list is shown.
+    pub fn checkout_picker_query(&self) -> &str {
+        &self.checkout_picker_query
+    }
+
     /// Open the searchable checkout picker over every known local and remote
     /// branch. Each row retains the `BranchInfo` remote bit so a local branch
     /// whose name resembles a remote ref is still checked out as local.
@@ -20,24 +25,19 @@ impl App {
                 .cmp(&b.name)
                 .then_with(|| a.is_remote.cmp(&b.is_remote))
         });
+        self.checkout_picker_query.clear();
         self.mode = AppMode::BranchPicker {
             branches,
-            query: String::new(),
             selected: 0,
         };
     }
 
     pub(crate) fn handle_branch_picker_action(&mut self, action: Action) -> Result<()> {
-        let AppMode::BranchPicker {
-            branches,
-            query,
-            selected,
-        } = &self.mode
-        else {
+        let AppMode::BranchPicker { branches, selected } = &self.mode else {
             return Ok(());
         };
         let branches = branches.clone();
-        let query = query.clone();
+        let query = self.checkout_picker_query.clone();
         let selected = *selected;
         let filtered = crate::palette::filter_checkout_branches(&branches, &query);
 
@@ -49,7 +49,6 @@ impl App {
                 let new = cyclic_prev(selected, filtered.len());
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query,
                     selected: new,
                 };
             }
@@ -60,7 +59,6 @@ impl App {
                 let new = cyclic_next(selected, filtered.len());
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query,
                     selected: new,
                 };
             }
@@ -73,40 +71,35 @@ impl App {
                 }
             }
             Action::InputChar(c) => {
-                let mut query = query;
-                query.push(c);
+                self.checkout_picker_query.push(c);
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query,
                     selected: 0,
                 };
             }
             Action::InputBackspace => {
-                let mut query = query;
-                query.pop();
+                self.checkout_picker_query.pop();
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query,
                     selected: 0,
                 };
             }
             Action::InputBackspaceWord => {
-                let mut query = query;
-                crate::text_editor::pop_word(&mut query);
+                crate::text_editor::pop_word(&mut self.checkout_picker_query);
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query,
                     selected: 0,
                 };
             }
             Action::InputClearLine => {
+                self.checkout_picker_query.clear();
                 self.mode = AppMode::BranchPicker {
                     branches,
-                    query: String::new(),
                     selected: 0,
                 };
             }
             Action::Cancel | Action::Quit => {
+                self.checkout_picker_query.clear();
                 self.mode = AppMode::Normal;
             }
             _ => {}

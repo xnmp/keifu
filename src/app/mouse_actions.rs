@@ -328,9 +328,10 @@ impl App {
             AppMode::CommitMenu { items, filter, .. } => {
                 Some(self.commit_menu_visible_count(items, filter))
             }
-            AppMode::BranchPicker {
-                branches, query, ..
-            } => Some(crate::palette::filter_checkout_branches(branches, query).len()),
+            AppMode::BranchPicker { branches, .. } => Some(
+                crate::palette::filter_checkout_branches(branches, &self.checkout_picker_query)
+                    .len(),
+            ),
             AppMode::BranchDeletePicker { branches, .. } => Some(branches.len()),
             AppMode::TagPicker { tags, .. } => Some(tags.len()),
             AppMode::RemotePicker { remotes, .. } => Some(remotes.len()),

@@ -41,15 +41,10 @@ fn palette_screen(app: &App, query: &str) -> String {
 }
 
 fn branch_picker_screen(app: &App) -> String {
-    let AppMode::BranchPicker {
-        branches,
-        query,
-        selected,
-    } = &app.mode
-    else {
+    let AppMode::BranchPicker { branches, selected } = &app.mode else {
         panic!("expected checkout picker, got {:?}", app.mode);
     };
-    let labels: Vec<String> = filter_checkout_branches(branches, query)
+    let labels: Vec<String> = filter_checkout_branches(branches, app.checkout_picker_query())
         .into_iter()
         .map(|branch| {
             if branch.is_remote {
@@ -61,7 +56,13 @@ fn branch_picker_screen(app: &App) -> String {
         .collect();
     let area = Rect::new(0, 0, 42, 8);
     let mut buffer = Buffer::empty(area);
-    BranchPickerWidget::new(&labels, query, *selected, &Theme::dark()).render(area, &mut buffer);
+    BranchPickerWidget::new(
+        &labels,
+        app.checkout_picker_query(),
+        *selected,
+        &Theme::dark(),
+    )
+    .render(area, &mut buffer);
     (0..area.height)
         .map(|y| {
             (0..area.width)
@@ -123,9 +124,9 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     app.handle_action(Action::MenuSelect).unwrap();
     type_text(&mut app, "origin/remote-work");
     let graph_matches = match &app.mode {
-        AppMode::BranchPicker {
-            branches, query, ..
-        } => filter_checkout_branches(branches, query),
+        AppMode::BranchPicker { branches, .. } => {
+            filter_checkout_branches(branches, app.checkout_picker_query())
+        }
         other => panic!("expected graph checkout picker, got {other:?}"),
     };
     assert_eq!(graph_matches.len(), 1);
@@ -186,10 +187,8 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     app.handle_action(Action::MenuSelect).unwrap();
     type_text(&mut app, "origin/remote-work");
     let remote_index = match &app.mode {
-        AppMode::BranchPicker {
-            branches, query, ..
-        } => {
-            let matching = filter_checkout_branches(branches, query);
+        AppMode::BranchPicker { branches, .. } => {
+            let matching = filter_checkout_branches(branches, app.checkout_picker_query());
             assert_eq!(matching.len(), 2, "local and remote collision must survive");
             matching.iter().position(|branch| branch.is_remote).unwrap()
         }
