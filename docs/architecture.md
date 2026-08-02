@@ -347,6 +347,21 @@ background gh polls: `App.refresh_latches.pr_fetch` (open-PR poll) and
 `src/app/network_ops.rs`. On failure the *last-good* data is kept (the PR map /
 merged-branch set is not wiped), so a transient gh error can't blank the badges.
 
+## Browser-Based Pull Request Creation (2026-08-02, #132)
+
+**Decision:** The branch Actions menu's “Open PR in browser” eligibility is
+derived from asynchronously fetched `gh repo view` metadata. GitHub's
+`defaultBranchRef` is the source of truth for the base; local `main`/`master`
+heuristics and `BranchInfo.ahead` are not suitable because the latter measures
+only against a branch's configured upstream. A branch is eligible only when its
+tip has commits ahead of every locally known copy of the authoritative base and
+the open-PR map has no entry for its normalized bare branch name.
+
+The action builds GitHub's compare/create URL and sends it through the existing
+detached browser opener. It deliberately does not reuse `CreatePr`, `PrCompose`,
+or `PrAction::Create`: those are the separate in-app/API creation flow. Browser
+spawn failures follow the normal red, non-blocking toast path.
+
 ## Settings Registry (2026-07-20)
 
 UiState schema additions and their backwards-compatibility requirements are
