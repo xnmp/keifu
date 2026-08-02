@@ -28,5 +28,6 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Squash-merge connector identity is its endpoint pair, not a branch name.** Local and remote refs can alias the same tip and target; resolve them through `SquashMergeLine::from_branch_targets` so the graph draws one connector.
 - **Clipboard uses shell tools with an OSC 52 fallback** — no clipboard crate (avoids openssl-sys build breakage).
 - **The full-screen issue list owns mouse hit-testing.** Its content rect must be recorded as the active popup so list-row clicks use the widget's window offset rather than assuming row zero. Issue Detail has no clickable rows.
+- **Browser-based PR eligibility uses GitHub repository metadata.** Fetch the repository URL and `defaultBranchRef` asynchronously with the PR data; do not infer the PR base from a local `main`/`master` name or reuse `BranchInfo.ahead` (which is only relative to that branch's upstream). The existing in-app Create PR flow remains a separate action.
 
 Fix root causes, not symptoms. Avoid band-aids like stopPropagation, setTimeout, or flags to mask bugs.
