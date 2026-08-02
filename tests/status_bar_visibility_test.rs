@@ -27,6 +27,10 @@ fn help_menu_toggles_status_bar_and_returns_its_row_to_the_main_layout() {
         initial.lines().last().unwrap().contains("help"),
         "the default screen must render the status-bar hints: {initial}"
     );
+    assert!(
+        initial.lines().nth(38).unwrap().contains('╰'),
+        "with the status bar visible, the main panes end one row above it: {initial}"
+    );
 
     app.handle_action(Action::ToggleHelp).unwrap();
 
@@ -59,6 +63,10 @@ fn help_menu_toggles_status_bar_and_returns_its_row_to_the_main_layout() {
     assert!(
         !hidden.lines().last().unwrap().contains("help"),
         "hiding the status bar must return its bottom row to the main interface: {hidden}"
+    );
+    assert!(
+        hidden.lines().last().unwrap().contains('╰'),
+        "the main pane border must occupy the reclaimed final row: {hidden}"
     );
 }
 
