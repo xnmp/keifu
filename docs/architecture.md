@@ -86,7 +86,7 @@ ranges instead of duplicating geometry in the widget and frame renderer.
 
 ## Merge-Conflict Awareness (2026-07-13)
 
-**Decision:** A conflict is a first-class *outcome*, not an error. `merge_branch` / `rebase_branch` / `cherry_pick` / `revert_commit` return `OpOutcome::{Completed, Conflicts{count}}` and deliberately leave the repo mid-operation (conflicted index + MERGE_HEAD / REBASE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD). Callers (`app/confirm_actions.rs`) route conflicts to a guided "resolve then Continue / Abort" flow via `App::handle_op_outcome`, not the raw error popup.
+**Decision:** A conflict or recoverable pause is a first-class *outcome*, not an unrecoverable error. History operations return `OpOutcome::{Completed, Conflicts{count}, Paused}` and deliberately leave the repo mid-operation when Git can continue or abort it. Callers (`app/confirm_actions.rs`) route conflicts to guided file resolution and route a non-conflict interactive-rebase pause (for example, a failed hook/`exec`) to retry-Continue / Abort guidance, never a blocking popup.
 
 **In-progress state** comes from `GitRepository::operation_state()` (`OperationState`, mapped from `git2::RepositoryState`) and `conflicted_count()` (`Status::CONFLICTED`), both refreshed in `refresh()`. `get_working_tree_status` must include `CONFLICTED` — otherwise a merge whose only change is the conflicted file leaves the uncommitted node (and its files) invisible.
 
