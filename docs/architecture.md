@@ -351,7 +351,9 @@ The cancellation path does not synchronously join pipe readers, so an unrelated
 inherited descriptor cannot hold the UI worker busy after owned processes die.
 Normal Git exit also drains stdout/stderr through channels with a one-second
 shared deadline; a detached helper retaining a descriptor therefore produces a
-terminal error instead of wedging the network slot.
+terminal error instead of wedging the network slot. If cancellation arrives
+during that drain, the still-owned Git process group is terminated and reaped
+before the cancellation outcome releases the slot.
 
 On non-Unix targets, the standard library provides no equivalent safe
 process-group signaling primitive. Those builds do not advertise the `x`
