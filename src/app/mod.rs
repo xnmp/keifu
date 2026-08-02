@@ -419,6 +419,8 @@ pub enum AppMode {
     },
     BranchPicker {
         branches: Vec<String>,
+        /// Fuzzy branch-name query; empty shows the complete local+remote list.
+        query: String,
         selected: usize,
     },
     BranchDeletePicker {
@@ -1588,6 +1590,10 @@ impl App {
         // The command palette opens from any panel in Normal mode.
         if matches!(action, Action::OpenCommandPalette) {
             self.open_command_palette();
+            return Ok(());
+        }
+        if matches!(action, Action::OpenCheckoutPicker) {
+            self.open_checkout_branch_picker();
             return Ok(());
         }
         // Branch quick search opens from any panel in Normal mode.

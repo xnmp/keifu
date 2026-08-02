@@ -868,13 +868,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         // Issue modes render full-screen via `draw_issue_screen` (early return
         // above), so they never reach this popup match.
-        AppMode::BranchPicker { branches, selected } => {
-            let max_name_len = branches.iter().map(|b| b.len()).max().unwrap_or(10);
+        AppMode::BranchPicker {
+            branches,
+            query,
+            selected,
+        } => {
+            let filtered: Vec<String> = crate::palette::filter_branch_names(branches, query)
+                .into_iter()
+                .cloned()
+                .collect();
+            let max_name_len = filtered
+                .iter()
+                .map(|b| b.len())
+                .chain(std::iter::once(query.len() + 2))
+                .max()
+                .unwrap_or(10);
             let popup_width = (max_name_len + 6).clamp(30, 60) as u16;
-            let popup_height = (branches.len() + 2).min(12) as u16;
+            let popup_height = (filtered.len().max(1) + 3).min(13) as u16;
             let popup_area = centered_rect_fixed(popup_width, popup_height, area);
             frame.render_widget(
-                BranchPickerWidget::new(branches, *selected, &theme),
+                BranchPickerWidget::new(&filtered, query, *selected, &theme),
                 popup_area,
             );
             rendered_popup = Some(popup_area);

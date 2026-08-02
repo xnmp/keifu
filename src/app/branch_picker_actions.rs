@@ -3,37 +3,100 @@
 use super::*;
 
 impl App {
+    /// Open the searchable checkout picker over every known local and remote
+    /// branch. The branch names remain raw so the existing remotes-aware
+    /// checkout path can authoritatively resolve remote refs on selection.
+    pub(crate) fn open_checkout_branch_picker(&mut self) {
+        let mut branches: Vec<String> = self.branches.iter().map(|b| b.name.clone()).collect();
+        branches.sort();
+        branches.dedup();
+        self.mode = AppMode::BranchPicker {
+            branches,
+            query: String::new(),
+            selected: 0,
+        };
+    }
+
     pub(crate) fn handle_branch_picker_action(&mut self, action: Action) -> Result<()> {
-        let AppMode::BranchPicker { branches, selected } = &self.mode else {
+        let AppMode::BranchPicker {
+            branches,
+            query,
+            selected,
+        } = &self.mode
+        else {
             return Ok(());
         };
         let branches = branches.clone();
+        let query = query.clone();
         let selected = *selected;
+        let filtered = crate::palette::filter_branch_names(&branches, &query);
 
         match action {
             Action::MoveUp => {
-                let new = cyclic_prev(selected, branches.len());
+                if filtered.is_empty() {
+                    return Ok(());
+                }
+                let new = cyclic_prev(selected, filtered.len());
                 self.mode = AppMode::BranchPicker {
                     branches,
+                    query,
                     selected: new,
                 };
             }
             Action::MoveDown => {
-                let new = cyclic_next(selected, branches.len());
+                if filtered.is_empty() {
+                    return Ok(());
+                }
+                let new = cyclic_next(selected, filtered.len());
                 self.mode = AppMode::BranchPicker {
                     branches,
+                    query,
                     selected: new,
                 };
             }
             Action::MenuSelect | Action::Confirm => {
-                if let Some(branch_name) = branches.get(selected) {
-                    let name = branch_name.clone();
+                if let Some(branch_name) = filtered.get(selected) {
+                    let name = (*branch_name).clone();
                     self.mode = AppMode::Normal;
                     // Picker entries are raw graph labels; resolve remoteness
                     // via the remotes()-aware splitter.
                     let is_remote = self.split_remote_ref(&name).is_some();
                     self.checkout_branch_by_name(&name, is_remote)?;
                 }
+            }
+            Action::InputChar(c) => {
+                let mut query = query;
+                query.push(c);
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    query,
+                    selected: 0,
+                };
+            }
+            Action::InputBackspace => {
+                let mut query = query;
+                query.pop();
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    query,
+                    selected: 0,
+                };
+            }
+            Action::InputBackspaceWord => {
+                let mut query = query;
+                crate::text_editor::pop_word(&mut query);
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    query,
+                    selected: 0,
+                };
+            }
+            Action::InputClearLine => {
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    query: String::new(),
+                    selected: 0,
+                };
             }
             Action::Cancel | Action::Quit => {
                 self.mode = AppMode::Normal;

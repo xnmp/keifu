@@ -1,5 +1,5 @@
-//! Command palette: a fuzzy finder over three source kinds — a curated command
-//! registry, branches, and loaded commits — ranked into one list.
+//! Command palette: a fuzzy finder over curated commands, settings, branches,
+//! and loaded commits, ranked into one list.
 //!
 //! This module holds the pure pieces: the command registry (with per-command
 //! eligibility over a lightweight [`PaletteContext`]), the candidate/result
@@ -41,11 +41,25 @@ pub(crate) fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
     SkimMatcherV2::default().fuzzy_match(text, query)
 }
 
+/// Branch names visible for a checkout-picker query, preserving source order.
+/// The handler and widget share this projection so navigation, mouse rows, and
+/// rendering always refer to the same result indices.
+pub fn filter_branch_names<'a>(branches: &'a [String], query: &str) -> Vec<&'a String> {
+    if query.trim().is_empty() {
+        return branches.iter().collect();
+    }
+    branches
+        .iter()
+        .filter(|branch| fuzzy_score(branch, query).is_some())
+        .collect()
+}
+
 /// Which source a palette row came from — also the display tag and the
 /// equal-score tiebreak order (commands rank above branches above commits).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteKind {
     Command,
+    Setting,
     Branch,
     Commit,
 }
@@ -55,6 +69,7 @@ impl PaletteKind {
     pub fn tag(self) -> &'static str {
         match self {
             PaletteKind::Command => "cmd",
+            PaletteKind::Setting => "setting",
             PaletteKind::Branch => "branch",
             PaletteKind::Commit => "commit",
         }
@@ -64,8 +79,9 @@ impl PaletteKind {
     fn rank(self) -> u8 {
         match self {
             PaletteKind::Command => 0,
-            PaletteKind::Branch => 1,
-            PaletteKind::Commit => 2,
+            PaletteKind::Setting => 1,
+            PaletteKind::Branch => 2,
+            PaletteKind::Commit => 3,
         }
     }
 }
@@ -84,6 +100,8 @@ pub enum PaletteAction {
     /// Open the checkout confirmation for a branch. `is_remote` carries the
     /// branch's authoritative remote/local status from its `BranchInfo`.
     Checkout { name: String, is_remote: bool },
+    /// Cycle a registry-backed setting by its descriptor index.
+    ToggleSetting(usize),
     /// Jump the graph selection to a commit by its full node index.
     JumpToCommit(usize),
 }
@@ -160,6 +178,7 @@ pub fn command_registry() -> Vec<PaletteEntry> {
             Action::CreateBranch,
             has_commit,
         ),
+        entry("Checkout branch…", None, Action::OpenCheckoutPicker, always),
         entry(
             "Mark commit for compare",
             Some("m"),
@@ -286,8 +305,8 @@ pub struct PaletteResults {
 ///
 /// Empty query: commands only, in registry order (no fuzzy). Otherwise fuzzy
 /// score each candidate's `match_text`, keep the matches, and sort by score
-/// (desc) with a fully deterministic tiebreak: kind (command < branch <
-/// commit), then `order` (asc), then label (asc).
+/// (desc) with a fully deterministic tiebreak: kind (command < setting <
+/// branch < commit), then `order` (asc), then label (asc).
 pub fn rank(query: &str, candidates: Vec<Candidate>, cap: usize) -> PaletteResults {
     if query.trim().is_empty() {
         let mut items: Vec<Candidate> = candidates

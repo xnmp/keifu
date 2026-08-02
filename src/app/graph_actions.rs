@@ -539,6 +539,7 @@ impl App {
             _ => {
                 self.mode = AppMode::BranchPicker {
                     branches,
+                    query: String::new(),
                     selected: 0,
                 };
             }

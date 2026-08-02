@@ -131,8 +131,8 @@ pub fn map_key_to_action(
         AppMode::IssueCompose { .. } => map_issue_compose_mode(key),
         AppMode::IssueLabelPicker { .. } => map_issue_label_picker_mode(key),
         AppMode::IssueLabelFilter { .. } => map_issue_label_filter_mode(key),
-        AppMode::BranchPicker { .. }
-        | AppMode::BranchDeletePicker { .. }
+        AppMode::BranchPicker { .. } => map_command_palette_mode(key),
+        AppMode::BranchDeletePicker { .. }
         | AppMode::TagPicker { .. }
         | AppMode::RemotePicker { .. } => map_picker_mode(key),
         AppMode::BranchFilter { .. } => map_branch_filter_mode(key),
@@ -225,6 +225,7 @@ pub fn is_text_editing_context(
         | AppMode::PrCompose { .. }
         | AppMode::IssueCompose { .. }
         | AppMode::BranchFilter { .. }
+        | AppMode::BranchPicker { .. }
         | AppMode::CommandPalette { .. }
         | AppMode::Settings { .. } => true,
         _ => false,

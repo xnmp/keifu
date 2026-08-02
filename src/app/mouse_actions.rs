@@ -295,6 +295,17 @@ impl App {
                 let first = selected.saturating_sub((list.height as usize).saturating_sub(1));
                 list_row_index(list, first, col, row)
             }
+            AppMode::BranchPicker { .. } => {
+                // The searchable checkout picker reserves its first inner row
+                // for the query, so branch hit-testing starts one row lower.
+                let list = Rect::new(
+                    inner.x,
+                    inner.y.saturating_add(1),
+                    inner.width,
+                    inner.height.saturating_sub(1),
+                );
+                list_row_index(list, 0, col, row)
+            }
             _ => list_row_index(inner, 0, col, row),
         }
     }
@@ -306,8 +317,10 @@ impl App {
             AppMode::CommitMenu { items, filter, .. } => {
                 Some(self.commit_menu_visible_count(items, filter))
             }
-            AppMode::BranchPicker { branches, .. }
-            | AppMode::BranchDeletePicker { branches, .. } => Some(branches.len()),
+            AppMode::BranchPicker {
+                branches, query, ..
+            } => Some(crate::palette::filter_branch_names(branches, query).len()),
+            AppMode::BranchDeletePicker { branches, .. } => Some(branches.len()),
             AppMode::TagPicker { tags, .. } => Some(tags.len()),
             AppMode::RemotePicker { remotes, .. } => Some(remotes.len()),
             AppMode::PrMergePicker { .. } => Some(crate::pr_action::MergeMethod::ALL.len()),

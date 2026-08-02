@@ -916,12 +916,13 @@ fn commit_menu_text_editing_shortcuts() {
     );
 }
 
-// ── Picker mode (no text editing) ──────────────────────────────────
+// ── Picker modes ───────────────────────────────────────────────────
 
 #[test]
-fn picker_mode_does_not_have_text_editing() {
+fn checkout_picker_supports_text_filtering() {
     let mode = AppMode::BranchPicker {
         branches: vec![],
+        query: String::new(),
         selected: 0,
     };
     let map = |k: KeyEvent| map_key_to_action(k, &mode, FocusedPanel::Graph, false, false, false);
@@ -932,9 +933,9 @@ fn picker_mode_does_not_have_text_editing() {
     assert_eq!(map(key(KeyCode::Esc)), Some(Action::Cancel));
     assert_eq!(
         map(key_mod(KeyCode::Char('h'), KeyModifiers::CONTROL)),
-        None
+        Some(Action::InputBackspaceWord)
     );
-    assert_eq!(map(key(KeyCode::Char('a'))), None);
+    assert_eq!(map(key(KeyCode::Char('a'))), Some(Action::InputChar('a')));
 }
 
 // ── Commit filter mode ─────────────────────────────────────────────
