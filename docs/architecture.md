@@ -335,9 +335,14 @@ heuristics and `BranchInfo.ahead` are not suitable because the latter measures
 only against a branch's configured upstream. A branch is eligible only when its
 tip has commits ahead of every locally known copy of the authoritative base and
 the open-PR map has no entry for its normalized bare branch name.
+The action stays hidden until the first successful open-PR fetch, because the
+startup empty map means “not loaded” rather than “no open PRs”; later poll
+failures retain the last-good authoritative map.
 
 The action builds GitHub's compare/create URL and sends it through the existing
-detached browser opener. It deliberately does not reuse `CreatePr`, `PrCompose`,
+detached browser opener, exposed on `App` as an injectable boundary so action
+success and failure are tested without launching a real browser. It deliberately
+does not reuse `CreatePr`, `PrCompose`,
 or `PrAction::Create`: those are the separate in-app/API creation flow. Browser
 spawn failures follow the normal red, non-blocking toast path.
 
