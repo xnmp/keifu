@@ -1009,6 +1009,10 @@ pub struct App {
     /// Normal keyboard prompts leave this `None` and retain their historical
     /// current-selection behavior.
     pub(crate) input_commit_target: Option<Oid>,
+    /// Commit identity captured while a reset-mode submenu is open. Reset is
+    /// selected in two steps, so its confirmation must not read a later graph
+    /// selection.
+    pub(crate) reset_commit_target: Option<Oid>,
     pub focused_panel: FocusedPanel,
     /// Files pane subsystem state
     pub files_pane: FilesPaneState,

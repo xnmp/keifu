@@ -195,6 +195,7 @@ impl App {
             graph_nav,
             command_palette_snapshot: None,
             input_commit_target: None,
+            reset_commit_target: None,
             // A hidden files pane must not hold startup focus (#116) — the
             // side-layout default only applies while that pane is visible.
             focused_panel: if ui_state.side_panel_layout && !ui_state.hide_files_pane {

@@ -430,6 +430,7 @@ impl App {
                 };
             }
             Action::Cancel | Action::Quit => {
+                self.reset_commit_target = None;
                 self.mode = AppMode::Normal;
             }
             _ => {}
@@ -558,7 +559,10 @@ impl App {
                 }
             }
             CommitMenuItem::Reset => {
-                // Open reset submenu
+                // Reset is selected in a second menu interaction. Keep this
+                // OID from the validated palette/Enter action so a refresh or
+                // navigation change cannot retarget the destructive reset.
+                self.reset_commit_target = commit_oid;
                 self.mode = AppMode::CommitMenu {
                     items: vec![
                         CommitMenuItem::ResetSoft,
@@ -570,7 +574,7 @@ impl App {
                 };
             }
             CommitMenuItem::ResetSoft => {
-                if let Some(oid) = commit_oid {
+                if let Some(oid) = self.reset_commit_target.take().or(commit_oid) {
                     self.mode = AppMode::Confirm {
                         message: format!("Reset (soft) to {}?", short_hash(oid)),
                         action: ConfirmAction::ResetSoft(oid),
@@ -578,7 +582,7 @@ impl App {
                 }
             }
             CommitMenuItem::ResetMixed => {
-                if let Some(oid) = commit_oid {
+                if let Some(oid) = self.reset_commit_target.take().or(commit_oid) {
                     self.mode = AppMode::Confirm {
                         message: format!("Reset (mixed) to {}?", short_hash(oid)),
                         action: ConfirmAction::ResetMixed(oid),
@@ -586,7 +590,7 @@ impl App {
                 }
             }
             CommitMenuItem::ResetHard => {
-                if let Some(oid) = commit_oid {
+                if let Some(oid) = self.reset_commit_target.take().or(commit_oid) {
                     self.mode = AppMode::Confirm {
                         message: format!(
                             "Reset (HARD) to {}? This will discard changes!",
