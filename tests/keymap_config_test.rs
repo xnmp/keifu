@@ -342,9 +342,8 @@ fn context_specific_default_alternatives_do_not_create_false_conflicts() {
 
 #[test]
 fn replacing_an_alias_removes_warnings_for_its_obsolete_binding() {
-    let keymap = resolved(
-        "[keymap]\ncommand-palette = [\"F5\"]\nopen-command-palette = [\"F3\"]\n",
-    );
+    let keymap =
+        resolved("[keymap]\ncommand-palette = [\"F5\"]\nopen-command-palette = [\"F3\"]\n");
     assert!(!keymap
         .warnings()
         .iter()

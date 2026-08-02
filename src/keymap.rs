@@ -211,6 +211,15 @@ impl BindingDescriptor {
             .map(|binding| binding.parse().expect("registry binding is valid"))
             .collect()
     }
+
+    fn scopes_for_default(&self, binding: KeyBinding) -> Scopes {
+        match (self.id, binding.to_string().as_str()) {
+            // These are Graph-only alternatives of an action whose Home
+            // binding is also present in other scrolling contexts.
+            ("go-to-top", "g" | "Ctrl+Home") => GRAPH,
+            _ => self.scopes,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -274,7 +283,18 @@ impl ResolvedKeymap {
             // Aliases and canonical spellings name one assignment. A later
             // entry replaces the earlier spelling instead of accumulating a
             // second, invisible set of effective shortcuts.
-            resolved.overrides.retain(|entry| entry.id != descriptor.id);
+            if resolved
+                .overrides
+                .iter()
+                .any(|entry| entry.id == descriptor.id)
+            {
+                let action_token = format!("'{}'", descriptor.id);
+                resolved.warnings.retain(|warning| {
+                    !(warning.reason.starts_with("conflict:")
+                        && warning.reason.contains(&action_token))
+                });
+                resolved.overrides.retain(|entry| entry.id != descriptor.id);
+            }
 
             for binding in &bindings {
                 for earlier in &resolved.overrides {
@@ -291,9 +311,9 @@ impl ResolvedKeymap {
                 }
                 for other in binding_registry() {
                     if other.id != descriptor.id
-                        && other.scopes & descriptor.scopes != 0
                         && !table.contains_key(other.id)
                         && other.parsed_defaults().contains(binding)
+                        && other.scopes_for_default(*binding) & descriptor.scopes != 0
                     {
                         resolved.warnings.push(KeymapWarning {
                             entry: configured_id.clone(),
@@ -690,13 +710,15 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
                 | CI_CHECKS
                 | BRANCH_FILTER
                 | FILE_DIFF
-                | PALETTE,
+                | PALETTE
+                | COMMIT_FILTER
+                | FILES_FILTER,
             ["Esc", "q"]
         ),
         (
             "confirm",
             Confirm,
-            INPUT | SEARCH | CONFIRM | REBASE_PLAN | BRANCH_FILTER,
+            INPUT | SEARCH | CONFIRM | REBASE_PLAN | BRANCH_FILTER | COMMIT_FILTER | FILES_FILTER,
             ["Enter", "y"]
         ),
         (
@@ -714,13 +736,27 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
         (
             "input-backspace-word",
             InputBackspaceWord,
-            INPUT | SEARCH | MENU | SETTINGS | BRANCH_FILTER | PALETTE,
+            INPUT
+                | SEARCH
+                | MENU
+                | SETTINGS
+                | BRANCH_FILTER
+                | PALETTE
+                | COMMIT_FILTER
+                | FILES_FILTER,
             ["Ctrl+Backspace", "Alt+Backspace", "Ctrl+H"]
         ),
         (
             "input-clear-line",
             InputClearLine,
-            INPUT | SEARCH | MENU | SETTINGS | BRANCH_FILTER | PALETTE,
+            INPUT
+                | SEARCH
+                | MENU
+                | SETTINGS
+                | BRANCH_FILTER
+                | PALETTE
+                | COMMIT_FILTER
+                | FILES_FILTER,
             ["Ctrl+U"]
         ),
         (
