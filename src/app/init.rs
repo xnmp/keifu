@@ -143,9 +143,7 @@ impl App {
         let conflict_count = repo.conflicted_count();
         let interactive_rebase_in_progress =
             repo.repo().path().join("rebase-merge/interactive").exists();
-        if !interactive_rebase_in_progress {
-            let _ = std::fs::remove_dir_all(repo.repo().path().join("keifu-interactive-rebase"));
-        }
+        super::rebase_plan_actions::reconcile_interactive_rebase_state(repo.repo().path());
         let uncommitted_count = working_tree_status
             .as_ref()
             .map(|s| s.accurate_file_count());

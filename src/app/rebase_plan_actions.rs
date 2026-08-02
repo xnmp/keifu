@@ -1,12 +1,39 @@
 //! Interactive-rebase range construction and plan editing.
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use fs2::FileExt;
 use git2::Sort;
 
 use super::*;
+
+fn acquire_interactive_rebase_state(git_dir: &Path) -> Result<File> {
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(git_dir.join("keifu-interactive-rebase.lock"))
+        .context("Open interactive rebase state lock")?;
+    lock.try_lock_exclusive()
+        .context("Another interactive rebase is starting")?;
+    Ok(lock)
+}
+
+pub(super) fn reconcile_interactive_rebase_state(git_dir: &Path) {
+    let Ok(lock) = acquire_interactive_rebase_state(git_dir) else {
+        // A live starter owns the pre-marker state. It will reconcile after Git
+        // returns; another app instance must not remove files out from under it.
+        return;
+    };
+    if !git_dir.join("rebase-merge/interactive").exists() {
+        let _ = fs::remove_dir_all(git_dir.join("keifu-interactive-rebase"));
+    }
+    drop(lock);
+}
 
 impl App {
     pub(crate) fn interactive_rebase_eligible(&self, base: Oid) -> bool {
@@ -183,7 +210,9 @@ impl App {
     }
 
     pub(crate) fn run_interactive_rebase_plan(&mut self, plan: RebasePlan) -> Result<OpOutcome> {
-        let state_dir = self.repo.repo().path().join("keifu-interactive-rebase");
+        let git_dir = self.repo.repo().path();
+        let _state_owner = acquire_interactive_rebase_state(git_dir)?;
+        let state_dir = git_dir.join("keifu-interactive-rebase");
         let result = (|| {
             fs::create_dir_all(&state_dir).context("Create interactive rebase state")?;
             let mut paths = HashMap::new();

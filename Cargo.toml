@@ -44,6 +44,7 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 unicode-width = "0.2"
+fs2 = "0.4"
 
 # Diff
 similar = { version = "2.7", features = ["inline"] }
