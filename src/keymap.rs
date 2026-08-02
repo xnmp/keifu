@@ -35,8 +35,10 @@ const CI_CHECKS: Scopes = 1 << 17;
 const BRANCH_FILTER: Scopes = 1 << 18;
 const FILE_DIFF: Scopes = 1 << 19;
 const PALETTE: Scopes = 1 << 20;
+const COMMIT_FILTER: Scopes = 1 << 21;
+const FILES_FILTER: Scopes = 1 << 22;
 const NORMAL: Scopes = GRAPH | FILES | DETAIL;
-const ALL: Scopes = (1 << 21) - 1;
+const ALL: Scopes = (1 << 23) - 1;
 
 /// A normalized, single-key terminal shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -269,6 +271,11 @@ impl ResolvedKeymap {
                 continue;
             }
 
+            // Aliases and canonical spellings name one assignment. A later
+            // entry replaces the earlier spelling instead of accumulating a
+            // second, invisible set of effective shortcuts.
+            resolved.overrides.retain(|entry| entry.id != descriptor.id);
+
             for binding in &bindings {
                 for earlier in &resolved.overrides {
                     if earlier.scopes & descriptor.scopes != 0 && earlier.bindings.contains(binding)
@@ -377,8 +384,8 @@ fn active_scopes(
 ) -> Scopes {
     let local = match mode {
         AppMode::Normal if editing_commit && panel == FocusedPanel::CommitDetail => EDITOR,
-        AppMode::Normal if files_filter_active && panel == FocusedPanel::Files => INPUT,
-        AppMode::Normal if commit_filter_active && panel == FocusedPanel::Graph => INPUT,
+        AppMode::Normal if files_filter_active && panel == FocusedPanel::Files => FILES_FILTER,
+        AppMode::Normal if commit_filter_active && panel == FocusedPanel::Graph => COMMIT_FILTER,
         AppMode::Normal => match panel {
             FocusedPanel::Graph => GRAPH,
             FocusedPanel::Files => FILES,
@@ -448,7 +455,12 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
         ("new-issue", NewIssue, ALL | ISSUE_LIST, ["Alt+I"]),
         ("toggle-debug-keys", ToggleDebugKeys, ALL, ["F12"]),
         ("toggle-layout", ToggleLayout, ALL, ["Alt+/"]),
-        ("full-update", FullUpdate, NORMAL, ["F5"]),
+        (
+            "full-update",
+            FullUpdate,
+            NORMAL | EDITOR | COMMIT_FILTER | FILES_FILTER,
+            ["F5"]
+        ),
         (
             "open-command-palette",
             OpenCommandPalette,
@@ -466,8 +478,18 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
         ("open-issue-list", OpenIssueList, NORMAL, ["Shift+I"]),
         ("toggle-files-pane", ToggleFilesPane, NORMAL, ["Shift+F"]),
         ("toggle-commit-pane", ToggleCommitPane, NORMAL, ["Shift+C"]),
-        ("panel-left", PanelLeft, NORMAL, ["Left", "Shift+BackTab"]),
-        ("panel-right", PanelRight, NORMAL, ["Right", "Tab"]),
+        (
+            "panel-left",
+            PanelLeft,
+            NORMAL | COMMIT_FILTER | FILES_FILTER,
+            ["Left", "Shift+BackTab"]
+        ),
+        (
+            "panel-right",
+            PanelRight,
+            NORMAL | COMMIT_FILTER | FILES_FILTER,
+            ["Right", "Tab"]
+        ),
         (
             "move-up",
             MoveUp,
@@ -520,7 +542,7 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
             "go-to-top",
             GoToTop,
             GRAPH | FILES | DETAIL | PR_THREAD | ISSUE_LIST | ISSUE_DETAIL | CI_CHECKS,
-            ["Home", "g"]
+            ["g", "Home", "Ctrl+Home"]
         ),
         (
             "go-to-bottom",
@@ -572,7 +594,7 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
         ("refresh", Refresh, GRAPH, ["Shift+R"]),
         ("toggle-help", ToggleHelp, NORMAL | HELP, ["?"]),
         ("quit", Quit, GRAPH, ["Esc"]),
-        ("toggle-stage", ToggleStage, FILES, ["s"]),
+        ("toggle-stage", ToggleStage, FILES, ["s", "a"]),
         ("stage-all", StageAll, FILES, ["Shift+S"]),
         ("unstage-all", UnstageAll, FILES, ["Shift+U"]),
         ("add-to-gitignore", AddToGitignore, FILES, ["i"]),
@@ -612,7 +634,7 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
             "editor-newline",
             EditorNewline,
             EDITOR | COMPOSE,
-            ["Shift+Enter"]
+            ["Shift+Enter", "Alt+Enter"]
         ),
         (
             "editor-backspace",
@@ -633,7 +655,19 @@ pub fn binding_registry() -> &'static [BindingDescriptor] {
             EDITOR,
             ["Ctrl+Delete", "Alt+D"]
         ),
-        ("editor-kill-line", EditorKillLine, EDITOR, ["Ctrl+K"]),
+        ("editor-kill-line", EditorKillLine, EDITOR, ["Ctrl+U"]),
+        (
+            "commit-filter-backspace",
+            CommitFilterBackspace,
+            COMMIT_FILTER,
+            ["Backspace"]
+        ),
+        (
+            "files-filter-backspace",
+            FilesFilterBackspace,
+            FILES_FILTER,
+            ["Backspace"]
+        ),
         (
             "menu-select",
             MenuSelect,
