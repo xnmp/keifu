@@ -199,3 +199,81 @@ fn malformed_unknown_and_alias_entries_recover_independently() {
     assert!(text.contains("not-a-command"));
     assert!(text.contains("unknown action"));
 }
+
+#[test]
+fn full_update_override_remains_active_in_editor_and_filter_states() {
+    let keymap = resolved("[keymap]\nfull-update = [\"F8\"]\n");
+    for (panel, editing, files_filter, commit_filter) in [
+        (FocusedPanel::CommitDetail, true, false, false),
+        (FocusedPanel::Files, false, true, false),
+        (FocusedPanel::Graph, false, false, true),
+    ] {
+        let map = |key| {
+            map_key_to_action_with_keymap(
+                key,
+                &AppMode::Normal,
+                panel,
+                editing,
+                files_filter,
+                commit_filter,
+                &keymap,
+            )
+        };
+        assert_eq!(map(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)), Some(Action::FullUpdate));
+        assert_eq!(map(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE)), None);
+    }
+}
+
+#[test]
+fn filter_backspace_actions_can_be_replaced_without_leaving_the_defaults_active() {
+    let keymap = resolved(
+        "[keymap]\ncommit-filter-backspace = [\"F7\"]\nfiles-filter-backspace = [\"F8\"]\n",
+    );
+    for (panel, files_filter, commit_filter, key, expected) in [
+        (FocusedPanel::Graph, false, true, KeyCode::F(7), Action::CommitFilterBackspace),
+        (FocusedPanel::Files, true, false, KeyCode::F(8), Action::FilesFilterBackspace),
+    ] {
+        let map = |key| {
+            map_key_to_action_with_keymap(
+                key,
+                &AppMode::Normal,
+                panel,
+                false,
+                files_filter,
+                commit_filter,
+                &keymap,
+            )
+        };
+        assert_eq!(map(KeyEvent::new(key, KeyModifiers::NONE)), Some(expected));
+        assert_eq!(map(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)), None);
+    }
+}
+
+#[test]
+fn registry_defaults_match_real_alternatives_and_detect_default_conflicts() {
+    let defaults = resolved("");
+    assert_eq!(defaults.display_bindings("toggle-stage"), "s / a");
+    assert_eq!(defaults.display_bindings("editor-newline"), "Shift+Enter / Alt+Enter");
+    assert_eq!(defaults.display_bindings("go-to-top"), "g / Home / Ctrl+Home");
+    assert_eq!(defaults.display_bindings("editor-kill-line"), "Ctrl+U");
+
+    let collision = resolved("[keymap]\neditor-delete-word = [\"Ctrl+U\"]\n");
+    assert!(collision.warnings().iter().any(|warning| {
+        warning.reason.contains("editor-kill-line")
+            && warning.reason.contains("editor-delete-word")
+            && warning.reason.contains("Ctrl+U")
+    }));
+}
+
+#[test]
+fn canonical_entry_replaces_an_earlier_alias_in_routing_and_labels() {
+    let keymap = resolved(
+        "[keymap]\ncommand-palette = [\"F2\"]\nopen-command-palette = [\"F3\"]\n",
+    );
+    assert_eq!(graph(&keymap, KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE)), None);
+    assert_eq!(
+        graph(&keymap, KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+        Some(Action::OpenCommandPalette)
+    );
+    assert_eq!(keymap.display_bindings("open-command-palette"), "F3");
+}
