@@ -1807,7 +1807,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_window_size_derives_the_current_cell_geometry() {
+    fn resize_derives_the_current_cell_geometry_from_window_size() {
         let mut state = pixel_state((CW as u16, CH as u16));
 
         state.refresh_font_size_from_window_size(crossterm::terminal::WindowSize {
