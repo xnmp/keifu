@@ -226,10 +226,10 @@ scripting entirely:
 - **squash** → emit the native `squash <sha>` verb and let `GIT_EDITOR=true`
   accept git's default concatenated message. Customising the squashed message is
   expressed as a `reword` on the squash target — no special case.
-- **fixup** / **drop** → native `fixup <sha>` / omit the line. **pick** →
+- **fixup** / **drop** → native `fixup <sha>` / `drop <sha>`. **pick** →
   `pick <sha>`.
 
-So our todo generator emits only `pick`/`squash`/`fixup`/`exec` lines — a small,
+So our todo generator emits only `pick`/`squash`/`fixup`/`drop`/`exec` lines — a small,
 **purely-testable** serialization (§5).
 
 ### Strongest counterargument (and why it loses)
@@ -320,7 +320,7 @@ existing-code change the design requires.
 - **Todo-file serialization**: plan → git todo text. Asserts the display order
   (newest-first in the UI) is **reversed** to git's oldest-first todo; that
   `reword` expands to `pick` + `exec git commit --amend -F <file>`; that
-  `squash`/`fixup` use native verbs; that `drop` omits the line; and that message
+  `squash`/`fixup`/`drop` use native verbs (including an all-drop range); and that message
   temp-file paths are wired correctly. This is the highest-value pure surface and
   where a serialization bug would corrupt a rebase.
 - **Summary generation**: action counts + force-push warning text from a fake
@@ -345,8 +345,9 @@ action, end-to-end:
 - **undo-after-success** resets to the pre-rebase HEAD (drives the ledger, like
   the existing undo merge test).
 
-No test drives the TUI render loop; all assert on git state (matching
-`undo_test.rs`).
+The binary debug-server test drives the TUI render loop from the commit menu
+through plan review and cancellation; execution tests separately assert final
+Git state (matching `undo_test.rs`).
 
 ---
 

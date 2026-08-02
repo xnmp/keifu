@@ -100,6 +100,20 @@ ranges instead of duplicating geometry in the widget and frame renderer.
 
 The plan lives on `App`, while `AppMode::RebasePlan` carries only its cursor. This preserves the plan when reword input and confirmation temporarily replace the mode. Confirmation materializes a durable todo and reword-message files under `.git/keifu-interactive-rebase`, then `GIT_SEQUENCE_EDITOR` hands that todo to `git rebase -i`. Git owns rewriting, signing, hooks, conflicts, and crash recovery; keifu refreshes and records a guarded hard-reset undo only after completion. State files remain while a CLI rebase is paused and are removed on completion or abort.
 
+### Interactive-rebase crash and concurrency lifecycle
+
+The Git marker `.git/rebase-merge/interactive` is authoritative. Keifu retains its todo and reword-message directory only while that marker exists; a failed start cleans immediately, and startup or refresh removes an orphan after a completed or externally aborted rebase.
+
+| Crash or external event | Observable recovery | Behavioural coverage |
+| --- | --- | --- |
+| After Keifu creates state, before Git creates its marker (including a rejecting `pre-rebase` hook) | The failed call removes the directory; a relaunch also removes any orphan left by a process crash. | `failed_confirmed_plan_is_a_non_blocking_error_toast`, `startup_removes_orphaned_interactive_rebase_state` |
+| After Git starts, before Keifu records the outcome | The Git marker preserves the CLI recovery route and Keifu retains message files. | `non_conflict_interactive_stop_remains_recoverable` |
+| During a conflict or other pause | Relaunch/refresh detects the CLI rebase; Continue or Abort uses Git CLI and preserves reword content until consumed. | `reword_message_file_survives_a_conflict_until_continue_reaches_it`, `confirmed_conflicting_plan_enters_the_existing_conflict_workflow` |
+| After Git completes, before Keifu removes state | The missing Git marker makes the next startup or refresh remove the orphan. | `confirmed_plan_refreshes_history_and_toasts_success`, `startup_removes_orphaned_interactive_rebase_state` |
+| An external process aborts the rebase | Refresh observes the missing marker, removes Keifu state, and restores ordinary libgit2 recovery routing. | `refresh_switches_from_cli_to_libgit2_rebase_recovery_in_one_session` |
+
+Concurrency is serialized by Git's single per-repository rebase state. Keifu only materializes its per-repository state after the existing history-operation eligibility checks. If another process wins the race and starts or rejects an operation, Git's result and marker decide recovery: an active interactive marker retains Keifu state; no marker cleans it. Keifu never treats its own directory alone as proof that a rebase is active.
+
 **Keys (files pane):** `o` accept ours, `t` accept theirs, `c` continue, `A` abort (behind the Confirm dialog).
 
 ## Hunk-Level Staging Model (2026-07-13)
