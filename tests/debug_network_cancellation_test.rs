@@ -13,7 +13,7 @@ use keifu::app::{App, AppMode, ConfirmAction, FocusedPanel};
 use keifu::debug_server::{handle_request, DebugRequest};
 use keifu::git::{operations::PullMode, GitRepository};
 use keifu::keybindings::map_active_network_key;
-use keifu::network::{CancellationReason, NetworkOperation, NetworkPhase};
+use keifu::network::{CancellationReason, NetworkOperation, NetworkPhase, PushSpec};
 use keifu::ui::{status_bar::StatusBar, theme::Theme};
 
 fn status_bar_text(app: &App) -> String {
@@ -121,11 +121,23 @@ fn each_cancellation_completion_toasts_once_and_allows_a_production_restart() {
         );
 
         let repo_path = app.repo_path.clone();
-        app.network
-            .start_fetch(&repo_path, "origin", false, false, None);
-        assert!(
-            app.is_fetching(),
-            "a production network operation can start after {label} cancellation"
+        match operation {
+            NetworkOperation::Fetch => {
+                app.network
+                    .start_fetch(&repo_path, "origin", false, false, None);
+            }
+            NetworkOperation::Pull => {
+                app.network
+                    .start_pull(&repo_path, None, None, PullMode::FfOnly, None);
+            }
+            NetworkOperation::Push => {
+                app.network.start_push(&repo_path, PushSpec::Current, None);
+            }
+        }
+        assert_eq!(
+            app.network_status().map(|status| status.operation),
+            Some(operation),
+            "the production {label} path can start after cancellation"
         );
     }
 }

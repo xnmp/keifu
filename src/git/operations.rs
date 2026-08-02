@@ -657,6 +657,16 @@ fn run_network_git_output(
     creds: Option<&Credentials>,
     control: &NetworkCommandControl,
 ) -> Result<std::process::Output, NetworkFailure> {
+    run_network_git_output_with_drain_notice(repo_path, args, creds, control, None)
+}
+
+fn run_network_git_output_with_drain_notice(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+    drain_started: Option<&Sender<()>>,
+) -> Result<std::process::Output, NetworkFailure> {
     let subcommand = args.first().copied().unwrap_or("");
     let mut cmd = Command::new("git");
     cmd.args([
@@ -747,9 +757,28 @@ fn run_network_git_output(
         thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
     };
 
+    if let Some(drain_started) = drain_started {
+        let _ = drain_started.send(());
+    }
     let drain_deadline = Instant::now() + NETWORK_PIPE_DRAIN_GRACE;
-    let stdout = collect_network_pipe(&stdout_rx, drain_deadline, control, subcommand, "stdout")?;
-    let stderr = collect_network_pipe(&stderr_rx, drain_deadline, control, subcommand, "stderr")?;
+    let stdout =
+        match collect_network_pipe(&stdout_rx, drain_deadline, control, subcommand, "stdout") {
+            Ok(output) => output,
+            Err(NetworkFailure::Cancelled(reason)) => {
+                terminate_network_process(child, subcommand)?;
+                return Err(NetworkFailure::Cancelled(reason));
+            }
+            Err(error) => return Err(error),
+        };
+    let stderr =
+        match collect_network_pipe(&stderr_rx, drain_deadline, control, subcommand, "stderr") {
+            Ok(output) => output,
+            Err(NetworkFailure::Cancelled(reason)) => {
+                terminate_network_process(child, subcommand)?;
+                return Err(NetworkFailure::Cancelled(reason));
+            }
+            Err(error) => return Err(error),
+        };
 
     Ok(std::process::Output {
         status,
@@ -2281,8 +2310,8 @@ mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
         is_divergent_pull_error, is_https_auth_failure, run_network_git_output,
-        terminate_network_process, url_host, AuthUrl, GitProgressParser, NetworkCommandControl,
-        OpOutcome, PullMode,
+        run_network_git_output_with_drain_notice, terminate_network_process, url_host, AuthUrl,
+        GitProgressParser, NetworkCommandControl, OpOutcome, PullMode,
     };
     use crate::network::{CancellationReason, CancellationToken, NetworkFailure};
     use std::sync::mpsc;
@@ -2469,6 +2498,82 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn drain_time_cancellation_reaps_the_exited_git_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let helper = tmp.path().join("remote-helper");
+        let helper_pid_log = tmp.path().join("helper.pid");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 sh -c 'exec </dev/null >/dev/null; trap \"exit 0\" INT TERM; printf \"%s\" \"$$\" > \"{}\"; sleep 8' &\n\
+                 exit 1\n",
+                helper_pid_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let (drain_tx, drain_rx) = mpsc::channel();
+        let remote = format!("ext::{}", helper.display());
+        let repo = repo.to_string_lossy().into_owned();
+        let worker = thread::spawn(move || {
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            run_network_git_output_with_drain_notice(
+                &repo,
+                &[
+                    "-c",
+                    "protocol.ext.allow=always",
+                    "fetch",
+                    "--progress",
+                    &remote,
+                ],
+                None,
+                &control,
+                Some(&drain_tx),
+            )
+        });
+
+        drain_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Git should exit and enter pipe draining");
+        wait_for_marker(&helper_pid_log);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("network worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        let helper_pid = std::fs::read_to_string(&helper_pid_log).unwrap();
+        assert!(
+            !Command::new("kill")
+                .args(["-0", helper_pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "drain-time cancellation must reap the pipe-owning helper"
+        );
     }
 
     #[cfg(unix)]
