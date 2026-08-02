@@ -465,6 +465,10 @@ mod tests {
 
         assert_eq!(app.op_state, OperationState::Rebase);
         assert!(app.interactive_rebase_in_progress);
+        assert!(
+            tmp.path().join(".git/keifu-interactive-rebase").exists(),
+            "a paused CLI rebase must retain its todo and reword state"
+        );
         assert_eq!(app.conflict_count, 1);
         assert_eq!(app.focused_panel, FocusedPanel::Files);
         assert!(app.get_message().unwrap().contains("Conflicts in 1 file"));
@@ -509,5 +513,56 @@ mod tests {
             !tmp.path().join(".git/keifu-interactive-rebase").exists(),
             "failed start must not retain todo or commit-message content"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_startup_does_not_delete_state_while_a_rebase_is_starting() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let (tmp, app, base, _head) = app_with_range();
+        drop(app);
+        let started = tmp.path().join("hook-started");
+        let release = tmp.path().join("hook-release");
+        let hook = tmp.path().join(".git/hooks/pre-rebase");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\nexit 1\n",
+                started.display(),
+                release.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+        let repo_path = tmp.path().to_path_buf();
+        let worker = std::thread::spawn(move || {
+            let mut app = App::from_repo(GitRepository::open(&repo_path).unwrap()).unwrap();
+            app.start_interactive_rebase(base);
+            let plan = app.rebase_plan.clone().unwrap();
+            app.run_interactive_rebase_plan(plan)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !started.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(started.exists(), "pre-rebase hook did not start");
+        let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
+        assert!(state_dir.join("todo").exists());
+
+        let _second_app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        let retained_during_start = state_dir.join("todo").exists();
+        std::fs::write(&release, "release\n").unwrap();
+        let outcome = worker.join().unwrap();
+
+        assert!(
+            retained_during_start,
+            "another app instance must not delete state owned by an in-flight start"
+        );
+        assert!(outcome.is_err());
+        assert!(!state_dir.exists());
     }
 }
