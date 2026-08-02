@@ -23,6 +23,8 @@ const NETWORK_INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 const NETWORK_TERMINATE_GRACE: Duration = Duration::from_secs(2);
 const NETWORK_KILL_REAP_GRACE: Duration = Duration::from_secs(1);
 const NETWORK_DESCENDANT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(200);
+#[cfg(unix)]
+const NETWORK_DESCENDANT_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_PIPE_DRAIN_GRACE: Duration = Duration::from_secs(1);
 const HTTP_LOW_SPEED_BYTES_PER_SECOND: &str = "1";
 const HTTP_LOW_SPEED_SECONDS: &str = "60";
@@ -270,7 +272,7 @@ impl ProcessTableSnapshot for PsProcessTableSnapshot {
 #[cfg(unix)]
 fn start_process_table_snapshot() -> std::io::Result<PsProcessTableSnapshot> {
     let mut process_list = Command::new("ps")
-        .args(["-e", "-o", "pid=,ppid="])
+        .args(["-e", "-o", "pid=,ppid=,pgid="])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -298,40 +300,65 @@ fn start_process_table_snapshot() -> std::io::Result<PsProcessTableSnapshot> {
     })
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn descendant_processes_from_snapshot<S: ProcessTableSnapshot>(
     root: i32,
+    snapshot: S,
+    timeout: Duration,
+) -> HashSet<i32> {
+    owned_processes_from_snapshot(root, HashSet::from([root]), snapshot, timeout)
+}
+
+#[cfg(unix)]
+fn owned_processes_from_snapshot<S: ProcessTableSnapshot>(
+    process_group: i32,
+    owned: HashSet<i32>,
     mut snapshot: S,
     timeout: Duration,
 ) -> HashSet<i32> {
     let deadline = Instant::now() + timeout;
     loop {
         match snapshot.try_snapshot() {
-            Ok(Some(output)) => return parse_descendant_processes(root, &output),
+            Ok(Some(output)) => return parse_owned_processes(process_group, owned, &output),
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
             }
             Ok(None) | Err(_) => {
                 snapshot.terminate();
-                return HashSet::from([root]);
+                return owned;
             }
         }
     }
 }
 
 #[cfg(unix)]
-fn parse_descendant_processes(root: i32, output: &[u8]) -> HashSet<i32> {
-    let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(output)
+fn parse_owned_processes(
+    process_group: i32,
+    mut owned: HashSet<i32>,
+    output: &[u8],
+) -> HashSet<i32> {
+    let processes: Vec<(i32, i32, i32)> = String::from_utf8_lossy(output)
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
-            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+            Some((
+                fields.next()?.parse().ok()?,
+                fields.next()?.parse().ok()?,
+                fields.next()?.parse().ok()?,
+            ))
         })
         .collect();
-    let mut owned = HashSet::from([root]);
+    // Group membership survives direct-child exit and reparenting. Seed the
+    // retained set from Git's dedicated process group before expanding by
+    // ancestry, so helpers remain owned if they later call setsid().
+    owned.extend(
+        processes
+            .iter()
+            .filter_map(|(pid, _, group)| (*group == process_group).then_some(*pid)),
+    );
     loop {
         let before = owned.len();
-        for (pid, parent) in &pairs {
+        for (pid, parent, _) in &processes {
             if owned.contains(parent) {
                 owned.insert(*pid);
             }
@@ -339,6 +366,70 @@ fn parse_descendant_processes(root: i32, output: &[u8]) -> HashSet<i32> {
         if owned.len() == before {
             return owned;
         }
+    }
+}
+
+#[cfg(unix)]
+struct NetworkProcessTracker {
+    process_group: i32,
+    owned_processes: HashSet<i32>,
+    next_refresh: Instant,
+}
+
+#[cfg(unix)]
+impl NetworkProcessTracker {
+    fn new(child: &Child) -> Result<Self, NetworkFailure> {
+        let root = i32::try_from(child.id())
+            .map_err(|_| NetworkFailure::Failed("Invalid git process identifier".to_string()))?;
+        Ok(Self {
+            process_group: root,
+            owned_processes: HashSet::from([root]),
+            next_refresh: Instant::now(),
+        })
+    }
+
+    fn refresh_if_due(&mut self) {
+        if Instant::now() < self.next_refresh {
+            return;
+        }
+        self.refresh();
+        self.next_refresh = Instant::now() + NETWORK_DESCENDANT_REFRESH_INTERVAL;
+    }
+
+    fn refresh(&mut self) {
+        let Ok(snapshot) = start_process_table_snapshot() else {
+            return;
+        };
+        self.owned_processes = owned_processes_from_snapshot(
+            self.process_group,
+            std::mem::take(&mut self.owned_processes),
+            snapshot,
+            NETWORK_DESCENDANT_DISCOVERY_TIMEOUT,
+        );
+    }
+
+    fn terminate(mut self, child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+        // Expand from every process observed while Git was alive. A helper may
+        // have detached and been reparented after the direct child exited, so
+        // its PID—not Git's now-dead PID—is the durable ownership handle.
+        self.refresh();
+        terminate_network_process_with_owned(child, subcommand, self.owned_processes)
+    }
+}
+
+#[cfg(not(unix))]
+struct NetworkProcessTracker;
+
+#[cfg(not(unix))]
+impl NetworkProcessTracker {
+    fn new(_child: &Child) -> Result<Self, NetworkFailure> {
+        Ok(Self)
+    }
+
+    fn refresh_if_due(&mut self) {}
+
+    fn terminate(self, child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+        terminate_network_process(child, subcommand)
     }
 }
 
@@ -495,7 +586,7 @@ fn wait_for_network_process_group(
 /// can abort cleanly; SIGTERM and SIGKILL are bounded fallbacks for wedged or
 /// signal-ignoring helpers. Pull integration is deliberately outside this
 /// runner, so escalation cannot interrupt index/worktree mutation.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn terminate_network_process(child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
     terminate_network_process_with_snapshot(
         child,
@@ -505,9 +596,9 @@ fn terminate_network_process(child: Child, subcommand: &str) -> Result<(), Netwo
     )
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn terminate_network_process_with_snapshot<S: ProcessTableSnapshot>(
-    mut child: Child,
+    child: Child,
     subcommand: &str,
     snapshot: Option<S>,
     discovery_timeout: Duration,
@@ -523,6 +614,18 @@ fn terminate_network_process_with_snapshot<S: ProcessTableSnapshot>(
             descendant_processes_from_snapshot(process_group, snapshot, discovery_timeout)
         })
         .unwrap_or_else(|| HashSet::from([process_group]));
+    terminate_network_process_with_owned(child, subcommand, owned_processes)
+}
+
+#[cfg(unix)]
+fn terminate_network_process_with_owned(
+    mut child: Child,
+    subcommand: &str,
+    owned_processes: HashSet<i32>,
+) -> Result<(), NetworkFailure> {
+    let process_group = i32::try_from(child.id()).map_err(|_| {
+        NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
+    })?;
     let mut direct_child_reaped = false;
 
     signal_network_processes(process_group, &owned_processes, libc::SIGINT).map_err(|error| {
@@ -696,6 +799,7 @@ fn run_network_git_output_with_drain_notice(
     let mut child = cmd
         .spawn()
         .map_err(|e| NetworkFailure::Failed(format!("Failed to execute git {subcommand}: {e}")))?;
+    let mut process_tracker = NetworkProcessTracker::new(&child)?;
     let mut stdout = child
         .stdout
         .take()
@@ -735,18 +839,19 @@ fn run_network_git_output_with_drain_notice(
     });
 
     let status = loop {
+        process_tracker.refresh_if_due();
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
-                let _ = terminate_network_process(child, subcommand);
+                let _ = process_tracker.terminate(child, subcommand);
                 return Err(NetworkFailure::Failed(format!(
                     "Failed to wait for git {subcommand}: {error}"
                 )));
             }
         }
         if let Some(reason) = control.cancellation_reason() {
-            terminate_network_process(child, subcommand)?;
+            process_tracker.terminate(child, subcommand)?;
             // Helpers spawned by Git (git-remote-https, ssh, credential
             // helpers) can move into another process group. The termination
             // helper snapshots and signals those owned descendants explicitly.
@@ -761,24 +866,42 @@ fn run_network_git_output_with_drain_notice(
         let _ = drain_started.send(());
     }
     let drain_deadline = Instant::now() + NETWORK_PIPE_DRAIN_GRACE;
-    let stdout =
-        match collect_network_pipe(&stdout_rx, drain_deadline, control, subcommand, "stdout") {
-            Ok(output) => output,
-            Err(NetworkFailure::Cancelled(reason)) => {
-                terminate_network_process(child, subcommand)?;
-                return Err(NetworkFailure::Cancelled(reason));
-            }
-            Err(error) => return Err(error),
-        };
-    let stderr =
-        match collect_network_pipe(&stderr_rx, drain_deadline, control, subcommand, "stderr") {
-            Ok(output) => output,
-            Err(NetworkFailure::Cancelled(reason)) => {
-                terminate_network_process(child, subcommand)?;
-                return Err(NetworkFailure::Cancelled(reason));
-            }
-            Err(error) => return Err(error),
-        };
+    let stdout = match collect_network_pipe(
+        &stdout_rx,
+        drain_deadline,
+        control,
+        &mut process_tracker,
+        subcommand,
+        "stdout",
+    ) {
+        Ok(output) => output,
+        Err(NetworkFailure::Cancelled(reason)) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        Err(error) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(error);
+        }
+    };
+    let stderr = match collect_network_pipe(
+        &stderr_rx,
+        drain_deadline,
+        control,
+        &mut process_tracker,
+        subcommand,
+        "stderr",
+    ) {
+        Ok(output) => output,
+        Err(NetworkFailure::Cancelled(reason)) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        Err(error) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(error);
+        }
+    };
 
     Ok(std::process::Output {
         status,
@@ -791,10 +914,12 @@ fn collect_network_pipe(
     receiver: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
     deadline: Instant,
     control: &NetworkCommandControl,
+    process_tracker: &mut NetworkProcessTracker,
     subcommand: &str,
     stream: &str,
 ) -> Result<Vec<u8>, NetworkFailure> {
     loop {
+        process_tracker.refresh_if_due();
         match receiver.try_recv() {
             Ok(result) => {
                 return result.map_err(|error| {

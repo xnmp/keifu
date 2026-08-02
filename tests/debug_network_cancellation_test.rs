@@ -16,6 +16,58 @@ use keifu::keybindings::map_active_network_key;
 use keifu::network::{CancellationReason, NetworkOperation, NetworkPhase, PushSpec};
 use keifu::ui::{status_bar::StatusBar, theme::Theme};
 
+const DETACHED_HELPER_PID_ENV: &str = "KEIFU_TEST_DETACHED_HELPER_PID";
+const DETACHED_HELPER_PARENT_EXIT_ENV: &str = "KEIFU_TEST_DETACHED_HELPER_PARENT_EXIT";
+
+/// Process-group member that launches the detached pipe owner, stays alive
+/// long enough for production ownership discovery, and then exits first.
+#[test]
+#[ignore = "subprocess entrypoint; invoked by the lifecycle test"]
+fn inherited_transport_parent_entrypoint() {
+    let Ok(helper_pid_log) = std::env::var(DETACHED_HELPER_PID_ENV) else {
+        return;
+    };
+    let parent_exit_log = std::env::var(DETACHED_HELPER_PARENT_EXIT_ENV).unwrap();
+    let mut helper = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "inherited_transport_helper_entrypoint",
+        ])
+        .env(DETACHED_HELPER_PID_ENV, helper_pid_log)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    thread::spawn(move || {
+        let _ = helper.wait();
+    });
+    eprint!("remote: Counting objects: 50% (1/2)\r");
+    thread::sleep(Duration::from_millis(600));
+    std::fs::write(parent_exit_log, "exited").unwrap();
+}
+
+/// Subprocess entrypoint for the inherited-pipe shutdown regression. Spawning
+/// the current Rust test binary avoids relying on the Linux-only `setsid`
+/// command: POSIX `setsid(2)` is available on every Unix target we support.
+#[test]
+#[ignore = "subprocess entrypoint; invoked by the lifecycle test"]
+fn inherited_transport_helper_entrypoint() {
+    let Ok(pid_log) = std::env::var(DETACHED_HELPER_PID_ENV) else {
+        return;
+    };
+    // SAFETY: setsid changes only this subprocess session. Restoring default
+    // signal handlers makes the deliberately detached helper terminable even
+    // when its parent shell started it as a background job.
+    unsafe {
+        assert_ne!(libc::setsid(), -1, "setsid failed");
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    }
+    std::fs::write(pid_log, std::process::id().to_string()).unwrap();
+    thread::sleep(Duration::from_secs(8));
+}
+
 fn status_bar_text(app: &App) -> String {
     let area = Rect::new(0, 0, 160, 1);
     let mut buffer = Buffer::empty(area);
@@ -267,16 +319,22 @@ fn normal_and_forced_quit_wait_for_a_real_inherited_helper_transport() {
         let repo = root.path().join("repo");
         let helper = root.path().join("remote-helper");
         let helper_pid_log = root.path().join("helper.pid");
+        let helper_parent_exit_log = root.path().join("helper-parent-exited");
+        let test_executable = std::env::current_exe().unwrap();
         git(root.path(), &["init", "-q", repo.to_str().unwrap()]);
         git(&repo, &["config", "protocol.ext.allow", "always"]);
         std::fs::write(
             &helper,
             format!(
                 "#!/bin/sh\n\
-                 setsid sh -c 'printf \"%s\" \"$$\" > \"{}\"; trap \"exit 0\" INT TERM; sleep 8' &\n\
-                 printf 'remote: Counting objects: 50%% (1/2)\\r' >&2\n\
-                 wait\n",
-                helper_pid_log.display()
+                 export {}=\"{}\"\n\
+                 export {}=\"{}\"\n\
+                 exec \"{}\" --ignored --exact inherited_transport_parent_entrypoint\n",
+                DETACHED_HELPER_PID_ENV,
+                helper_pid_log.display(),
+                DETACHED_HELPER_PARENT_EXIT_ENV,
+                helper_parent_exit_log.display(),
+                test_executable.display()
             ),
         )
         .unwrap();
@@ -297,7 +355,14 @@ fn normal_and_forced_quit_wait_for_a_real_inherited_helper_transport() {
             app.update_network_state();
             thread::sleep(Duration::from_millis(10));
         }
-
+        while !helper_parent_exit_log.exists() {
+            assert!(
+                Instant::now() < start_deadline,
+                "transport helper parent never exited"
+            );
+            app.update_network_state();
+            thread::sleep(Duration::from_millis(10));
+        }
         app.handle_action(action.clone()).unwrap();
 
         assert!(!app.should_quit, "quit bypassed the active transport");
