@@ -1756,7 +1756,17 @@ mod tests {
         let mut state = pixel_state((CW as u16, CH as u16));
         let row = spec(vec![pipe([0, 255, 0])]);
         state.sync_frame(std::slice::from_ref(&row));
+        let avatar = AvatarReq {
+            email: "dev@example.com".into(),
+            source: AvatarSource::Fallback,
+            color: [0, 255, 0],
+        };
+        state.sync_avatars(std::slice::from_ref(&avatar));
         assert!(state.get(&row).is_some(), "the initial image is cached");
+        assert!(
+            state.get_avatar(&avatar.email).is_some(),
+            "the initial avatar image is cached"
+        );
 
         state.refresh_font_size((20, 40));
 
@@ -1764,6 +1774,10 @@ mod tests {
         assert!(
             state.get(&row).is_none(),
             "a changed cell geometry must regenerate the image payload"
+        );
+        assert!(
+            state.get_avatar(&avatar.email).is_none(),
+            "a changed cell geometry must regenerate avatar payloads"
         );
     }
 
