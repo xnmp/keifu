@@ -1755,7 +1755,7 @@ mod tests {
     fn resize_refreshes_cell_geometry_and_invalidates_cached_protocols() {
         let mut state = pixel_state((CW as u16, CH as u16));
         let row = spec(vec![pipe([0, 255, 0])]);
-        state.sync_frame(&[row.clone()]);
+        state.sync_frame(std::slice::from_ref(&row));
         assert!(state.get(&row).is_some(), "the initial image is cached");
 
         state.refresh_font_size((20, 40));
@@ -1771,7 +1771,7 @@ mod tests {
     fn resize_with_zero_cell_geometry_keeps_existing_cached_protocols() {
         let mut state = pixel_state((CW as u16, CH as u16));
         let row = spec(vec![pipe([0, 255, 0])]);
-        state.sync_frame(&[row.clone()]);
+        state.sync_frame(std::slice::from_ref(&row));
         assert!(state.get(&row).is_some(), "the initial image is cached");
 
         state.refresh_font_size((0, 40));
