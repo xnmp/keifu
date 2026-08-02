@@ -1,6 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use keifu::app::{AppMode, FocusedPanel};
-use keifu::{action::Action, app::App, keybindings::map_key_to_action, ui};
+use keifu::{
+    action::Action, app::App, config::UiState, git::GitRepository, keybindings::map_key_to_action,
+    ui,
+};
 use ratatui::{backend::TestBackend, Terminal};
 
 fn rendered_screen(app: &mut App, width: u16, height: u16) -> String {
@@ -57,4 +60,40 @@ fn help_menu_toggles_status_bar_and_returns_its_row_to_the_main_layout() {
         !hidden.lines().last().unwrap().contains("help"),
         "hiding the status bar must return its bottom row to the main interface: {hidden}"
     );
+}
+
+#[test]
+fn help_toggle_persists_to_a_fresh_ui_state_and_app() {
+    let config_dir = tempfile::tempdir().unwrap();
+    let repo_dir = tempfile::tempdir().unwrap();
+    git2::Repository::init(repo_dir.path()).unwrap();
+    let original_config_dir = std::env::var_os("XDG_CONFIG_HOME");
+    std::env::set_var("XDG_CONFIG_HOME", config_dir.path());
+
+    let repo = GitRepository::open(repo_dir.path()).unwrap();
+    let mut app = App::from_repo(repo).unwrap();
+    assert!(
+        app.status_bar_visible,
+        "new apps show the status bar by default"
+    );
+
+    app.handle_action(Action::ToggleHelp).unwrap();
+    app.handle_action(Action::ToggleStatusBar).unwrap();
+
+    let restored_state = UiState::load();
+    assert!(
+        !restored_state.status_bar_visible,
+        "the Help toggle must be written to state.toml"
+    );
+    let fresh_repo = GitRepository::open(repo_dir.path()).unwrap();
+    let fresh_app = App::from_repo_with_ui_state(fresh_repo, restored_state).unwrap();
+    assert!(
+        !fresh_app.status_bar_visible,
+        "a fresh app must honor the persisted hidden status bar preference"
+    );
+
+    match original_config_dir {
+        Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+        None => std::env::remove_var("XDG_CONFIG_HOME"),
+    }
 }
