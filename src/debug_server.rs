@@ -214,6 +214,7 @@ fn mode_name(mode: &AppMode) -> &'static str {
         AppMode::Input { .. } => "input",
         AppMode::Confirm { .. } => "confirm",
         AppMode::CommitMenu { .. } => "commit_menu",
+        AppMode::RebasePlan { .. } => "rebase_plan",
         AppMode::MetadataMenu { .. } => "metadata_menu",
         AppMode::Settings { .. } => "settings",
         AppMode::PullDivergence { .. } => "pull_divergence",

@@ -52,6 +52,13 @@ pub enum Action {
     /// Show/hide the commit-detail pane (#116).
     ToggleCommitPane,
     MenuSelect,
+    RebaseMoveCommitUp,
+    RebaseMoveCommitDown,
+    RebasePick,
+    RebaseSquash,
+    RebaseFixup,
+    RebaseReword,
+    RebaseDrop,
     SelectAll,
     SelectNone,
 

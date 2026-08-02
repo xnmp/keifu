@@ -93,6 +93,7 @@ pub fn map_key_to_action(
         }
         AppMode::Confirm { .. } => map_confirm_mode(key),
         AppMode::CommitMenu { .. } => map_commit_menu_mode(key),
+        AppMode::RebasePlan { .. } => map_rebase_plan_mode(key),
         AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
         AppMode::Settings { .. } => map_settings_menu_mode(key),
         AppMode::PullDivergence { .. } => map_pull_divergence_mode(key),
@@ -965,6 +966,33 @@ fn map_commit_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        _ => None,
+    }
+}
+
+fn map_rebase_plan_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) | (KeyModifiers::NONE, KeyCode::Char('k')) => {
+            Some(Action::MoveUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) | (KeyModifiers::NONE, KeyCode::Char('j')) => {
+            Some(Action::MoveDown)
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('K')) | (KeyModifiers::NONE, KeyCode::Char('K')) => {
+            Some(Action::RebaseMoveCommitUp)
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('J')) | (KeyModifiers::NONE, KeyCode::Char('J')) => {
+            Some(Action::RebaseMoveCommitDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::RebasePick),
+        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::RebaseSquash),
+        (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::RebaseFixup),
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RebaseReword),
+        (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::RebaseDrop),
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Confirm),
+        (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            Some(Action::Cancel)
+        }
         _ => None,
     }
 }

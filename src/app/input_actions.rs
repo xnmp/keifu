@@ -102,6 +102,18 @@ impl App {
                         self.auth_submit_password(input.clone());
                         return Ok(());
                     }
+                    InputAction::RebaseReword { index } => {
+                        if let Some(plan) = self.rebase_plan.as_mut() {
+                            match plan.set_reword_message(index, input.clone()) {
+                                Ok(()) => self.mode = AppMode::RebasePlan { cursor: index },
+                                Err(_) => self.toast(
+                                    crate::toast::ToastKind::Info,
+                                    "Commit message cannot be empty",
+                                ),
+                            }
+                        }
+                        return Ok(());
+                    }
                 }
                 // Clear search state after confirming
                 self.search_state = SearchState::default();
@@ -120,6 +132,10 @@ impl App {
                 // Restore position when canceling search
                 if matches!(input_action, InputAction::Search) {
                     self.restore_search_position();
+                }
+                if let InputAction::RebaseReword { index } = input_action {
+                    self.mode = AppMode::RebasePlan { cursor: index };
+                    return Ok(());
                 }
                 self.search_state = SearchState::default();
                 // Cancelling the assignee edit returns to the issue detail it was
@@ -165,6 +181,10 @@ impl App {
                 if input.is_empty() {
                     if matches!(input_action, InputAction::Search) {
                         self.restore_search_position();
+                    }
+                    if let InputAction::RebaseReword { index } = input_action {
+                        self.mode = AppMode::RebasePlan { cursor: index };
+                        return Ok(());
                     }
                     self.search_state = SearchState::default();
                     self.mode = if matches!(input_action, InputAction::EditIssueAssignees { .. }) {

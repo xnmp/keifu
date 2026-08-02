@@ -18,6 +18,7 @@ pub mod issue_list;
 pub mod metadata_menu;
 pub mod pr_compose;
 pub mod pr_thread;
+pub mod rebase_plan;
 pub mod search_dropdown;
 pub mod settings_menu;
 pub mod status_bar;
@@ -673,6 +674,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 popup_area,
             );
             rendered_popup = Some(popup_area);
+        }
+        AppMode::RebasePlan { cursor } => {
+            if let Some(plan) = &app.rebase_plan {
+                let popup_area = centered_rect(84, 76, area);
+                frame.render_widget(
+                    rebase_plan::RebasePlanWidget::new(plan, *cursor, &theme),
+                    popup_area,
+                );
+                rendered_popup = Some(popup_area);
+            }
         }
         AppMode::MetadataMenu { selected } => {
             use self::metadata_menu::MetadataMenuWidget;

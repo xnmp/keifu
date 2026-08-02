@@ -1,7 +1,7 @@
 # Interactive rebase — design (issue #25)
 
-Status: **design only**. This document proposes the architecture; no execution
-code ships on this branch. Every claim below is grounded in existing keifu code
+Status: **implemented**. This document records the architecture used by the
+interactive-rebase workflow. Every claim below is grounded in keifu code
 (cited as `path:line`).
 
 Interactive rebase is the one genuinely multi-session feature on the slate, and
@@ -189,7 +189,7 @@ it doesn't implement the feature.
    a coreutil already assumed present (keifu already shell-outs to `xclip`/`curl`
    etc. and targets Unix). The op function is a sibling of the existing ones:
    `rebase_interactive(repo_path, base_oid, todo_path) -> Result<OpOutcome>` via
-   `run_git_allow_conflict(repo_path, &["rebase", "-i", &base_oid.to_string()])`.
+   `git rebase -i --empty=drop --reschedule-failed-exec <base>`.
 
 2. **Conflicts + abort + continue are already wired for this exact state.**
    `operation_state()` maps `RebaseInteractive → OperationState::Rebase`
@@ -226,10 +226,10 @@ scripting entirely:
 - **squash** → emit the native `squash <sha>` verb and let `GIT_EDITOR=true`
   accept git's default concatenated message. Customising the squashed message is
   expressed as a `reword` on the squash target — no special case.
-- **fixup** / **drop** → native `fixup <sha>` / omit the line. **pick** →
+- **fixup** / **drop** → native `fixup <sha>` / `drop <sha>`. **pick** →
   `pick <sha>`.
 
-So our todo generator emits only `pick`/`squash`/`fixup`/`exec` lines — a small,
+So our todo generator emits only `pick`/`squash`/`fixup`/`drop`/`exec` lines — a small,
 **purely-testable** serialization (§5).
 
 ### Strongest counterargument (and why it loses)
@@ -270,14 +270,19 @@ existing-code change the design requires.
 | **Detached HEAD** | **Block** in v1: "Check out a branch to rebase." (`head_detached` is already tracked on `App`.) |
 | **Range contains a merge commit** | **Block** in v1 (no `--rebase-merges`): "Range contains a merge commit; not supported." Detect via `is_merge`. |
 | **Branch already pushed upstream** | **Warn, don't block.** The summary confirm notes the force-push implication, computed from `BranchInfo.upstream/ahead/behind`. Rewriting is the user's call. |
-| **Empty commit produced** (e.g. drop leaves a redundant patch) | Delegate to git (`--empty=drop` by default); note the dropped commit in the completion toast. |
+| **Empty commit produced** (e.g. drop leaves a redundant patch) | Pass `--empty=drop` explicitly so Git drops it and completes instead of stopping for a choice the recovery UI does not offer. |
+| **Reword amend hook/exec fails** | Git pauses and retains the failed `exec` because the initial command passes `--reschedule-failed-exec`; after the user fixes the cause, Continue retries the authored amend instead of silently keeping the old message. |
+| **Branch, HEAD, operation, or worktree changes while reviewing** | The plan retains the displayed full branch ref and HEAD OID. Confirmation reopens the repository and revalidates both plus raw Git operation state and worktree cleanliness under the execution lock, before writing execution state; mismatch is a non-blocking error and no rewrite starts. |
 
 ---
 
 ## 4. Safety integration (reuses the reflog-undo work)
 
-- **Pre-rebase snapshot into the `UndoLedger`.** Before running, capture
-  `pre = self.repo.head_oid()`. On `OpOutcome::Completed` with HEAD moved, record
+- **Pre-rebase snapshot into durable execution state.** Before running, capture
+  `pre = self.repo.head_oid()` with the plan count/base under
+  `.git/keifu-interactive-rebase`. This seed survives conflicts, pauses, and an
+  app relaunch. On `OpOutcome::Completed` with HEAD moved — whether returned by
+  the initial run or a later Continue — consume it before cleanup and record
   the *same* entry shape the merge/pull undos already use
   (`confirm_actions.rs`, merge arm; `src/undo.rs`):
 
@@ -306,6 +311,14 @@ existing-code change the design requires.
   never on abort. (Same principle as recording merge undo only on
   `OpOutcome::Completed`, `confirm_actions.rs`.)
 
+- **An active marker forbids new materialization.** The Keifu lock protects the
+  pre-marker startup window. After acquiring it, execution also refuses to
+  write any todo, message, or undo seed when `.git/rebase-merge/interactive`
+  already exists, so another app cannot corrupt a paused run's pending files.
+  Continue and Abort reacquire and retain the lock across their Git command and
+  the post-marker undo/cleanup handoff, so startup reconciliation or a new plan
+  cannot race into the shared directory after Git removes its marker.
+
 ---
 
 ## 5. Testing plan
@@ -320,7 +333,7 @@ existing-code change the design requires.
 - **Todo-file serialization**: plan → git todo text. Asserts the display order
   (newest-first in the UI) is **reversed** to git's oldest-first todo; that
   `reword` expands to `pick` + `exec git commit --amend -F <file>`; that
-  `squash`/`fixup` use native verbs; that `drop` omits the line; and that message
+  `squash`/`fixup`/`drop` use native verbs (including an all-drop range); and that message
   temp-file paths are wired correctly. This is the highest-value pure surface and
   where a serialization bug would corrupt a rebase.
 - **Summary generation**: action counts + force-push warning text from a fake
@@ -345,8 +358,9 @@ action, end-to-end:
 - **undo-after-success** resets to the pre-rebase HEAD (drives the ledger, like
   the existing undo merge test).
 
-No test drives the TUI render loop; all assert on git state (matching
-`undo_test.rs`).
+The binary debug-server test drives the TUI render loop from the commit menu
+through plan review and cancellation; execution tests separately assert final
+Git state (matching `undo_test.rs`).
 
 ---
 

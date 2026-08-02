@@ -78,6 +78,20 @@ impl App {
                         let outcome = rebase_branch(self.repo.repo(), &name, branch_type)?;
                         op_outcome = Some((outcome, OperationState::Rebase));
                     }
+                    ConfirmAction::RunInteractiveRebase(plan) => {
+                        match self.run_interactive_rebase_plan(plan) {
+                            Ok(outcome) => {
+                                op_outcome = Some((outcome, OperationState::Rebase));
+                            }
+                            Err(error) => {
+                                self.mode = AppMode::Normal;
+                                self.rebase_plan = None;
+                                self.show_error(format!("Interactive rebase failed: {error}"));
+                                return Ok(());
+                            }
+                        }
+                        self.rebase_plan = None;
+                    }
                     ConfirmAction::CherryPick(oid) => {
                         let outcome = cherry_pick(&self.repo_path, oid)?;
                         op_outcome = Some((outcome, OperationState::CherryPick));
@@ -87,7 +101,25 @@ impl App {
                         op_outcome = Some((outcome, OperationState::Revert));
                     }
                     ConfirmAction::AbortOperation(op) => {
-                        abort_operation(&self.repo_path, op)?;
+                        let cli_interactive_rebase =
+                            op == OperationState::Rebase && self.interactive_rebase_in_progress;
+                        let state_owner = if cli_interactive_rebase {
+                            Some(
+                                super::rebase_plan_actions::acquire_interactive_rebase_state(
+                                    self.repo.repo().path(),
+                                )?,
+                            )
+                        } else {
+                            None
+                        };
+                        if cli_interactive_rebase {
+                            crate::git::operations::abort_interactive_rebase(&self.repo_path)?;
+                            self.interactive_rebase_in_progress = false;
+                            self.cleanup_interactive_rebase_state();
+                        } else {
+                            abort_operation(&self.repo_path, op)?;
+                        }
+                        drop(state_owner);
                         self.refresh(true)?;
                         self.toast(
                             crate::toast::ToastKind::Success,
@@ -253,6 +285,9 @@ impl App {
                 } = confirm_action
                 {
                     self.reopen_file_diff_for_path(&file_path, scroll_offset)?;
+                } else if matches!(confirm_action, ConfirmAction::RunInteractiveRebase(_)) {
+                    self.rebase_plan = None;
+                    self.mode = AppMode::Normal;
                 } else {
                     self.mode = AppMode::Normal;
                 }
