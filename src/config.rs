@@ -124,7 +124,7 @@ impl Config {
             return Self::default();
         };
 
-        fs::read_to_string(&path)
+        fs::read_to_string(path)
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
@@ -374,10 +374,14 @@ impl UiState {
         let Some(path) = Self::state_path() else {
             return Self::default();
         };
+        Self::load_from_path(&path)
+    }
+
+    fn load_from_path(path: &std::path::Path) -> Self {
         if !path.exists() {
             return Self::default();
         }
-        fs::read_to_string(&path)
+        fs::read_to_string(path)
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
@@ -387,11 +391,15 @@ impl UiState {
         let Some(path) = Self::state_path() else {
             return;
         };
+        self.save_to_path(&path);
+    }
+
+    fn save_to_path(&self, path: &std::path::Path) {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(content) = toml::to_string(self) {
-            let _ = fs::write(&path, content);
+            let _ = fs::write(path, content);
         }
     }
 }
@@ -745,6 +753,28 @@ mod tests {
         };
         let restored: UiState = toml::from_str(&toml::to_string(&hidden).unwrap()).unwrap();
         assert!(restored.hide_stashes);
+    }
+
+    #[test]
+    fn status_bar_visibility_defaults_on_and_persists_to_a_state_file() {
+        let state_dir = tempfile::tempdir().unwrap();
+        let state_path = state_dir.path().join("state.toml");
+
+        // A first launch has no state file and retains the historical visible
+        // status bar. Saving a user's toggle must survive a fresh load.
+        assert!(UiState::load_from_path(&state_path).status_bar_visible);
+        UiState {
+            status_bar_visible: false,
+            ..UiState::default()
+        }
+        .save_to_path(&state_path);
+
+        let saved = fs::read_to_string(&state_path).unwrap();
+        assert!(saved.contains("status_bar_visible = false"));
+        assert!(
+            !UiState::load_from_path(&state_path).status_bar_visible,
+            "a fresh UI state must retain the hidden status bar preference"
+        );
     }
 
     #[test]
