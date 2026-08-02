@@ -596,6 +596,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 HelpPopup::new(app.is_uncommitted_selected(), &theme, app.help_scroll),
                 popup_area,
             );
+            rendered_popup = Some(popup_area);
         }
         AppMode::Input {
             input,
