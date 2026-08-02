@@ -121,7 +121,7 @@ fn handle_input_event(
             app.editing_commit_message,
             app.files_pane.files_filter_active,
             app.commit_filter_active,
-            app.is_network_busy(),
+            app.can_cancel_network_operation(),
         )
         .or_else(|| {
             map_key_to_action(

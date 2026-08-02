@@ -325,6 +325,7 @@ impl StatusBar {
                         NetworkOperation::Pull => "Pulling…",
                         NetworkOperation::Push => "Pushing…",
                     },
+                    NetworkPhase::Integrating => "Integrating pull…",
                     NetworkPhase::Cancelling(_) => "Cancelling…",
                 };
                 let progress_style = Style::default()

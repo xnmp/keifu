@@ -121,7 +121,7 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
                         app.editing_commit_message,
                         app.files_pane.files_filter_active,
                         app.commit_filter_active,
-                        app.is_network_busy(),
+                        app.can_cancel_network_operation(),
                     )
                     .or_else(|| {
                         map_key_to_action(
@@ -273,6 +273,7 @@ fn state_json(app: &App) -> Value {
     });
     let network_phase = network_status.map(|status| match status.phase {
         crate::network::NetworkPhase::Running => "running",
+        crate::network::NetworkPhase::Integrating => "integrating",
         crate::network::NetworkPhase::Cancelling(_) => "cancelling",
     });
 

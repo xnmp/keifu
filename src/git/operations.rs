@@ -1,6 +1,6 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -27,10 +27,12 @@ const HTTP_LOW_SPEED_SECONDS: &str = "60";
 pub(crate) struct NetworkCommandControl {
     cancellation: CancellationToken,
     progress_tx: Sender<NetworkProgress>,
+    integration_tx: Option<Sender<Sender<()>>>,
     progress: Arc<Mutex<NetworkProgress>>,
 }
 
 impl NetworkCommandControl {
+    #[cfg(test)]
     pub(crate) fn new(
         cancellation: CancellationToken,
         progress_tx: Sender<NetworkProgress>,
@@ -38,6 +40,20 @@ impl NetworkCommandControl {
         Self {
             cancellation,
             progress_tx,
+            integration_tx: None,
+            progress: Arc::new(Mutex::new(NetworkProgress::default())),
+        }
+    }
+
+    pub(crate) fn with_integration(
+        cancellation: CancellationToken,
+        progress_tx: Sender<NetworkProgress>,
+        integration_tx: Sender<Sender<()>>,
+    ) -> Self {
+        Self {
+            cancellation,
+            progress_tx,
+            integration_tx: Some(integration_tx),
             progress: Arc::new(Mutex::new(NetworkProgress::default())),
         }
     }
@@ -61,6 +77,22 @@ impl NetworkCommandControl {
             *progress
         };
         let _ = self.progress_tx.send(snapshot);
+    }
+
+    /// Synchronize the worker's durable pull-integration boundary with the App
+    /// event loop. The manager enters `Integrating` before acknowledging, so
+    /// repository-mutating actions are gated before this method returns.
+    fn begin_pull_integration(&self) -> Result<(), NetworkFailure> {
+        let Some(integration_tx) = &self.integration_tx else {
+            return Ok(());
+        };
+        let (acknowledge_tx, acknowledge_rx) = std::sync::mpsc::channel();
+        integration_tx.send(acknowledge_tx).map_err(|_| {
+            NetworkFailure::Failed("Pull integration manager disconnected".to_string())
+        })?;
+        acknowledge_rx.recv().map_err(|_| {
+            NetworkFailure::Failed("Pull integration was not acknowledged".to_string())
+        })
     }
 }
 
@@ -173,9 +205,72 @@ fn process_group_exists(process_group: i32) -> std::io::Result<bool> {
 }
 
 #[cfg(unix)]
+fn process_exists(process: i32) -> std::io::Result<bool> {
+    // SAFETY: signal 0 performs existence/permission checking only.
+    let result = unsafe { libc::kill(process, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn descendant_processes(root: i32) -> HashSet<i32> {
+    let Ok(output) = Command::new("ps").args(["-e", "-o", "pid=,ppid="]).output() else {
+        return HashSet::from([root]);
+    };
+    let pairs: Vec<(i32, i32)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .collect();
+    let mut owned = HashSet::from([root]);
+    loop {
+        let before = owned.len();
+        for (pid, parent) in &pairs {
+            if owned.contains(parent) {
+                owned.insert(*pid);
+            }
+        }
+        if owned.len() == before {
+            return owned;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn signal_network_processes(
+    process_group: i32,
+    owned_processes: &HashSet<i32>,
+    signal: i32,
+) -> std::io::Result<()> {
+    signal_process_group(process_group, signal)?;
+    for process in owned_processes {
+        // SAFETY: each positive PID came from the process table rooted at the
+        // spawned Git child; no pointers are involved.
+        let result = unsafe { libc::kill(*process, signal) };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn wait_for_network_process_group(
     child: &mut Child,
     process_group: i32,
+    owned_processes: &HashSet<i32>,
     direct_child_reaped: &mut bool,
     grace: Duration,
     subcommand: &str,
@@ -198,7 +293,18 @@ fn wait_for_network_process_group(
                 "Failed to inspect git {subcommand} process group: {error}"
             ))
         })?;
-        if *direct_child_reaped && !group_exists {
+        let owned_exists = owned_processes
+            .iter()
+            .filter(|process| **process != process_group || !*direct_child_reaped)
+            .try_fold(false, |exists, process| {
+                process_exists(*process).map(|current| exists || current)
+            })
+            .map_err(|error| {
+                NetworkFailure::Failed(format!(
+                    "Failed to inspect git {subcommand} helper: {error}"
+                ))
+            })?;
+        if *direct_child_reaped && !group_exists && !owned_exists {
             return Ok(true);
         }
         if Instant::now() >= deadline {
@@ -214,18 +320,23 @@ fn wait_for_network_process_group(
 /// signal-ignoring helpers. Pull integration is deliberately outside this
 /// runner, so escalation cannot interrupt index/worktree mutation.
 #[cfg(unix)]
-fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), NetworkFailure> {
+fn terminate_network_process(mut child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
     let process_group = i32::try_from(child.id()).map_err(|_| {
         NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
     })?;
+    // Snapshot the full descendant tree before signaling. This retains explicit
+    // ownership of helpers that called setsid()/setpgid() and escaped Git's
+    // process group while remaining descendants of the launched command.
+    let owned_processes = descendant_processes(process_group);
     let mut direct_child_reaped = false;
 
-    signal_process_group(process_group, libc::SIGINT).map_err(|error| {
+    signal_network_processes(process_group, &owned_processes, libc::SIGINT).map_err(|error| {
         NetworkFailure::Failed(format!("Failed to interrupt git {subcommand}: {error}"))
     })?;
     if wait_for_network_process_group(
-        child,
+        &mut child,
         process_group,
+        &owned_processes,
         &mut direct_child_reaped,
         NETWORK_INTERRUPT_GRACE,
         subcommand,
@@ -233,12 +344,13 @@ fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), 
         return Ok(());
     }
 
-    signal_process_group(process_group, libc::SIGTERM).map_err(|error| {
+    signal_network_processes(process_group, &owned_processes, libc::SIGTERM).map_err(|error| {
         NetworkFailure::Failed(format!("Failed to terminate git {subcommand}: {error}"))
     })?;
     if wait_for_network_process_group(
-        child,
+        &mut child,
         process_group,
+        &owned_processes,
         &mut direct_child_reaped,
         NETWORK_TERMINATE_GRACE,
         subcommand,
@@ -246,38 +358,38 @@ fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), 
         return Ok(());
     }
 
-    signal_process_group(process_group, libc::SIGKILL).map_err(|error| {
+    signal_network_processes(process_group, &owned_processes, libc::SIGKILL).map_err(|error| {
         NetworkFailure::Failed(format!("Failed to kill git {subcommand}: {error}"))
     })?;
-    if !direct_child_reaped {
-        child.wait().map_err(|error| {
-            NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
-        })?;
-        direct_child_reaped = true;
-    }
     if !wait_for_network_process_group(
-        child,
+        &mut child,
         process_group,
+        &owned_processes,
         &mut direct_child_reaped,
         NETWORK_KILL_REAP_GRACE,
         subcommand,
     )? {
+        if !direct_child_reaped {
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
         return Err(NetworkFailure::Failed(format!(
-            "git {subcommand} helper process did not exit after cancellation"
+            "git {subcommand} process tree did not exit within the cancellation deadline"
         )));
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), NetworkFailure> {
+fn terminate_network_process(mut child: Child, _subcommand: &str) -> Result<(), NetworkFailure> {
     // Cancellation tokens are rejected on these platforms because std does
     // not expose a portable soft-signal/process-group API. This function is
     // therefore only the cleanup path for an unexpected `try_wait` error: wait
     // naturally rather than risking repository state with a direct force-kill.
-    child.wait().map_err(|error| {
-        NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
-    })?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
@@ -422,19 +534,19 @@ fn run_network_git_output(
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
-                let _ = terminate_network_process(&mut child, subcommand);
+                let _ = terminate_network_process(child, subcommand);
                 return Err(NetworkFailure::Failed(format!(
                     "Failed to wait for git {subcommand}: {error}"
                 )));
             }
         }
         if let Some(reason) = control.cancellation_reason() {
-            terminate_network_process(&mut child, subcommand)?;
+            terminate_network_process(child, subcommand)?;
             // Helpers spawned by Git (git-remote-https, ssh, credential
-            // helpers) can daemonize away from the original process group and
-            // retain these pipes. Do not synchronously join readers on the
-            // cancellation path; a detached reader cannot hold the UI busy and
-            // finishes when any escaped helper eventually closes the pipe.
+            // helpers) can move into another process group. The termination
+            // helper snapshots and signals those owned descendants explicitly.
+            // Readers remain detached here so an unrelated inherited
+            // descriptor can never hold the UI busy after owned processes die.
             return Err(NetworkFailure::Cancelled(reason));
         }
         thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
@@ -1146,6 +1258,29 @@ impl PullMode {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PullHeadSnapshot {
+    reference: Option<String>,
+    target: Option<Oid>,
+    detached: bool,
+}
+
+fn pull_head_snapshot(repo_path: &str) -> Result<PullHeadSnapshot, NetworkFailure> {
+    let repo = Repository::open(repo_path)
+        .map_err(|error| NetworkFailure::Failed(format!("Failed to inspect pull HEAD: {error}")))?;
+    let detached = repo
+        .head_detached()
+        .map_err(|error| NetworkFailure::Failed(format!("Failed to inspect pull HEAD: {error}")))?;
+    let head = repo.head().ok();
+    Ok(PullHeadSnapshot {
+        reference: head
+            .as_ref()
+            .and_then(|reference| reference.name().map(str::to_string)),
+        target: head.as_ref().and_then(|reference| reference.target()),
+        detached,
+    })
+}
+
 /// Fetch and integrate from a remote (`git pull`) with an explicit `mode`.
 ///
 /// The default is `PullMode::FfOnly`: with `pull.rebase`/`pull.ff` unset (git
@@ -1185,6 +1320,7 @@ pub(crate) fn pull_controlled(
     creds: Option<&Credentials>,
     control: &NetworkCommandControl,
 ) -> Result<OpOutcome, NetworkFailure> {
+    let starting_head = pull_head_snapshot(repo_path)?;
     // Keep the cancellable boundary around network transfer only. `git pull`
     // combines fetch with durable index/worktree integration; interrupting that
     // combined command can leave a half-started merge/rebase or stale locks.
@@ -1206,6 +1342,14 @@ pub(crate) fn pull_controlled(
     }
     if let Some(reason) = control.cancellation_reason() {
         return Err(NetworkFailure::Cancelled(reason));
+    }
+    control.begin_pull_integration()?;
+    let current_head = pull_head_snapshot(repo_path)?;
+    if current_head != starting_head {
+        return Err(NetworkFailure::Failed(
+            "Pull stopped because HEAD changed while fetching; retry on the intended branch"
+                .to_string(),
+        ));
     }
 
     let integration_args: &[&str] = match mode {
@@ -1911,8 +2055,9 @@ pub fn file_history(repo_path: &str, path: &str, limit: usize) -> Result<Vec<Oid
 mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
-        is_divergent_pull_error, is_https_auth_failure, run_network_git_output, url_host, AuthUrl,
-        GitProgressParser, NetworkCommandControl, OpOutcome, PullMode,
+        is_divergent_pull_error, is_https_auth_failure, run_network_git_output,
+        terminate_network_process, url_host, AuthUrl, GitProgressParser, NetworkCommandControl,
+        OpOutcome, PullMode,
     };
     use crate::network::{CancellationReason, CancellationToken, NetworkFailure};
     use std::sync::mpsc;
@@ -1936,7 +2081,7 @@ mod tests {
         assert_eq!(final_progress.bytes, 2 * 1024 * 1024);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn real_git_child_cancellation_returns_without_waiting_for_inherited_pipes() {
         use std::os::unix::fs::PermissionsExt;
@@ -1959,10 +2104,9 @@ mod tests {
                 "#!/bin/sh\n\
                  git config --get http.lowSpeedLimit > \"{}\"\n\
                  git config --get http.lowSpeedTime >> \"{}\"\n\
-                 printf '%s' \"$$\" > \"{}\"\n\
+                 setsid sh -c 'printf \"%s\" \"$$\" > \"{}\"; trap \"\" INT TERM; sleep 8' &\n\
                  printf 'remote: Counting objects: 50%% (500/1000)\\r' >&2\n\
-                 trap '' INT TERM\n\
-                 sleep 8\n",
+                 wait\n",
                 config_log.display(),
                 config_log.display(),
                 helper_pid_log.display()
@@ -1998,6 +2142,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("real Git helper should report measurable progress");
         assert_eq!(progress.objects, 500);
+        wait_for_marker(&helper_pid_log);
         assert!(cancellation.request(CancellationReason::User));
         let cancelled_at = Instant::now();
         assert_eq!(
@@ -2019,6 +2164,40 @@ mod tests {
                 .unwrap()
                 .success(),
             "the transport helper must not survive cancellation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_escalation_has_a_direct_child_reap_deadline() {
+        use std::os::unix::process::CommandExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("direct-child-ready");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "trap '' INT TERM; printf ready > \"{}\"; sleep 8",
+                marker.display()
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let child = command.spawn().unwrap();
+        wait_for_marker(&marker);
+
+        let started = Instant::now();
+        terminate_network_process(child, "test-child").unwrap();
+
+        assert!(
+            started.elapsed()
+                < super::NETWORK_INTERRUPT_GRACE
+                    + super::NETWORK_TERMINATE_GRACE
+                    + super::NETWORK_KILL_REAP_GRACE
+                    + Duration::from_secs(1),
+            "direct-child reaping must not exceed the documented escalation deadline"
         );
     }
 
@@ -2483,6 +2662,47 @@ mod tests {
         assert!(lock_files(&local.join(".git")).is_empty());
         fetch_remote_controlled(local.to_str().unwrap(), "origin", None, &fresh_control())
             .expect("a subsequent controlled network operation must succeed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pull_revalidates_head_after_integration_gate_acknowledgement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, old_oid, _new_oid) = setup_advanced_remote(&tmp);
+        let cancellation = CancellationToken::default();
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let (integration_tx, integration_rx) = mpsc::channel();
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            pull_controlled(
+                &local_for_worker,
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &control,
+            )
+        });
+
+        let acknowledge = integration_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("pull should request its integration lifecycle gate");
+        git(&local, &["checkout", "-qb", "other"]);
+        acknowledge.send(()).unwrap();
+
+        let error = worker
+            .join()
+            .expect("pull worker panicked")
+            .expect_err("changed HEAD must stop integration");
+        assert!(error.to_string().contains("HEAD changed while fetching"));
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.head().unwrap().shorthand(), Some("other"));
+        assert_eq!(repo.head().unwrap().target(), Some(old_oid));
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(std::fs::read_to_string(local.join("a.txt")).unwrap(), "a");
+        assert!(lock_files(&local.join(".git")).is_empty());
     }
 
     /// #91: `fetch_all` fetches remotes independently — a broken remote must not

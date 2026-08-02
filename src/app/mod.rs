@@ -1487,6 +1487,90 @@ impl App {
         }
     }
 
+    fn repository_mutation_during_pull_integration(&self, action: &Action) -> bool {
+        if !self.network.is_integrating() {
+            return false;
+        }
+        if matches!(
+            action,
+            Action::Checkout
+                | Action::CreateBranch
+                | Action::DeleteBranch
+                | Action::ConfirmDeleteBranchAndRemote
+                | Action::Merge
+                | Action::Rebase
+                | Action::UndoLastOp
+                | Action::RestoreFile
+                | Action::ToggleStage
+                | Action::StageAll
+                | Action::UnstageAll
+                | Action::AddToGitignore
+                | Action::ArchiveFile
+                | Action::TrashFile
+                | Action::UndoLastFileOp
+                | Action::AcceptOurs
+                | Action::AcceptTheirs
+                | Action::ContinueOperation
+                | Action::AbortOperation
+                | Action::CommitChanges
+                | Action::AmendCommit
+                | Action::StashStaged
+                | Action::StageHunk
+                | Action::UnstageHunk
+                | Action::DiscardHunk
+        ) {
+            return true;
+        }
+
+        match (&self.mode, action) {
+            (
+                AppMode::Confirm {
+                    action: confirm_action,
+                    ..
+                },
+                Action::Confirm | Action::ConfirmDeleteBranchAndRemote,
+            ) => matches!(
+                confirm_action,
+                ConfirmAction::Checkout { .. }
+                    | ConfirmAction::Undo
+                    | ConfirmAction::DeleteBranch(_)
+                    | ConfirmAction::DeleteBranchWithRemote { .. }
+                    | ConfirmAction::Merge { .. }
+                    | ConfirmAction::Rebase { .. }
+                    | ConfirmAction::CherryPick(_)
+                    | ConfirmAction::Revert(_)
+                    | ConfirmAction::ResetSoft(_)
+                    | ConfirmAction::ResetMixed(_)
+                    | ConfirmAction::ResetHard(_)
+                    | ConfirmAction::TrashFile(_)
+                    | ConfirmAction::RestoreFile(_)
+                    | ConfirmAction::StashDrop(_)
+                    | ConfirmAction::DeleteTag(_)
+                    | ConfirmAction::AbortOperation(_)
+                    | ConfirmAction::DiscardHunk { .. }
+            ),
+            (
+                AppMode::Input {
+                    action: input_action,
+                    ..
+                },
+                Action::Confirm,
+            ) => matches!(
+                input_action,
+                InputAction::CreateBranch
+                    | InputAction::AddTag
+                    | InputAction::RenameBranch { .. }
+                    | InputAction::BranchFromStash { .. }
+                    | InputAction::StashPush { .. }
+            ),
+            (
+                AppMode::BranchPicker { .. } | AppMode::CommitMenu { .. },
+                Action::Confirm | Action::MenuSelect,
+            ) => true,
+            _ => false,
+        }
+    }
+
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         if matches!(action, Action::ForceQuit) {
             // The issue worker owns a private clipboard-image copy. Let it
@@ -1500,6 +1584,13 @@ impl App {
                 return Ok(());
             }
             self.should_quit = true;
+            return Ok(());
+        }
+        if self.repository_mutation_during_pull_integration(&action) {
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Pull integration in progress; wait before changing the repository",
+            );
             return Ok(());
         }
         if matches!(action, Action::ToggleLayout) {

@@ -15,6 +15,10 @@ impl App {
         self.network.status()
     }
 
+    pub fn can_cancel_network_operation(&self) -> bool {
+        self.network.can_cancel()
+    }
+
     pub(crate) fn cancel_network_operation(&mut self) {
         self.network.cancel_active(CancellationReason::User);
     }

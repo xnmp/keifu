@@ -44,6 +44,9 @@ pub enum CancellationReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkPhase {
     Running,
+    /// Pull transport finished; local index/worktree integration is now
+    /// non-cancellable and repository-mutating actions must be gated.
+    Integrating,
     Cancelling(CancellationReason),
 }
 
@@ -157,6 +160,7 @@ pub struct NetworkManager {
     pull_receiver: Option<Receiver<Result<OpOutcome, NetworkFailure>>>,
     active: Option<ActiveOperation>,
     progress_receiver: Option<Receiver<NetworkProgress>>,
+    integration_receiver: Option<Receiver<Sender<()>>>,
     last_refresh_time: Instant,
     last_fetch_time: Instant,
 }
@@ -202,6 +206,7 @@ impl NetworkManager {
             pull_receiver: None,
             active: None,
             progress_receiver: None,
+            integration_receiver: None,
             last_refresh_time: now,
             last_fetch_time: now,
         }
@@ -227,6 +232,21 @@ impl NetworkManager {
 
     pub fn is_busy(&self) -> bool {
         self.is_fetching() || self.is_pushing() || self.is_pulling()
+    }
+
+    /// Whether pull has crossed into its non-cancellable local mutation phase.
+    pub fn is_integrating(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.phase == NetworkPhase::Integrating)
+    }
+
+    pub fn can_cancel(&self) -> bool {
+        NETWORK_CANCELLATION_SUPPORTED
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.phase == NetworkPhase::Running)
     }
 
     /// Current operation lifecycle snapshot, when network work is active.
@@ -317,6 +337,12 @@ impl NetworkManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub fn activate_integrating_pull_for_test(&mut self) {
+        self.activate_for_test(NetworkOperation::Pull, Instant::now());
+        self.active.as_mut().expect("activated pull").phase = NetworkPhase::Integrating;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn finish_cancelled_for_test(&mut self, reason: CancellationReason) {
         let Some(operation) = self.active.as_ref().map(|active| active.operation) else {
             return;
@@ -343,9 +369,14 @@ impl NetworkManager {
     fn begin_operation(
         &mut self,
         operation: NetworkOperation,
-    ) -> (CancellationToken, Sender<NetworkProgress>) {
+    ) -> (
+        CancellationToken,
+        Sender<NetworkProgress>,
+        Sender<Sender<()>>,
+    ) {
         let cancellation = CancellationToken::default();
         let (progress_tx, progress_rx) = mpsc::channel();
+        let (integration_tx, integration_rx) = mpsc::channel();
         self.active = Some(ActiveOperation {
             operation,
             phase: NetworkPhase::Running,
@@ -354,7 +385,8 @@ impl NetworkManager {
             cancellation: cancellation.clone(),
         });
         self.progress_receiver = Some(progress_rx);
-        (cancellation, progress_tx)
+        self.integration_receiver = Some(integration_rx);
+        (cancellation, progress_tx, integration_tx)
     }
 
     /// Drain worker progress and transition a stalled operation into automatic
@@ -372,7 +404,24 @@ impl NetworkManager {
         for snapshot in progress {
             self.record_progress_at(snapshot, now);
         }
-        self.check_inactivity_at(now)
+        let integration_barriers: Vec<_> = self
+            .integration_receiver
+            .as_ref()
+            .map(|receiver| receiver.try_iter().collect())
+            .unwrap_or_default();
+        let mut integration_started = false;
+        for acknowledge in integration_barriers {
+            if let Some(active) = self.active.as_mut() {
+                if active.operation == NetworkOperation::Pull
+                    && active.phase == NetworkPhase::Running
+                {
+                    active.phase = NetworkPhase::Integrating;
+                    integration_started = true;
+                    let _ = acknowledge.send(());
+                }
+            }
+        }
+        integration_started || self.check_inactivity_at(now)
     }
 
     fn finish_operation(&mut self, operation: NetworkOperation) {
@@ -383,6 +432,7 @@ impl NetworkManager {
         {
             self.active = None;
             self.progress_receiver = None;
+            self.integration_receiver = None;
         }
     }
 
@@ -396,8 +446,10 @@ impl NetworkManager {
         creds: Option<Credentials>,
     ) -> Option<String> {
         let (tx, rx) = mpsc::channel();
-        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Fetch);
-        let control = NetworkCommandControl::new(cancellation, progress_tx);
+        let (cancellation, progress_tx, integration_tx) =
+            self.begin_operation(NetworkOperation::Fetch);
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
         let path = repo_path.to_string();
         let remote_owned = remote.to_string();
         thread::spawn(move || {
@@ -418,8 +470,10 @@ impl NetworkManager {
     /// `poll_fetch` / refresh path as a single-remote fetch.
     pub fn start_fetch_all(&mut self, repo_path: &str, creds: Option<Credentials>) -> String {
         let (tx, rx) = mpsc::channel();
-        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Fetch);
-        let control = NetworkCommandControl::new(cancellation, progress_tx);
+        let (cancellation, progress_tx, integration_tx) =
+            self.begin_operation(NetworkOperation::Fetch);
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
         let path = repo_path.to_string();
         thread::spawn(move || {
             let result = fetch_all_controlled(&path, creds.as_ref(), &control);
@@ -438,8 +492,10 @@ impl NetworkManager {
         creds: Option<Credentials>,
     ) -> String {
         let (tx, rx) = mpsc::channel();
-        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Push);
-        let control = NetworkCommandControl::new(cancellation, progress_tx);
+        let (cancellation, progress_tx, integration_tx) =
+            self.begin_operation(NetworkOperation::Push);
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
         let path = repo_path.to_string();
         let message = match &spec {
             PushSpec::Current => "Pushing...".to_string(),
@@ -480,8 +536,10 @@ impl NetworkManager {
         creds: Option<Credentials>,
     ) -> String {
         let (tx, rx) = mpsc::channel();
-        let (cancellation, progress_tx) = self.begin_operation(NetworkOperation::Pull);
-        let control = NetworkCommandControl::new(cancellation, progress_tx);
+        let (cancellation, progress_tx, integration_tx) =
+            self.begin_operation(NetworkOperation::Pull);
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
         let path = repo_path.to_string();
         let message = match &remote {
             Some(r) => format!("Pulling from {r}..."),
