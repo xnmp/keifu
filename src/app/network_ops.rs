@@ -326,6 +326,29 @@ impl App {
         true
     }
 
+    /// Kick off / poll authoritative GitHub repository metadata used by the
+    /// browser-based Open PR action. Never blocks the UI thread.
+    pub fn update_pr_repo_info(&mut self) -> bool {
+        self.pr_repo_fetch.maybe_start(&self.repo_path);
+        let info = match self.pr_repo_fetch.poll() {
+            Some(Ok(info)) => {
+                self.refresh_latches.pr_repo_fetch = false;
+                info
+            }
+            Some(Err(e)) => {
+                if !self.refresh_latches.pr_repo_fetch {
+                    self.refresh_latches.pr_repo_fetch = true;
+                    self.set_message(format!("PR repository fetch failed: {e}"));
+                }
+                return false;
+            }
+            None => return false,
+        };
+        let changed = self.pr_repo_info.as_ref() != Some(&info);
+        self.pr_repo_info = Some(info);
+        changed
+    }
+
     /// Kick off / poll the background merged-PR fetch (`gh pr list --state
     /// merged`). On a change, hand the new signal to the background classifier;
     /// its result is applied by `update_merged_classification`. This is the

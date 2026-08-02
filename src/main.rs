@@ -270,6 +270,7 @@ fn main() -> Result<()> {
         needs_render |= app.update_pull_status();
         needs_render |= app.check_auto_refresh();
         needs_render |= app.poll_fs_watcher();
+        needs_render |= app.update_pr_repo_info();
         needs_render |= app.update_open_prs();
         needs_render |= app.update_merged_prs();
         needs_render |= app.update_merged_classification();

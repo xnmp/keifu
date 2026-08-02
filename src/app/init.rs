@@ -256,6 +256,7 @@ impl App {
             pending_auth: None,
             open_prs: std::collections::HashMap::new(),
             pr_repo_info: None,
+            pr_repo_fetch: crate::pr::repo_info_fetch(),
             pr_fetch: crate::pr::open_pr_fetch(),
             last_pull: None,
             pre_pull_head: None,

@@ -984,6 +984,9 @@ pub struct RefreshLatches {
     /// reports once rather than every 5-minute tick — and cleared on success.
     /// The last-good PR map is kept on failure rather than wiped.
     pub pr_fetch: bool,
+    /// Background GitHub repository-metadata poll failures. The last-good URL
+    /// and default base remain usable until the next successful poll.
+    pub pr_repo_fetch: bool,
     /// Background merged-PR poll (`gh pr list --state merged`) failures (issue
     /// #65). Same once-per-episode shape as `pr_fetch`.
     pub merged_fetch: bool,
@@ -1150,6 +1153,7 @@ pub struct App {
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
     pub pr_repo_info: Option<crate::pr::PrRepoInfo>,
+    pub pr_repo_fetch: crate::interval_fetch::IntervalFetch<crate::pr::PrRepoInfo>,
     pub pr_fetch:
         crate::interval_fetch::IntervalFetch<std::collections::HashMap<String, crate::pr::PrInfo>>,
 
