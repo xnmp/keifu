@@ -300,6 +300,28 @@ mod tests {
         (tmp, app, base, head)
     }
 
+    fn app_with_conflicting_range() -> (tempfile::TempDir, App, Oid, Oid) {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        git(tmp.path(), &["config", "user.name", "Test User"]);
+        git(tmp.path(), &["config", "user.email", "test@example.com"]);
+        std::fs::write(tmp.path().join("f.txt"), "base\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "base"]);
+        let repo = git2::Repository::open(tmp.path()).unwrap();
+        let base = repo.head().unwrap().target().unwrap();
+        std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "one"]);
+        std::fs::write(tmp.path().join("f.txt"), "two\n").unwrap();
+        git(tmp.path(), &["add", "."]);
+        git(tmp.path(), &["commit", "-q", "-m", "two"]);
+        let head = repo.head().unwrap().target().unwrap();
+        drop(repo);
+        let app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        (tmp, app, base, head)
+    }
+
     #[test]
     fn plan_screen_lists_the_real_range_and_cancel_preserves_head() {
         let (_tmp, mut app, base, head) = app_with_range();
@@ -509,6 +531,113 @@ mod tests {
         assert!(
             !tmp.path().join(".git/keifu-interactive-rebase").exists(),
             "app-driven abort must remove durable reword/todo state"
+        );
+    }
+
+    #[test]
+    fn continued_interactive_rebase_after_restart_can_be_undone() {
+        let (tmp, mut app, base, original_head) = app_with_conflicting_range();
+        app.start_interactive_rebase(base);
+        app.rebase_plan.as_mut().unwrap().move_down(0).unwrap();
+        let plan = app.rebase_plan.clone().unwrap();
+        app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan),
+        };
+        app.handle_action(Action::Confirm).unwrap();
+        assert!(app.interactive_rebase_in_progress);
+        drop(app);
+
+        std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
+        git(tmp.path(), &["add", "f.txt"]);
+        let mut resumed = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        resumed.focused_panel = FocusedPanel::Files;
+        resumed.handle_action(Action::ContinueOperation).unwrap();
+        let rebased_head = resumed.repo.head_oid().unwrap();
+        assert_ne!(rebased_head, original_head);
+
+        resumed.focused_panel = FocusedPanel::Graph;
+        resumed.handle_action(Action::UndoLastOp).unwrap();
+        let AppMode::Confirm { message, .. } = &resumed.mode else {
+            panic!("completed Continue must make the rebase undoable")
+        };
+        assert!(message.contains(&short_hash(original_head)));
+        resumed.handle_action(Action::Confirm).unwrap();
+
+        assert_eq!(resumed.repo.head_oid(), Some(original_head));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            "two\n"
+        );
+    }
+
+    #[test]
+    fn second_instance_cannot_overwrite_pending_reword_of_paused_rebase() {
+        let (tmp, mut first_app, base, _original_head) = app_with_conflicting_range();
+        first_app.start_interactive_rebase(base);
+        first_app
+            .rebase_plan
+            .as_mut()
+            .unwrap()
+            .move_down(0)
+            .unwrap();
+        first_app
+            .rebase_plan
+            .as_mut()
+            .unwrap()
+            .set_reword_message(0, "original pending message")
+            .unwrap();
+        let first_plan = first_app.rebase_plan.clone().unwrap();
+        let mut second_plan = first_plan.clone();
+        second_plan
+            .set_reword_message(0, "overwritten by second instance")
+            .unwrap();
+        first_app.mode = AppMode::Confirm {
+            message: rebase_summary(&first_plan),
+            action: ConfirmAction::RunInteractiveRebase(first_plan),
+        };
+        first_app.handle_action(Action::Confirm).unwrap();
+        assert!(first_app.interactive_rebase_in_progress);
+        drop(first_app);
+
+        let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
+        let message_path = std::fs::read_dir(&state_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("message-")
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&message_path).unwrap(),
+            "original pending message"
+        );
+        let mut second_app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+
+        let second_start = second_app.run_interactive_rebase_plan(second_plan);
+
+        assert!(second_start.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&message_path).unwrap(),
+            "original pending message"
+        );
+        std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
+        git(tmp.path(), &["add", "f.txt"]);
+        second_app.focused_panel = FocusedPanel::Files;
+        second_app.handle_action(Action::ContinueOperation).unwrap();
+        assert_eq!(
+            second_app
+                .repo
+                .repo()
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .summary(),
+            Some("original pending message")
         );
     }
 
