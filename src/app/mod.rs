@@ -157,6 +157,14 @@ fn open_url(url: &str) -> Result<()> {
     anyhow::bail!("No URL opener found (install xdg-open)")
 }
 
+/// Injectable URL-opening boundary. Production uses the detached system
+/// opener above; integration tests substitute a recorder or a failure.
+pub type UrlOpener = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+fn default_url_opener() -> UrlOpener {
+    std::sync::Arc::new(|url| open_url(url).map_err(|e| e.to_string()))
+}
+
 /// Format a file-count label: the single quoted path, or "N files".
 fn file_count_label(paths: &[String]) -> String {
     if paths.len() == 1 {
@@ -1152,6 +1160,9 @@ pub struct App {
     // Open GitHub PRs by head branch name, refreshed in the background via the
     // `gh` CLI. Empty when gh is unavailable or the repo has no GitHub remote.
     pub open_prs: std::collections::HashMap<String, crate::pr::PrInfo>,
+    /// True only after the first successful open-PR fetch. Until then an empty
+    /// map means “unknown,” not “this repository has no open PRs.”
+    pub open_prs_loaded: bool,
     pub pr_repo_info: Option<crate::pr::PrRepoInfo>,
     pub pr_repo_fetch: crate::interval_fetch::IntervalFetch<crate::pr::PrRepoInfo>,
     pub pr_fetch:
@@ -1185,6 +1196,7 @@ pub struct App {
     // Mutating PR actions (create/merge/review): compose editor + async runner.
     pub pr_editor: crate::text_editor::TextEditor,
     pub pr_action_runner: crate::pr_action::PrActionRunner,
+    pub url_opener: UrlOpener,
 
     // GitHub Issues: on-demand fetcher + async action runner, the list/detail
     // popup views (`Some` only while open), the compose editor, and the live
