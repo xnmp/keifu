@@ -201,7 +201,17 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_encode, build_osc52_sequence, OSC52_MAX_BASE64_LEN};
+    use super::{
+        base64_encode, build_osc52_sequence, keyboard_enhancement_flags, KeyboardEnhancementFlags,
+        OSC52_MAX_BASE64_LEN,
+    };
+
+    #[test]
+    fn keyboard_enhancement_reports_all_keys_for_capslock_state() {
+        let flags = keyboard_enhancement_flags();
+        assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+    }
 
     #[test]
     fn encodes_base64_with_padding() {

@@ -403,6 +403,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_capslock_state_key() {
+        let event = parse_key_sequence("<caps-k>").unwrap().pop().unwrap();
+        assert_eq!(event.code, KeyCode::Char('k'));
+        assert_eq!(event.modifiers, KeyModifiers::NONE);
+        assert!(event
+            .state
+            .contains(crossterm::event::KeyEventState::CAPS_LOCK));
+    }
+
+    #[test]
     fn rejects_unknown_tokens() {
         assert!(parse_key_sequence("<bogus>").is_err());
         assert!(parse_key_sequence("ab").is_err());
