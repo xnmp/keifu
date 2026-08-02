@@ -737,7 +737,9 @@ mod tests {
     #[test]
     fn completion_handoff_blocks_a_new_plan_until_undo_and_cleanup_finish() {
         use std::io::Write;
-        use std::time::{Duration, Instant};
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
 
         let (tmp, mut first_app, base, original_head) = app_with_conflicting_range();
         first_app.start_interactive_rebase(base);
@@ -758,13 +760,31 @@ mod tests {
 
         let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
         let undo_path = state_dir.join(INTERACTIVE_REBASE_UNDO_FILE);
-        let mut undo_file = OpenOptions::new().append(true).open(&undo_path).unwrap();
-        undo_file.write_all(&vec![b' '; 64 * 1024 * 1024]).unwrap();
-        drop(undo_file);
+        let undo_seed = std::fs::read(&undo_path).unwrap();
+        let original_todo = std::fs::read(state_dir.join("todo")).unwrap();
+        std::fs::remove_file(&undo_path).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&undo_path)
+            .status()
+            .unwrap()
+            .success());
         std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
         git(tmp.path(), &["add", "f.txt"]);
+        let hook = tmp.path().join(".git/hooks/pre-rebase");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
 
         let mut competing_app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        let (reader_open_tx, reader_open_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let mut fifo = OpenOptions::new().write(true).open(undo_path).unwrap();
+            reader_open_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            fifo.write_all(&undo_seed).unwrap();
+        });
         let repo_path = tmp.path().to_path_buf();
         let worker = std::thread::spawn(move || {
             let mut resumed = App::from_repo(GitRepository::open(&repo_path).unwrap()).unwrap();
@@ -778,18 +798,23 @@ mod tests {
             (resumed.undo_ledger.len(), resumed.repo.head_oid())
         });
         let marker = tmp.path().join(".git/rebase-merge/interactive");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while marker.exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(
-            !marker.exists(),
-            "continued rebase did not reach completion"
-        );
+        reader_open_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        let marker_removed_during_handoff = !marker.exists();
+        let _startup_app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        let todo_after_startup = std::fs::read(state_dir.join("todo")).ok();
 
         let competing_start = competing_app.run_interactive_rebase_plan(plan);
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
         let (undo_count, completed_head) = worker.join().unwrap();
 
+        assert!(marker_removed_during_handoff);
+        assert_eq!(
+            todo_after_startup.as_deref(),
+            Some(original_todo.as_slice())
+        );
         assert!(
             competing_start
                 .unwrap_err()
