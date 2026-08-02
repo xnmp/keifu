@@ -1005,6 +1005,10 @@ pub struct App {
     /// Contextual rows and their selection identity for the currently open
     /// command palette. Cleared when the palette closes.
     pub(crate) command_palette_snapshot: Option<crate::palette::ContextualPaletteSnapshot>,
+    /// Commit identity captured when a contextual branch/tag prompt opens.
+    /// Normal keyboard prompts leave this `None` and retain their historical
+    /// current-selection behavior.
+    pub(crate) input_commit_target: Option<Oid>,
     pub focused_panel: FocusedPanel,
     /// Files pane subsystem state
     pub files_pane: FilesPaneState,

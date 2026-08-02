@@ -81,7 +81,14 @@ impl App {
                 continue;
             };
             let label = item.label().to_string();
-            if out.iter().any(|candidate| candidate.label == label) {
+            let contextual_action = PaletteAction::CommitMenuItem { item, target };
+            if let Some(candidate) = out.iter_mut().find(|candidate| candidate.label == label) {
+                // Contextual rows supersede same-labelled registry shortcuts.
+                // In particular, Create branch here and Pull must retain the
+                // palette-open target fingerprint rather than dispatching a
+                // current-selection action directly.
+                candidate.hint = Some("Enter".to_string());
+                candidate.action = contextual_action;
                 continue;
             }
             out.push(Candidate {
@@ -89,7 +96,7 @@ impl App {
                 label: label.clone(),
                 hint: Some("Enter".to_string()),
                 match_text: label,
-                action: PaletteAction::CommitMenuItem { item, target },
+                action: contextual_action,
                 order: registry_len + i,
             });
         }

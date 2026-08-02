@@ -490,6 +490,7 @@ impl App {
         match item {
             CommitMenuItem::Checkout => self.do_checkout()?,
             CommitMenuItem::CreateBranch => {
+                self.input_commit_target = commit_oid;
                 self.mode = AppMode::Input {
                     title: "New Branch Name".to_string(),
                     input: String::new(),
@@ -613,6 +614,7 @@ impl App {
                 }
             }
             CommitMenuItem::AddTag => {
+                self.input_commit_target = commit_oid;
                 self.mode = AppMode::Input {
                     title: "Tag Name".to_string(),
                     input: String::new(),

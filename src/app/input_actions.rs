@@ -19,25 +19,31 @@ impl App {
                 match input_action {
                     InputAction::CreateBranch => {
                         if !input.is_empty() {
-                            if let Some(node) = self.selected_commit_node() {
-                                if let Some(commit) = &node.commit {
-                                    create_branch(self.repo.repo(), &input, commit.oid)?;
-                                    self.refresh(true)?;
-                                }
+                            let target = self.input_commit_target.or_else(|| {
+                                self.selected_commit_node()
+                                    .and_then(|node| node.commit.as_ref())
+                                    .map(|commit| commit.oid)
+                            });
+                            if let Some(target) = target {
+                                create_branch(self.repo.repo(), &input, target)?;
+                                self.refresh(true)?;
                             }
                         }
                     }
                     InputAction::AddTag => {
                         if !input.is_empty() {
-                            if let Some(node) = self.selected_commit_node() {
-                                if let Some(commit) = &node.commit {
-                                    add_tag(self.repo.repo(), &input, commit.oid)?;
-                                    self.refresh(true)?;
-                                    self.toast(
-                                        crate::toast::ToastKind::Success,
-                                        format!("Tag '{}' created", input),
-                                    );
-                                }
+                            let target = self.input_commit_target.or_else(|| {
+                                self.selected_commit_node()
+                                    .and_then(|node| node.commit.as_ref())
+                                    .map(|commit| commit.oid)
+                            });
+                            if let Some(target) = target {
+                                add_tag(self.repo.repo(), &input, target)?;
+                                self.refresh(true)?;
+                                self.toast(
+                                    crate::toast::ToastKind::Success,
+                                    format!("Tag '{}' created", input),
+                                );
                             }
                         }
                     }
@@ -105,6 +111,7 @@ impl App {
                 }
                 // Clear search state after confirming
                 self.search_state = SearchState::default();
+                self.input_commit_target = None;
                 self.mode = AppMode::Normal;
             }
             Action::Cancel => {
@@ -122,6 +129,7 @@ impl App {
                     self.restore_search_position();
                 }
                 self.search_state = SearchState::default();
+                self.input_commit_target = None;
                 // Cancelling the assignee edit returns to the issue detail it was
                 // launched from, not all the way out to Normal.
                 self.mode = if matches!(input_action, InputAction::EditIssueAssignees { .. }) {
