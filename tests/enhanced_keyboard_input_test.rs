@@ -53,3 +53,25 @@ fn enhanced_keyboard_shift_forms_preserve_bindings_and_editor_text() {
         Some(Action::EditorChar('G'))
     );
 }
+
+#[test]
+fn enhanced_keyboard_ctrl_shift_forms_preserve_commit_search() {
+    // Alternate-key reporting supplies `F` and clears SHIFT, while the base
+    // protocol form carries `f` plus SHIFT. Both must remain commit search;
+    // unshifted Ctrl+F remains branch quick search.
+    assert_eq!(
+        map_graph(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::CONTROL)),
+        Some(Action::StartCommitFilter)
+    );
+    assert_eq!(
+        map_graph(KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )),
+        Some(Action::StartCommitFilter)
+    );
+    assert_eq!(
+        map_graph(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        Some(Action::Search)
+    );
+}
