@@ -341,9 +341,12 @@ two seconds and finally SIGKILL with a one-second reap bound. Group signaling
 includes ordinary `git-remote-*`, SSH, credential, and hook children instead of
 orphaning them when only the direct Git PID exits. Before signaling, the runner
 also snapshots Git's descendant PIDs and signals them individually, covering a
-helper that detached into a different process group. Direct-child reaping uses
-the same polling deadline; if SIGKILL cannot make it observable as exited, an
-eventual reaper thread owns the child while the worker returns a terminal error.
+helper that detached into a different process group. That process-table scan is
+itself capped at 200 ms; if the platform command cannot complete, cancellation
+falls back to the still-owned process group instead of wedging before the first
+signal. Direct-child reaping uses the same polling deadline and a testable wait
+seam; if SIGKILL cannot make the child observable as exited, an eventual reaper
+thread owns it while the worker returns a terminal error.
 The cancellation path does not synchronously join pipe readers, so an unrelated
 inherited descriptor cannot hold the UI worker busy after owned processes die.
 
@@ -366,8 +369,9 @@ creating a half-started merge/rebase. Fetch ref writes remain atomic under
 Git's transaction machinery. The job remains busy through transfer and local
 integration; only its terminal result clears the slot and emits the outcome
 toast. Regression tests cover prepared ref cancellation, a HEAD change at the
-barrier, App-level checkout gating, clean repository state/no stale locks, and
-successful subsequent network operations.
+barrier, the real worker/manager/App checkout gate, clean repository state/no
+stale locks, bounded child waiting, detached-helper ownership, and successful
+subsequent network operations.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a
