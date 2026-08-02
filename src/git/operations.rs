@@ -199,33 +199,151 @@ fn signal_process_group(process_group: i32, signal: i32) -> std::io::Result<()> 
     }
 }
 
+/// Kernel-assigned process birth identity paired with a PID. A PID can be
+/// reused, but these values cannot match across two births of that PID.
 #[cfg(unix)]
-fn process_group_exists(process_group: i32) -> std::io::Result<bool> {
-    // SAFETY: signal 0 performs existence/permission checking only.
-    let result = unsafe { libc::kill(-process_group, 0) };
-    if result == 0 {
-        return Ok(true);
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProcessBirth {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    ProcStartTicks(u64),
+    #[cfg(target_vendor = "apple")]
+    AppleStartTime { seconds: u64, microseconds: u64 },
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    PsStartTime(String),
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn current_process_birth(process: i32) -> std::io::Result<Option<ProcessBirth>> {
+    let stat = match std::fs::read_to_string(format!("/proc/{process}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // The parenthesized comm field may itself contain spaces or parentheses;
+    // fields after its final ')' begin with state (field 3). Start time is 22.
+    let after_comm = stat.rsplit_once(')').map(|(_, rest)| rest).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid /proc stat")
+    })?;
+    let start_ticks = after_comm
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing process start time",
+            )
+        })?
+        .parse()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    Ok(Some(ProcessBirth::ProcStartTicks(start_ticks)))
+}
+
+#[cfg(target_vendor = "apple")]
+fn current_process_birth(process: i32) -> std::io::Result<Option<ProcessBirth>> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: proc_pidinfo writes at most the supplied proc_bsdinfo buffer.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            process,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
+        )
+    };
+    if read == 0 {
+        // SAFETY: signal 0 only distinguishes a vanished PID from an
+        // identity-query failure; it does not deliver a signal.
+        let exists = unsafe { libc::kill(process, 0) };
+        if exists != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Ok(None);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "process birth identity is not inspectable",
+        ));
     }
-    let error = std::io::Error::last_os_error();
-    match error.raw_os_error() {
-        Some(libc::ESRCH) => Ok(false),
-        Some(libc::EPERM) => Ok(true),
-        _ => Err(error),
+    if read as usize != std::mem::size_of::<libc::proc_bsdinfo>() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "incomplete process identity",
+        ));
     }
+    // SAFETY: proc_pidinfo reported a complete initialized structure.
+    let info = unsafe { info.assume_init() };
+    Ok(Some(ProcessBirth::AppleStartTime {
+        seconds: info.pbi_start_tvsec,
+        microseconds: info.pbi_start_tvusec,
+    }))
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
+))]
+fn current_process_birth(process: i32) -> std::io::Result<Option<ProcessBirth>> {
+    let output = Command::new("ps")
+        .args(["-p", &process.to_string(), "-o", "lstart="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let start = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!start.is_empty()).then_some(ProcessBirth::PsStartTime(start)))
 }
 
 #[cfg(unix)]
-fn process_exists(process: i32) -> std::io::Result<bool> {
-    // SAFETY: signal 0 performs existence/permission checking only.
-    let result = unsafe { libc::kill(process, 0) };
-    if result == 0 {
-        return Ok(true);
+type OwnedProcesses = HashMap<i32, ProcessBirth>;
+
+#[cfg(unix)]
+trait ProcessControl {
+    fn birth(&self, process: i32) -> std::io::Result<Option<ProcessBirth>>;
+    fn group(&self, process: i32) -> std::io::Result<Option<i32>>;
+    fn signal_process(&self, process: i32, signal: i32) -> std::io::Result<()>;
+    fn signal_group(&self, process_group: i32, signal: i32) -> std::io::Result<()>;
+}
+
+#[cfg(unix)]
+struct SystemProcessControl;
+
+#[cfg(unix)]
+impl ProcessControl for SystemProcessControl {
+    fn birth(&self, process: i32) -> std::io::Result<Option<ProcessBirth>> {
+        current_process_birth(process)
     }
-    let error = std::io::Error::last_os_error();
-    match error.raw_os_error() {
-        Some(libc::ESRCH) => Ok(false),
-        Some(libc::EPERM) => Ok(true),
-        _ => Err(error),
+
+    fn group(&self, process: i32) -> std::io::Result<Option<i32>> {
+        // SAFETY: getpgid reads kernel process metadata only.
+        let group = unsafe { libc::getpgid(process) };
+        if group >= 0 {
+            return Ok(Some(group));
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(None),
+            _ => Err(error),
+        }
+    }
+
+    fn signal_process(&self, process: i32, signal: i32) -> std::io::Result<()> {
+        // SAFETY: the caller revalidated the process birth immediately before
+        // signaling; no pointers are involved.
+        let result = unsafe { libc::kill(process, signal) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    fn signal_group(&self, process_group: i32, signal: i32) -> std::io::Result<()> {
+        signal_process_group(process_group, signal)
     }
 }
 
@@ -305,21 +423,34 @@ fn descendant_processes_from_snapshot<S: ProcessTableSnapshot>(
     root: i32,
     snapshot: S,
     timeout: Duration,
-) -> HashSet<i32> {
-    owned_processes_from_snapshot(root, HashSet::from([root]), snapshot, timeout)
+) -> OwnedProcesses {
+    let Some(group_birth) = current_process_birth(root).ok().flatten() else {
+        return OwnedProcesses::default();
+    };
+    let owned = HashMap::from([(root, group_birth.clone())]);
+    owned_processes_from_snapshot(root, &group_birth, owned, snapshot, timeout)
 }
 
 #[cfg(unix)]
 fn owned_processes_from_snapshot<S: ProcessTableSnapshot>(
     process_group: i32,
-    owned: HashSet<i32>,
+    process_group_birth: &ProcessBirth,
+    owned: OwnedProcesses,
     mut snapshot: S,
     timeout: Duration,
-) -> HashSet<i32> {
+) -> OwnedProcesses {
     let deadline = Instant::now() + timeout;
     loop {
         match snapshot.try_snapshot() {
-            Ok(Some(output)) => return parse_owned_processes(process_group, owned, &output),
+            Ok(Some(output)) => {
+                return parse_owned_processes(
+                    process_group,
+                    process_group_birth,
+                    owned,
+                    &output,
+                    &SystemProcessControl,
+                )
+            }
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
             }
@@ -332,11 +463,13 @@ fn owned_processes_from_snapshot<S: ProcessTableSnapshot>(
 }
 
 #[cfg(unix)]
-fn parse_owned_processes(
+fn parse_owned_processes<C: ProcessControl>(
     process_group: i32,
-    mut owned: HashSet<i32>,
+    process_group_birth: &ProcessBirth,
+    mut owned: OwnedProcesses,
     output: &[u8],
-) -> HashSet<i32> {
+    control: &C,
+) -> OwnedProcesses {
     let processes: Vec<(i32, i32, i32)> = String::from_utf8_lossy(output)
         .lines()
         .filter_map(|line| {
@@ -348,31 +481,61 @@ fn parse_owned_processes(
             ))
         })
         .collect();
+    // Discard stale PID slots before using them as ancestry roots. A reused PID
+    // must never cause its replacement (or replacement's children) to become
+    // part of this network operation.
+    owned.retain(|process, birth| control.birth(*process).ok().flatten().as_ref() == Some(birth));
+    let group_has_member = processes
+        .iter()
+        .any(|(_, _, group)| *group == process_group);
+    // POSIX does not reuse a PGID while that group has members. After Git (the
+    // group leader) exits, an absent leader therefore still identifies the
+    // original group. If the PID slot has been reused, its changed birth
+    // identity rejects the group before any member is adopted.
+    let group_is_owned = group_has_member
+        && match control.birth(process_group) {
+            Ok(Some(current)) => current == *process_group_birth,
+            Ok(None) => true,
+            Err(_) => false,
+        };
+    let mut candidates: HashSet<i32> = owned.keys().copied().collect();
     // Group membership survives direct-child exit and reparenting. Seed the
     // retained set from Git's dedicated process group before expanding by
-    // ancestry, so helpers remain owned if they later call setsid().
-    owned.extend(
-        processes
-            .iter()
-            .filter_map(|(pid, _, group)| (*group == process_group).then_some(*pid)),
-    );
+    // ancestry, but only while a birth-validated member anchors that group.
+    if group_is_owned {
+        candidates.extend(
+            processes
+                .iter()
+                .filter_map(|(pid, _, group)| (*group == process_group).then_some(*pid)),
+        );
+    }
     loop {
-        let before = owned.len();
+        let before = candidates.len();
         for (pid, parent, _) in &processes {
-            if owned.contains(parent) {
-                owned.insert(*pid);
+            if candidates.contains(parent) {
+                candidates.insert(*pid);
             }
         }
-        if owned.len() == before {
-            return owned;
+        if candidates.len() == before {
+            break;
         }
     }
+    for process in candidates {
+        if owned.contains_key(&process) {
+            continue;
+        }
+        if let Ok(Some(birth)) = control.birth(process) {
+            owned.insert(process, birth);
+        }
+    }
+    owned
 }
 
 #[cfg(unix)]
 struct NetworkProcessTracker {
     process_group: i32,
-    owned_processes: HashSet<i32>,
+    process_group_birth: ProcessBirth,
+    owned_processes: OwnedProcesses,
     next_refresh: Instant,
 }
 
@@ -381,9 +544,19 @@ impl NetworkProcessTracker {
     fn new(child: &Child) -> Result<Self, NetworkFailure> {
         let root = i32::try_from(child.id())
             .map_err(|_| NetworkFailure::Failed("Invalid git process identifier".to_string()))?;
+        let birth = current_process_birth(root)
+            .map_err(|error| {
+                NetworkFailure::Failed(format!("Failed to identify git process: {error}"))
+            })?
+            .ok_or_else(|| {
+                NetworkFailure::Failed(
+                    "Git process exited before ownership was recorded".to_string(),
+                )
+            })?;
         Ok(Self {
             process_group: root,
-            owned_processes: HashSet::from([root]),
+            process_group_birth: birth.clone(),
+            owned_processes: HashMap::from([(root, birth)]),
             next_refresh: Instant::now(),
         })
     }
@@ -402,6 +575,7 @@ impl NetworkProcessTracker {
         };
         self.owned_processes = owned_processes_from_snapshot(
             self.process_group,
+            &self.process_group_birth,
             std::mem::take(&mut self.owned_processes),
             snapshot,
             NETWORK_DESCENDANT_DISCOVERY_TIMEOUT,
@@ -411,7 +585,8 @@ impl NetworkProcessTracker {
     fn terminate(mut self, child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
         // Expand from every process observed while Git was alive. A helper may
         // have detached and been reparented after the direct child exited, so
-        // its PID—not Git's now-dead PID—is the durable ownership handle.
+        // its PID plus kernel birth identity—not Git's now-dead PID—is the
+        // durable ownership handle.
         self.refresh();
         terminate_network_process_with_owned(child, subcommand, self.owned_processes)
     }
@@ -481,27 +656,25 @@ fn reap_direct_child_until<R: DirectChildReaper>(
 #[cfg(unix)]
 fn wait_for_owned_processes(
     process_group: i32,
-    owned_processes: &HashSet<i32>,
+    owned_processes: &OwnedProcesses,
     deadline: Instant,
     subcommand: &str,
 ) -> Result<bool, NetworkFailure> {
     loop {
-        let group_exists = process_group_exists(process_group).map_err(|error| {
-            NetworkFailure::Failed(format!(
-                "Failed to inspect git {subcommand} process group: {error}"
-            ))
-        })?;
-        let owned_exists = owned_processes
-            .iter()
-            .filter(|process| **process != process_group)
-            .try_fold(false, |exists, process| {
-                process_exists(*process).map(|current| exists || current)
-            })
-            .map_err(|error| {
-                NetworkFailure::Failed(format!(
-                    "Failed to inspect git {subcommand} helper: {error}"
-                ))
-            })?;
+        let group_exists =
+            owned_group_exists_with(process_group, owned_processes, &SystemProcessControl)
+                .map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} process group: {error}"
+                    ))
+                })?;
+        let owned_exists =
+            owned_processes_exist_with(owned_processes, Some(process_group), &SystemProcessControl)
+                .map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} helper: {error}"
+                    ))
+                })?;
         if !group_exists && !owned_exists {
             return Ok(true);
         }
@@ -513,21 +686,75 @@ fn wait_for_owned_processes(
 }
 
 #[cfg(unix)]
+fn identity_matches<C: ProcessControl>(
+    process: i32,
+    expected: &ProcessBirth,
+    control: &C,
+) -> std::io::Result<bool> {
+    control
+        .birth(process)
+        .map(|current| current.as_ref() == Some(expected))
+}
+
+#[cfg(unix)]
+fn owned_group_exists_with<C: ProcessControl>(
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    control: &C,
+) -> std::io::Result<bool> {
+    for (process, birth) in owned_processes {
+        if identity_matches(*process, birth, control)?
+            && control.group(*process)? == Some(process_group)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn owned_processes_exist_with<C: ProcessControl>(
+    owned_processes: &OwnedProcesses,
+    excluded: Option<i32>,
+    control: &C,
+) -> std::io::Result<bool> {
+    for (process, birth) in owned_processes {
+        if Some(*process) != excluded && identity_matches(*process, birth, control)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
 fn signal_network_processes(
     process_group: i32,
-    owned_processes: &HashSet<i32>,
+    owned_processes: &OwnedProcesses,
     signal: i32,
 ) -> std::io::Result<()> {
-    signal_process_group(process_group, signal)?;
-    for process in owned_processes {
-        // SAFETY: each positive PID came from the process table rooted at the
-        // spawned Git child; no pointers are involved.
-        let result = unsafe { libc::kill(*process, signal) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error);
-            }
+    signal_network_processes_with(
+        process_group,
+        owned_processes,
+        signal,
+        &SystemProcessControl,
+    )
+}
+
+#[cfg(unix)]
+fn signal_network_processes_with<C: ProcessControl>(
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    signal: i32,
+    control: &C,
+) -> std::io::Result<()> {
+    // Never signal a raw process-group ID after its original members vanish;
+    // PGIDs are PID slots and can be reused too.
+    if owned_group_exists_with(process_group, owned_processes, control)? {
+        control.signal_group(process_group, signal)?;
+    }
+    for (process, birth) in owned_processes {
+        if identity_matches(*process, birth, control)? {
+            control.signal_process(*process, signal)?;
         }
     }
     Ok(())
@@ -537,7 +764,7 @@ fn signal_network_processes(
 fn wait_for_network_process_group(
     child: &mut Child,
     process_group: i32,
-    owned_processes: &HashSet<i32>,
+    owned_processes: &OwnedProcesses,
     direct_child_reaped: &mut bool,
     grace: Duration,
     subcommand: &str,
@@ -555,22 +782,22 @@ fn wait_for_network_process_group(
                 }
             }
         }
-        let group_exists = process_group_exists(process_group).map_err(|error| {
-            NetworkFailure::Failed(format!(
-                "Failed to inspect git {subcommand} process group: {error}"
-            ))
-        })?;
-        let owned_exists = owned_processes
-            .iter()
-            .filter(|process| **process != process_group || !*direct_child_reaped)
-            .try_fold(false, |exists, process| {
-                process_exists(*process).map(|current| exists || current)
-            })
-            .map_err(|error| {
-                NetworkFailure::Failed(format!(
-                    "Failed to inspect git {subcommand} helper: {error}"
-                ))
-            })?;
+        let group_exists =
+            owned_group_exists_with(process_group, owned_processes, &SystemProcessControl)
+                .map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} process group: {error}"
+                    ))
+                })?;
+        let excluded = (*direct_child_reaped).then_some(process_group);
+        let owned_exists =
+            owned_processes_exist_with(owned_processes, excluded, &SystemProcessControl).map_err(
+                |error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} helper: {error}"
+                    ))
+                },
+            )?;
         if *direct_child_reaped && !group_exists && !owned_exists {
             return Ok(true);
         }
@@ -613,7 +840,13 @@ fn terminate_network_process_with_snapshot<S: ProcessTableSnapshot>(
         .map(|snapshot| {
             descendant_processes_from_snapshot(process_group, snapshot, discovery_timeout)
         })
-        .unwrap_or_else(|| HashSet::from([process_group]));
+        .unwrap_or_else(|| {
+            current_process_birth(process_group)
+                .ok()
+                .flatten()
+                .map(|birth| HashMap::from([(process_group, birth)]))
+                .unwrap_or_default()
+        });
     terminate_network_process_with_owned(child, subcommand, owned_processes)
 }
 
@@ -621,7 +854,7 @@ fn terminate_network_process_with_snapshot<S: ProcessTableSnapshot>(
 fn terminate_network_process_with_owned(
     mut child: Child,
     subcommand: &str,
-    owned_processes: HashSet<i32>,
+    owned_processes: OwnedProcesses,
 ) -> Result<(), NetworkFailure> {
     let process_group = i32::try_from(child.id()).map_err(|_| {
         NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
@@ -2781,6 +3014,81 @@ mod tests {
             );
             thread::yield_now();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reused_retained_pid_is_neither_owned_nor_signalled() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        fn birth(value: u64) -> super::ProcessBirth {
+            super::ProcessBirth::ProcStartTicks(value)
+        }
+        #[cfg(target_vendor = "apple")]
+        fn birth(value: u64) -> super::ProcessBirth {
+            super::ProcessBirth::AppleStartTime {
+                seconds: value,
+                microseconds: 0,
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+        fn birth(value: u64) -> super::ProcessBirth {
+            super::ProcessBirth::PsStartTime(value.to_string())
+        }
+
+        struct FakeProcessControl {
+            births: HashMap<i32, super::ProcessBirth>,
+            groups: HashMap<i32, i32>,
+            signals: Mutex<Vec<(bool, i32, i32)>>,
+        }
+
+        impl super::ProcessControl for FakeProcessControl {
+            fn birth(&self, process: i32) -> std::io::Result<Option<super::ProcessBirth>> {
+                Ok(self.births.get(&process).cloned())
+            }
+
+            fn group(&self, process: i32) -> std::io::Result<Option<i32>> {
+                Ok(self.groups.get(&process).copied())
+            }
+
+            fn signal_process(&self, process: i32, signal: i32) -> std::io::Result<()> {
+                self.signals.lock().unwrap().push((false, process, signal));
+                Ok(())
+            }
+
+            fn signal_group(&self, group: i32, signal: i32) -> std::io::Result<()> {
+                self.signals.lock().unwrap().push((true, group, signal));
+                Ok(())
+            }
+        }
+
+        let original_birth = birth(100);
+        let retained = HashMap::from([(41, original_birth.clone())]);
+        let control = FakeProcessControl {
+            // PID 41 now names a different process; PID 42 is its child in the
+            // new process table and must not be adopted through stale ancestry.
+            births: HashMap::from([(41, birth(200)), (42, birth(300))]),
+            groups: HashMap::from([(41, 41), (42, 41)]),
+            signals: Mutex::new(Vec::new()),
+        };
+
+        let refreshed = super::parse_owned_processes(
+            41,
+            &original_birth,
+            retained.clone(),
+            b"41 1 41\n42 41 41\n",
+            &control,
+        );
+        assert!(refreshed.is_empty(), "reused ancestry was retained");
+        assert!(!super::owned_processes_exist_with(&retained, None, &control).unwrap());
+
+        super::signal_network_processes_with(41, &retained, libc::SIGTERM, &control).unwrap();
+        assert!(
+            control.signals.lock().unwrap().is_empty(),
+            "a reused PID or process-group ID was signalled"
+        );
     }
 
     #[cfg(unix)]

@@ -340,12 +340,15 @@ lockfile and ref-transaction handlers to unwind, then escalates to SIGTERM for
 two seconds and finally SIGKILL with a one-second reap bound. Group signaling
 includes ordinary `git-remote-*`, SSH, credential, and hook children instead of
 orphaning them when only the direct Git PID exits. Before signaling, the runner
-also snapshots Git's process-group members and their descendant PIDs, retaining
-that set while Git runs and while its pipes drain. Group membership remains
-observable after the direct Git child exits, and a retained PID remains an
-ownership handle after a helper calls `setsid` and is reparented. Each scan is
-capped at 200 ms; if the platform command cannot complete, cancellation falls
-back to the already-retained set instead of wedging before the first signal.
+also snapshots Git's process-group members and their descendant PIDs, pairing
+each PID with its kernel birth identity while Git runs and while its pipes
+drain. Group membership remains observable after the direct Git child exits,
+and the retained PID/birth pair remains an ownership handle after a helper
+calls `setsid` and is reparented. Existence checks and every signal revalidate
+that birth identity; a recycled PID or process-group ID is ignored rather than
+targeting its new owner. Each scan is capped at 200 ms; if the platform command
+cannot complete, cancellation falls back to the already-retained identities
+instead of wedging before the first signal.
 Direct-child reaping uses the same polling deadline and a testable wait seam; if
 SIGKILL cannot make the child observable as exited, an eventual reaper thread
 owns it while the worker returns a terminal error.
