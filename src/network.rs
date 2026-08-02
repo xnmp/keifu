@@ -2,7 +2,7 @@
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::config::RefreshConfig;
 use crate::git::operations::{
@@ -10,6 +10,40 @@ use crate::git::operations::{
     push_set_upstream, OpOutcome, PullMode,
 };
 use crate::git::Credentials;
+
+/// Maximum time a network operation may go without observable transport
+/// progress before cancellation is requested automatically.
+pub const NETWORK_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The user-facing kind of the one network operation keifu permits at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkOperation {
+    Fetch,
+    Pull,
+    Push,
+}
+
+/// Why cancellation was requested for an active operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationReason {
+    User,
+    InactivityTimeout,
+}
+
+/// Lifecycle phase exposed to the status bar while an operation is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPhase {
+    Running,
+    Cancelling(CancellationReason),
+}
+
+/// Snapshot consumed by the UI; it is derived from the worker lifecycle rather
+/// than maintained as separate presentation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkStatus {
+    pub operation: NetworkOperation,
+    pub phase: NetworkPhase,
+}
 
 /// What a background push should do.
 #[derive(Debug, Clone)]
