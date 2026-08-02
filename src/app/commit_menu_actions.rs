@@ -157,6 +157,9 @@ impl App {
         if self.can_offer_create_pr() {
             items.push(CommitMenuItem::CreatePr);
         }
+        if self.selected_open_pr_target().is_some() {
+            items.push(CommitMenuItem::OpenPrInBrowser);
+        }
         if self.selected_commit_has_open_pr() {
             items.push(CommitMenuItem::MergePr);
         }
@@ -702,7 +705,9 @@ impl App {
             CommitMenuItem::CreatePr => {
                 self.open_create_pr();
             }
-            CommitMenuItem::OpenPrInBrowser => {}
+            CommitMenuItem::OpenPrInBrowser => {
+                self.open_pr_in_browser();
+            }
             CommitMenuItem::MergePr => {
                 self.open_merge_pr();
             }
