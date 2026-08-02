@@ -349,3 +349,23 @@ fn replacing_an_alias_removes_warnings_for_its_obsolete_binding() {
         .iter()
         .any(|warning| warning.reason.contains("F5")));
 }
+
+#[test]
+fn go_to_top_g_default_conflicts_in_list_and_detail_contexts() {
+    let keymap = resolved("[keymap]\nopen-review-picker = [\"g\"]\n");
+    assert!(keymap.warnings().iter().any(|warning| {
+        warning.reason.contains("go-to-top")
+            && warning.reason.contains("open-review-picker")
+            && warning.reason.contains("g")
+    }));
+}
+
+#[test]
+fn filter_text_q_and_y_do_not_conflict_with_cancel_or_confirm() {
+    let keymap = resolved(
+        "[keymap]\ncommit-filter-backspace = [\"q\"]\nfiles-filter-backspace = [\"y\"]\n",
+    );
+    assert!(!keymap.warnings().iter().any(|warning| {
+        warning.reason.contains("cancel") || warning.reason.contains("confirm")
+    }));
+}
