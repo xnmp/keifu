@@ -103,11 +103,10 @@ fn handle_input_event(
     app: &mut App,
     event: crossterm::event::Event,
 ) -> Result<bool> {
-    if matches!(event, crossterm::event::Event::Resize(_, _)) {
-        if let Some(pixel_graph) = app.pixel_graph.as_mut() {
-            pixel_graph.refresh_on_resize_event(&event, crossterm::terminal::window_size().ok());
-        }
-    } else if let Some(key) = get_key_event(&event) {
+    if let Some(pixel_graph) = app.pixel_graph.as_mut() {
+        pixel_graph.refresh_on_resize_event(&event, || crossterm::terminal::window_size().ok());
+    }
+    if let Some(key) = get_key_event(&event) {
         if app.debug_keys {
             app.set_message(format!("KEY: code={:?} mod={:?}", key.code, key.modifiers));
         }
