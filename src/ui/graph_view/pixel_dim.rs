@@ -165,7 +165,10 @@ pub fn dim_pixel_specs_window(
             r.node,
             app.metadata_columns.mute_base_merges,
             app.merged.base_update.value(),
-        );
+        ) || (!app.commit_filter.is_empty()
+            && r.node.commit.as_ref().is_none_or(|commit| {
+                !app.commit_filter_matches.contains(&commit.oid)
+            }));
     }
     // Merged-lane dim (#108), gated the same way the unicode path is: dim on and
     // hide off. `None` = feature off, so the core skips the merged-lane pass.

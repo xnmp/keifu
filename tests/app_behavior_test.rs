@@ -1525,12 +1525,19 @@ fn scoped_commit_filter_matches_all_fields_and_keeps_parent_topology() {
         "all populated fields must match, so Bob's docs-only commit is excluded"
     );
 
+    let selected_before_refresh = app
+        .graph_nav
+        .selected_node(&app.graph_layout)
+        .and_then(|node| node.commit.as_ref())
+        .map(|commit| commit.oid)
+        .unwrap();
     app.refresh(true).unwrap();
     let selected = app.graph_nav.selected_node(&app.graph_layout).unwrap();
     assert!(
         selected.commit.is_some(),
         "refresh keeps the graph selection on a visible commit"
     );
+    assert_eq!(selected.commit.as_ref().unwrap().oid, selected_before_refresh);
 }
 
 #[test]
