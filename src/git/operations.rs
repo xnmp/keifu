@@ -271,12 +271,10 @@ fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), 
 
 #[cfg(not(unix))]
 fn terminate_network_process(child: &mut Child, subcommand: &str) -> Result<(), NetworkFailure> {
-    // std does not expose a portable soft-signal/process-group API. Keep the
-    // fallback bounded and always reap the direct child; durable pull
-    // integration still runs outside the cancellable subprocess on all hosts.
-    child.kill().map_err(|error| {
-        NetworkFailure::Failed(format!("Failed to cancel git {subcommand}: {error}"))
-    })?;
+    // Cancellation tokens are rejected on these platforms because std does
+    // not expose a portable soft-signal/process-group API. This function is
+    // therefore only the cleanup path for an unexpected `try_wait` error: wait
+    // naturally rather than risking repository state with a direct force-kill.
     child.wait().map_err(|error| {
         NetworkFailure::Failed(format!("Failed to reap git {subcommand}: {error}"))
     })?;

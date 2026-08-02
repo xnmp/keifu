@@ -6,6 +6,7 @@ use crossterm::event::{
 
 use crate::action::Action;
 use crate::app::{AppMode, FocusedPanel};
+use crate::network::NETWORK_CANCELLATION_SUPPORTED;
 
 /// Map a raw mouse event to an `Action`, passing coordinates through. All
 /// hit-testing (which panel / row / chip / menu the point lands on) happens in
@@ -132,7 +133,8 @@ pub fn map_active_network_key(
     commit_filter_active: bool,
     network_busy: bool,
 ) -> Option<Action> {
-    if !network_busy
+    if !NETWORK_CANCELLATION_SUPPORTED
+        || !network_busy
         || !matches!(mode, AppMode::Normal)
         || is_text_editing_context(
             mode,

@@ -20,6 +20,11 @@ use crate::git::Credentials;
 /// progress before cancellation is requested automatically.
 pub const NETWORK_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Whether this platform exposes the process-group signaling needed to cancel
+/// Git without force-killing only its direct child. Non-Unix builds retain
+/// transport low-speed bounds but do not advertise or accept cancellation.
+pub const NETWORK_CANCELLATION_SUPPORTED: bool = cfg!(unix);
+
 /// The user-facing kind of the one network operation keifu permits at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkOperation {
@@ -72,6 +77,9 @@ pub(crate) struct CancellationToken(Arc<AtomicU8>);
 
 impl CancellationToken {
     pub(crate) fn request(&self, reason: CancellationReason) -> bool {
+        if !NETWORK_CANCELLATION_SUPPORTED {
+            return false;
+        }
         let encoded = match reason {
             CancellationReason::User => 1,
             CancellationReason::InactivityTimeout => 2,
@@ -87,6 +95,28 @@ impl CancellationToken {
             2 => Some(CancellationReason::InactivityTimeout),
             _ => None,
         }
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod non_unix_cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_is_rejected_without_safe_process_group_signaling() {
+        assert!(!NETWORK_CANCELLATION_SUPPORTED);
+        let started = Instant::now();
+        let mut network = NetworkManager::active_for_test(NetworkOperation::Fetch, started);
+
+        assert!(!network.cancel_active(CancellationReason::User));
+        assert!(!network.check_inactivity_at(started + NETWORK_INACTIVITY_TIMEOUT));
+        assert_eq!(
+            network.status(),
+            Some(NetworkStatus {
+                operation: NetworkOperation::Fetch,
+                phase: NetworkPhase::Running,
+            })
+        );
     }
 }
 

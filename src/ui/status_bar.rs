@@ -332,7 +332,9 @@ impl StatusBar {
                     .bg(theme.status_busy_bg)
                     .add_modifier(Modifier::BOLD);
                 hb.span(Span::styled(format!(" {label} "), progress_style));
-                if status.phase == NetworkPhase::Running {
+                if status.phase == NetworkPhase::Running
+                    && crate::network::NETWORK_CANCELLATION_SUPPORTED
+                {
                     hb.hint(
                         " x ",
                         key_style,
