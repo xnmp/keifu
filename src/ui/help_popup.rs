@@ -201,6 +201,7 @@ pub struct HelpPopup<'a> {
     pub status_bar_visible: bool,
     pub theme: &'a Theme,
     pub scroll: usize,
+    pub keymap: Option<&'a crate::keymap::ResolvedKeymap>,
 }
 
 impl<'a> HelpPopup<'a> {
@@ -219,6 +220,23 @@ impl<'a> HelpPopup<'a> {
             status_bar_visible,
             theme,
             scroll,
+            keymap: None,
+        }
+    }
+
+    pub fn with_keymap(
+        is_uncommitted: bool,
+        status_bar_visible: bool,
+        theme: &'a Theme,
+        scroll: usize,
+        keymap: &'a crate::keymap::ResolvedKeymap,
+    ) -> Self {
+        Self {
+            is_uncommitted,
+            status_bar_visible,
+            theme,
+            scroll,
+            keymap: Some(keymap),
         }
     }
 
@@ -230,13 +248,35 @@ impl<'a> HelpPopup<'a> {
         theme: &Theme,
         inner_width: u16,
     ) -> usize {
-        Paragraph::new(lines(is_uncommitted, status_bar_visible, theme))
+        Paragraph::new(lines(is_uncommitted, status_bar_visible, theme, None))
             .wrap(Wrap { trim: false })
             .line_count(inner_width)
     }
+
+    pub fn content_height_with_keymap(
+        is_uncommitted: bool,
+        status_bar_visible: bool,
+        theme: &Theme,
+        inner_width: u16,
+        keymap: &crate::keymap::ResolvedKeymap,
+    ) -> usize {
+        Paragraph::new(lines(
+            is_uncommitted,
+            status_bar_visible,
+            theme,
+            Some(keymap),
+        ))
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width)
+    }
 }
 
-fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<Line<'static>> {
+fn lines(
+    is_uncommitted: bool,
+    status_bar_visible: bool,
+    theme: &Theme,
+    keymap: Option<&crate::keymap::ResolvedKeymap>,
+) -> Vec<Line<'static>> {
     let key_style = Style::default()
         .fg(theme.help_key)
         .add_modifier(Modifier::BOLD);
@@ -245,15 +285,33 @@ fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<L
         .fg(theme.help_header)
         .add_modifier(Modifier::BOLD);
     let entries = entries(is_uncommitted);
-    let kw = key_column_width(&entries);
+    let kw = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            HelpEntry::Row(key, desc) => Some(
+                keymap
+                    .and_then(|map| help_action_id(desc).map(|id| map.display_bindings(id)))
+                    .unwrap_or_else(|| (*key).to_string()),
+            ),
+            _ => None,
+        })
+        .map(|key| UnicodeWidthStr::width(key.as_str()))
+        .max()
+        .unwrap_or_else(|| key_column_width(&entries).saturating_sub(KEY_GAP))
+        + KEY_GAP;
     entries
         .iter()
         .map(|entry| match entry {
             HelpEntry::Header(text) => Line::from(Span::styled(*text, header_style)),
-            HelpEntry::Row(key, desc) => Line::from(vec![
-                Span::styled(format!(" {key:<kw$}"), key_style),
-                Span::styled(*desc, desc_style),
-            ]),
+            HelpEntry::Row(key, desc) => {
+                let effective = keymap
+                    .and_then(|map| help_action_id(desc).map(|id| map.display_bindings(id)))
+                    .unwrap_or_else(|| (*key).to_string());
+                Line::from(vec![
+                    Span::styled(format!(" {effective:<kw$}"), key_style),
+                    Span::styled(*desc, desc_style),
+                ])
+            }
             HelpEntry::StatusBar => Line::from(vec![
                 Span::styled(format!(" {:<kw$}", "s"), key_style),
                 Span::styled(
@@ -269,6 +327,42 @@ fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<L
         .collect()
 }
 
+fn help_action_id(description: &str) -> Option<&'static str> {
+    Some(match description {
+        "Open actions menu" => "open-commit-menu",
+        "Create new branch" => "create-branch",
+        "Delete branch" => "delete-branch",
+        "Fetch from remote" => "fetch",
+        "Pull (fetch + integrate)" => "pull",
+        "Push current branch (publishes if no upstream)" => "push",
+        "Mark / compare two commits (Esc clears)" => "mark-for-compare",
+        "Open PR in browser (badge color = CI: green/yellow/red)" => "open-pr",
+        "CI check details (see failure logs without a browser)" => "open-ci-checks",
+        "View PR conversation (comments, reviews, threads)" => "open-pr-thread",
+        "Toggle branch tracing (dim off-lineage lanes)" => "toggle-trace",
+        "Stage/unstage file" => "toggle-stage",
+        "Stage all" => "stage-all",
+        "Unstage all" => "unstage-all",
+        "Add to .gitignore (folder in folder mode)" => "add-to-gitignore",
+        "Archive to .archive/ (folder in folder mode)" => "archive-file",
+        "Restore file (discard changes)" => "restore-file",
+        "Copy file path" => "copy-path",
+        "File history (commits touching this file)" => "file-history",
+        "Start editing commit message" => "start-editing",
+        "Commit changes (or save amend)" => "commit-changes",
+        "Amend last commit" => "amend-commit",
+        "Stash changes (staged / all / +untracked)" => "stash-staged",
+        "Open the issue list (from any panel)" => "open-issue-list",
+        "New repo issue (from anywhere)" => "new-issue",
+        "Report a Keifu issue (from anywhere)" => "report-keifu-issue",
+        "Full update (fetch all remotes + PRs + refresh)" => "full-update",
+        "Command palette (commands, branches, commits)" => "open-command-palette",
+        "Toggle this help" => "toggle-help",
+        "Quit (from anywhere)" => "force-quit",
+        _ => return None,
+    })
+}
+
 impl<'a> Widget for HelpPopup<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
@@ -279,12 +373,22 @@ impl<'a> Widget for HelpPopup<'a> {
         if inner.height == 0 || inner.width == 0 {
             return;
         }
-        let content_height = Self::content_height(
-            self.is_uncommitted,
-            self.status_bar_visible,
-            self.theme,
-            inner.width,
-        );
+        let content_height = if let Some(keymap) = self.keymap {
+            Self::content_height_with_keymap(
+                self.is_uncommitted,
+                self.status_bar_visible,
+                self.theme,
+                inner.width,
+                keymap,
+            )
+        } else {
+            Self::content_height(
+                self.is_uncommitted,
+                self.status_bar_visible,
+                self.theme,
+                inner.width,
+            )
+        };
         let scroll = self
             .scroll
             .min(content_height.saturating_sub(inner.height as usize));
@@ -292,6 +396,7 @@ impl<'a> Widget for HelpPopup<'a> {
             self.is_uncommitted,
             self.status_bar_visible,
             self.theme,
+            self.keymap,
         ))
         .wrap(Wrap { trim: false })
         .scroll((scroll.min(u16::MAX as usize) as u16, 0))

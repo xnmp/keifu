@@ -1322,6 +1322,8 @@ pub struct App {
 
     // Config
     pub config: Config,
+    /// Effective startup keymap shared by routing and shortcut-aware widgets.
+    pub keymap: crate::keymap::ResolvedKeymap,
 
     // Terminal background color (r, g, b), detected once at startup.
     // Used to derive theme-adaptive structural colors. `None` when the

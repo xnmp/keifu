@@ -25,10 +25,25 @@ fn graph(keymap: &ResolvedKeymap, key: KeyEvent) -> Option<Action> {
 #[test]
 fn parses_and_formats_supported_single_key_bindings() {
     for (source, code, modifiers, formatted) in [
-        ("Ctrl+Alt+Shift+F2", KeyCode::F(2), KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT, "Ctrl+Alt+Shift+F2"),
+        (
+            "Ctrl+Alt+Shift+F2",
+            KeyCode::F(2),
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT,
+            "Ctrl+Alt+Shift+F2",
+        ),
         ("Alt+/", KeyCode::Char('/'), KeyModifiers::ALT, "Alt+/"),
-        ("Shift+G", KeyCode::Char('G'), KeyModifiers::SHIFT, "Shift+G"),
-        ("PageDown", KeyCode::PageDown, KeyModifiers::NONE, "PageDown"),
+        (
+            "Shift+G",
+            KeyCode::Char('G'),
+            KeyModifiers::SHIFT,
+            "Shift+G",
+        ),
+        (
+            "PageDown",
+            KeyCode::PageDown,
+            KeyModifiers::NONE,
+            "PageDown",
+        ),
     ] {
         let binding = source.parse::<KeyBinding>().expect(source);
         assert_eq!(binding.code, code);
@@ -44,13 +59,19 @@ fn parses_and_formats_supported_single_key_bindings() {
 fn no_keymap_preserves_defaults_and_overrides_replace_them() {
     let defaults = resolved("");
     assert_eq!(
-        graph(&defaults, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
+        graph(
+            &defaults,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)
+        ),
         Some(Action::Pull)
     );
 
     let custom = resolved("[keymap]\npull = [\"Ctrl+Alt+F2\", \"F6\"]\n");
     assert_eq!(
-        graph(&custom, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
+        graph(
+            &custom,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)
+        ),
         None
     );
     for key in [
@@ -66,7 +87,10 @@ fn no_keymap_preserves_defaults_and_overrides_replace_them() {
 fn an_empty_list_unassigns_the_action() {
     let keymap = resolved("[keymap]\npull = []\n");
     assert_eq!(
-        graph(&keymap, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
+        graph(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)
+        ),
         None
     );
     assert_eq!(keymap.display_bindings("pull"), "Unassigned");
@@ -93,7 +117,10 @@ fn overrides_apply_in_normal_panel_and_modal_contexts() {
         ),
         Some(Action::ToggleStage)
     );
-    let picker = AppMode::BranchPicker { branches: vec![], selected: 0 };
+    let picker = AppMode::BranchPicker {
+        branches: vec![],
+        selected: 0,
+    };
     assert_eq!(
         map_key_to_action_with_keymap(
             KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE),
@@ -112,10 +139,16 @@ fn overrides_apply_in_normal_panel_and_modal_contexts() {
 fn same_context_conflict_is_last_wins_but_cross_context_reuse_is_allowed() {
     let conflicting = resolved("[keymap]\nfetch = [\"F2\"]\npull = [\"F2\"]\n");
     assert_eq!(
-        graph(&conflicting, KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE)),
+        graph(
+            &conflicting,
+            KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE)
+        ),
         Some(Action::Pull)
     );
-    let warning = conflicting.warnings().iter().find(|w| w.reason.contains("conflict"))
+    let warning = conflicting
+        .warnings()
+        .iter()
+        .find(|w| w.reason.contains("conflict"))
         .expect("conflict warning");
     assert!(warning.reason.contains("fetch"));
     assert!(warning.reason.contains("pull"));
@@ -123,6 +156,13 @@ fn same_context_conflict_is_last_wins_but_cross_context_reuse_is_allowed() {
 
     let disjoint = resolved("[keymap]\npull = [\"F3\"]\ntoggle-stage = [\"F3\"]\n");
     assert!(disjoint.warnings().is_empty());
+
+    let reversed = resolved("[keymap]\npull = [\"F2\"]\nfetch = [\"F2\"]\n");
+    assert_eq!(
+        graph(&reversed, KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE)),
+        Some(Action::Fetch),
+        "source order, rather than identifier sort order, determines the winner"
+    );
 }
 
 #[test]
@@ -131,7 +171,10 @@ fn malformed_unknown_and_alias_entries_recover_independently() {
         "[keymap]\npull = [\"Ctrl++P\"]\nnot-a-command = [\"F9\"]\nfetch = [\"F2\"]\ncommand-palette = [\"F4\"]\n",
     );
     assert_eq!(
-        graph(&keymap, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
+        graph(
+            &keymap,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)
+        ),
         Some(Action::Pull),
         "malformed override keeps the action default"
     );
@@ -145,7 +188,12 @@ fn malformed_unknown_and_alias_entries_recover_independently() {
         Some(Action::OpenCommandPalette),
         "compatibility alias resolves"
     );
-    let text = keymap.warnings().iter().map(|w| format!("{}: {}", w.entry, w.reason)).collect::<Vec<_>>().join("\n");
+    let text = keymap
+        .warnings()
+        .iter()
+        .map(|w| format!("{}: {}", w.entry, w.reason))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(text.contains("pull"));
     assert!(text.contains("Ctrl++P"));
     assert!(text.contains("not-a-command"));

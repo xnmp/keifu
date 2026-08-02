@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 
 use crate::{
     app::{App, AppMode, FocusedPanel},
-    keybindings::{map_key_to_action, map_mouse_to_action},
+    keybindings::{map_key_to_action_with_keymap, map_mouse_to_action},
     ui,
 };
 
@@ -114,13 +114,14 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
             Ok(events) => {
                 for key in events {
                     app.maybe_hint_capslock(&key);
-                    if let Some(action) = map_key_to_action(
+                    if let Some(action) = map_key_to_action_with_keymap(
                         key,
                         &app.mode,
                         app.focused_panel,
                         app.editing_commit_message,
                         app.files_pane.files_filter_active,
                         app.commit_filter_active,
+                        &app.keymap,
                     ) {
                         if let Err(e) = app.handle_action(action) {
                             app.show_error(format!("{}", e));

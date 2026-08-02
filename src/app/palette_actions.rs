@@ -57,7 +57,13 @@ impl App {
             out.push(Candidate {
                 kind: PaletteKind::Command,
                 label: e.label.to_string(),
-                hint: e.hint.map(str::to_string),
+                hint: crate::keymap::public_action_id(&e.action)
+                    .and_then(|id| {
+                        let display = self.keymap.display_bindings(id);
+                        (self.keymap.is_overridden(id) || display != "Unassigned")
+                            .then_some(display)
+                    })
+                    .or_else(|| e.hint.map(str::to_string)),
                 match_text: e.label.to_string(),
                 action: PaletteAction::Dispatch(e.action),
                 order: i,
@@ -87,7 +93,6 @@ impl App {
                 // In particular, Create branch here and Pull must retain the
                 // palette-open target fingerprint rather than dispatching a
                 // current-selection action directly.
-                candidate.hint = Some("Enter".to_string());
                 candidate.action = contextual_action;
                 continue;
             }

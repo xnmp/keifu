@@ -8,11 +8,38 @@ use git2::{Repository, Signature};
 use keifu::action::Action;
 use keifu::app::{App, AppMode, ConfirmAction, InputAction};
 use keifu::git::GitRepository;
+use keifu::keymap::ResolvedKeymap;
 
 use common::{commit_file, init_repo, Seed};
 
 fn make_app(repo: GitRepository) -> App {
     App::from_repo(repo).unwrap()
+}
+
+#[test]
+fn command_palette_labels_use_effective_bindings() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    commit_file(repo.repo(), "a.txt", "a", "first");
+    let mut app = make_app(repo);
+    let table = "pull = [\"Ctrl+Alt+F2\", \"F6\"]\nfetch = []"
+        .parse::<toml::Table>()
+        .unwrap();
+    app.keymap = ResolvedKeymap::from_table(&table);
+
+    let pull = app
+        .palette_results("Pull")
+        .items
+        .into_iter()
+        .find(|item| item.label == "Pull")
+        .unwrap();
+    assert_eq!(pull.hint.as_deref(), Some("Ctrl+Alt+F2 / F6"));
+    let fetch = app
+        .palette_results("Fetch")
+        .items
+        .into_iter()
+        .find(|item| item.label == "Fetch")
+        .unwrap();
+    assert_eq!(fetch.hint.as_deref(), Some("Unassigned"));
 }
 
 #[test]

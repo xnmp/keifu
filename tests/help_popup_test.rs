@@ -1,3 +1,4 @@
+use keifu::keymap::ResolvedKeymap;
 use keifu::ui::help_popup::HelpPopup;
 use keifu::ui::theme::Theme;
 use ratatui::{backend::TestBackend, layout::Rect, Terminal};
@@ -14,6 +15,32 @@ fn rendered_help(is_uncommitted: bool) -> String {
         })
         .unwrap();
 
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(120)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn rendered_help_with_keymap(source: &str) -> String {
+    let table = source.parse::<toml::Table>().unwrap()["keymap"]
+        .as_table()
+        .unwrap()
+        .clone();
+    let keymap = ResolvedKeymap::from_table(&table);
+    let mut terminal = Terminal::new(TestBackend::new(120, 100)).unwrap();
+    let theme = Theme::dark();
+    terminal
+        .draw(|frame| {
+            frame.render_widget(
+                HelpPopup::with_keymap(false, true, &theme, 0, &keymap),
+                Rect::new(0, 0, 120, 100),
+            );
+        })
+        .unwrap();
     terminal
         .backend()
         .buffer()
@@ -66,4 +93,16 @@ fn help_popup_keeps_context_specific_file_entries() {
     ] {
         assert!(help.contains(expected), "help popup omitted {expected:?}");
     }
+}
+
+#[test]
+fn help_popup_renders_effective_multiple_and_unassigned_bindings() {
+    let help =
+        rendered_help_with_keymap("[keymap]\npull = [\"Ctrl+Alt+F2\", \"F6\"]\nfetch = []\n");
+    assert!(help.lines().any(|line| {
+        line.contains("Ctrl+Alt+F2 / F6") && line.contains("Pull (fetch + integrate)")
+    }));
+    assert!(help
+        .lines()
+        .any(|line| { line.contains("Unassigned") && line.contains("Fetch from remote") }));
 }
