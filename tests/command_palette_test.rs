@@ -151,4 +151,55 @@ fn command_palette_uses_enter_menu_preconditions_for_stashes_and_branch_tips() {
         !labels.iter().any(|label| label == "Cherry-pick"),
         "{labels:?}"
     );
+
+    // A stash has a commit payload, but is not an ordinary commit context.
+    // Registry shortcuts must not leak alongside the dedicated stash actions.
+    for ordinary in [
+        "Commit actions menu",
+        "Create branch here",
+        "Mark commit for compare",
+        "Jump to merge base with main",
+    ] {
+        let labels: Vec<String> = app
+            .palette_results(ordinary)
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(
+            !labels.iter().any(|label| label == ordinary),
+            "stash palette leaked {ordinary}: {labels:?}"
+        );
+    }
+
+    fs::write(td.path().join("b.txt"), "uncommitted").unwrap();
+    app.refresh(true).unwrap();
+    let uncommitted_idx = app
+        .graph_layout
+        .nodes
+        .iter()
+        .position(|node| node.is_uncommitted)
+        .expect("an uncommitted node is present");
+    app.graph_nav.graph_list_state.select(Some(uncommitted_idx));
+
+    // Enter switches this selection to Files; the palette must similarly omit
+    // ordinary commit actions rather than offering dead ends.
+    for ordinary in [
+        "Checkout",
+        "Cherry-pick",
+        "Reset to this commit...",
+        "Revert this commit",
+        "Copy commit hash",
+    ] {
+        let labels: Vec<String> = app
+            .palette_results(ordinary)
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(
+            !labels.iter().any(|label| label == ordinary),
+            "uncommitted palette leaked {ordinary}: {labels:?}"
+        );
+    }
 }
