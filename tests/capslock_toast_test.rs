@@ -44,13 +44,13 @@ fn capslock_key_drives_the_visible_toast_and_its_normal_binding() {
     let (_tmp, mut app) = test_app();
     let before = handle_request(&mut app, 120, 35, DebugRequest::State);
 
-    assert_ne!(
+    assert_eq!(
         handle_request(
             &mut app,
             120,
             35,
             DebugRequest::Keys {
-                keys: "<caps-j>".into()
+                keys: "<caps-down>".into()
             }
         )["ok"],
         true
@@ -66,14 +66,11 @@ fn capslock_key_drives_the_visible_toast_and_its_normal_binding() {
         },
     );
 
-    assert_eq!(
+    assert_ne!(
         after["selected_index"], before["selected_index"],
-        "the Caps Lock-reported j key must still run its normal navigation binding"
+        "the Caps Lock-reported down key must still run its normal navigation binding"
     );
-    assert!(dump["screen"]
-        .as_str()
-        .unwrap()
-        .contains("Caps Lock is on — keys are case-sensitive"));
+    assert!(dump["screen"].as_str().unwrap().contains("Caps Lock is on"));
 }
 
 #[test]

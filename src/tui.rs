@@ -29,6 +29,7 @@ static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Keyboard protocol features Keifu relies on while its TUI owns the terminal.
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
 /// Push the `DISAMBIGUATE_ESCAPE_CODES` keyboard-enhancement flag when the
@@ -66,13 +67,13 @@ pub fn init() -> Result<Tui> {
         EnableMouseCapture,
         EnableBracketedPaste
     )?;
-    // Enable keyboard enhancement after the alternate screen so Ctrl+punctuation
-    // and reported Caps Lock state reach crossterm. Log the outcome so the user
-    // can confirm in the --log-file whether their terminal supports it.
+    // Enable keyboard enhancement after the alternate screen so every key,
+    // including text-producing keys, reports its Caps Lock state to crossterm.
+    // Log the outcome so the user can confirm terminal support in --log-file.
     let enhanced = push_keyboard_enhancement(&mut stdout)?;
     tracing::info!(
         keyboard_enhancement = enhanced,
-        "terminal keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES, Caps Lock state)"
+        "terminal keyboard enhancement (all keys + Caps Lock state)"
     );
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
