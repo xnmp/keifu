@@ -1,39 +1,103 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use keifu::{app::App, git::repository::GitRepository};
+use keifu::{
+    app::App,
+    debug_server::{handle_request, DebugRequest},
+    git::repository::GitRepository,
+};
+use std::fs;
 
 fn test_app() -> (tempfile::TempDir, App) {
     let tempdir = tempfile::tempdir().unwrap();
-    git2::Repository::init(tempdir.path()).unwrap();
+    let raw_repo = git2::Repository::init(tempdir.path()).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+    let mut index = raw_repo.index().unwrap();
+    fs::write(tempdir.path().join("first.txt"), "first").unwrap();
+    index.add_path(std::path::Path::new("first.txt")).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = raw_repo.find_tree(tree_id).unwrap();
+    raw_repo
+        .commit(Some("HEAD"), &signature, &signature, "first", &tree, &[])
+        .unwrap();
+    fs::write(tempdir.path().join("second.txt"), "second").unwrap();
+    index.add_path(std::path::Path::new("second.txt")).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = raw_repo.find_tree(tree_id).unwrap();
+    let parent = raw_repo.head().unwrap().peel_to_commit().unwrap();
+    raw_repo
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "second",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
     let repo = GitRepository::open(tempdir.path()).unwrap();
     let app = App::from_repo(repo).unwrap();
     (tempdir, app)
 }
 
-fn key_with_state(state: KeyEventState) -> KeyEvent {
-    KeyEvent::new_with_kind_and_state(
-        KeyCode::Char('k'),
-        KeyModifiers::NONE,
-        KeyEventKind::Press,
-        state,
-    )
+#[test]
+fn capslock_key_drives_the_visible_toast_and_its_normal_binding() {
+    let (_tmp, mut app) = test_app();
+    let before = handle_request(&mut app, 120, 35, DebugRequest::State);
+
+    assert_ne!(
+        handle_request(
+            &mut app,
+            120,
+            35,
+            DebugRequest::Keys {
+                keys: "<caps-j>".into()
+            }
+        )["ok"],
+        true
+    );
+    let after = handle_request(&mut app, 120, 35, DebugRequest::State);
+    let dump = handle_request(
+        &mut app,
+        120,
+        35,
+        DebugRequest::Dump {
+            width: Some(120),
+            height: Some(35),
+        },
+    );
+
+    assert_eq!(
+        after["selected_index"], before["selected_index"],
+        "the Caps Lock-reported j key must still run its normal navigation binding"
+    );
+    assert!(dump["screen"]
+        .as_str()
+        .unwrap()
+        .contains("Caps Lock is on — keys are case-sensitive"));
 }
 
 #[test]
 fn capslock_warning_is_once_per_reported_session_and_rearms_when_inactive() {
     let (_tmp, mut app) = test_app();
 
-    app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
-    assert_eq!(app.toasts.visible().len(), 1, "first reported key warns");
-
-    app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
-    assert_eq!(
-        app.toasts.visible().len(),
-        1,
-        "a continuing reported session is suppressed"
+    handle_request(
+        &mut app,
+        120,
+        35,
+        DebugRequest::Keys {
+            keys: "<caps-k> <caps-k>".into(),
+        },
     );
+    assert_eq!(app.toasts.visible().len(), 1, "one session warns once");
 
-    app.maybe_hint_capslock(&key_with_state(KeyEventState::empty()));
-    app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
+    handle_request(
+        &mut app,
+        120,
+        35,
+        DebugRequest::Keys {
+            keys: "k <caps-k>".into(),
+        },
+    );
     assert_eq!(
         app.toasts.visible().len(),
         2,
@@ -44,9 +108,7 @@ fn capslock_warning_is_once_per_reported_session_and_rearms_when_inactive() {
 #[test]
 fn absent_capslock_state_does_not_infer_a_warning_from_uppercase_text() {
     let (_tmp, mut app) = test_app();
-    let unreported = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE);
-
-    app.maybe_hint_capslock(&unreported);
+    handle_request(&mut app, 120, 35, DebugRequest::Keys { keys: "K".into() });
 
     assert!(app.toasts.is_empty());
 }
