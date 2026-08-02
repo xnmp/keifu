@@ -1576,6 +1576,39 @@ impl PixelGraphState {
         !self.poisoned
     }
 
+    /// The pixel dimensions of one terminal cell used for rasterization.
+    pub fn cell_size(&self) -> (u16, u16) {
+        self.font_size
+    }
+
+    /// Refresh the terminal cell geometry after a resize event. Invalid
+    /// measurements retain the current geometry because some terminals report
+    /// zero pixel dimensions.
+    pub fn refresh_font_size(&mut self, font_size: (u16, u16)) {
+        if font_size.0 == 0 || font_size.1 == 0 || font_size == self.font_size {
+            return;
+        }
+
+        let protocol_type = self.picker.protocol_type();
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(font_size);
+        picker.set_protocol_type(protocol_type);
+        self.picker = picker;
+        self.font_size = font_size;
+        self.protocols.clear();
+        self.avatar_protocols.clear();
+    }
+
+    /// Read the terminal's current pixel and cell dimensions after a resize.
+    /// This avoids terminal input queries while the crossterm event reader is
+    /// active.
+    pub fn refresh_font_size_from_window_size(&mut self, size: crossterm::terminal::WindowSize) {
+        if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
+            return;
+        }
+        self.refresh_font_size((size.width / size.columns, size.height / size.rows));
+    }
+
     /// Prepare every protocol referenced by the current frame. Prunes the cache
     /// to the current spec set on overflow (item: bounded, no thrash), then
     /// ensures each spec. Stops early once poisoned so a persistent failure
@@ -1718,6 +1751,78 @@ mod tests {
 
     fn pipe(color: [u8; 3]) -> PixelCell {
         solid(CellShape::Pipe, color)
+    }
+
+    fn pixel_state(font_size: (u16, u16)) -> PixelGraphState {
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(font_size);
+        picker.set_protocol_type(ProtocolType::Iterm2);
+        PixelGraphState::from_picker(picker)
+    }
+
+    #[test]
+    fn resize_refreshes_cell_geometry_and_invalidates_cached_protocols() {
+        let mut state = pixel_state((CW as u16, CH as u16));
+        let row = spec(vec![pipe([0, 255, 0])]);
+        state.sync_frame(std::slice::from_ref(&row));
+        let avatar = AvatarReq {
+            email: "dev@example.com".into(),
+            source: AvatarSource::Fallback,
+            color: [0, 255, 0],
+        };
+        state.sync_avatars(std::slice::from_ref(&avatar));
+        assert!(state.get(&row).is_some(), "the initial image is cached");
+        assert!(
+            state.get_avatar(&avatar.email).is_some(),
+            "the initial avatar image is cached"
+        );
+
+        state.refresh_font_size((20, 40));
+
+        assert_eq!(state.font_size, (20, 40));
+        assert!(
+            state.get(&row).is_none(),
+            "a changed cell geometry must regenerate the image payload"
+        );
+        assert!(
+            state.get_avatar(&avatar.email).is_none(),
+            "a changed cell geometry must regenerate avatar payloads"
+        );
+    }
+
+    #[test]
+    fn resize_with_zero_cell_geometry_keeps_existing_cached_protocols() {
+        let mut state = pixel_state((CW as u16, CH as u16));
+        let row = spec(vec![pipe([0, 255, 0])]);
+        state.sync_frame(std::slice::from_ref(&row));
+        assert!(state.get(&row).is_some(), "the initial image is cached");
+
+        state.refresh_font_size_from_window_size(crossterm::terminal::WindowSize {
+            columns: 10,
+            rows: 20,
+            width: 0,
+            height: 400,
+        });
+
+        assert_eq!(state.font_size, (CW as u16, CH as u16));
+        assert!(
+            state.get(&row).is_some(),
+            "an unusable resize must retain the last renderable image"
+        );
+    }
+
+    #[test]
+    fn resize_derives_the_current_cell_geometry_from_window_size() {
+        let mut state = pixel_state((CW as u16, CH as u16));
+
+        state.refresh_font_size_from_window_size(crossterm::terminal::WindowSize {
+            columns: 10,
+            rows: 20,
+            width: 200,
+            height: 800,
+        });
+
+        assert_eq!(state.font_size, (20, 40));
     }
 
     const PAD_X: u32 = PIXEL_LEFT_PAD_CELLS as u32 * CW;

@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 use keifu::{
     app::App,
     debug_server,
-    event::{get_key_event, get_mouse_event, get_paste_event, poll_event_with_timeout},
+    event::{
+        dispatch_pixel_graph_resize, get_key_event, get_mouse_event, get_paste_event,
+        poll_event_with_timeout,
+    },
     external_edit::{self, ExternalEditTarget},
     git::configure_git_extensions,
     keybindings::{map_key_to_action, map_mouse_to_action},
@@ -103,6 +106,9 @@ fn handle_input_event(
     app: &mut App,
     event: crossterm::event::Event,
 ) -> Result<bool> {
+    dispatch_pixel_graph_resize(&event, app.pixel_graph.as_mut(), || {
+        crossterm::terminal::window_size().ok()
+    });
     if let Some(key) = get_key_event(&event) {
         if app.debug_keys {
             app.set_message(format!("KEY: code={:?} mod={:?}", key.code, key.modifiers));
