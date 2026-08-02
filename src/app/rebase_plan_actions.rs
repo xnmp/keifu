@@ -706,12 +706,10 @@ mod tests {
 
         let second_start = second_app.run_interactive_rebase_plan(second_plan);
 
-        assert!(
-            second_start
-                .unwrap_err()
-                .to_string()
-                .contains("already in progress")
-        );
+        assert!(second_start
+            .unwrap_err()
+            .to_string()
+            .contains("already in progress"));
         assert_eq!(
             std::fs::read_to_string(&message_path).unwrap(),
             "original pending message"
@@ -733,6 +731,75 @@ mod tests {
                 .summary(),
             Some("original pending message")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completion_handoff_blocks_a_new_plan_until_undo_and_cleanup_finish() {
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+
+        let (tmp, mut first_app, base, original_head) = app_with_conflicting_range();
+        first_app.start_interactive_rebase(base);
+        first_app
+            .rebase_plan
+            .as_mut()
+            .unwrap()
+            .move_down(0)
+            .unwrap();
+        let plan = first_app.rebase_plan.clone().unwrap();
+        first_app.mode = AppMode::Confirm {
+            message: rebase_summary(&plan),
+            action: ConfirmAction::RunInteractiveRebase(plan.clone()),
+        };
+        first_app.handle_action(Action::Confirm).unwrap();
+        assert!(first_app.interactive_rebase_in_progress);
+        drop(first_app);
+
+        let state_dir = tmp.path().join(".git/keifu-interactive-rebase");
+        let undo_path = state_dir.join(INTERACTIVE_REBASE_UNDO_FILE);
+        let mut undo_file = OpenOptions::new().append(true).open(&undo_path).unwrap();
+        undo_file.write_all(&vec![b' '; 64 * 1024 * 1024]).unwrap();
+        drop(undo_file);
+        std::fs::write(tmp.path().join("f.txt"), "one\n").unwrap();
+        git(tmp.path(), &["add", "f.txt"]);
+
+        let mut competing_app = App::from_repo(GitRepository::open(tmp.path()).unwrap()).unwrap();
+        let repo_path = tmp.path().to_path_buf();
+        let worker = std::thread::spawn(move || {
+            let mut resumed = App::from_repo(GitRepository::open(&repo_path).unwrap()).unwrap();
+            resumed.focused_panel = FocusedPanel::Files;
+            for _ in 0..3 {
+                resumed.handle_action(Action::ContinueOperation).unwrap();
+                if !resumed.interactive_rebase_in_progress {
+                    break;
+                }
+            }
+            (resumed.undo_ledger.len(), resumed.repo.head_oid())
+        });
+        let marker = tmp.path().join(".git/rebase-merge/interactive");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !marker.exists(),
+            "continued rebase did not reach completion"
+        );
+
+        let competing_start = competing_app.run_interactive_rebase_plan(plan);
+        let (undo_count, completed_head) = worker.join().unwrap();
+
+        assert!(
+            competing_start
+                .unwrap_err()
+                .to_string()
+                .contains("Another interactive rebase is starting"),
+            "the completion owner must retain the state lock through cleanup"
+        );
+        assert_eq!(undo_count, 1);
+        assert_ne!(completed_head, Some(original_head));
+        assert!(!state_dir.exists());
     }
 
     #[cfg(unix)]
