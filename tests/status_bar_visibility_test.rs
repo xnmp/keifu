@@ -1,10 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use keifu::app::{AppMode, FocusedPanel};
-use keifu::{
-    action::Action, app::App, config::UiState, git::GitRepository, keybindings::map_key_to_action,
-    ui,
-};
+use keifu::{action::Action, app::App, keybindings::map_key_to_action, ui};
 use ratatui::{backend::TestBackend, Terminal};
+use std::process::Command;
 
 fn rendered_screen(app: &mut App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -68,40 +66,72 @@ fn help_menu_toggles_status_bar_and_returns_its_row_to_the_main_layout() {
         hidden.lines().last().unwrap().contains('╰'),
         "the main pane border must occupy the reclaimed final row: {hidden}"
     );
+
+    app.handle_action(Action::ToggleHelp).unwrap();
+    app.handle_action(Action::ToggleStatusBar).unwrap();
+    let restored_help = rendered_screen(&mut app, 120, 100);
+    assert!(
+        restored_help.contains("Toggle status bar (On)"),
+        "the Help menu must report the restored enabled state: {restored_help}"
+    );
+
+    app.handle_action(Action::ToggleHelp).unwrap();
+    let restored = rendered_screen(&mut app, 120, 40);
+    assert!(
+        restored.lines().last().unwrap().contains("help"),
+        "the restored status bar must occupy the final row: {restored}"
+    );
+    assert!(
+        restored.lines().nth(38).unwrap().contains('╰'),
+        "the main pane must relinquish the final row when the status bar returns: {restored}"
+    );
 }
 
 #[test]
 fn help_toggle_persists_to_a_fresh_ui_state_and_app() {
-    let config_dir = tempfile::tempdir().unwrap();
-    let repo_dir = tempfile::tempdir().unwrap();
-    git2::Repository::init(repo_dir.path()).unwrap();
-    let original_config_dir = std::env::var_os("XDG_CONFIG_HOME");
-    std::env::set_var("XDG_CONFIG_HOME", config_dir.path());
+    const CHILD_ENV: &str = "KEIFU_STATUS_BAR_PERSISTENCE_CHILD";
 
-    let repo = GitRepository::open(repo_dir.path()).unwrap();
-    let mut app = App::from_repo(repo).unwrap();
-    assert!(
-        app.status_bar_visible,
-        "new apps show the status bar by default"
-    );
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(repo_dir.path()).unwrap();
 
-    app.handle_action(Action::ToggleHelp).unwrap();
-    app.handle_action(Action::ToggleStatusBar).unwrap();
+        let repo = keifu::git::GitRepository::open(repo_dir.path()).unwrap();
+        let mut app = App::from_repo(repo).unwrap();
+        assert!(
+            app.status_bar_visible,
+            "new apps show the status bar by default"
+        );
 
-    let restored_state = UiState::load();
-    assert!(
-        !restored_state.status_bar_visible,
-        "the Help toggle must be written to state.toml"
-    );
-    let fresh_repo = GitRepository::open(repo_dir.path()).unwrap();
-    let fresh_app = App::from_repo_with_ui_state(fresh_repo, restored_state).unwrap();
-    assert!(
-        !fresh_app.status_bar_visible,
-        "a fresh app must honor the persisted hidden status bar preference"
-    );
+        app.handle_action(Action::ToggleHelp).unwrap();
+        app.handle_action(Action::ToggleStatusBar).unwrap();
 
-    match original_config_dir {
-        Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-        None => std::env::remove_var("XDG_CONFIG_HOME"),
+        let restored_state = keifu::config::UiState::load();
+        assert!(
+            !restored_state.status_bar_visible,
+            "the Help toggle must be written to state.toml"
+        );
+        let fresh_repo = keifu::git::GitRepository::open(repo_dir.path()).unwrap();
+        let fresh_app = App::from_repo_with_ui_state(fresh_repo, restored_state).unwrap();
+        assert!(
+            !fresh_app.status_bar_visible,
+            "a fresh app must honor the persisted hidden status bar preference"
+        );
+        return;
     }
+
+    let config_dir = tempfile::tempdir().unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("help_toggle_persists_to_a_fresh_ui_state_and_app")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "the isolated persistence scenario failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
