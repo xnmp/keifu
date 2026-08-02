@@ -14,7 +14,11 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git").args(args).current_dir(repo).status().unwrap();
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .unwrap();
     assert!(status.success(), "git command failed: git {args:?}");
 }
 
@@ -68,7 +72,14 @@ fn start_app(repo: &Path, port: u16, tmux: bool, answer_query: bool) -> RunningA
     command.args(["--debug-listen", &address]);
     command.cwd(repo);
     command.env("XDG_CONFIG_HOME", config_home.path());
-    command.env("TERM", if tmux { "tmux-256color" } else { "xterm-256color" });
+    command.env(
+        "TERM",
+        if tmux {
+            "tmux-256color"
+        } else {
+            "xterm-256color"
+        },
+    );
     for variable in [
         "KEIFU_FORCE_PIXEL",
         "TERM_PROGRAM",
@@ -103,14 +114,13 @@ fn start_app(repo: &Path, port: u16, tmux: bool, answer_query: bool) -> RunningA
                 answered_keyboard = true;
             }
             if !answered_background && output.windows(5).any(|part| part == b"]11;?") {
-                writer.write_all(b"\x1b]11;rgb:0000/0000/0000\x07\x1b[0n").unwrap();
+                writer
+                    .write_all(b"\x1b]11;rgb:0000/0000/0000\x07\x1b[0n")
+                    .unwrap();
                 writer.flush().unwrap();
                 answered_background = true;
             }
-            if answer_query
-                && !answered_picker
-                && output.windows(5).any(|part| part == b"_Gi=3")
-            {
+            if answer_query && !answered_picker && output.windows(5).any(|part| part == b"_Gi=3") {
                 // Kitty graphics, a nonzero cell size, then the terminal-status
                 // response which completes the real Picker stdio query.
                 writer
