@@ -7,7 +7,13 @@ use common::{add_bare_origin, commit_file, current_branch, git_cli, init_repo, r
 use keifu::action::Action;
 use keifu::app::{App, AppMode};
 use keifu::config::{Config, GraphRenderer, UiState};
-use keifu::git::operations::{checkout_branch, create_branch, delete_branch};
+use keifu::git::{
+    operations::{checkout_branch, create_branch, delete_branch},
+    GitRepository,
+};
+use keifu::palette::filter_checkout_branches;
+use keifu::toast::ToastKind;
+use keifu::ui::dialog::BranchPickerWidget;
 use keifu::ui::{command_palette::CommandPaletteWidget, theme::Theme};
 
 fn type_text(app: &mut App, text: &str) {
@@ -37,6 +43,38 @@ fn palette_screen(app: &App, query: &str) -> String {
         .join("\n")
 }
 
+fn branch_picker_screen(app: &App) -> String {
+    let AppMode::BranchPicker {
+        branches,
+        query,
+        selected,
+    } = &app.mode
+    else {
+        panic!("expected checkout picker, got {:?}", app.mode);
+    };
+    let labels: Vec<String> = filter_checkout_branches(branches, query)
+        .into_iter()
+        .map(|branch| {
+            if branch.is_remote {
+                format!("remote {}", branch.name)
+            } else {
+                branch.name.clone()
+            }
+        })
+        .collect();
+    let area = Rect::new(0, 0, 42, 8);
+    let mut buffer = Buffer::empty(area);
+    BranchPickerWidget::new(&labels, query, *selected, &Theme::dark()).render(area, &mut buffer);
+    (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() {
     // Keep state/config writes from palette setting actions inside this test's
@@ -51,6 +89,10 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     let initial = repo.head().unwrap().peel_to_commit().unwrap().id();
     let default_branch = current_branch(repo);
     create_branch(repo, "local-work", initial).unwrap();
+    create_branch(repo, "vanishing", initial).unwrap();
+    for i in 0..16 {
+        create_branch(repo, &format!("topic-{i:02}"), initial).unwrap();
+    }
 
     let _origin = add_bare_origin(&path);
     create_branch(repo, "remote-source", initial).unwrap();
@@ -60,6 +102,9 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     checkout_branch(repo, &default_branch).unwrap();
     delete_branch(repo, "remote-source").unwrap();
     git_cli(&path, &["fetch", "origin"]);
+    // Git permits this local name even though the same display name is also a
+    // remote-tracking ref. The picker must retain both authoritative identities.
+    create_branch(repo, "origin/remote-work", initial).unwrap();
     assert!(repo.find_branch("remote-work", BranchType::Local).is_err());
 
     let mut app = App::from_repo(git_repo).unwrap();
@@ -71,7 +116,8 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
         .items
         .iter()
         .any(|item| item.label == "Refresh"));
-    app.handle_action(Action::Cancel).unwrap();
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(matches!(app.mode, AppMode::Normal));
 
     // Checkout is a command that opens a dedicated, searchable branch picker.
     open_palette(&mut app, "checkout");
@@ -92,6 +138,19 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     open_palette(&mut app, "checkout");
     app.handle_action(Action::MenuSelect).unwrap();
     type_text(&mut app, "origin/remote-work");
+    let remote_index = match &app.mode {
+        AppMode::BranchPicker {
+            branches, query, ..
+        } => {
+            let matching = filter_checkout_branches(branches, query);
+            assert_eq!(matching.len(), 2, "local and remote collision must survive");
+            matching.iter().position(|branch| branch.is_remote).unwrap()
+        }
+        other => panic!("expected checkout picker, got {other:?}"),
+    };
+    for _ in 0..remote_index {
+        app.handle_action(Action::MoveDown).unwrap();
+    }
     app.handle_action(Action::MenuSelect).unwrap();
     let reopened = Repository::open(&path).unwrap();
     assert_eq!(reopened.head().unwrap().shorthand(), Some("remote-work"));
@@ -103,6 +162,40 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     assert_eq!(tracking.name().unwrap(), Some("origin/remote-work"));
     drop(tracking);
     drop(reopened);
+
+    // Navigation windows around the selected result instead of moving the
+    // highlight beyond the visible viewport.
+    open_palette(&mut app, "checkout");
+    app.handle_action(Action::MenuSelect).unwrap();
+    type_text(&mut app, "topic");
+    for _ in 0..12 {
+        app.handle_action(Action::MoveDown).unwrap();
+    }
+    let picker = branch_picker_screen(&app);
+    assert!(
+        picker.contains("> topic-12"),
+        "selected fuzzy result must remain visible:\n{picker}"
+    );
+    app.handle_action(Action::Cancel).unwrap();
+
+    // A stale result exercises the real event-loop error composition: the
+    // picker closes, the error becomes a red toast, and input remains usable.
+    open_palette(&mut app, "checkout");
+    app.handle_action(Action::MenuSelect).unwrap();
+    type_text(&mut app, "vanishing");
+    Repository::open(&path)
+        .unwrap()
+        .find_branch("vanishing", BranchType::Local)
+        .unwrap()
+        .delete()
+        .unwrap();
+    if let Err(error) = app.handle_action(Action::MenuSelect) {
+        app.show_error(error.to_string());
+    }
+    assert!(matches!(app.mode, AppMode::Normal));
+    let error_toast = app.toasts.visible().last().expect("checkout error toast");
+    assert_eq!(error_toast.kind, ToastKind::Error);
+    assert!(error_toast.text.contains("vanishing"));
 
     // The rendered palette shows the current setting value. Selecting the row
     // updates the live app and leaves the row open with its new value visible.
@@ -132,6 +225,28 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     let renderer_after = palette_screen(&app, "graph renderer");
     assert!(renderer_after.contains("unicode"));
     assert_eq!(Config::load().ui.graph_renderer, GraphRenderer::Unicode);
+
+    // Reconstruct the application with preferences loaded from disk and prove
+    // the reopened user-facing palette reports the persisted values.
+    drop(app);
+    let mut reloaded = App::from_repo_with_preferences(
+        GitRepository::open(&path).unwrap(),
+        Config::load(),
+        UiState::load(),
+    )
+    .unwrap();
+    open_palette(&mut reloaded, "diff line wrap");
+    let persisted_wrap = palette_screen(&reloaded, "diff line wrap");
+    assert!(
+        persisted_wrap.contains("On"),
+        "screen was:\n{persisted_wrap}"
+    );
+    open_palette(&mut reloaded, "graph renderer");
+    let persisted_renderer = palette_screen(&reloaded, "graph renderer");
+    assert!(
+        persisted_renderer.contains("unicode"),
+        "screen was:\n{persisted_renderer}"
+    );
 
     std::env::remove_var("XDG_CONFIG_HOME");
 }

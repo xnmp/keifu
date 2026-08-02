@@ -319,12 +319,16 @@ impl<'a> Widget for BranchPickerWidget<'a> {
             return;
         }
 
-        for (i, branch) in self.branches.iter().enumerate() {
-            if i as u16 >= inner.height.saturating_sub(row_offset) {
-                break;
-            }
-
-            let y = inner.y + row_offset + i as u16;
+        let visible_rows = inner.height.saturating_sub(row_offset) as usize;
+        let first = self.selected.saturating_sub(visible_rows.saturating_sub(1));
+        for (i, branch) in self
+            .branches
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(visible_rows)
+        {
+            let y = inner.y + row_offset + (i - first) as u16;
             let is_selected = i == self.selected;
             let style = if is_selected {
                 self.theme.list_selection_style()

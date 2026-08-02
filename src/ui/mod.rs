@@ -873,9 +873,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             query,
             selected,
         } => {
-            let filtered: Vec<String> = crate::palette::filter_branch_names(branches, query)
+            let filtered: Vec<String> = crate::palette::filter_checkout_branches(branches, query)
                 .into_iter()
-                .cloned()
+                .map(|branch| {
+                    if branch.is_remote {
+                        format!(
+                            "{} {}",
+                            crate::ui::graph_view::REMOTE_ONLY_ICON,
+                            branch.name
+                        )
+                    } else {
+                        branch.name.clone()
+                    }
+                })
                 .collect();
             let max_name_len = filtered
                 .iter()

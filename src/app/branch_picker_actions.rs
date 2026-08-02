@@ -4,12 +4,22 @@ use super::*;
 
 impl App {
     /// Open the searchable checkout picker over every known local and remote
-    /// branch. The branch names remain raw so the existing remotes-aware
-    /// checkout path can authoritatively resolve remote refs on selection.
+    /// branch. Each row retains the `BranchInfo` remote bit so a local branch
+    /// whose name resembles a remote ref is still checked out as local.
     pub(crate) fn open_checkout_branch_picker(&mut self) {
-        let mut branches: Vec<String> = self.branches.iter().map(|b| b.name.clone()).collect();
-        branches.sort();
-        branches.dedup();
+        let mut branches: Vec<crate::palette::CheckoutBranch> = self
+            .branches
+            .iter()
+            .map(|branch| crate::palette::CheckoutBranch {
+                name: branch.name.clone(),
+                is_remote: branch.is_remote,
+            })
+            .collect();
+        branches.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.is_remote.cmp(&b.is_remote))
+        });
         self.mode = AppMode::BranchPicker {
             branches,
             query: String::new(),
@@ -29,7 +39,7 @@ impl App {
         let branches = branches.clone();
         let query = query.clone();
         let selected = *selected;
-        let filtered = crate::palette::filter_branch_names(&branches, &query);
+        let filtered = crate::palette::filter_checkout_branches(&branches, &query);
 
         match action {
             Action::MoveUp => {
@@ -55,12 +65,10 @@ impl App {
                 };
             }
             Action::MenuSelect | Action::Confirm => {
-                if let Some(branch_name) = filtered.get(selected) {
-                    let name = (*branch_name).clone();
+                if let Some(branch) = filtered.get(selected) {
+                    let name = branch.name.clone();
+                    let is_remote = branch.is_remote;
                     self.mode = AppMode::Normal;
-                    // Picker entries are raw graph labels; resolve remoteness
-                    // via the remotes()-aware splitter.
-                    let is_remote = self.split_remote_ref(&name).is_some();
                     self.checkout_branch_by_name(&name, is_remote)?;
                 }
             }

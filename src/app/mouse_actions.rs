@@ -295,7 +295,7 @@ impl App {
                 let first = selected.saturating_sub((list.height as usize).saturating_sub(1));
                 list_row_index(list, first, col, row)
             }
-            AppMode::BranchPicker { .. } => {
+            AppMode::BranchPicker { selected, .. } => {
                 // The searchable checkout picker reserves its first inner row
                 // for the query, so branch hit-testing starts one row lower.
                 let list = Rect::new(
@@ -304,7 +304,8 @@ impl App {
                     inner.width,
                     inner.height.saturating_sub(1),
                 );
-                list_row_index(list, 0, col, row)
+                let first = selected.saturating_sub((list.height as usize).saturating_sub(1));
+                list_row_index(list, first, col, row)
             }
             _ => list_row_index(inner, 0, col, row),
         }
@@ -319,7 +320,7 @@ impl App {
             }
             AppMode::BranchPicker {
                 branches, query, ..
-            } => Some(crate::palette::filter_branch_names(branches, query).len()),
+            } => Some(crate::palette::filter_checkout_branches(branches, query).len()),
             AppMode::BranchDeletePicker { branches, .. } => Some(branches.len()),
             AppMode::TagPicker { tags, .. } => Some(tags.len()),
             AppMode::RemotePicker { remotes, .. } => Some(remotes.len()),

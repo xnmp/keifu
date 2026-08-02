@@ -418,7 +418,7 @@ pub enum AppMode {
         all_branches: Vec<String>,
     },
     BranchPicker {
-        branches: Vec<String>,
+        branches: Vec<crate::palette::CheckoutBranch>,
         /// Fuzzy branch-name query; empty shows the complete local+remote list.
         query: String,
         selected: usize,

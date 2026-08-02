@@ -41,16 +41,27 @@ pub(crate) fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
     SkimMatcherV2::default().fuzzy_match(text, query)
 }
 
-/// Branch names visible for a checkout-picker query, preserving source order.
-/// The handler and widget share this projection so navigation, mouse rows, and
-/// rendering always refer to the same result indices.
-pub fn filter_branch_names<'a>(branches: &'a [String], query: &str) -> Vec<&'a String> {
+/// One checkout-picker row. Keep remote identity separate from the display
+/// name: Git permits a local branch named e.g. `origin/topic`, which must not
+/// collide with or be mistaken for the remote-tracking ref of the same name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutBranch {
+    pub name: String,
+    pub is_remote: bool,
+}
+
+/// Checkout rows visible for a fuzzy query, preserving source order. Handler,
+/// widget, and mouse hit-testing share this projection so their indices agree.
+pub fn filter_checkout_branches<'a>(
+    branches: &'a [CheckoutBranch],
+    query: &str,
+) -> Vec<&'a CheckoutBranch> {
     if query.trim().is_empty() {
         return branches.iter().collect();
     }
     branches
         .iter()
-        .filter(|branch| fuzzy_score(branch, query).is_some())
+        .filter(|branch| fuzzy_score(&branch.name, query).is_some())
         .collect()
 }
 

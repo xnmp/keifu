@@ -515,10 +515,13 @@ impl App {
         if self.block_if_op_in_progress("checkout") {
             return Ok(());
         }
-        let branches: Vec<String> = self
+        let branches: Vec<crate::palette::CheckoutBranch> = self
             .selected_node_branches()
             .iter()
-            .map(|s| s.to_string())
+            .map(|name| crate::palette::CheckoutBranch {
+                name: name.to_string(),
+                is_remote: self.split_remote_ref(name).is_some(),
+            })
             .collect();
 
         match branches.len() {
@@ -531,10 +534,8 @@ impl App {
                 }
             }
             1 => {
-                // A graph label is a raw name; resolve remoteness via the
-                // remotes()-aware splitter rather than an "origin/" guess.
-                let is_remote = self.split_remote_ref(&branches[0]).is_some();
-                self.checkout_branch_by_name(&branches[0], is_remote)?;
+                let branch = &branches[0];
+                self.checkout_branch_by_name(&branch.name, branch.is_remote)?;
             }
             _ => {
                 self.mode = AppMode::BranchPicker {
