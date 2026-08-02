@@ -672,6 +672,7 @@ impl App {
             CommitMenuItem::CreatePr => {
                 self.open_create_pr();
             }
+            CommitMenuItem::OpenPrInBrowser => {}
             CommitMenuItem::MergePr => {
                 self.open_merge_pr();
             }
