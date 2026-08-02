@@ -303,3 +303,50 @@ fn canonical_entry_replaces_an_earlier_alias_in_routing_and_labels() {
     );
     assert_eq!(keymap.display_bindings("open-command-palette"), "F3");
 }
+
+#[test]
+fn shared_text_commands_remain_remappable_inside_both_filters() {
+    let keymap = resolved(
+        "[keymap]\ncancel = [\"F2\"]\nconfirm = [\"F3\"]\ninput-backspace-word = [\"F4\"]\ninput-clear-line = [\"F6\"]\n",
+    );
+    for (panel, files_filter, commit_filter) in [
+        (FocusedPanel::Graph, false, true),
+        (FocusedPanel::Files, true, false),
+    ] {
+        let map = |code| {
+            map_key_to_action_with_keymap(
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &AppMode::Normal,
+                panel,
+                false,
+                files_filter,
+                commit_filter,
+                &keymap,
+            )
+        };
+        assert_eq!(map(KeyCode::F(2)), Some(Action::Cancel));
+        assert_eq!(map(KeyCode::F(3)), Some(Action::Confirm));
+        assert_eq!(map(KeyCode::F(4)), Some(Action::InputBackspaceWord));
+        assert_eq!(map(KeyCode::F(6)), Some(Action::InputClearLine));
+    }
+}
+
+#[test]
+fn context_specific_default_alternatives_do_not_create_false_conflicts() {
+    let keymap = resolved("[keymap]\ntoggle-stage = [\"Ctrl+Home\"]\n");
+    assert!(!keymap
+        .warnings()
+        .iter()
+        .any(|warning| warning.reason.contains("go-to-top")));
+}
+
+#[test]
+fn replacing_an_alias_removes_warnings_for_its_obsolete_binding() {
+    let keymap = resolved(
+        "[keymap]\ncommand-palette = [\"F5\"]\nopen-command-palette = [\"F3\"]\n",
+    );
+    assert!(!keymap
+        .warnings()
+        .iter()
+        .any(|warning| warning.reason.contains("F5")));
+}
