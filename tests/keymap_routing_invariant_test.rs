@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use git2::Oid;
 use keifu::app::{
     AppMode, CommitMenuItem, ComposePurpose, ConfirmAction, FocusedPanel, InputAction,
-    IssueComposePurpose, IssueCreateTarget,
+    IssueComposePurpose, IssueCreateTarget, RemoteOp, TagAction,
 };
 use keifu::diff_cache::DiffTarget;
 use keifu::git::{FileChangeKind, FileDiffContent};
@@ -107,6 +107,13 @@ fn routing_contexts() -> Vec<RoutingContext> {
                 selected: 0,
             },
         ),
+        RoutingContext::mode(
+            "PR review picker",
+            AppMode::PrReviewPicker {
+                number: 1,
+                selected: 0,
+            },
+        ),
         RoutingContext::mode("issue list", AppMode::IssueList),
         RoutingContext::mode("issue detail", AppMode::IssueDetail),
         RoutingContext::mode(
@@ -141,6 +148,29 @@ fn routing_contexts() -> Vec<RoutingContext> {
             AppMode::BranchPicker {
                 branches: vec![],
                 selected: 0,
+            },
+        ),
+        RoutingContext::mode(
+            "branch delete picker",
+            AppMode::BranchDeletePicker {
+                branches: vec![],
+                selected: 0,
+            },
+        ),
+        RoutingContext::mode(
+            "tag picker",
+            AppMode::TagPicker {
+                tags: vec![],
+                selected: 0,
+                action: TagAction::Delete,
+            },
+        ),
+        RoutingContext::mode(
+            "remote picker",
+            AppMode::RemotePicker {
+                remotes: vec![],
+                selected: 0,
+                op: RemoteOp::Fetch,
             },
         ),
         RoutingContext::mode(
