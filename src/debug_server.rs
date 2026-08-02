@@ -21,7 +21,10 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use ratatui::{backend::TestBackend, Terminal};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -286,7 +289,8 @@ fn state_json(app: &App) -> Value {
 /// Whitespace-separated tokens; single characters are sent as-is (uppercase
 /// implies Shift), and special keys use angle brackets: <enter> <esc> <tab>
 /// <backtab> <space> <up> <down> <left> <right> <home> <end> <pgup> <pgdn>
-/// <backspace> <c-x> (Ctrl+x) <c-s-x> (Ctrl+Shift+x)
+/// <backspace> <c-x> (Ctrl+x) <c-s-x> (Ctrl+Shift+x). `<caps-k>` and
+/// `<caps-down>` inject normal keys whose reported state has Caps Lock enabled.
 fn parse_key_sequence(input: &str) -> std::result::Result<Vec<KeyEvent>, String> {
     let mut events = Vec::new();
     for token in input.split_whitespace() {
@@ -311,6 +315,29 @@ fn parse_key_token(token: &str) -> std::result::Result<KeyEvent, String> {
         .and_then(|t| t.strip_suffix('>'))
         .ok_or_else(|| format!("invalid key token: {token}"))?
         .to_ascii_lowercase();
+
+    if let Some(c) = inner.strip_prefix("caps-") {
+        let code = match c {
+            "up" => KeyCode::Up,
+            "down" => KeyCode::Down,
+            "left" => KeyCode::Left,
+            "right" => KeyCode::Right,
+            _ => {
+                let mut it = c.chars();
+                if let (Some(ch), None) = (it.next(), it.next()) {
+                    KeyCode::Char(ch)
+                } else {
+                    return Err(format!("invalid Caps Lock key token: {token}"));
+                }
+            }
+        };
+        return Ok(KeyEvent::new_with_kind_and_state(
+            code,
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+            KeyEventState::CAPS_LOCK,
+        ));
+    }
 
     // Ctrl+Alt combo, e.g. <c-a-w>.
     if let Some(c) = inner.strip_prefix("c-a-") {
