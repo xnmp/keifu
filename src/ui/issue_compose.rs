@@ -434,6 +434,21 @@ mod tests {
     }
 
     #[test]
+    fn new_issue_cursor_advances_after_trailing_spaces() {
+        let mut editor = TextEditor::from_text("Issue");
+
+        editor.insert_char(' ');
+        assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((6, 0)));
+
+        editor.insert_char(' ');
+        assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((7, 0)));
+
+        editor.insert_char('t');
+        assert_eq!(editor.text, "Issue  t");
+        assert_eq!(editor_layout(&editor, 20, 3).cursor, Some((8, 0)));
+    }
+
+    #[test]
     fn wrapped_layout_handles_wide_unicode_and_large_pastes() {
         let wide = editor_layout(&TextEditor::from_text("界界界"), 4, 3);
         assert_eq!(
