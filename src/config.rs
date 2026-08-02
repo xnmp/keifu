@@ -337,6 +337,9 @@ pub struct UiState {
     pub hide_files_pane: bool,
     /// Hide the commit-detail pane entirely (#116). Off by default.
     pub hide_commit_pane: bool,
+    /// Whether the shared status bar is rendered. On by default to preserve
+    /// the historical layout and keep its existing hints available.
+    pub status_bar_visible: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -356,6 +359,7 @@ impl Default for UiState {
             hide_stashes: false,
             hide_files_pane: false,
             hide_commit_pane: false,
+            status_bar_visible: true,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -581,6 +585,7 @@ mod tests {
             hide_stashes: false,
             hide_files_pane: true,
             hide_commit_pane: false,
+            status_bar_visible: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,

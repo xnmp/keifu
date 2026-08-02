@@ -207,6 +207,8 @@ pub enum Action {
 
     // UI
     ToggleHelp,
+    /// Show or hide the shared status bar (available from the Help menu).
+    ToggleStatusBar,
     /// Scroll the help sheet by one rendered row.
     HelpScrollUp,
     /// Scroll the help sheet by one rendered row.
