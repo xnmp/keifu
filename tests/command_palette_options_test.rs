@@ -259,6 +259,18 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     assert!(after.contains("On"), "screen was:\n{after}");
     assert!(UiState::load().diff_word_wrap);
 
+    // State-backed settings added to the registry are projected automatically,
+    // including status-bar visibility, and persist through the same action.
+    open_palette(&mut app, "show status bar");
+    let status_before = palette_screen(&app, "show status bar");
+    assert!(status_before.contains("Show status bar"));
+    assert!(status_before.contains("On"), "screen was:\n{status_before}");
+    app.handle_action(Action::MenuSelect).unwrap();
+    assert!(!app.status_bar_visible);
+    let status_after = palette_screen(&app, "show status bar");
+    assert!(status_after.contains("Off"), "screen was:\n{status_after}");
+    assert!(!UiState::load().status_bar_visible);
+
     // Graph renderer proves config-backed enum cycling uses the same registry
     // path and persists its restart-time value.
     open_palette(&mut app, "graph renderer");
@@ -283,6 +295,13 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     assert!(
         persisted_wrap.contains("On"),
         "screen was:\n{persisted_wrap}"
+    );
+    open_palette(&mut reloaded, "show status bar");
+    assert!(!reloaded.status_bar_visible);
+    let persisted_status = palette_screen(&reloaded, "show status bar");
+    assert!(
+        persisted_status.contains("Off"),
+        "screen was:\n{persisted_status}"
     );
     open_palette(&mut reloaded, "graph renderer");
     let persisted_renderer = palette_screen(&reloaded, "graph renderer");
