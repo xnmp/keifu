@@ -279,6 +279,7 @@ fn state_json(app: &App) -> Value {
         "trace_enabled": app.trace_enabled,
         "diff_word_wrap": app.diff_word_wrap,
         "commit_detail_word_wrap": app.commit_detail_word_wrap,
+        "panel_titles_visible": app.panel_titles_visible,
         "graph_renderer": app.config.ui.graph_renderer.as_str(),
         "pixel_graph_active": app.pixel_graph.is_some(),
     })

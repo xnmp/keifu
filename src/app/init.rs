@@ -292,6 +292,7 @@ impl App {
             hide_files_pane: ui_state.hide_files_pane,
             hide_commit_pane: ui_state.hide_commit_pane,
             status_bar_visible: ui_state.status_bar_visible,
+            panel_titles_visible: ui_state.panel_titles_visible,
             hide_remote_branches: ui_state.hide_remote_branches,
             hide_stashes: ui_state.hide_stashes,
             merged: MergedState {

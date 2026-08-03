@@ -343,6 +343,9 @@ pub struct UiState {
     /// Whether the shared status bar is rendered. On by default to preserve
     /// the historical layout and keep its existing hints available.
     pub status_bar_visible: bool,
+    /// Whether the shared panel titles are rendered. On by default to preserve
+    /// the historical appearance of the commits, files, and detail panes.
+    pub panel_titles_visible: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -363,6 +366,7 @@ impl Default for UiState {
             hide_files_pane: false,
             hide_commit_pane: false,
             status_bar_visible: true,
+            panel_titles_visible: true,
             metadata_columns: MetadataColumns::default(),
         }
     }
