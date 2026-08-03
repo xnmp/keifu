@@ -299,4 +299,22 @@ fn dirty_worktree_keeps_the_uncommitted_connector_without_restoring_unrelated_hi
     assert!(messages.contains(&"Initial parser"));
     assert!(messages.contains(&"Current head work"));
     assert!(!messages.contains(&"Unrelated documentation"));
+
+    app.handle_action(Action::GoToTop).unwrap();
+    assert!(
+        app.graph_nav
+            .selected_node(&app.graph_layout)
+            .is_some_and(|node| node.is_uncommitted),
+        "filtered navigation retains the working-tree staging row"
+    );
+    // Editing an active query rebuilds the graph. The selection must not be
+    // clamped away from the staging row during that rebuild.
+    app.handle_action(Action::CommitFilterChar(' ')).unwrap();
+    app.handle_action(Action::CommitFilterBackspace).unwrap();
+    assert!(
+        app.graph_nav
+            .selected_node(&app.graph_layout)
+            .is_some_and(|node| node.is_uncommitted),
+        "a graph rebuild preserves an uncommitted-row selection under a filter"
+    );
 }

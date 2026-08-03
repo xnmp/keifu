@@ -582,6 +582,13 @@ impl App {
         if !self.commit_filter_is_active() {
             return true;
         }
+        // The working-tree row is a usable staging entry point, not dimmed
+        // ancestry. Keep it in the navigation set while a graph filter is
+        // applied so users can return to uncommitted changes without clearing
+        // the query.
+        if node.is_uncommitted {
+            return true;
+        }
         let Some(commit) = &node.commit else {
             return false;
         };
@@ -794,7 +801,7 @@ mod tests {
         // The HEAD row is kept visible so its uncommitted connector terminates
         // at the star instead of dangling into a hidden row.
         assert!(
-            app.visible_commit_indices.contains(&head_idx),
+            app.graph_layout.nodes.iter().any(|node| node.is_head),
             "HEAD row must stay visible while an uncommitted connector anchors to it"
         );
     }

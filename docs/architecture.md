@@ -299,10 +299,11 @@ the graph from direct matches plus their loaded parent closure, keeping retained
 ancestors visible but dimmed so merge edges remain valid. The synthetic
 uncommitted row also retains HEAD *after* that closure is formed; walking from
 HEAD would otherwise restore all loaded history. Rendering includes that
-topology, while `filter_navigation_indices` contains only direct matches so
-arrow/branch navigation never stops on dimmed ancestry. Changed-path metadata
-is loaded only after a non-empty `file=` clause appears and is memoized by OID;
-unreadable shallow/grafted commits are skipped rather than failing refresh.
+topology, while `filter_navigation_indices` contains only direct matches plus
+the working-tree staging row, so arrow/branch navigation never stops on dimmed
+ancestry but staging remains reachable. Changed-path metadata is loaded only
+after a non-empty `file=` clause appears and is memoized by OID; unreadable
+shallow/grafted commits are skipped rather than failing refresh.
 
 ## Toasts vs. Status Bar (2026-07-20)
 
