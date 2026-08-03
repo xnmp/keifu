@@ -289,6 +289,7 @@ impl App {
             repo_dirty: false,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
+            launch_mode: LaunchMode::Full,
             hide_files_pane: ui_state.hide_files_pane,
             hide_commit_pane: ui_state.hide_commit_pane,
             status_bar_visible: ui_state.status_bar_visible,

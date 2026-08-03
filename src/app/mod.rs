@@ -65,6 +65,20 @@ mod search_ops;
 mod status_message;
 mod undo_actions;
 
+/// Session-only startup layout selected by the command line. This is kept
+/// separate from persisted UI settings so a one-off launch never changes a
+/// user's normal layout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LaunchMode {
+    /// The regular graph, files, commit-detail, and status-bar layout.
+    #[default]
+    Full,
+    /// The graph pane by itself.
+    Bare,
+    /// The files and commit-detail panes without graph chrome.
+    Scm,
+}
+
 /// Which mechanism handled a successful clipboard copy, and whether the
 /// payload had to be truncated (OSC 52 fallback only, which some terminals
 /// cap around 100KB of base64).
@@ -1252,6 +1266,10 @@ pub struct App {
 
     // Layout
     pub side_panel_layout: bool,
+
+    /// The layout requested for this process invocation. Unlike the visibility
+    /// settings below, this is never written to `state.toml`.
+    pub launch_mode: LaunchMode,
 
     /// Hide the files pane entirely (#116). Persisted in `UiState`. Focus and
     /// mouse hit-testing must never land on a hidden pane; flows that
