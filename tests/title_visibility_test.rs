@@ -18,7 +18,10 @@ fn rendered_screen(app: &mut App) -> String {
 #[test]
 fn panel_title_setting_controls_all_panel_titles_without_removing_borders_or_content() {
     let mut app = App::test_fixture();
-    assert!(app.panel_titles_visible, "panel titles are visible by default");
+    assert!(
+        app.panel_titles_visible,
+        "panel titles are visible by default"
+    );
     assert!(
         settings::descriptors()
             .iter()
