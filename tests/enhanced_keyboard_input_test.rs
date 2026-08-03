@@ -97,33 +97,38 @@ fn enhanced_keyboard_ctrl_shift_forms_preserve_commit_search() {
 
 #[test]
 fn enhanced_keyboard_shift_forms_preserve_configured_shortcuts() {
-    let keymap = resolved_keymap(
-        "[keymap]\npush = [\"Shift+P\"]\nopen-issue-list = [\"Alt+Shift+I\"]\n",
-    );
+    let keymap =
+        resolved_keymap("[keymap]\npush = [\"Shift+P\"]\nopen-issue-list = [\"Alt+Shift+I\"]\n");
 
     // Alternate-key reporting supplies the shifted character and removes
     // SHIFT; the base protocol supplies the lowercase character plus SHIFT.
     // Both forms must honor configured shortcuts before legacy dispatch.
     assert_eq!(
-        map_graph_with_keymap(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE), &keymap),
+        map_graph_with_keymap(
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+            &keymap
+        ),
         Some(Action::Push)
     );
     assert_eq!(
-        map_graph_with_keymap(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT), &keymap),
+        map_graph_with_keymap(
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SHIFT),
+            &keymap
+        ),
         Some(Action::Push)
     );
     assert_eq!(
-        map_graph_with_keymap(KeyEvent::new(
-            KeyCode::Char('I'),
-            KeyModifiers::ALT,
-        ), &keymap),
+        map_graph_with_keymap(
+            KeyEvent::new(KeyCode::Char('I'), KeyModifiers::ALT,),
+            &keymap
+        ),
         Some(Action::OpenIssueList)
     );
     assert_eq!(
-        map_graph_with_keymap(KeyEvent::new(
-            KeyCode::Char('i'),
-            KeyModifiers::ALT | KeyModifiers::SHIFT,
-        ), &keymap),
+        map_graph_with_keymap(
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT | KeyModifiers::SHIFT,),
+            &keymap
+        ),
         Some(Action::OpenIssueList)
     );
 }

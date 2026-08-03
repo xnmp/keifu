@@ -156,6 +156,11 @@ pub fn map_key_to_action_with_keymap(
     if key.kind == KeyEventKind::Release {
         return None;
     }
+    // Keymap bindings must see the same canonical event shape as legacy
+    // bindings. Otherwise alternate-key terminals clear SHIFT before a
+    // configured Shift+… shortcut is considered, allowing it to go dead or
+    // fall through to a different legacy action.
+    let key = normalize_enhanced_shift(key);
     if let Some(action) = keymap.action_for_key(
         key,
         mode,
