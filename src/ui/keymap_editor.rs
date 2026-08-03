@@ -109,3 +109,37 @@ impl Widget for KeymapEditorWidget<'_> {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_binding_conflict_is_rendered_even_if_another_warning_precedes_it() {
+        let mut pending = toml::Table::new();
+        pending.insert(
+            "not-an-action".into(),
+            toml::Value::Array(vec![toml::Value::String("F2".into())]),
+        );
+        pending.insert(
+            "force-quit".into(),
+            toml::Value::Array(vec![toml::Value::String("F5".into())]),
+        );
+        let keymap = ResolvedKeymap::from_table(&pending);
+        let area = Rect::new(0, 0, 100, 12);
+        let mut buffer = Buffer::empty(area);
+
+        KeymapEditorWidget::new(&keymap, 0, false, &Theme::dark()).render(area, &mut buffer);
+
+        let rendered = buffer
+            .content
+            .chunks(area.width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("full-update") && rendered.contains("'force-quit' wins"),
+            "the selected conflict must name the other action and its winner: {rendered}"
+        );
+    }
+}
