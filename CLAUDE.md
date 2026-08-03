@@ -7,6 +7,9 @@ keifu (系譜) is a Rust TUI for git graph visualization — a VSCode-like Git G
 - Track work in GitHub Issues (`gh issue create`). `docs/TODO.md` is a historical log — do not add new entries.
 - Never commit directly to `chong-dev`. Branch → PR (`gh pr create --base chong-dev`, body `Closes #N`) → squash merge. Keep `main` fast-forwarded from `chong-dev`.
 - `cargo test` and `cargo clippy` must pass before a PR.
+- The cross-platform CI test matrix has a 15-minute job timeout so an intermittent
+  runner or test hang settles as a failure instead of pinning a PR indefinitely;
+  `tests/ci_timeout_test.rs` guards that workflow contract.
 - Changes with visible TUI behavior get verified in the real app (debug server: `--debug-listen`, see `docs/debugging.md`), not only through unit tests.
 - Caps Lock warnings must use `KeyEvent.state` from Crossterm keyboard enhancement, not character casing; unsupported terminals leave that state empty and intentionally produce no warning.
 - All-key keyboard enhancement must also request alternate keys; normalize its alternate and base-plus-Shift ASCII forms, including chorded Ctrl/Alt keys, at the keybinding boundary so shifted bindings and editor text preserve the user’s layout-correct character.
@@ -33,5 +36,6 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Clipboard uses shell tools with an OSC 52 fallback** — no clipboard crate (avoids openssl-sys build breakage).
 - **The full-screen issue list owns mouse hit-testing.** Its content rect must be recorded as the active popup so list-row clicks use the widget's window offset rather than assuming row zero. Issue Detail has no clickable rows.
 - **The command palette derives contextual commit operations from the Enter-menu availability builder.** Keep `available_commit_menu_items` as the shared source so unavailable actions never appear as palette dead ends and both routes preserve the same confirmation/prompt flow. Contextual rows capture and revalidate their commit/stash/branch target; branch/tag prompts retain the validated commit OID through final confirmation, and reset retains it through its submenu.
+- **Browser-based PR eligibility uses GitHub repository metadata.** Fetch the repository URL and `defaultBranchRef` asynchronously with the PR data; do not infer the PR base from a local `main`/`master` name or reuse `BranchInfo.ahead` (which is only relative to that branch's upstream). An empty open-PR map is not authoritative until its first successful fetch. The existing in-app Create PR flow remains a separate action.
 
 Fix root causes, not symptoms. Avoid band-aids like stopPropagation, setTimeout, or flags to mask bugs.

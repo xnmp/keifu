@@ -319,11 +319,35 @@ impl App {
         }
         // Arm after the first successful fill so the startup population is quiet.
         self.pr_toasts_armed = true;
+        self.open_prs_loaded = true;
         self.open_prs = prs;
         // The base-update-merge set (issue #55) is derived from the open PRs, so
         // recompute it now that they changed (guarded by its own signature).
         self.recompute_base_update_merges();
         true
+    }
+
+    /// Kick off / poll authoritative GitHub repository metadata used by the
+    /// browser-based Open PR action. Never blocks the UI thread.
+    pub fn update_pr_repo_info(&mut self) -> bool {
+        self.pr_repo_fetch.maybe_start(&self.repo_path);
+        let info = match self.pr_repo_fetch.poll() {
+            Some(Ok(info)) => {
+                self.refresh_latches.pr_repo_fetch = false;
+                info
+            }
+            Some(Err(e)) => {
+                if !self.refresh_latches.pr_repo_fetch {
+                    self.refresh_latches.pr_repo_fetch = true;
+                    self.set_message(format!("PR repository fetch failed: {e}"));
+                }
+                return false;
+            }
+            None => return false,
+        };
+        let changed = self.pr_repo_info.as_ref() != Some(&info);
+        self.pr_repo_info = Some(info);
+        changed
     }
 
     /// Kick off / poll the background merged-PR fetch (`gh pr list --state

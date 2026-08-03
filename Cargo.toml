@@ -99,3 +99,4 @@ panic = "abort"
 keifu = { path = ".", features = ["test-support"] }
 filetime = "0.2"
 portable-pty = "0.9"
+serde_yaml = "0.9"

@@ -19,6 +19,70 @@ const PR_FETCH_INTERVAL: Duration = Duration::from_secs(300);
 /// Hard cap on a single `gh` invocation so a hung CLI can't leak a thread.
 const GH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// GitHub repository metadata needed to offer browser-based PR creation.
+///
+/// Both values come from `gh repo view`, so the default base is GitHub's
+/// authoritative setting rather than a local `main`/`master` convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrRepoInfo {
+    pub url: String,
+    pub default_base: String,
+}
+
+/// A selected branch that can be opened on GitHub's compare/create page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPrTarget {
+    pub head: String,
+    pub compare_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhDefaultBranchRef {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct GhRepoInfo {
+    url: String,
+    #[serde(rename = "defaultBranchRef")]
+    default_branch_ref: GhDefaultBranchRef,
+}
+
+/// Parse the repository metadata returned by `gh repo view`.
+pub fn parse_repo_info(json: &str) -> Result<PrRepoInfo, String> {
+    let raw: GhRepoInfo = serde_json::from_str(json)
+        .map_err(|e| format!("could not parse GitHub repository metadata: {e}"))?;
+    let url = raw.url.trim_end_matches('/').to_string();
+    let default_base = raw.default_branch_ref.name;
+    if url.is_empty() || default_base.is_empty() {
+        return Err("GitHub repository metadata is incomplete".to_string());
+    }
+    Ok(PrRepoInfo { url, default_base })
+}
+
+/// Build GitHub's compare/create URL for a default base and selected head.
+pub fn compare_create_url(repo_url: &str, base: &str, head: &str) -> String {
+    fn encode_ref(name: &str) -> String {
+        use std::fmt::Write;
+
+        name.bytes().fold(String::new(), |mut encoded, byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+                encoded.push(byte as char);
+            } else {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+            encoded
+        })
+    }
+
+    format!(
+        "{}/compare/{}...{}?expand=1",
+        repo_url.trim_end_matches('/'),
+        encode_ref(base),
+        encode_ref(head)
+    )
+}
+
 /// Aggregate CI status of a PR's head commit, from `statusCheckRollup`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CiStatus {
@@ -516,6 +580,28 @@ fn parse_squash_pr_subject(summary: &str) -> Option<(u64, String)> {
 /// on a worker thread, routed through the generic [`IntervalFetch`].
 pub fn open_pr_fetch() -> IntervalFetch<HashMap<String, PrInfo>> {
     IntervalFetch::new(PR_FETCH_INTERVAL, fetch_open_prs)
+}
+
+/// Build the background repository-metadata fetcher. This shares the PR poll's
+/// coarse interval so opening the Actions menu never blocks on `gh`.
+pub fn repo_info_fetch() -> IntervalFetch<PrRepoInfo> {
+    IntervalFetch::new(PR_FETCH_INTERVAL, fetch_repo_info)
+}
+
+fn fetch_repo_info(repo_path: &str) -> Result<PrRepoInfo, String> {
+    let out = crate::gh::run(
+        repo_path,
+        &["repo", "view", "--json", "url,defaultBranchRef"],
+        GH_TIMEOUT,
+    )?;
+    if !out.success {
+        return Err(if out.stderr.is_empty() {
+            "gh repo view failed".to_string()
+        } else {
+            out.stderr
+        });
+    }
+    parse_repo_info(&out.stdout)
 }
 
 /// Run `gh pr list` in `repo_path`, returning open PRs by head branch. `Err`
