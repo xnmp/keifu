@@ -1140,9 +1140,21 @@ pub fn stage_file(repo_path: &str, file_path: &str) -> Result<()> {
     let repo = Repository::open(repo_path)
         .with_context(|| format!("Failed to open repository at {repo_path}"))?;
     let mut index = repo.index().context("Failed to open Git index")?;
-    index
-        .add_path(Path::new(file_path))
-        .with_context(|| format!("Failed to stage {file_path}"))?;
+    let path = Path::new(file_path);
+    let workdir = repo
+        .workdir()
+        .context("Cannot stage a file in a bare repository")?;
+    match std::fs::symlink_metadata(workdir.join(path)) {
+        Ok(_) => index
+            .add_path(path)
+            .with_context(|| format!("Failed to stage {file_path}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => index
+            .remove_path(path)
+            .with_context(|| format!("Failed to stage deletion of {file_path}"))?,
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to inspect {file_path}"));
+        }
+    }
     index.write().context("Failed to write Git index")?;
     Ok(())
 }
