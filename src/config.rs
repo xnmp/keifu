@@ -175,6 +175,32 @@ impl Config {
         doc["ui"]["theme"] = value(self.ui.theme.clone());
         doc["ui"]["graph_renderer"] = value(self.ui.graph_renderer.as_str());
         doc["ui"]["squash_link_lines"] = value(self.ui.squash_link_lines);
+
+        // Keymap edits are made one action at a time by the settings surface.
+        // Rewrite only entries whose parsed values changed so comments beside
+        // untouched user entries stay exactly where they were.
+        for (action, bindings) in &self.keymap {
+            let changed = doc["keymap"]
+                .get(action)
+                .and_then(|item| item.to_string().trim().parse::<toml::Value>().ok())
+                .as_ref()
+                != Some(bindings);
+            if !changed {
+                continue;
+            }
+            if doc.get("keymap").is_none() {
+                doc["keymap"] = toml_edit::table();
+            }
+            let mut values = toml_edit::Array::default();
+            if let Some(bindings) = bindings.as_array() {
+                for binding in bindings {
+                    if let Some(binding) = binding.as_str() {
+                        values.push(binding);
+                    }
+                }
+            }
+            doc["keymap"][action] = value(values);
+        }
     }
 }
 
