@@ -80,9 +80,9 @@ For performance questions, use the log instead (see above).
 ```bash
 script -qec "keifu --debug-listen 127.0.0.1:7167" /dev/null &
 sleep 2
-printf '%s\n' '{"cmd":"keys","keys":"<down> <down>"}' | nc -q1 127.0.0.1 7167
-printf '%s\n' '{"cmd":"dump","width":100,"height":30}' | nc -q1 127.0.0.1 7167
-printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' | nc -q1 127.0.0.1 7167  # Ctrl+Q always quits
+printf '%s\n' '{"cmd":"keys","keys":"<down> <down>"}' | nc -N 127.0.0.1 7167
+printf '%s\n' '{"cmd":"dump","width":100,"height":30}' | nc -N 127.0.0.1 7167
+printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' | nc -N 127.0.0.1 7167  # Ctrl+Q always quits
 ```
 
 `<c-q>` (Ctrl+Q) force-quits from any mode; `<esc>` quits from the graph pane
@@ -122,9 +122,9 @@ for _ in $(seq 30); do
 done
 nc -z 127.0.0.1 7169
 
-before=$(printf '%s\n' '{"cmd":"state"}' | nc -q1 127.0.0.1 7169)
+before=$(printf '%s\n' '{"cmd":"state"}' | nc -N 127.0.0.1 7169)
 immediate=$(printf '%s\n' '{"cmd":"keys","keys":"l"}' '{"cmd":"state"}' \
-  | nc -q1 127.0.0.1 7169 | tail -n 1)
+  | nc -N 127.0.0.1 7169 | tail -n 1)
 before_index=$(jq -r '.selected_index' <<<"$before")
 after_index=$(jq -r '.selected_index' <<<"$immediate")
 jq -e '(.mode == "normal" and .focused_panel == "graph")' <<<"$before" >/dev/null
@@ -135,16 +135,16 @@ test "$before_index" = "$after_index"
 immediate_started=$(jq -r '.is_pulling' <<<"$immediate")
 
 for _ in $(seq 30); do
-  settled=$(printf '%s\n' '{"cmd":"state"}' | nc -q1 127.0.0.1 7169)
+  settled=$(printf '%s\n' '{"cmd":"state"}' | nc -N 127.0.0.1 7169)
   jq -e '.is_pulling == false' <<<"$settled" >/dev/null && break
   sleep 1
 done
 jq -e '.is_pulling == false' <<<"$settled" >/dev/null
 screen=$(printf '%s\n' '{"cmd":"dump","width":120,"height":35}' \
-  | nc -q1 127.0.0.1 7169 | jq -r '.screen')
+  | nc -N 127.0.0.1 7169 | jq -r '.screen')
 grep -Fq 'Pulled' <<<"$screen"
 printf '%s\n' '{"cmd":"keys","keys":"<c-q>"}' \
-  | nc -q1 127.0.0.1 7169 >/dev/null
+  | nc -N 127.0.0.1 7169 >/dev/null
 rm -rf "$tmp_dir"
 ```
 
