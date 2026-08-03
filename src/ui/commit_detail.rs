@@ -17,6 +17,7 @@ pub struct CommitDetailWidget<'a> {
     is_focused: bool,
     commit_scroll: u16,
     word_wrap: bool,
+    show_title: bool,
     theme: &'a Theme,
 }
 
@@ -86,6 +87,7 @@ impl<'a> CommitDetailWidget<'a> {
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             commit_scroll: app.commit_detail_scroll,
             word_wrap: app.commit_detail_word_wrap,
+            show_title: app.panel_titles_visible,
             theme,
         }
     }
@@ -327,8 +329,7 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             return;
         }
 
-        let commit_block = Block::default()
-            .title(" Commit Detail ")
+        let mut commit_block = Block::default()
             .title_style(self.theme.title_style(self.is_focused))
             .borders(Borders::ALL)
             .border_style(self.theme.border_style(self.is_focused))
@@ -336,6 +337,9 @@ impl<'a> Widget for CommitDetailWidget<'a> {
             // One column of horizontal inset so field text (Author:/Date:/…)
             // never touches the border, matching the other panes' padding.
             .padding(Padding::horizontal(1));
+        if self.show_title {
+            commit_block = commit_block.title(" Commit Detail ");
+        }
 
         let commit_paragraph = Paragraph::new(self.commit_lines)
             .block(commit_block)
@@ -363,6 +367,7 @@ mod tests {
             is_focused: false,
             commit_scroll: 0,
             word_wrap,
+            show_title: true,
             theme: &theme,
         }
         .render(area, &mut buffer);

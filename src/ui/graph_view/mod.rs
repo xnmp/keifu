@@ -250,7 +250,9 @@ impl<'a> GraphViewWidget<'a> {
             chip_hits.push(chips);
         }
 
-        let title = if app.commit_filter_active {
+        let title = if !app.panel_titles_visible {
+            String::new()
+        } else if app.commit_filter_active {
             format!(" Commits: {}_ ", app.commit_filter)
         } else if has_filter {
             format!(" Commits [{}] ", app.commit_filter)
