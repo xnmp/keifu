@@ -585,14 +585,6 @@ impl App {
             .map(|commit| commit.oid)
             .collect();
         let mut retained = self.commit_filter_matches.clone();
-        // The synthetic working-tree row is connected to HEAD. Preserve that
-        // endpoint even when it is not a direct match so the connector cannot
-        // terminate in a filtered-out row.
-        if self.working_tree_status.is_some() {
-            if let Some(head) = self.repo.head_oid() {
-                retained.insert(head);
-            }
-        }
         let by_oid: std::collections::HashMap<_, _> = self
             .commits
             .iter()
@@ -606,6 +598,16 @@ impl App {
                         pending.push(*parent);
                     }
                 }
+            }
+        }
+        // The synthetic working-tree row is connected to HEAD. Preserve that
+        // endpoint even when it is not a direct match so the connector cannot
+        // terminate in a filtered-out row. Do this after walking direct-match
+        // ancestry: including HEAD in `pending` would otherwise retain every
+        // loaded ancestor of HEAD and make a dirty-worktree filter ineffective.
+        if self.working_tree_status.is_some() {
+            if let Some(head) = self.repo.head_oid() {
+                retained.insert(head);
             }
         }
         self.commits

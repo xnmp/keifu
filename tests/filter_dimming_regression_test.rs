@@ -154,3 +154,61 @@ fn path_is_case_sensitive_while_author_name_is_case_insensitive() {
         1
     );
 }
+
+#[test]
+fn dirty_worktree_keeps_the_uncommitted_connector_without_restoring_unrelated_history() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    let git = repo.repo();
+    commit_as(
+        git,
+        "src/base.rs",
+        "base",
+        "Initial parser",
+        "Alice Example",
+        "alice@example.com",
+    );
+    commit_as(
+        git,
+        "src/matching.rs",
+        "match",
+        "Target parser change",
+        "Alice Example",
+        "alice@example.com",
+    );
+    commit_as(
+        git,
+        "docs/unrelated.md",
+        "unrelated",
+        "Unrelated documentation",
+        "Bob Example",
+        "bob@example.com",
+    );
+    commit_as(
+        git,
+        "src/head.rs",
+        "head",
+        "Current head work",
+        "Bob Example",
+        "bob@example.com",
+    );
+    fs::write(git.workdir().unwrap().join("scratch.txt"), "dirty").unwrap();
+
+    let mut app = keifu::app::App::from_repo(repo).unwrap();
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    for c in "file=src/matching.rs".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+
+    assert!(app.has_uncommitted_node());
+    let messages: Vec<_> = app
+        .graph_layout
+        .nodes
+        .iter()
+        .filter_map(|node| node.commit.as_ref())
+        .map(|commit| commit.message.as_str())
+        .collect();
+    assert!(messages.contains(&"Target parser change"));
+    assert!(messages.contains(&"Initial parser"));
+    assert!(messages.contains(&"Current head work"));
+    assert!(!messages.contains(&"Unrelated documentation"));
+}
