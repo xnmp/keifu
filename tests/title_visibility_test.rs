@@ -54,3 +54,17 @@ fn panel_title_setting_controls_all_panel_titles_without_removing_borders_or_con
         "hiding titles must retain panel content:\n{hidden}"
     );
 }
+
+#[test]
+fn active_commit_filter_remains_visible_when_static_panel_titles_are_hidden() {
+    let mut app = App::test_fixture();
+    app.panel_titles_visible = false;
+    app.commit_filter_active = true;
+    app.commit_filter = "author:alice".to_string();
+
+    let rendered = rendered_screen(&mut app);
+    assert!(
+        rendered.contains("Commits: author:alice_"),
+        "the live commit-filter prompt must remain visible when static panel titles are hidden:\n{rendered}"
+    );
+}
