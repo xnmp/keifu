@@ -4,7 +4,37 @@ use std::{fs, path::Path};
 
 use common::{init_repo, Seed};
 use git2::{Oid, Repository, Signature};
-use keifu::action::Action;
+use keifu::{action::Action, ui};
+use ratatui::{backend::TestBackend, style::Color, Terminal};
+
+fn render_graph(app: &mut keifu::app::App) -> (String, Vec<Color>) {
+    let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let width = 120;
+    let cells = buffer.content();
+    let screen = cells
+        .chunks(width)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (screen, cells.iter().map(|cell| cell.fg).collect())
+}
+
+fn message_foreground(screen: &str, colors: &[Color], message: &str) -> Color {
+    let offset = screen.find(message).unwrap();
+    let row = screen[..offset]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count();
+    let column = screen[..offset]
+        .rsplit('\n')
+        .next()
+        .unwrap()
+        .chars()
+        .count();
+    colors[row * 120 + column]
+}
 
 fn commit_as(
     repo: &Repository,
@@ -102,6 +132,23 @@ fn scoped_filters_match_observables_and_retain_ancestry_after_refresh() {
         .unwrap();
     assert!(app.node_passes_commit_filter(matching_node));
     assert!(!app.node_passes_commit_filter(retained_ancestor));
+    let (rendered, colors) = render_graph(&mut app);
+    assert!(rendered
+        .contains("Commits: message=fix parser; author=ALICE@EXAMPLE.COM; file=src/parser.rs_"));
+    assert_ne!(
+        message_foreground(&rendered, &colors, "Fix Parser Regression"),
+        message_foreground(&rendered, &colors, "Initial parser"),
+        "direct matches render normally while retained ancestry is dimmed"
+    );
+    app.handle_action(Action::Confirm).unwrap();
+    app.handle_action(Action::MoveDown).unwrap();
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    app.handle_action(Action::Cancel).unwrap();
+    assert_eq!(
+        app.graph_layout.nodes.len(),
+        3,
+        "clearing restores every row"
+    );
     let selected = app
         .graph_nav
         .selected_node(&app.graph_layout)
