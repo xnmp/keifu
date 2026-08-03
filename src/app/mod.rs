@@ -1814,7 +1814,7 @@ impl App {
     /// actually appear — a hidden pane silently holding focus would strand
     /// input.
     pub(crate) fn focus_files_pane(&mut self) {
-        if !self.panel_visible(FocusedPanel::Files) {
+        if self.launch_mode == LaunchMode::Bare {
             return;
         }
         if self.launch_mode == LaunchMode::Full && self.hide_files_pane {
