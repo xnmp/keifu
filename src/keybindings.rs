@@ -117,6 +117,7 @@ pub fn map_key_to_action(
         AppMode::RebasePlan { .. } => map_rebase_plan_mode(key),
         AppMode::MetadataMenu { .. } => map_metadata_menu_mode(key),
         AppMode::Settings { .. } => map_settings_menu_mode(key),
+        AppMode::KeymapEditor { .. } => map_keymap_editor_mode(key),
         AppMode::PullDivergence { .. } => map_pull_divergence_mode(key),
         AppMode::CiChecks => map_ci_checks_mode(key),
         AppMode::PrThread => map_pr_thread_mode(key),
@@ -161,6 +162,21 @@ pub fn map_key_to_action_with_keymap(
     // configured Shift+… shortcut is considered, allowing it to go dead or
     // fall through to a different legacy action.
     let key = normalize_enhanced_shift(key);
+    // Capture must receive the raw normalized shortcut before user bindings or
+    // legacy global shortcuts consume it.
+    if let AppMode::KeymapEditor { capturing: true, .. } = mode {
+        return match key.code {
+            KeyCode::Esc => Some(Action::Cancel),
+            _ => Some(Action::KeymapCapture(crate::keymap::KeyBinding {
+                code: key.code,
+                modifiers: key.modifiers
+                    & (KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT),
+            })),
+        };
+    }
+    if matches!(mode, AppMode::KeymapEditor { .. }) {
+        return map_keymap_editor_mode(key);
+    }
     if let Some(action) = keymap.action_for_key(
         key,
         mode,
@@ -761,6 +777,9 @@ fn map_metadata_menu_mode(key: KeyEvent) -> Option<Action> {
 /// arrow keys move the selection. Space stays a toggle, not filter text
 /// (matching `BranchFilter`, which reserves Space for its own toggle too).
 fn map_settings_menu_mode(key: KeyEvent) -> Option<Action> {
+    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('k') {
+        return Some(Action::OpenKeymapEditor);
+    }
     if let Some(action) = map_text_editing_shortcut(key) {
         return Some(action);
     }
@@ -774,6 +793,22 @@ fn map_settings_menu_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::InputBackspace),
         (KeyModifiers::NONE, KeyCode::Char(c)) => Some(Action::InputChar(c)),
         (KeyModifiers::SHIFT, KeyCode::Char(c)) => Some(Action::InputChar(c)),
+        _ => None,
+    }
+}
+
+/// Navigation remains fixed in this editor so users can always repair a
+/// broken navigation binding. Capture itself is handled before this mapper.
+fn map_keymap_editor_mode(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Up) => Some(Action::MoveUp),
+        (KeyModifiers::NONE, KeyCode::Down) => Some(Action::MoveDown),
+        (KeyModifiers::NONE, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
+            Some(Action::MenuSelect)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::KeymapClear),
+        (KeyModifiers::CONTROL, KeyCode::Char('s')) => Some(Action::KeymapSave),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
         _ => None,
     }
 }

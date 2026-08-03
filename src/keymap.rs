@@ -435,6 +435,7 @@ fn active_scopes(
         AppMode::Confirm { .. } => CONFIRM,
         AppMode::RebasePlan { .. } => REBASE_PLAN,
         AppMode::Settings { .. } => SETTINGS,
+        AppMode::KeymapEditor { .. } => MENU,
         AppMode::PrThread => PR_THREAD,
         AppMode::PrCompose { .. } | AppMode::IssueCompose { .. } => COMPOSE,
         AppMode::IssueList => ISSUE_LIST,

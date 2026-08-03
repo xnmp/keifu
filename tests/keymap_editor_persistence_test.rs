@@ -80,3 +80,34 @@ fn settings_opens_a_dedicated_keyboard_shortcuts_editor() {
         app.mode
     );
 }
+
+#[test]
+fn captured_conflicting_binding_stays_pending_until_saved_and_cancel_discards_it() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    let mut app = App::from_repo(repo).unwrap();
+    app.handle_action(Action::OpenKeymapEditor).unwrap();
+    app.handle_action(Action::MenuSelect).unwrap();
+
+    let captured = map_key_to_action_with_keymap(
+        KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+        &app.mode,
+        app.focused_panel,
+        false,
+        false,
+        false,
+        &app.keymap,
+    )
+    .expect("capture mode must receive the raw pressed key");
+    app.handle_action(captured).unwrap();
+
+    let pending = format!("{:?}", app.mode);
+    assert!(pending.contains("F5"), "captured chord was not reflected: {pending}");
+    assert!(
+        app.config.keymap.is_empty(),
+        "capture must not mutate persisted config before Save"
+    );
+
+    app.handle_action(Action::Cancel).unwrap();
+    assert!(app.config.keymap.is_empty(), "cancel must discard the pending edit");
+}
