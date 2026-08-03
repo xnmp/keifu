@@ -1266,6 +1266,10 @@ pub struct App {
     /// controlled from the Help menu and Settings.
     pub status_bar_visible: bool,
 
+    /// Whether the commits, changed-files, and commit-detail pane titles are
+    /// rendered. Persisted in `UiState` and controlled from Settings.
+    pub panel_titles_visible: bool,
+
     /// When true, remote-only branches (remote refs with no matching local
     /// branch) are hidden from the graph — their labels and their exclusive
     /// commits. Composes with `hidden_branches`. Persisted in `UiState`.

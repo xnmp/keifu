@@ -254,6 +254,8 @@ impl<'a> GraphViewWidget<'a> {
             format!(" Commits: {}_ ", app.commit_filter)
         } else if has_filter {
             format!(" Commits [{}] ", app.commit_filter)
+        } else if !app.panel_titles_visible {
+            String::new()
         } else {
             " Commits ".to_string()
         };

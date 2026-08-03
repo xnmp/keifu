@@ -343,6 +343,9 @@ pub struct UiState {
     /// Whether the shared status bar is rendered. On by default to preserve
     /// the historical layout and keep its existing hints available.
     pub status_bar_visible: bool,
+    /// Whether the shared panel titles are rendered. On by default to preserve
+    /// the historical appearance of the commits, files, and detail panes.
+    pub panel_titles_visible: bool,
     pub metadata_columns: MetadataColumns,
 }
 
@@ -363,6 +366,7 @@ impl Default for UiState {
             hide_files_pane: false,
             hide_commit_pane: false,
             status_bar_visible: true,
+            panel_titles_visible: true,
             metadata_columns: MetadataColumns::default(),
         }
     }
@@ -597,6 +601,7 @@ mod tests {
             hide_files_pane: true,
             hide_commit_pane: false,
             status_bar_visible: false,
+            panel_titles_visible: false,
             metadata_columns: MetadataColumns {
                 author: true,
                 hash: false,
@@ -792,6 +797,32 @@ mod tests {
         assert!(
             !UiState::load_from_path(&state_path).status_bar_visible,
             "a fresh UI state must retain the hidden status bar preference"
+        );
+    }
+
+    #[test]
+    fn panel_title_visibility_defaults_on_and_persists_to_a_state_file() {
+        let state_dir = tempfile::tempdir().unwrap();
+        let state_path = state_dir.path().join("state.toml");
+
+        // Older state files predate this preference and must retain the
+        // historical titled-panel appearance.
+        assert!(UiState::load_from_path(&state_path).panel_titles_visible);
+        fs::write(&state_path, "side_panel_layout = true\n").unwrap();
+        assert!(UiState::load_from_path(&state_path).panel_titles_visible);
+
+        UiState {
+            panel_titles_visible: false,
+            ..UiState::default()
+        }
+        .save_to_path(&state_path);
+
+        assert!(fs::read_to_string(&state_path)
+            .unwrap()
+            .contains("panel_titles_visible = false"));
+        assert!(
+            !UiState::load_from_path(&state_path).panel_titles_visible,
+            "a fresh UI state must retain the hidden panel-title preference"
         );
     }
 

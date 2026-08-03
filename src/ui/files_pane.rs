@@ -19,6 +19,7 @@ pub struct FilesPaneWidget<'a> {
     is_focused: bool,
     is_uncommitted: bool,
     is_loading: bool,
+    show_title: bool,
     theme: &'a Theme,
 }
 
@@ -29,6 +30,7 @@ impl<'a> FilesPaneWidget<'a> {
             is_focused: app.focused_panel == FocusedPanel::Files,
             is_uncommitted: app.is_uncommitted_selected(),
             is_loading: app.is_diff_loading(),
+            show_title: app.panel_titles_visible,
             theme,
         }
     }
@@ -55,12 +57,14 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
             " Changed Files "
         };
 
-        let block = Block::default()
-            .title(title)
+        let mut block = Block::default()
             .title_style(self.theme.title_style(self.is_focused))
             .borders(Borders::ALL)
             .border_style(self.theme.border_style(self.is_focused))
             .border_type(self.theme.border_type());
+        if self.show_title {
+            block = block.title(title);
+        }
 
         let inner = block.inner(area);
         block.render(area, buf);

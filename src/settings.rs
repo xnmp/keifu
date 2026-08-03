@@ -550,6 +550,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             status_bar_visible,
             status_bar_visible
         ),
+        state_bool!(
+            "Show panel titles",
+            Interface,
+            None,
+            panel_titles_visible,
+            panel_titles_visible
+        ),
         SettingDescriptor {
             label: "Theme",
             group: Interface,
@@ -632,6 +639,7 @@ mod tests {
             hide_files_pane: true,
             hide_commit_pane: true,
             status_bar_visible: false,
+            panel_titles_visible: false,
             metadata_columns: MetadataColumns {
                 author: false,
                 hash: false,
