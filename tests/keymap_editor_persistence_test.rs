@@ -51,6 +51,26 @@ pull = ["F7"]
 }
 
 #[test]
+fn saving_first_keymap_entry_creates_the_keymap_table() {
+    let mut config: Config = toml::from_str("[refresh]\nauto_refresh = false\n").unwrap();
+    config.keymap.insert(
+        "force-quit".into(),
+        toml::Value::Array(vec![toml::Value::String("l".into())]),
+    );
+    let mut document = "[refresh]\nauto_refresh = false\n".parse().unwrap();
+
+    config.apply_to_document(&mut document);
+
+    assert_eq!(
+        toml::from_str::<Config>(&document.to_string()).unwrap().keymap["force-quit"]
+            .as_array()
+            .unwrap()[0]
+            .as_str(),
+        Some("l")
+    );
+}
+
+#[test]
 fn settings_opens_a_dedicated_keyboard_shortcuts_editor() {
     let (_td, repo) = init_repo(Seed::Empty);
     commit_file(repo.repo(), "a.txt", "a", "initial");
