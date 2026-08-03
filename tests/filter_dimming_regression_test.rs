@@ -80,6 +80,28 @@ fn scoped_filters_match_observables_and_retain_ancestry_after_refresh() {
     assert!(messages.contains(&"Fix Parser Regression"));
     assert!(messages.contains(&"Initial parser"));
     assert!(!messages.contains(&"Fix parser notes"));
+    let matching_node = app
+        .graph_layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.commit
+                .as_ref()
+                .is_some_and(|commit| commit.message == "Fix Parser Regression")
+        })
+        .unwrap();
+    let retained_ancestor = app
+        .graph_layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.commit
+                .as_ref()
+                .is_some_and(|commit| commit.message == "Initial parser")
+        })
+        .unwrap();
+    assert!(app.node_passes_commit_filter(matching_node));
+    assert!(!app.node_passes_commit_filter(retained_ancestor));
     let selected = app
         .graph_nav
         .selected_node(&app.graph_layout)
