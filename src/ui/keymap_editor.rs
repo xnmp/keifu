@@ -88,10 +88,25 @@ impl Widget for KeymapEditorWidget<'_> {
         }
 
         let footer_y = inner.y + inner.height.saturating_sub(2);
+        let selected_id = binding_registry()
+            .get(self.selected)
+            .map(|descriptor| descriptor.id);
+        let selected_conflict = selected_id.and_then(|id| {
+            let action = format!("'{id}'");
+            self.keymap
+                .warnings()
+                .iter()
+                .find(|warning| {
+                    warning.reason.starts_with("conflict:") && warning.reason.contains(&action)
+                })
+                .map(|warning| warning.reason.as_str())
+        });
         let detail = if self.capturing {
             "Press a supported key (Esc cancels capture)"
+        } else if let Some(conflict) = selected_conflict {
+            conflict
         } else if let Some(warning) = self.keymap.warnings().first() {
-            &warning.reason
+            warning.reason.as_str()
         } else {
             "Enter capture  u unassign  Ctrl+S save  Esc discard"
         };
