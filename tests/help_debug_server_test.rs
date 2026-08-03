@@ -228,3 +228,22 @@ fn debug_server_renders_the_requested_reduced_launch_layouts() {
         assert!(!scm.contains(absent), "SCM dump rendered {absent:?}: {scm}");
     }
 }
+
+#[test]
+fn debug_server_keeps_bare_mode_focus_on_the_graph_after_tab() {
+    let repo = fixture_repo(false);
+    let port = reserve_port();
+    let app = start_app(repo.path(), port, &["--bare"]);
+
+    let tab = request(port, r#"{"cmd":"keys","keys":"<tab>"}"#);
+    assert_eq!(tab["ok"], true);
+    let state = request(port, r#"{"cmd":"state"}"#);
+    assert_eq!(
+        state["focused_panel"], "graph",
+        "bare mode must not focus a removed pane"
+    );
+
+    let quit = request(port, r#"{"cmd":"keys","keys":"<c-q>"}"#);
+    assert_eq!(quit["ok"], true);
+    app.wait();
+}

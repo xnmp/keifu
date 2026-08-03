@@ -275,9 +275,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // hidden (#116) there is no detail area at all — the graph takes the full
     // main area and the hidden panes get zero-size rects, which also removes
     // them from mouse hit-testing (a zero-size Rect contains no point).
-    let (graph_area, files_area, commit_area) = match app.launch_mode {
-        LaunchMode::Bare => (main_area, Rect::default(), Rect::default()),
-        LaunchMode::Scm => {
+    let (graph_area, files_area, commit_area) = match (
+        app.panel_rendered(crate::app::FocusedPanel::Graph),
+        app.panel_rendered(crate::app::FocusedPanel::Files),
+        app.panel_rendered(crate::app::FocusedPanel::CommitDetail),
+    ) {
+        (true, false, false) => (main_area, Rect::default(), Rect::default()),
+        (false, true, true) => {
             let direction = if main_area.width <= 56 {
                 Direction::Vertical
             } else {
@@ -289,7 +293,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 .split(main_area);
             (Rect::default(), panes[0], panes[1])
         }
-        LaunchMode::Full => {
+        _ => {
             let graph_ratio = app.graph_split_ratio;
             let detail_ratio = 100u16.saturating_sub(graph_ratio);
             let show_detail = !(app.hide_files_pane && app.hide_commit_pane);

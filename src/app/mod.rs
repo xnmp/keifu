@@ -1760,14 +1760,30 @@ impl App {
     /// Toggle whether remote-only branches are shown in the graph (persisted).
     /// Rebuilds the graph so their exclusive commits appear/disappear, not just
     /// their labels. Composes with the per-branch filter.
-    /// Whether a panel is currently visible — the invariant every focus path
+    /// Whether a panel can receive focus — the invariant every focus path
     /// (cycling, mouse, force-focus) must respect: focus never lands on a
-    /// hidden pane (#116). The graph is always visible.
+    /// removed pane (#116). SCM keeps graph focus because it owns commit
+    /// selection even though that mode does not render the graph widget.
     pub(crate) fn panel_visible(&self, panel: FocusedPanel) -> bool {
-        match panel {
-            FocusedPanel::Graph => true,
-            FocusedPanel::Files => !self.hide_files_pane,
-            FocusedPanel::CommitDetail => !self.hide_commit_pane,
+        match self.launch_mode {
+            LaunchMode::Bare => panel == FocusedPanel::Graph,
+            LaunchMode::Scm => true,
+            LaunchMode::Full => match panel {
+                FocusedPanel::Graph => true,
+                FocusedPanel::Files => !self.hide_files_pane,
+                FocusedPanel::CommitDetail => !self.hide_commit_pane,
+            },
+        }
+    }
+
+    /// Whether the layout renders a panel. This shares launch-mode ownership
+    /// with [`Self::panel_visible`]; SCM's graph is focusable solely to drive
+    /// the selected commit in its two rendered detail panes.
+    pub(crate) fn panel_rendered(&self, panel: FocusedPanel) -> bool {
+        match self.launch_mode {
+            LaunchMode::Bare => panel == FocusedPanel::Graph,
+            LaunchMode::Scm => panel != FocusedPanel::Graph,
+            LaunchMode::Full => self.panel_visible(panel),
         }
     }
 
@@ -1798,7 +1814,10 @@ impl App {
     /// actually appear — a hidden pane silently holding focus would strand
     /// input.
     pub(crate) fn focus_files_pane(&mut self) {
-        if self.hide_files_pane {
+        if !self.panel_visible(FocusedPanel::Files) {
+            return;
+        }
+        if self.launch_mode == LaunchMode::Full && self.hide_files_pane {
             self.hide_files_pane = false;
             self.save_ui_state();
         }
@@ -1808,6 +1827,9 @@ impl App {
     /// Toggle the files pane's visibility (persisted, #116). Hiding the pane
     /// that holds focus moves focus to the graph.
     pub(crate) fn toggle_files_pane(&mut self) {
+        if self.launch_mode != LaunchMode::Full {
+            return;
+        }
         self.hide_files_pane = !self.hide_files_pane;
         if !self.panel_visible(self.focused_panel) {
             self.focused_panel = FocusedPanel::Graph;
@@ -1824,6 +1846,9 @@ impl App {
     /// Toggle the commit-detail pane's visibility (persisted, #116). Hiding the
     /// pane that holds focus moves focus to the graph.
     pub(crate) fn toggle_commit_pane(&mut self) {
+        if self.launch_mode != LaunchMode::Full {
+            return;
+        }
         self.hide_commit_pane = !self.hide_commit_pane;
         if !self.panel_visible(self.focused_panel) {
             self.editing_commit_message = false;

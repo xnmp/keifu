@@ -1,4 +1,5 @@
 use keifu::{
+    action::Action,
     app::{App, LaunchMode},
     ui,
 };
@@ -37,6 +38,32 @@ fn bare_launch_renders_only_an_untitled_graph_without_a_status_bar() {
             "bare launch must not render {absent:?}: {screen}"
         );
     }
+}
+
+#[test]
+fn bare_launch_keeps_focus_on_the_rendered_graph() {
+    let mut app = App::test_fixture();
+    app.launch_mode = LaunchMode::Bare;
+
+    app.handle_action(Action::PanelRight).unwrap();
+    assert_eq!(
+        app.focused_panel,
+        keifu::app::FocusedPanel::Graph,
+        "Tab must not focus the removed files pane"
+    );
+    app.handle_action(Action::PanelLeft).unwrap();
+    assert_eq!(
+        app.focused_panel,
+        keifu::app::FocusedPanel::Graph,
+        "reverse panel cycling must also remain on the only rendered pane"
+    );
+
+    app.handle_action(Action::ToggleFilesPane).unwrap();
+    app.handle_action(Action::ToggleCommitPane).unwrap();
+    assert!(
+        !app.hide_files_pane && !app.hide_commit_pane,
+        "reduced launch modes must not persist invisible pane toggles"
+    );
 }
 
 #[test]
