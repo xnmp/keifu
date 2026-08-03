@@ -1137,7 +1137,13 @@ fn continue_rebase(repo_path: &str) -> Result<OpOutcome> {
 
 /// Stage a file
 pub fn stage_file(repo_path: &str, file_path: &str) -> Result<()> {
-    run_git(repo_path, &["add", "--", file_path])?;
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Failed to open repository at {repo_path}"))?;
+    let mut index = repo.index().context("Failed to open Git index")?;
+    index
+        .add_path(Path::new(file_path))
+        .with_context(|| format!("Failed to stage {file_path}"))?;
+    index.write().context("Failed to write Git index")?;
     Ok(())
 }
 
