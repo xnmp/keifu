@@ -81,7 +81,6 @@ mod tests {
             timestamp: Local::now(),
             message: format!("commit {id}"),
             full_message: format!("commit {id}"),
-            changed_paths: Vec::new(),
             parent_oids: parents.iter().map(|p| oid(*p)).collect(),
         }
     }
