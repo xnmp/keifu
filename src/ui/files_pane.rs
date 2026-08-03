@@ -24,13 +24,13 @@ pub struct FilesPaneWidget<'a> {
 }
 
 impl<'a> FilesPaneWidget<'a> {
-    pub fn new(app: &App, theme: &'a Theme) -> Self {
+    pub fn new(app: &App, theme: &'a Theme, show_title: bool) -> Self {
         Self {
             items: app.display_items().to_vec(),
             is_focused: app.focused_panel == FocusedPanel::Files,
             is_uncommitted: app.is_uncommitted_selected(),
             is_loading: app.is_diff_loading(),
-            show_title: app.panel_titles_visible,
+            show_title: show_title && app.panel_titles_visible,
             theme,
         }
     }
