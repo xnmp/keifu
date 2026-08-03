@@ -7,6 +7,9 @@ keifu (系譜) is a Rust TUI for git graph visualization — a VSCode-like Git G
 - Track work in GitHub Issues (`gh issue create`). `docs/TODO.md` is a historical log — do not add new entries.
 - Never commit directly to `chong-dev`. Branch → PR (`gh pr create --base chong-dev`, body `Closes #N`) → squash merge. Keep `main` fast-forwarded from `chong-dev`.
 - `cargo test` and `cargo clippy` must pass before a PR.
+- The cross-platform CI test matrix has a 15-minute job timeout so an intermittent
+  runner or test hang settles as a failure instead of pinning a PR indefinitely;
+  `tests/ci_timeout_test.rs` guards that workflow contract.
 - Changes with visible TUI behavior get verified in the real app (debug server: `--debug-listen`, see `docs/debugging.md`), not only through unit tests.
 - Architectural decisions and gotchas go in `docs/architecture.md` when they land.
 
