@@ -120,6 +120,42 @@ pub fn map_key_to_action(
     }
 }
 
+/// Map a key through the startup-resolved overrides, falling back to the
+/// legacy defaults for actions that were not configured. Keeping the legacy
+/// mapper as the fallback makes an absent `[keymap]` byte-for-byte compatible.
+pub fn map_key_to_action_with_keymap(
+    key: KeyEvent,
+    mode: &AppMode,
+    focused_panel: FocusedPanel,
+    editing_commit: bool,
+    files_filter_active: bool,
+    commit_filter_active: bool,
+    keymap: &crate::keymap::ResolvedKeymap,
+) -> Option<Action> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    if let Some(action) = keymap.action_for_key(
+        key,
+        mode,
+        focused_panel,
+        editing_commit,
+        files_filter_active,
+        commit_filter_active,
+    ) {
+        return Some(action);
+    }
+    let legacy = map_key_to_action(
+        key,
+        mode,
+        focused_panel,
+        editing_commit,
+        files_filter_active,
+        commit_filter_active,
+    );
+    legacy.filter(|action| !keymap.replaces_action(action))
+}
+
 /// True when a keystroke matches the CapsLock signature: an uppercase letter
 /// arriving WITHOUT the SHIFT modifier (#106). With the keyboard-enhancement
 /// flags active (`DISAMBIGUATE_ESCAPE_CODES`, see `tui::init`) a genuine

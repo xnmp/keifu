@@ -586,11 +586,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let popup = centered_rect(60, 70, area);
         let inner_width = popup.width.saturating_sub(4);
         let visible = popup.height.saturating_sub(2) as usize;
-        let content = HelpPopup::content_height(
+        let content = HelpPopup::content_height_with_keymap(
             app.is_uncommitted_selected(),
             app.status_bar_visible,
             &theme,
             inner_width,
+            &app.keymap,
         );
         app.help_viewport_rows = visible;
         app.help_max_scroll = content.saturating_sub(visible);
@@ -601,11 +602,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         AppMode::Help => {
             let popup_area = centered_rect(60, 70, area);
             frame.render_widget(
-                HelpPopup::with_status_bar_visibility(
+                HelpPopup::with_keymap(
                     app.is_uncommitted_selected(),
                     app.status_bar_visible,
                     &theme,
                     app.help_scroll,
+                    &app.keymap,
                 ),
                 popup_area,
             );

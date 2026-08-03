@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub refresh: RefreshConfig,
     pub ui: UiConfig,
+    /// User shortcut overrides. Values are validated independently after TOML
+    /// parsing so one bad entry cannot discard unrelated configuration.
+    pub keymap: toml::Table,
 }
 
 /// UI configuration
@@ -845,6 +848,7 @@ custom_unknown_key = \"keep me\"
                 graph_renderer: GraphRenderer::Pixel,
                 squash_link_lines: true,
             },
+            keymap: toml::Table::new(),
         };
         cfg.apply_to_document(&mut doc);
         let out = doc.to_string();

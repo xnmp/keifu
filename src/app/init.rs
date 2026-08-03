@@ -57,6 +57,8 @@ impl App {
         pending_watcher: Option<crate::watcher::PendingFsWatcher>,
         terminal_bg: Option<(u8, u8, u8)>,
     ) -> Result<Self> {
+        let keymap = crate::keymap::ResolvedKeymap::from_table(&config.keymap);
+        let keymap_warnings = keymap.warnings().to_vec();
         let now = Instant::now();
         // Startup phase timings, folded into the exit perf summary (and the
         // live slow-op log) so "startup feels slow" reports come with their
@@ -319,11 +321,17 @@ impl App {
             dragging_divider: false,
             trace_enabled: ui_state.trace_enabled,
             config,
+            keymap,
             terminal_bg,
             pixel_graph: None,
             pixel_specs_cache: None,
             trace_cache: None,
         };
+        for warning in keymap_warnings {
+            let message = format!("Keymap '{}': {}", warning.entry, warning.reason);
+            tracing::warn!(entry = %warning.entry, reason = %warning.reason, "keymap entry rejected or shadowed");
+            app.toast(crate::toast::ToastKind::Error, message);
+        }
         // Reconcile the seeded merged classification against the live repo in the
         // background — never inline (#104). Dim-only mode always starts empty and
         // kicks. Hide mode primed from an exact cache hit is already correct, so

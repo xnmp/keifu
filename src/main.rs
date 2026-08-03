@@ -15,7 +15,7 @@ use keifu::{
     },
     external_edit::{self, ExternalEditTarget},
     git::configure_git_extensions,
-    keybindings::{map_key_to_action, map_mouse_to_action},
+    keybindings::{map_key_to_action_with_keymap, map_mouse_to_action},
     logging,
     toast::ToastKind,
     tui, ui,
@@ -114,13 +114,14 @@ fn handle_input_event(
             app.set_message(format!("KEY: code={:?} mod={:?}", key.code, key.modifiers));
         }
         app.maybe_hint_capslock(&key);
-        if let Some(action) = map_key_to_action(
+        if let Some(action) = map_key_to_action_with_keymap(
             key,
             &app.mode,
             app.focused_panel,
             app.editing_commit_message,
             app.files_pane.files_filter_active,
             app.commit_filter_active,
+            &app.keymap,
         ) {
             if let Err(e) = app.handle_action(action) {
                 app.show_error(format!("{}", e));

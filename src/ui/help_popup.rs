@@ -20,6 +20,8 @@ enum HelpEntry {
     Header(&'static str),
     /// A `(key, description)` binding row.
     Row(&'static str, &'static str),
+    /// A binding row tied directly to one or more stable action identifiers.
+    Binding(&'static str, &'static [&'static str], &'static str),
     /// The status-bar control, whose label reports the current setting value.
     StatusBar,
     /// Vertical spacer between sections.
@@ -36,7 +38,9 @@ fn key_column_width(entries: &[HelpEntry]) -> usize {
     let widest = entries
         .iter()
         .filter_map(|e| match e {
-            HelpEntry::Row(key, _) => Some(UnicodeWidthStr::width(*key)),
+            HelpEntry::Row(key, _) | HelpEntry::Binding(key, _, _) => {
+                Some(UnicodeWidthStr::width(*key))
+            }
             HelpEntry::StatusBar => Some(UnicodeWidthStr::width("s")),
             _ => None,
         })
@@ -48,57 +52,130 @@ fn key_column_width(entries: &[HelpEntry]) -> usize {
 /// The help entries for the current context (uncommitted adds the staging and
 /// merge-conflict rows). Order matches the on-screen sections.
 fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
-    use HelpEntry::{Blank, Header, Row, StatusBar};
+    use HelpEntry::{Binding, Blank, Header, Row, StatusBar};
+    macro_rules! bind {
+        ($key:literal, $description:literal, $($id:literal),+ $(,)?) => {
+            Binding($key, &[$($id),+], $description)
+        };
+    }
     let mut e = vec![
         Header("Navigation"),
-        Row("↑ / ↓", "Move up/down"),
-        Row("← / →", "Switch panels"),
-        Row("Tab / Shift+Tab", "Switch panels (forward/back)"),
-        Row("Shift+F / Shift+C", "Show/hide the files / commit pane"),
-        Row("Ctrl+d/u", "Page down/up"),
-        Row("g / Home", "Go to top"),
-        Row("Shift+G / End", "Go to bottom"),
-        Row("@", "Jump to HEAD"),
-        Row("Esc", "Return to graph / stop editing / quit (from graph)"),
+        bind!("↑ / ↓", "Move up/down", "move-up", "move-down"),
+        bind!("← / →", "Switch panels", "panel-left", "panel-right"),
+        bind!(
+            "Tab / Shift+Tab",
+            "Switch panels (forward/back)",
+            "panel-right",
+            "panel-left"
+        ),
+        bind!(
+            "Shift+F / Shift+C",
+            "Show/hide the files / commit pane",
+            "toggle-files-pane",
+            "toggle-commit-pane"
+        ),
+        bind!("Ctrl+d/u", "Page down/up", "page-down", "page-up"),
+        bind!("g / Home", "Go to top", "go-to-top"),
+        bind!("Shift+G / End", "Go to bottom", "go-to-bottom"),
+        bind!("@", "Jump to HEAD", "jump-to-head"),
+        bind!(
+            "Esc",
+            "Return to graph / stop editing / quit (from graph)",
+            "focus-graph",
+            "stop-editing",
+            "quit"
+        ),
         StatusBar,
         Blank,
         Header("Graph Panel"),
-        Row("Enter", "Open actions menu"),
-        Row("Space", "Open file select"),
-        Row("] / [", "Next / previous branch label"),
-        Row("b", "Create new branch"),
-        Row("d", "Delete branch"),
-        Row("f", "Fetch from remote"),
-        Row("l", "Pull (fetch + integrate)"),
-        Row("Shift+P", "Push current branch (publishes if no upstream)"),
-        Row(
+        bind!("Enter", "Open actions menu", "open-commit-menu"),
+        bind!("Space", "Open file select", "open-file-diff"),
+        bind!(
+            "] / [",
+            "Next / previous branch label",
+            "next-branch",
+            "previous-branch"
+        ),
+        bind!("b", "Create new branch", "create-branch"),
+        bind!("d", "Delete branch", "delete-branch"),
+        bind!("f", "Fetch from remote", "fetch"),
+        bind!("l", "Pull (fetch + integrate)", "pull"),
+        bind!(
+            "Shift+P",
+            "Push current branch (publishes if no upstream)",
+            "push"
+        ),
+        bind!(
             "Shift+B",
             "Branch filter (type to filter by name, @ by author)",
+            "open-branch-filter"
         ),
-        Row("Shift+O", "Show/hide remote-only branches"),
-        Row(
+        bind!(
+            "Shift+O",
+            "Show/hide remote-only branches",
+            "toggle-remote-branches"
+        ),
+        bind!(
             "Shift+H",
             "Hide/dim branches merged into the trunk (incl. squash)",
+            "toggle-merged-branches"
         ),
-        Row("Ctrl+Shift+F", "Filter commits (message/author/hash)"),
-        Row("m", "Mark / compare two commits (Esc clears)"),
-        Row(
+        bind!(
+            "Ctrl+Shift+F",
+            "Filter commits (message/author/hash)",
+            "start-commit-filter"
+        ),
+        bind!(
+            "m",
+            "Mark / compare two commits (Esc clears)",
+            "mark-for-compare"
+        ),
+        bind!(
             "o",
             "Open PR in browser (badge color = CI: green/yellow/red)",
+            "open-pr"
         ),
-        Row("c", "CI check details (see failure logs without a browser)"),
-        Row("v", "View PR conversation (comments, reviews, threads)"),
-        Row("Shift+M", "Toggle author/hash/date, muted merges & avatars"),
-        Row("< / >", "Shrink / widen the graph column (… = truncated)"),
-        Row("t", "Toggle branch tracing (dim off-lineage lanes)"),
-        Row("^", "Jump to fork point (merge base with main / HEAD)"),
-        Row(
+        bind!(
+            "c",
+            "CI check details (see failure logs without a browser)",
+            "open-ci-checks"
+        ),
+        bind!(
+            "v",
+            "View PR conversation (comments, reviews, threads)",
+            "open-pr-thread"
+        ),
+        bind!(
+            "Shift+M",
+            "Toggle author/hash/date, muted merges & avatars",
+            "open-metadata-menu"
+        ),
+        bind!(
+            "< / >",
+            "Shrink / widen the graph column (… = truncated)",
+            "shrink-graph-width",
+            "widen-graph-width"
+        ),
+        bind!(
+            "t",
+            "Toggle branch tracing (dim off-lineage lanes)",
+            "toggle-trace"
+        ),
+        bind!(
+            "^",
+            "Jump to fork point (merge base with main / HEAD)",
+            "jump-to-merge-base"
+        ),
+        bind!(
             "Ctrl+↑ / Ctrl+↓",
             "Jump to previous/next commit on the same graph line",
+            "same-lane-up",
+            "same-lane-down"
         ),
-        Row(
+        bind!(
             "Ctrl+Z",
             "Undo last op — branch/tag delete, merge, pull, rename",
+            "undo-last-operation"
         ),
         Blank,
         Header("Files Panel"),
@@ -106,69 +183,146 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
 
     if is_uncommitted {
         e.extend([
-            Row("s", "Stage/unstage file"),
-            Row("Shift+S", "Stage all"),
-            Row("Shift+U", "Unstage all"),
-            Row("i", "Add to .gitignore (folder in folder mode)"),
-            Row("v", "Archive to .archive/ (folder in folder mode)"),
-            Row("r", "Restore file (discard changes)"),
-            Row("Delete", "Delete untracked file (recycle bin)"),
-            Row("Ctrl+z", "Undo last file operation"),
+            bind!("s", "Stage/unstage file", "toggle-stage"),
+            bind!("Shift+S", "Stage all", "stage-all"),
+            bind!("Shift+U", "Unstage all", "unstage-all"),
+            bind!(
+                "i",
+                "Add to .gitignore (folder in folder mode)",
+                "add-to-gitignore"
+            ),
+            bind!(
+                "v",
+                "Archive to .archive/ (folder in folder mode)",
+                "archive-file"
+            ),
+            bind!("r", "Restore file (discard changes)", "restore-file"),
+            bind!(
+                "Delete",
+                "Delete untracked file (recycle bin)",
+                "trash-file"
+            ),
+            bind!(
+                "Ctrl+z",
+                "Undo last file operation",
+                "undo-last-file-operation"
+            ),
             Header("Merge conflicts"),
-            Row("] / [", "Jump to next / previous conflicted file"),
-            Row("o", "Accept ours (on conflicted file)"),
-            Row("t", "Accept theirs (on conflicted file)"),
-            Row("c", "Continue merge/rebase/cherry-pick/revert"),
-            Row("Shift+A", "Abort the in-progress operation"),
+            bind!(
+                "] / [",
+                "Jump to next / previous conflicted file",
+                "next-conflict",
+                "previous-conflict"
+            ),
+            bind!("o", "Accept ours (on conflicted file)", "accept-ours"),
+            bind!("t", "Accept theirs (on conflicted file)", "accept-theirs"),
+            bind!(
+                "c",
+                "Continue merge/rebase/cherry-pick/revert",
+                "continue-operation"
+            ),
+            bind!(
+                "Shift+A",
+                "Abort the in-progress operation",
+                "abort-operation"
+            ),
         ]);
     }
 
     e.extend([
-        Row("f", "Toggle folder grouping"),
-        Row("/", "Filter files"),
-        Row("Space", "Open file with default app"),
-        Row("y", "Copy file path"),
-        Row("Enter", "Open file diff"),
-        Row("h", "File history (commits touching this file)"),
+        bind!("f", "Toggle folder grouping", "toggle-folder-view"),
+        bind!("/", "Filter files", "start-files-filter"),
+        bind!("Space", "Open file with default app", "open-with-default"),
+        bind!("y", "Copy file path", "copy-path"),
+        bind!("Enter", "Open file diff", "open-file-diff"),
+        bind!(
+            "h",
+            "File history (commits touching this file)",
+            "file-history"
+        ),
         Blank,
         Header("File Diff Viewer"),
-        Row("[ / ]", "Previous / next hunk"),
-        Row("n / Shift+N", "Next / previous file"),
-        Row("s", "Stage hunk under cursor"),
-        Row("u", "Unstage hunk under cursor"),
-        Row("x", "Discard hunk (working tree)"),
-        Row("Ctrl+Alt+W", "Toggle soft line wrap"),
+        bind!(
+            "[ / ]",
+            "Previous / next hunk",
+            "previous-hunk",
+            "next-hunk"
+        ),
+        bind!(
+            "n / Shift+N",
+            "Next / previous file",
+            "next-file",
+            "previous-file"
+        ),
+        bind!("s", "Stage hunk under cursor", "stage-hunk"),
+        bind!("u", "Unstage hunk under cursor", "unstage-hunk"),
+        bind!("x", "Discard hunk (working tree)", "discard-hunk"),
+        bind!("Ctrl+Alt+W", "Toggle soft line wrap", "toggle-diff-wrap"),
         Blank,
         Header("Commit Panel"),
-        Row("↑ / ↓", "Scroll"),
-        Row("Ctrl+Alt+W", "Toggle soft line wrap"),
-        Row("Enter", "Start editing commit message"),
-        Row("Enter", "Commit changes (or save amend)"),
-        Row("Ctrl+Enter", "Amend last commit"),
-        Row("Ctrl+S", "Stash changes (staged / all / +untracked)"),
+        bind!("↑ / ↓", "Scroll", "move-up", "move-down"),
+        bind!(
+            "Ctrl+Alt+W",
+            "Toggle soft line wrap",
+            "toggle-commit-detail-wrap"
+        ),
+        bind!("Enter", "Start editing commit message", "start-editing"),
+        bind!("Enter", "Commit changes (or save amend)", "commit-changes"),
+        bind!("Ctrl+Enter", "Amend last commit", "amend-commit"),
+        bind!(
+            "Ctrl+S",
+            "Stash changes (staged / all / +untracked)",
+            "stash-staged"
+        ),
         Blank,
         Header("GitHub Issues"),
-        Row("Shift+I", "Open the issue list (from any panel)"),
-        Row("Alt+I", "New repo issue (from anywhere)"),
-        Row("Alt+K", "Report a Keifu issue (from anywhere)"),
-        Row("Enter", "Open the selected issue's detail"),
-        Row("Tab / f", "Cycle status filter (open / closed / all)"),
-        Row("t", "Filter by label (checkbox picker)"),
-        Row(
+        bind!(
+            "Shift+I",
+            "Open the issue list (from any panel)",
+            "open-issue-list"
+        ),
+        bind!("Alt+I", "New repo issue (from anywhere)", "new-issue"),
+        bind!(
+            "Alt+K",
+            "Report a Keifu issue (from anywhere)",
+            "report-keifu-issue"
+        ),
+        bind!(
+            "Enter",
+            "Open the selected issue's detail",
+            "open-issue-detail"
+        ),
+        bind!(
+            "Tab / f",
+            "Cycle status filter (open / closed / all)",
+            "cycle-issue-filter"
+        ),
+        bind!(
+            "t",
+            "Filter by label (checkbox picker)",
+            "open-issue-label-filter"
+        ),
+        bind!(
             "u",
             "Toggle unblocked-only (hide issues with open blockers)",
+            "toggle-unblocked-only"
         ),
-        Row("l", "Toggle tags on the selected issue"),
-        Row("n", "New issue"),
-        Row("e", "Edit title/body (in detail)"),
-        Row("c", "Comment (in detail)"),
-        Row("x", "Close / reopen (in detail)"),
-        Row("a", "Edit assignees (in detail)"),
-        Row("r", "Refresh   o  Open in browser"),
+        bind!(
+            "l",
+            "Toggle tags on the selected issue",
+            "edit-issue-labels"
+        ),
+        bind!("n", "New issue", "new-issue"),
+        bind!("e", "Edit title/body (in detail)", "edit-issue"),
+        bind!("c", "Comment (in detail)", "comment-on-issue"),
+        bind!("x", "Close / reopen (in detail)", "toggle-issue-state"),
+        bind!("a", "Edit assignees (in detail)", "edit-issue-assignees"),
+        bind!("r", "Refresh issues", "refresh-issues"),
+        bind!("o", "Open issue in browser", "open-issue-in-browser"),
         Blank,
         Header("Search"),
-        Row("Ctrl+F / /", "Search branches"),
-        Row("Ctrl+Shift+F", "Search commits"),
+        bind!("Ctrl+F / /", "Search branches", "search"),
+        bind!("Ctrl+Shift+F", "Search commits", "start-commit-filter"),
         Blank,
         Header("Mouse"),
         Row("Click", "Select commit/file, focus panel"),
@@ -179,18 +333,24 @@ fn entries(is_uncommitted: bool) -> Vec<HelpEntry> {
         Row("Drag divider", "Resize the graph/detail split"),
         Blank,
         Header("Other"),
-        Row(
+        bind!(
             "Ctrl+P / Ctrl+Alt+P / :",
             "Command palette (commands, branches, commits)",
+            "open-command-palette"
         ),
-        Row(
+        bind!(
             "Ctrl+, / ,",
             "Settings menu (toggle/edit persisted settings)",
+            "open-settings"
         ),
-        Row("Shift+R", "Refresh"),
-        Row("F5", "Full update (fetch all remotes + PRs + refresh)"),
-        Row("?", "Toggle this help"),
-        Row("Ctrl+Q", "Quit (from anywhere)"),
+        bind!("Shift+R", "Refresh", "refresh"),
+        bind!(
+            "F5",
+            "Full update (fetch all remotes + PRs + refresh)",
+            "full-update"
+        ),
+        bind!("?", "Toggle this help", "toggle-help"),
+        bind!("Ctrl+Q", "Quit (from anywhere)", "force-quit"),
     ]);
 
     e
@@ -201,6 +361,7 @@ pub struct HelpPopup<'a> {
     pub status_bar_visible: bool,
     pub theme: &'a Theme,
     pub scroll: usize,
+    pub keymap: Option<&'a crate::keymap::ResolvedKeymap>,
 }
 
 impl<'a> HelpPopup<'a> {
@@ -219,6 +380,23 @@ impl<'a> HelpPopup<'a> {
             status_bar_visible,
             theme,
             scroll,
+            keymap: None,
+        }
+    }
+
+    pub fn with_keymap(
+        is_uncommitted: bool,
+        status_bar_visible: bool,
+        theme: &'a Theme,
+        scroll: usize,
+        keymap: &'a crate::keymap::ResolvedKeymap,
+    ) -> Self {
+        Self {
+            is_uncommitted,
+            status_bar_visible,
+            theme,
+            scroll,
+            keymap: Some(keymap),
         }
     }
 
@@ -230,13 +408,35 @@ impl<'a> HelpPopup<'a> {
         theme: &Theme,
         inner_width: u16,
     ) -> usize {
-        Paragraph::new(lines(is_uncommitted, status_bar_visible, theme))
+        Paragraph::new(lines(is_uncommitted, status_bar_visible, theme, None))
             .wrap(Wrap { trim: false })
             .line_count(inner_width)
     }
+
+    pub fn content_height_with_keymap(
+        is_uncommitted: bool,
+        status_bar_visible: bool,
+        theme: &Theme,
+        inner_width: u16,
+        keymap: &crate::keymap::ResolvedKeymap,
+    ) -> usize {
+        Paragraph::new(lines(
+            is_uncommitted,
+            status_bar_visible,
+            theme,
+            Some(keymap),
+        ))
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width)
+    }
 }
 
-fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<Line<'static>> {
+fn lines(
+    is_uncommitted: bool,
+    status_bar_visible: bool,
+    theme: &Theme,
+    keymap: Option<&crate::keymap::ResolvedKeymap>,
+) -> Vec<Line<'static>> {
     let key_style = Style::default()
         .fg(theme.help_key)
         .add_modifier(Modifier::BOLD);
@@ -245,7 +445,22 @@ fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<L
         .fg(theme.help_header)
         .add_modifier(Modifier::BOLD);
     let entries = entries(is_uncommitted);
-    let kw = key_column_width(&entries);
+    let kw = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            HelpEntry::Row(key, _) => Some((*key).to_string()),
+            HelpEntry::Binding(key, ids, _) => Some(effective_bindings(keymap, key, ids)),
+            HelpEntry::StatusBar => Some(
+                keymap
+                    .map(|map| map.display_bindings("toggle-status-bar"))
+                    .unwrap_or_else(|| "s".to_string()),
+            ),
+            _ => None,
+        })
+        .map(|key| UnicodeWidthStr::width(key.as_str()))
+        .max()
+        .unwrap_or_else(|| key_column_width(&entries).saturating_sub(KEY_GAP))
+        + KEY_GAP;
     entries
         .iter()
         .map(|entry| match entry {
@@ -254,8 +469,23 @@ fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<L
                 Span::styled(format!(" {key:<kw$}"), key_style),
                 Span::styled(*desc, desc_style),
             ]),
+            HelpEntry::Binding(key, ids, desc) => {
+                let effective = effective_bindings(keymap, key, ids);
+                Line::from(vec![
+                    Span::styled(format!(" {effective:<kw$}"), key_style),
+                    Span::styled(*desc, desc_style),
+                ])
+            }
             HelpEntry::StatusBar => Line::from(vec![
-                Span::styled(format!(" {:<kw$}", "s"), key_style),
+                Span::styled(
+                    format!(
+                        " {:<kw$}",
+                        keymap
+                            .map(|map| map.display_bindings("toggle-status-bar"))
+                            .unwrap_or_else(|| "s".to_string())
+                    ),
+                    key_style,
+                ),
                 Span::styled(
                     format!(
                         "Toggle status bar ({})",
@@ -269,6 +499,30 @@ fn lines(is_uncommitted: bool, status_bar_visible: bool, theme: &Theme) -> Vec<L
         .collect()
 }
 
+fn effective_bindings(
+    keymap: Option<&crate::keymap::ResolvedKeymap>,
+    fallback: &str,
+    ids: &[&str],
+) -> String {
+    keymap.map_or_else(
+        || fallback.to_string(),
+        |map| {
+            if !ids.iter().any(|id| map.is_overridden(id)) {
+                return fallback.to_string();
+            }
+            let mut labels = Vec::new();
+            for id in ids {
+                for label in map.display_bindings(id).split(" / ") {
+                    if !labels.iter().any(|existing| existing == label) {
+                        labels.push(label.to_string());
+                    }
+                }
+            }
+            labels.join(" / ")
+        },
+    )
+}
+
 impl<'a> Widget for HelpPopup<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
@@ -279,12 +533,22 @@ impl<'a> Widget for HelpPopup<'a> {
         if inner.height == 0 || inner.width == 0 {
             return;
         }
-        let content_height = Self::content_height(
-            self.is_uncommitted,
-            self.status_bar_visible,
-            self.theme,
-            inner.width,
-        );
+        let content_height = if let Some(keymap) = self.keymap {
+            Self::content_height_with_keymap(
+                self.is_uncommitted,
+                self.status_bar_visible,
+                self.theme,
+                inner.width,
+                keymap,
+            )
+        } else {
+            Self::content_height(
+                self.is_uncommitted,
+                self.status_bar_visible,
+                self.theme,
+                inner.width,
+            )
+        };
         let scroll = self
             .scroll
             .min(content_height.saturating_sub(inner.height as usize));
@@ -292,6 +556,7 @@ impl<'a> Widget for HelpPopup<'a> {
             self.is_uncommitted,
             self.status_bar_visible,
             self.theme,
+            self.keymap,
         ))
         .wrap(Wrap { trim: false })
         .scroll((scroll.min(u16::MAX as usize) as u16, 0))
@@ -336,6 +601,22 @@ mod tests {
     }
 
     #[test]
+    fn every_shortcut_aware_help_row_references_registered_actions() {
+        for entry in entries(true) {
+            if let HelpEntry::Binding(_, ids, description) = entry {
+                for id in ids {
+                    assert!(
+                        crate::keymap::binding_registry()
+                            .iter()
+                            .any(|descriptor| descriptor.id == *id),
+                        "help row {description:?} references unknown action {id:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn key_column_leaves_a_gap_after_the_longest_key() {
         let e = entries(true);
         let kw = key_column_width(&e);
@@ -343,7 +624,9 @@ mod tests {
         let widest = e
             .iter()
             .filter_map(|entry| match entry {
-                HelpEntry::Row(k, _) => Some(UnicodeWidthStr::width(*k)),
+                HelpEntry::Row(k, _) | HelpEntry::Binding(k, _, _) => {
+                    Some(UnicodeWidthStr::width(*k))
+                }
                 _ => None,
             })
             .max()
@@ -353,7 +636,7 @@ mod tests {
         // the description — the fix for the "Tab / Shift+TabSwitch panels"
         // collision.
         for entry in &e {
-            if let HelpEntry::Row(k, _) = entry {
+            if let HelpEntry::Row(k, _) | HelpEntry::Binding(k, _, _) = entry {
                 let padded = format!("{k:<kw$}");
                 let trailing = kw - UnicodeWidthStr::width(*k);
                 assert!(
@@ -397,7 +680,7 @@ mod tests {
         let text: String = entries(true)
             .iter()
             .filter_map(|entry| match entry {
-                HelpEntry::Row(k, _) => Some(*k),
+                HelpEntry::Row(k, _) | HelpEntry::Binding(k, _, _) => Some(*k),
                 _ => None,
             })
             .collect::<Vec<_>>()

@@ -68,3 +68,55 @@ Pixel rendering draws the graph lines as transparent images via the terminal's
 image protocol (detected once at startup). It requires a graphics-capable
 terminal such as WezTerm, Kitty, or iTerm2; on any other terminal keifu
 silently uses the Unicode renderer.
+
+## Keyboard shortcuts
+
+Add a `[keymap]` table to replace shortcuts for individual actions. Action
+names are stable, kebab-case identifiers shared with Keifu's command registry.
+An action that is not listed keeps all of its current defaults.
+
+```toml
+[keymap]
+# Replace Pull's default `l` binding.
+pull = ["Ctrl+Alt+P"]
+
+# Every listed alternative triggers the action.
+open-command-palette = ["Ctrl+P", "Ctrl+Alt+P", "F2"]
+
+# An empty list deliberately leaves an action without a shortcut.
+toggle-debug-keys = []
+```
+
+Common identifiers include `fetch`, `pull`, `push`, `refresh`,
+`open-commit-menu`, `open-command-palette`, `open-settings`, `toggle-help`,
+`move-up`, `move-down`, `menu-select`, `confirm`, `cancel`, `toggle-stage`,
+`stage-all`, `open-file-diff`, `start-editing`, `commit-changes`, and the
+descriptive kebab-case names shown by the command palette. Navigation and
+modal actions use one identifier in every context where that action is
+available. The compatibility aliases `command-palette` and `open-palette`
+currently resolve to `open-command-palette`.
+
+Bindings contain one base key and any of `Ctrl`, `Alt`, and `Shift`, joined by
+`+`. Modifiers can be combined. Named keys include `Enter`, `Esc`, `Tab`,
+`BackTab`, `Backspace`, `Delete`, `Insert`, the four arrows, `Home`, `End`,
+`PageUp`, `PageDown`, `Space`, and `F1` through `F24`.
+
+```toml
+[keymap]
+full-update = ["Ctrl+Shift+F5"]
+open-issue-list = ["Alt+Shift+I"]
+menu-select = ["Enter", "F12"]
+```
+
+Multi-key sequences such as `Ctrl+K Ctrl+C` are not supported. If an action
+name or binding is malformed, Keifu keeps that action's defaults, applies the
+other valid entries, and reports the rejected entry in a startup error toast
+and the log.
+
+The same shortcut can be reused in mutually exclusive contexts, such as one
+graph-panel action and one files-panel action. When two actions that can be
+active together resolve to the same shortcut, the later entry in the TOML
+table wins. Keifu reports both action names and the winning binding at startup
+instead of silently shadowing the earlier action. The Help popup and command
+palette always show the effective startup configuration, including multiple
+alternatives and `Unassigned` actions.

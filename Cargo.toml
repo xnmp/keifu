@@ -62,7 +62,7 @@ trash = "5"
 terminal-light = "1.8"
 
 # Config
-toml = "0.8"
+toml = { version = "0.8", features = ["preserve_order"] }
 # Comment/format-preserving TOML editing for writing back config.toml. Already
 # in the tree transitively via `toml` 0.8, so this direct dep adds no new
 # compiled code — it just exposes the DocumentMut API for faithful round-trips.
