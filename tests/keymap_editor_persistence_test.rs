@@ -62,7 +62,9 @@ fn saving_first_keymap_entry_creates_the_keymap_table() {
     config.apply_to_document(&mut document);
 
     assert_eq!(
-        toml::from_str::<Config>(&document.to_string()).unwrap().keymap["force-quit"]
+        toml::from_str::<Config>(&document.to_string())
+            .unwrap()
+            .keymap["force-quit"]
             .as_array()
             .unwrap()[0]
             .as_str(),
