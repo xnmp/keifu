@@ -164,7 +164,10 @@ pub fn map_key_to_action_with_keymap(
     let key = normalize_enhanced_shift(key);
     // Capture must receive the raw normalized shortcut before user bindings or
     // legacy global shortcuts consume it.
-    if let AppMode::KeymapEditor { capturing: true, .. } = mode {
+    if let AppMode::KeymapEditor {
+        capturing: true, ..
+    } = mode
+    {
         return match key.code {
             KeyCode::Esc => Some(Action::Cancel),
             _ => Some(Action::KeymapCapture(crate::keymap::KeyBinding {

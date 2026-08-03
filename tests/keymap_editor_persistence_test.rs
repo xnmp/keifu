@@ -2,12 +2,7 @@ mod common;
 
 use common::{commit_file, init_repo, Seed};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use keifu::{
-    action::Action,
-    app::App,
-    config::Config,
-    keybindings::map_key_to_action_with_keymap,
-};
+use keifu::{action::Action, app::App, config::Config, keybindings::map_key_to_action_with_keymap};
 
 /// The editor writes through the same config document path as the settings
 /// registry, so a saved keymap must leave neighboring user-authored TOML alone.
@@ -102,12 +97,18 @@ fn captured_conflicting_binding_stays_pending_until_saved_and_cancel_discards_it
     app.handle_action(captured).unwrap();
 
     let pending = format!("{:?}", app.mode);
-    assert!(pending.contains("F5"), "captured chord was not reflected: {pending}");
+    assert!(
+        pending.contains("F5"),
+        "captured chord was not reflected: {pending}"
+    );
     assert!(
         app.config.keymap.is_empty(),
         "capture must not mutate persisted config before Save"
     );
 
     app.handle_action(Action::Cancel).unwrap();
-    assert!(app.config.keymap.is_empty(), "cancel must discard the pending edit");
+    assert!(
+        app.config.keymap.is_empty(),
+        "cancel must discard the pending edit"
+    );
 }

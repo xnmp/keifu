@@ -2166,7 +2166,9 @@ impl App {
         let count = crate::keymap::binding_registry().len();
         let (selected, capturing) = match &self.mode {
             AppMode::KeymapEditor {
-                selected, capturing, ..
+                selected,
+                capturing,
+                ..
             } => (*selected, *capturing),
             _ => return,
         };

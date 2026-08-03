@@ -737,3 +737,9 @@ Invalid entries are rejected independently. Their action keeps its defaults;
 other valid entries still apply. Resolver warnings become both tracing events
 and non-blocking startup error toasts. Conflict ordering follows TOML source
 order, so the `toml` dependency must retain `preserve_order`.
+
+The in-app editor builds a separate pending keymap table and resolves that
+table for its list and conflict preview. It updates `Config` only on Save,
+then uses the same `toml_edit` persistence path as other config settings;
+Escape discards the pending table. Capture receives the normalized raw key
+before configured or legacy routing so any supported binding can be recorded.

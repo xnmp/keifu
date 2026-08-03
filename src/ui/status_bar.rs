@@ -874,11 +874,29 @@ impl StatusBar {
             }
             AppMode::KeymapEditor { capturing, .. } => {
                 if *capturing {
-                    hb.hint(" Esc ", key_style, "cancel capture", desc_style, Action::Cancel);
+                    hb.hint(
+                        " Esc ",
+                        key_style,
+                        "cancel capture",
+                        desc_style,
+                        Action::Cancel,
+                    );
                 } else {
                     hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
-                    hb.hint(" Enter ", key_style, "capture ", desc_style, Action::MenuSelect);
-                    hb.hint(" u ", key_style, "unassign ", desc_style, Action::KeymapClear);
+                    hb.hint(
+                        " Enter ",
+                        key_style,
+                        "capture ",
+                        desc_style,
+                        Action::MenuSelect,
+                    );
+                    hb.hint(
+                        " u ",
+                        key_style,
+                        "unassign ",
+                        desc_style,
+                        Action::KeymapClear,
+                    );
                     hb.hint(" C-s ", key_style, "save ", desc_style, Action::KeymapSave);
                     hb.hint(" Esc ", key_style, "discard ", desc_style, Action::Cancel);
                 }

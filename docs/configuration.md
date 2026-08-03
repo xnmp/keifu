@@ -75,6 +75,12 @@ Add a `[keymap]` table to replace shortcuts for individual actions. Action
 names are stable, kebab-case identifiers shared with Keifu's command registry.
 An action that is not listed keeps all of its current defaults.
 
+You can also edit these bindings in Keifu: open Settings with `Ctrl+,`, then
+press `Ctrl+K`. Select an action, press Enter to capture its replacement, use
+`u` to explicitly unassign it, and press `Ctrl+S` to save. The editor previews
+the effective binding and conflict warning before it writes `config.toml`; Esc
+cancels capture or discards unsaved edits.
+
 ```toml
 [keymap]
 # Replace Pull's default `l` binding.
