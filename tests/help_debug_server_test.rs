@@ -58,7 +58,7 @@ impl RunningApp {
     }
 }
 
-fn start_app(repo: &Path, port: u16) -> RunningApp {
+fn start_app(repo: &Path, port: u16, extra_args: &[&str]) -> RunningApp {
     let binary = env!("CARGO_BIN_EXE_keifu");
     let pty = native_pty_system()
         .openpty(PtySize {
@@ -81,6 +81,7 @@ fn start_app(repo: &Path, port: u16) -> RunningApp {
         command.args(["--debug-listen", &address]);
         command
     };
+    command.args(extra_args);
     command.cwd(repo);
     let child = pty.slave.spawn_command(command).unwrap();
     drop(pty.slave);
@@ -117,7 +118,7 @@ fn request(port: u16, body: &str) -> Value {
 
 fn help_screen(repo: &Path, with_uncommitted_file: bool) -> String {
     let port = reserve_port();
-    let app = start_app(repo, port);
+    let app = start_app(repo, port, &[]);
     let key_sequence = if with_uncommitted_file {
         "<home> ?"
     } else {
@@ -186,4 +187,63 @@ fn debug_server_renders_updated_help_for_clean_and_uncommitted_repositories() {
 
     let uncommitted = fixture_repo(true);
     help_screen(uncommitted.path(), true);
+}
+
+fn launch_mode_screen(repo: &Path, mode: &str) -> String {
+    let port = reserve_port();
+    let app = start_app(repo, port, &[mode]);
+    let dump = request(port, r#"{"cmd":"dump","width":140,"height":40}"#);
+    assert_eq!(dump["ok"], true);
+    let screen = dump["screen"].as_str().unwrap().to_owned();
+    let quit = request(port, r#"{"cmd":"keys","keys":"<c-q>"}"#);
+    assert_eq!(quit["ok"], true);
+    app.wait();
+    screen
+}
+
+#[test]
+fn debug_server_renders_the_requested_reduced_launch_layouts() {
+    let repo = fixture_repo(false);
+
+    let bare = launch_mode_screen(repo.path(), "--bare");
+    assert!(bare
+        .lines()
+        .next()
+        .is_some_and(|line| !line.contains("Commit")));
+    for absent in ["Changed Files", "Commit Detail", "? help"] {
+        assert!(
+            !bare.contains(absent),
+            "bare dump rendered {absent:?}: {bare}"
+        );
+    }
+
+    let scm = launch_mode_screen(repo.path(), "--scm");
+    for expected in ["README.md", "Author:"] {
+        assert!(
+            scm.contains(expected),
+            "SCM dump omitted {expected:?}: {scm}"
+        );
+    }
+    for absent in ["Commits", "Changed Files", "Commit Detail", "? help"] {
+        assert!(!scm.contains(absent), "SCM dump rendered {absent:?}: {scm}");
+    }
+}
+
+#[test]
+fn debug_server_keeps_bare_mode_focus_on_the_graph_after_tab() {
+    let repo = fixture_repo(false);
+    let port = reserve_port();
+    let app = start_app(repo.path(), port, &["--bare"]);
+
+    let tab = request(port, r#"{"cmd":"keys","keys":"<tab>"}"#);
+    assert_eq!(tab["ok"], true);
+    let state = request(port, r#"{"cmd":"state"}"#);
+    assert_eq!(
+        state["focused_panel"], "graph",
+        "bare mode must not focus a removed pane"
+    );
+
+    let quit = request(port, r#"{"cmd":"keys","keys":"<c-q>"}"#);
+    assert_eq!(quit["ok"], true);
+    app.wait();
 }

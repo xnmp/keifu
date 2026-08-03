@@ -289,6 +289,7 @@ impl App {
             repo_dirty: false,
             last_undoable_op: None,
             side_panel_layout: ui_state.side_panel_layout,
+            launch_mode: LaunchMode::Full,
             hide_files_pane: ui_state.hide_files_pane,
             hide_commit_pane: ui_state.hide_commit_pane,
             status_bar_visible: ui_state.status_bar_visible,
@@ -430,6 +431,11 @@ impl App {
 
     /// Create a new application
     pub fn new() -> Result<Self> {
+        Self::new_with_launch_mode(LaunchMode::Full)
+    }
+
+    /// Create a new application with a session-only startup layout.
+    pub fn new_with_launch_mode(launch_mode: LaunchMode) -> Result<Self> {
         // The OSC-11 background-color query blocks on the terminal reply
         // (typically 5-15ms, worst case 100ms); overlap it with repository
         // loading. Joined below even on the error path, so the query's
@@ -452,6 +458,7 @@ impl App {
 
         let mut app = result?;
         app.terminal_bg = terminal_bg;
+        app.launch_mode = launch_mode;
         Ok(app)
     }
 }

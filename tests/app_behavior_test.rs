@@ -748,8 +748,14 @@ fn commit_detail_wrap_action_reaches_the_rendered_panel() {
     let area = Rect::new(0, 0, 14, 8);
     let theme = Theme::dark();
     let mut buffer = Buffer::empty(area);
-    CommitDetailWidget::new(&app, area, &theme, vec![Line::from("abcdefghij klmnop")])
-        .render(area, &mut buffer);
+    CommitDetailWidget::new(
+        &app,
+        area,
+        &theme,
+        vec![Line::from("abcdefghij klmnop")],
+        true,
+    )
+    .render(area, &mut buffer);
 
     let mut rendered = String::new();
     for y in 0..area.height {

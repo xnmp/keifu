@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use keifu::{
-    app::App,
+    app::{App, LaunchMode},
     debug_server,
     event::{
         dispatch_pixel_graph_resize, get_key_event, get_mouse_event, get_paste_event,
@@ -28,6 +28,14 @@ use keifu::{
     about = "A TUI tool to visualize Git commit graphs with branch genealogy"
 )]
 struct Cli {
+    /// Show only the git graph, without a title or status bar
+    #[arg(long, conflicts_with = "scm")]
+    bare: bool,
+
+    /// Show only source-control files and commit details, without pane titles or a status bar
+    #[arg(long, conflicts_with = "bare")]
+    scm: bool,
+
     /// Append debug logs and a perf summary on exit to this file
     /// (level via KEIFU_LOG, default "debug")
     #[arg(long, value_name = "PATH")]
@@ -174,7 +182,14 @@ fn main() -> Result<()> {
     configure_git_extensions()?;
 
     // Initialize application
-    let mut app = App::new()?;
+    let launch_mode = if cli.bare {
+        LaunchMode::Bare
+    } else if cli.scm {
+        LaunchMode::Scm
+    } else {
+        LaunchMode::Full
+    };
+    let mut app = App::new_with_launch_mode(launch_mode)?;
 
     // Initialize terminal
     let mut terminal = tui::init()?;

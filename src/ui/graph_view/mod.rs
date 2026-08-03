@@ -128,6 +128,7 @@ impl<'a> GraphViewWidget<'a> {
         theme: &'a Theme,
         pixel_mode: bool,
         viewport_height: u16,
+        show_title: bool,
     ) -> Self {
         let needed = (app.graph_layout.max_lane + 1) * 2;
         let graph_width = effective_graph_width(needed, app.graph_width_cap);
@@ -250,7 +251,9 @@ impl<'a> GraphViewWidget<'a> {
             chip_hits.push(chips);
         }
 
-        let title = if app.commit_filter_active {
+        let title = if !show_title {
+            String::new()
+        } else if app.commit_filter_active {
             format!(" Commits: {}_ ", app.commit_filter)
         } else if has_filter {
             format!(" Commits [{}] ", app.commit_filter)

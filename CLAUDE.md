@@ -31,6 +31,9 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Merged-lane dimming yields to the selected trace.** A selected merged branch must keep its complete path, including its merge arc into the trunk, visible in both Unicode and pixel graph renderers; unrelated merged work remains dimmed.
 - **Settings go through the pure registry** in `src/settings.rs` (no `App` dependency). State-only settings persist via `UiState` to `state.toml`; config-file settings rewrite only touched keys through `toml_edit` so user comments survive.
 - **Panel-title visibility is one shared UI-state preference with three render owners.** The graph, files, and commit-detail widgets each keep their border and content when titles are off; a live or applied graph filter remains visible so users can understand and clear the narrowed commit list.
+- **Launch layouts are session-only.** `--bare` and `--scm` select a layout on
+  `App` at startup without writing visibility preferences to `state.toml`; the
+  default invocation keeps the complete layout.
 - **The unicode and pixel dim/render paths are deliberately parallel implementations** (see comments in `ui/graph_view/`). Do not unify them.
 - **Pixel graph cell geometry is mutable at runtime.** On terminal resize, derive it from `crossterm::terminal::window_size()` and rebuild the `ratatui_image::Picker` as well as clearing pixel protocol caches: the picker embeds its own font metrics, so changing only `PixelGraphState.font_size` leaves fixed-size image protocols stale.
 - **Squash-merge connector identity is its endpoint pair, not a branch name.** Local and remote refs can alias the same tip and target; resolve them through `SquashMergeLine::from_branch_targets` so the graph draws one connector.

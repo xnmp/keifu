@@ -81,13 +81,14 @@ impl<'a> CommitDetailWidget<'a> {
         _commit_area: Rect,
         theme: &'a Theme,
         commit_lines: Vec<Line<'a>>,
+        show_title: bool,
     ) -> Self {
         Self {
             commit_lines,
             is_focused: app.focused_panel == FocusedPanel::CommitDetail,
             commit_scroll: app.commit_detail_scroll,
             word_wrap: app.commit_detail_word_wrap,
-            show_title: app.panel_titles_visible,
+            show_title: show_title && app.panel_titles_visible,
             theme,
         }
     }

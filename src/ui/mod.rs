@@ -36,7 +36,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, AppMode, InputAction};
+use crate::app::{App, AppMode, InputAction, LaunchMode};
 
 use self::{
     branch_filter::BranchFilterWidget,
@@ -269,55 +269,73 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = vertical[0];
     let status_area = vertical[1];
 
-    // Split main area: graph + detail. The graph gets `graph_split_ratio`%;
+    // Split main area according to the session startup layout. The normal
+    // layout's graph gets `graph_split_ratio`%;
     // the divider between them is drag-resizable. With both detail panes
     // hidden (#116) there is no detail area at all — the graph takes the full
     // main area and the hidden panes get zero-size rects, which also removes
     // them from mouse hit-testing (a zero-size Rect contains no point).
-    let graph_ratio = app.graph_split_ratio;
-    let detail_ratio = 100u16.saturating_sub(graph_ratio);
-    let show_detail = !(app.hide_files_pane && app.hide_commit_pane);
-    let (graph_area, detail_area) = if !show_detail {
-        (main_area, Rect::default())
-    } else if app.side_panel_layout {
-        // Side layout: detail on LEFT, graph on RIGHT.
-        let h = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(detail_ratio),
-                Constraint::Percentage(graph_ratio),
-            ])
-            .split(main_area);
-        (h[1], h[0])
-    } else {
-        // Default: graph on TOP, detail on BOTTOM.
-        let v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(graph_ratio),
-                Constraint::Percentage(detail_ratio),
-            ])
-            .split(main_area);
-        (v[0], v[1])
-    };
-
-    // Split detail area into files pane + commit detail; a hidden pane (#116)
-    // cedes the whole detail area to the other.
-    let (files_area, commit_area) = if app.hide_files_pane {
-        (Rect::default(), detail_area)
-    } else if app.hide_commit_pane {
-        (detail_area, Rect::default())
-    } else {
-        let detail_direction = if detail_area.width <= 56 {
-            Direction::Vertical
-        } else {
-            Direction::Horizontal
-        };
-        let detail_chunks = Layout::default()
-            .direction(detail_direction)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(detail_area);
-        (detail_chunks[0], detail_chunks[1])
+    let (graph_area, files_area, commit_area) = match (
+        app.panel_rendered(crate::app::FocusedPanel::Graph),
+        app.panel_rendered(crate::app::FocusedPanel::Files),
+        app.panel_rendered(crate::app::FocusedPanel::CommitDetail),
+    ) {
+        (true, false, false) => (main_area, Rect::default(), Rect::default()),
+        (false, true, true) => {
+            let direction = if main_area.width <= 56 {
+                Direction::Vertical
+            } else {
+                Direction::Horizontal
+            };
+            let panes = Layout::default()
+                .direction(direction)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(main_area);
+            (Rect::default(), panes[0], panes[1])
+        }
+        _ => {
+            let graph_ratio = app.graph_split_ratio;
+            let detail_ratio = 100u16.saturating_sub(graph_ratio);
+            let show_detail = !(app.hide_files_pane && app.hide_commit_pane);
+            let (graph_area, detail_area) = if !show_detail {
+                (main_area, Rect::default())
+            } else if app.side_panel_layout {
+                let h = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(detail_ratio),
+                        Constraint::Percentage(graph_ratio),
+                    ])
+                    .split(main_area);
+                (h[1], h[0])
+            } else {
+                let v = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(graph_ratio),
+                        Constraint::Percentage(detail_ratio),
+                    ])
+                    .split(main_area);
+                (v[0], v[1])
+            };
+            let (files_area, commit_area) = if app.hide_files_pane {
+                (Rect::default(), detail_area)
+            } else if app.hide_commit_pane {
+                (detail_area, Rect::default())
+            } else {
+                let detail_direction = if detail_area.width <= 56 {
+                    Direction::Vertical
+                } else {
+                    Direction::Horizontal
+                };
+                let panes = Layout::default()
+                    .direction(detail_direction)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(detail_area);
+                (panes[0], panes[1])
+            };
+            (graph_area, files_area, commit_area)
+        }
     };
 
     // Record panel rects for mouse hit-testing.
@@ -347,16 +365,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // offset — ratatui clamps a stale offset during render to keep the
     // selection visible, and a window computed from the pre-render offset
     // missed whole bands at the top/bottom on page jumps and G/g.
-    let pixel_mode = app.pixel_graph.is_some();
+    let pixel_mode = !graph_area.is_empty() && app.pixel_graph.is_some();
     let graph_viewport = graph_area.height.saturating_sub(2);
-    let graph_widget =
-        GraphViewWidget::new(app, graph_area.width, &theme, pixel_mode, graph_viewport);
-    app.graph_chip_hits = graph_widget.chip_hits.clone();
-    frame.render_stateful_widget(
-        graph_widget,
-        graph_area,
-        &mut app.graph_nav.graph_list_state,
-    );
+    if !graph_area.is_empty() {
+        let graph_widget = GraphViewWidget::new(
+            app,
+            graph_area.width,
+            &theme,
+            pixel_mode,
+            graph_viewport,
+            app.launch_mode != LaunchMode::Bare,
+        );
+        app.graph_chip_hits = graph_widget.chip_hits.clone();
+        frame.render_stateful_widget(
+            graph_widget,
+            graph_area,
+            &mut app.graph_nav.graph_list_state,
+        );
+    } else {
+        app.graph_chip_hits.clear();
+    }
     stage!(app, "graph_widget");
 
     // Pixel graph pass: (re)build the row specs, dim the window, and transmit
@@ -494,7 +522,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             offset: 0,
         };
         frame.render_stateful_widget(
-            FilesPaneWidget::new(app, &theme),
+            FilesPaneWidget::new(app, &theme, app.launch_mode == LaunchMode::Full),
             files_area,
             &mut files_state,
         );
@@ -504,7 +532,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if !commit_area.is_empty() {
         frame.render_widget(
-            CommitDetailWidget::new(app, commit_area, &theme, commit_lines),
+            CommitDetailWidget::new(
+                app,
+                commit_area,
+                &theme,
+                commit_lines,
+                app.launch_mode == LaunchMode::Full,
+            ),
             commit_area,
         );
     }
@@ -1049,13 +1083,13 @@ const TOAST_MAX_WIDTH: u16 = 44;
 const TOAST_MARGIN: u16 = 1;
 /// Height of the shared status bar in the current layout.
 fn status_bar_height(app: &App) -> u16 {
-    u16::from(app.status_bar_visible)
+    u16::from(app.launch_mode == LaunchMode::Full && app.status_bar_visible)
 }
 
 /// Render the shared status bar only when enabled, clearing stale mouse hints
 /// when its row is returned to the active screen.
 fn render_status_bar(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
-    if !app.status_bar_visible {
+    if app.launch_mode != LaunchMode::Full || !app.status_bar_visible {
         app.status_hints.clear();
         return;
     }
