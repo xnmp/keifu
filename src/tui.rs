@@ -26,19 +26,27 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// a double restore can't underflow the terminal's flag stack.
 static KEYBOARD_ENHANCEMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Push the `DISAMBIGUATE_ESCAPE_CODES` keyboard-enhancement flag when the
-/// terminal advertises support. This is what lets the terminal encode
-/// Ctrl+punctuation (e.g. Ctrl+,) which the legacy protocol cannot represent, so
-/// crossterm can actually see those key events. Returns whether it was enabled.
+/// Keyboard protocol features Keifu relies on while its TUI owns the terminal.
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+}
+
+/// Push all keyboard-enhancement flags Keifu needs when the terminal advertises
+/// support. All-key reporting includes `KeyEventState` such as Caps Lock on
+/// text keys, while alternate-key reporting supplies the layout-correct shifted
+/// character instead of only its unshifted base codepoint. Returns whether it
+/// was enabled.
 ///
-/// Side effect the callers must account for: with this flag on, the terminal
-/// also delivers `KeyEventKind::Release`/`Repeat` events — `keybindings` filters
-/// those so bindings don't double-fire.
+/// All keypresses, including modifier-key presses, are encoded as escape
+/// sequences. `keybindings` continues to discard any Release events reported by
+/// terminals that opt into event-type reporting.
 fn push_keyboard_enhancement(stdout: &mut Stdout) -> Result<bool> {
     if matches!(supports_keyboard_enhancement(), Ok(true)) {
         execute!(
             stdout,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
         )?;
         KEYBOARD_ENHANCEMENT_ACTIVE.store(true, Ordering::SeqCst);
         Ok(true)
@@ -60,13 +68,13 @@ pub fn init() -> Result<Tui> {
         EnableMouseCapture,
         EnableBracketedPaste
     )?;
-    // Enable keyboard enhancement after the alternate screen so Ctrl+punctuation
-    // (e.g. Ctrl+,) reaches crossterm. Log the outcome so the user can confirm in
-    // the --log-file whether their terminal supports it.
+    // Enable keyboard enhancement after the alternate screen so every key,
+    // including text-producing keys, reports its Caps Lock state to crossterm.
+    // Log the outcome so the user can confirm terminal support in --log-file.
     let enhanced = push_keyboard_enhancement(&mut stdout)?;
     tracing::info!(
         keyboard_enhancement = enhanced,
-        "terminal keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES)"
+        "terminal keyboard enhancement (all keys + Caps Lock state)"
     );
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
@@ -195,7 +203,18 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_encode, build_osc52_sequence, OSC52_MAX_BASE64_LEN};
+    use super::{
+        base64_encode, build_osc52_sequence, keyboard_enhancement_flags, KeyboardEnhancementFlags,
+        OSC52_MAX_BASE64_LEN,
+    };
+
+    #[test]
+    fn keyboard_enhancement_reports_all_keys_for_capslock_state() {
+        let flags = keyboard_enhancement_flags();
+        assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
+    }
 
     #[test]
     fn encodes_base64_with_padding() {

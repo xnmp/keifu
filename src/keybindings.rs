@@ -31,6 +31,26 @@ pub fn map_mouse_to_action(mouse: MouseEvent) -> Option<Action> {
     }
 }
 
+/// Canonicalize the two shifted ASCII forms enhanced terminals can report.
+///
+/// With alternate-key reporting, crossterm returns the layout-correct `G` with
+/// no Shift bit; without it, the Kitty protocol reports base `g` plus Shift.
+/// The keybinding table historically uses `G` plus Shift, so normalize either
+/// form at this boundary while retaining companion modifiers such as Ctrl and
+/// Alt. Shifted punctuation is deliberately not synthesized: alternate-key
+/// reporting supplies the layout-correct character for it.
+fn normalize_enhanced_shift(mut key: KeyEvent) -> KeyEvent {
+    let KeyCode::Char(c) = key.code else {
+        return key;
+    };
+    if key.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
+        key.code = KeyCode::Char(c.to_ascii_uppercase());
+    } else if !key.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_uppercase() {
+        key.modifiers.insert(KeyModifiers::SHIFT);
+    }
+    key
+}
+
 pub fn map_key_to_action(
     key: KeyEvent,
     mode: &AppMode,
@@ -47,6 +67,7 @@ pub fn map_key_to_action(
     if key.kind == KeyEventKind::Release {
         return None;
     }
+    let key = normalize_enhanced_shift(key);
 
     // Ctrl+Q always quits
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
@@ -135,6 +156,11 @@ pub fn map_key_to_action_with_keymap(
     if key.kind == KeyEventKind::Release {
         return None;
     }
+    // Keymap bindings must see the same canonical event shape as legacy
+    // bindings. Otherwise alternate-key terminals clear SHIFT before a
+    // configured Shift+… shortcut is considered, allowing it to go dead or
+    // fall through to a different legacy action.
+    let key = normalize_enhanced_shift(key);
     if let Some(action) = keymap.action_for_key(
         key,
         mode,
@@ -155,25 +181,6 @@ pub fn map_key_to_action_with_keymap(
     );
     legacy.filter(|action| !keymap.replaces_action(action))
 }
-
-/// True when a keystroke matches the CapsLock signature: an uppercase letter
-/// arriving WITHOUT the SHIFT modifier (#106). With the keyboard-enhancement
-/// flags active (`DISAMBIGUATE_ESCAPE_CODES`, see `tui::init`) a genuine
-/// Shift+letter always carries the SHIFT modifier, so it never matches here —
-/// only CapsLock (or a terminal reporting caps state as the bare letter)
-/// produces an uppercase char with no modifier. On legacy terminals that infer
-/// SHIFT from the uppercase byte itself, this simply never fires; that silent
-/// degradation is acceptable, not a case to special-case around.
-pub fn looks_like_capslock(key: &KeyEvent) -> bool {
-    if key.kind == KeyEventKind::Release {
-        return false;
-    }
-    match key.code {
-        KeyCode::Char(c) => c.is_uppercase() && !key.modifiers.contains(KeyModifiers::SHIFT),
-        _ => false,
-    }
-}
-
 /// Whether the current mode/flags route character keys into a free-text
 /// buffer rather than single-key commands — the commit-message editor, Input
 /// mode (branch/tag/search), the graph/files text filters, PR/issue compose,
@@ -1445,58 +1452,6 @@ mod tests {
             map_confirm_mode(r),
             Some(Action::ConfirmDeleteBranchAndRemote)
         );
-    }
-
-    #[test]
-    fn capslock_signature_is_uppercase_letter_without_shift() {
-        let key = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE);
-        assert!(looks_like_capslock(&key));
-    }
-
-    #[test]
-    fn genuine_shift_uppercase_is_not_capslock() {
-        let key = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
-        assert!(!looks_like_capslock(&key));
-    }
-
-    #[test]
-    fn lowercase_is_never_capslock() {
-        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert!(!looks_like_capslock(&key));
-    }
-
-    #[test]
-    fn non_alphabetic_chars_are_never_capslock() {
-        // '?' and ':' arrive shifted on most layouts but aren't letters, so
-        // `is_uppercase()` is false for them regardless of the modifier.
-        let question = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-        let colon = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::SHIFT);
-        assert!(!looks_like_capslock(&question));
-        assert!(!looks_like_capslock(&colon));
-    }
-
-    #[test]
-    fn release_events_are_never_capslock() {
-        let key = KeyEvent::new_with_kind(
-            KeyCode::Char('K'),
-            KeyModifiers::NONE,
-            KeyEventKind::Release,
-        );
-        assert!(!looks_like_capslock(&key));
-    }
-
-    #[test]
-    fn repeat_events_can_be_capslock() {
-        // A held caps-locked key repeats; the hint should still be eligible.
-        let key =
-            KeyEvent::new_with_kind(KeyCode::Char('K'), KeyModifiers::NONE, KeyEventKind::Repeat);
-        assert!(looks_like_capslock(&key));
-    }
-
-    #[test]
-    fn non_char_keys_are_never_capslock() {
-        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert!(!looks_like_capslock(&key));
     }
 
     #[test]

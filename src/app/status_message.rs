@@ -6,11 +6,6 @@ use std::time::{Duration, Instant};
 /// How long a transient status message stays on screen before it clears.
 const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Minimum spacing between CapsLock hint toasts (#106). Without this, holding
-/// a caps-locked key (or just navigating with it on) would spawn a fresh toast
-/// on every keystroke.
-const CAPSLOCK_HINT_COOLDOWN: Duration = Duration::from_secs(30);
-
 /// Pure visibility rule for a status message, so the timeout/stickiness logic is
 /// unit-testable without a clock or a live network op.
 ///
@@ -94,14 +89,19 @@ impl App {
         self.toasts.push(kind, text, std::time::Instant::now());
     }
 
-    /// Nudge the user when a keystroke looks like it was typed with CapsLock on
-    /// (#106) — case-sensitive keybindings otherwise fail silently. No-ops
-    /// while the key was consumed as free text (commit editor, Input mode,
-    /// filters, compose editors, command palette, settings query): uppercase
-    /// is expected there, not a sign of a broken binding. Rate-limited via
-    /// `last_capslock_hint` so a held or repeated key doesn't spam a toast.
+    /// Nudge the user once per reported Caps Lock session (#130). Crossterm's
+    /// keyboard-enhancement protocol attaches this state to compatible key
+    /// events; terminals that omit it leave the state empty and silently take
+    /// this re-arming path. Text-entry contexts deliberately skip the warning.
     pub fn maybe_hint_capslock(&mut self, key: &crossterm::event::KeyEvent) {
-        if !crate::keybindings::looks_like_capslock(key) {
+        if !key
+            .state
+            .contains(crossterm::event::KeyEventState::CAPS_LOCK)
+        {
+            self.capslock_hint_armed = true;
+            return;
+        }
+        if !self.capslock_hint_armed {
             return;
         }
         if crate::keybindings::is_text_editing_context(
@@ -113,16 +113,10 @@ impl App {
         ) {
             return;
         }
-        let now = Instant::now();
-        if let Some(last) = self.last_capslock_hint {
-            if now.duration_since(last) < CAPSLOCK_HINT_COOLDOWN {
-                return;
-            }
-        }
-        self.last_capslock_hint = Some(now);
+        self.capslock_hint_armed = false;
         self.toast(
             crate::toast::ToastKind::Info,
-            "CapsLock appears to be on — keys are case-sensitive",
+            "Caps Lock is on — keys are case-sensitive",
         );
     }
 
@@ -178,7 +172,7 @@ mod tests {
 mod capslock_hint_tests {
     use crate::app::App;
     use crate::git::repository::GitRepository;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn test_app() -> (tempfile::TempDir, App) {
         let tempdir = tempfile::tempdir().unwrap();
@@ -188,15 +182,20 @@ mod capslock_hint_tests {
         (tempdir, app)
     }
 
-    fn capslock_key() -> KeyEvent {
-        KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE)
+    fn key_with_state(state: KeyEventState) -> KeyEvent {
+        KeyEvent::new_with_kind_and_state(
+            KeyCode::Char('k'),
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+            state,
+        )
     }
 
     #[test]
-    fn capslock_signature_key_in_normal_mode_toasts() {
+    fn first_keypress_with_reported_capslock_state_toasts() {
         let (_tmp, mut app) = test_app();
         assert!(app.toasts.is_empty());
-        app.maybe_hint_capslock(&capslock_key());
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
         assert_eq!(app.toasts.visible().len(), 1);
         assert_eq!(app.toasts.visible()[0].kind, crate::toast::ToastKind::Info);
     }
@@ -206,7 +205,7 @@ mod capslock_hint_tests {
         let (_tmp, mut app) = test_app();
         app.focused_panel = crate::app::FocusedPanel::CommitDetail;
         app.editing_commit_message = true;
-        app.maybe_hint_capslock(&capslock_key());
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
         assert!(
             app.toasts.is_empty(),
             "typing uppercase in the commit editor is normal, not a CapsLock signal"
@@ -218,7 +217,7 @@ mod capslock_hint_tests {
         let (_tmp, mut app) = test_app();
         app.focused_panel = crate::app::FocusedPanel::Files;
         app.files_pane.files_filter_active = true;
-        app.maybe_hint_capslock(&capslock_key());
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
         assert!(app.toasts.is_empty());
     }
 
@@ -230,30 +229,37 @@ mod capslock_hint_tests {
             input: String::new(),
             action: crate::app::InputAction::CreateBranch,
         };
-        app.maybe_hint_capslock(&capslock_key());
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
         assert!(app.toasts.is_empty());
     }
 
     #[test]
-    fn second_capslock_key_within_cooldown_does_not_toast_again() {
+    fn further_capslock_keypresses_in_the_same_session_do_not_toast() {
         let (_tmp, mut app) = test_app();
-        app.maybe_hint_capslock(&capslock_key());
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
         assert_eq!(app.toasts.visible().len(), 1);
-        // Immediately repeated (well within the 30s cooldown): must not add
-        // a second toast.
-        app.maybe_hint_capslock(&capslock_key());
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
         assert_eq!(
             app.toasts.visible().len(),
             1,
-            "rate limit must suppress a second hint within the cooldown"
+            "a Caps Lock session must only warn once"
         );
     }
 
     #[test]
-    fn genuine_shift_uppercase_never_toasts() {
+    fn inactive_keypress_rearms_the_next_capslock_session() {
         let (_tmp, mut app) = test_app();
-        let shifted = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
-        app.maybe_hint_capslock(&shifted);
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::empty()));
+        app.maybe_hint_capslock(&key_with_state(KeyEventState::CAPS_LOCK));
+        assert_eq!(app.toasts.visible().len(), 2);
+    }
+
+    #[test]
+    fn keypress_without_reported_capslock_state_is_silent() {
+        let (_tmp, mut app) = test_app();
+        let unreported = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE);
+        app.maybe_hint_capslock(&unreported);
         assert!(app.toasts.is_empty());
     }
 }
