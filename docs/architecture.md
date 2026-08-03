@@ -84,6 +84,14 @@ ranges instead of duplicating geometry in the widget and frame renderer.
 
 **Documented exception:** `ui/*` is otherwise stateless over `&App`, but `draw()` writes render-time layout facts back to `App` (`sync_file_list_cache`, `diff_viewport_*`, commit-detail scroll clamps) because terminal size is only known at render time. This is intentional; new widgets should not add other kinds of mutation.
 
+## Session Launch Layouts (2026-08-03, #164)
+
+`LaunchMode` is selected once by the mutually-exclusive `--bare` and `--scm`
+CLI flags and is stored only on `App`. It is deliberately not a `UiState`
+setting: a reduced launch must not overwrite the user's normal persisted pane
+visibility. The renderer owns the mode-specific split and title suppression so
+each mode produces its entire observable layout from one source of truth.
+
 ## Merge-Conflict Awareness (2026-07-13)
 
 **Decision:** A conflict or recoverable pause is a first-class *outcome*, not an unrecoverable error. History operations return `OpOutcome::{Completed, Conflicts{count}, Paused}` and deliberately leave the repo mid-operation when Git can continue or abort it. Callers (`app/confirm_actions.rs`) route conflicts to guided file resolution and route a non-conflict interactive-rebase pause (for example, a failed hook/`exec`) to retry-Continue / Abort guidance, never a blocking popup.
