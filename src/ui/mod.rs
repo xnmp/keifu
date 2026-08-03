@@ -456,22 +456,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let want_merged_lane_dim =
             app.merged.dim && !app.merged.hide && !app.merged.lane_oids.is_empty();
         let want_filter_ancestry_dim = !app.commit_filter.is_empty();
-        pixel_frame_dim = if trace_active
-            || want_base_mute
-            || want_merged_lane_dim
-            || want_filter_ancestry_dim
-        {
-            let base = &app.pixel_specs_cache.as_ref().unwrap().4;
-            Some(graph_view::dim_pixel_specs_window(
-                app,
-                base,
-                app.active_trace(),
-                win_start,
-                win_end,
-            ))
-        } else {
-            None
-        };
+        pixel_frame_dim =
+            if trace_active || want_base_mute || want_merged_lane_dim || want_filter_ancestry_dim {
+                let base = &app.pixel_specs_cache.as_ref().unwrap().4;
+                Some(graph_view::dim_pixel_specs_window(
+                    app,
+                    base,
+                    app.active_trace(),
+                    win_start,
+                    win_end,
+                ))
+            } else {
+                None
+            };
         let active = {
             // Disjoint field borrows: `specs` from pixel_specs_cache (or the
             // owned dim overlay), `pg` from pixel_graph.

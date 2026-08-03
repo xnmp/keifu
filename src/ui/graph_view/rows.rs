@@ -330,7 +330,6 @@ mod tests {
             timestamp: chrono::Local::now(),
             message: "m".to_string(),
             full_message: "m".to_string(),
-            changed_paths: Vec::new(),
             parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
         };
         let mut n = node_with_cells(cells, false);

@@ -23,7 +23,6 @@ fn make_commit(id: &str, parents: Vec<&str>) -> CommitInfo {
         timestamp: Local::now(),
         message: format!("Commit {}", id),
         full_message: format!("Commit {}", id),
-        changed_paths: Vec::new(),
         parent_oids: parents.into_iter().map(make_oid).collect(),
     }
 }

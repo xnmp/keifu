@@ -166,9 +166,10 @@ pub fn dim_pixel_specs_window(
             app.metadata_columns.mute_base_merges,
             app.merged.base_update.value(),
         ) || (!app.commit_filter.is_empty()
-            && r.node.commit.as_ref().is_none_or(|commit| {
-                !app.commit_filter_matches.contains(&commit.oid)
-            }));
+            && r.node
+                .commit
+                .as_ref()
+                .is_none_or(|commit| !app.commit_filter_matches.contains(&commit.oid)));
     }
     // Merged-lane dim (#108), gated the same way the unicode path is: dim on and
     // hide off. `None` = feature off, so the core skips the merged-lane pass.
@@ -462,7 +463,6 @@ mod tests {
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            changed_paths: Vec::new(),
             parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
         };
         GraphNode {

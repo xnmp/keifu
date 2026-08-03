@@ -232,6 +232,7 @@ impl App {
             commit_filter_active: false,
             visible_commit_indices: Vec::new(),
             commit_filter_matches: std::collections::HashSet::new(),
+            commit_changed_paths: std::collections::HashMap::new(),
             search_state: SearchState::default(),
             working_tree_status,
             op_state,

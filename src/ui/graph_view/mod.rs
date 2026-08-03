@@ -654,7 +654,6 @@ mod tests {
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            changed_paths: Vec::new(),
             parent_oids: vec![oid(0)], // single parent => not a merge
         };
         GraphNode {
@@ -989,7 +988,6 @@ mod tests {
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            changed_paths: Vec::new(),
             parent_oids: vec![git2::Oid::zero(); 2], // 2 parents => a merge
         };
         GraphNode {
@@ -1181,7 +1179,6 @@ mod tests {
             timestamp: Local::now(),
             message: message.to_string(),
             full_message: message.to_string(),
-            changed_paths: Vec::new(),
             parent_oids: vec![git2::Oid::zero()],
         };
         GraphNode {

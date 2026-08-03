@@ -213,7 +213,6 @@ impl GitRepository {
             }
             let commit = self.repo.find_commit(oid)?;
             let mut info = CommitInfo::from_git2_commit(&commit);
-            info.changed_paths = self.changed_paths(&commit)?;
             // Stash commits have 2-3 parents (base + index + untracked).
             // Treat them as single-parent to avoid merge rendering.
             if stash_oids.contains(&oid) {
@@ -228,7 +227,20 @@ impl GitRepository {
     /// All paths touched by a commit, including both sides of a rename. Merge
     /// commits compare against each parent so a path changed on either side is
     /// discoverable by the graph filter.
-    fn changed_paths(&self, commit: &git2::Commit<'_>) -> Result<Vec<String>> {
+    pub fn changed_paths_by_commit(
+        &self,
+        commits: &[CommitInfo],
+    ) -> Result<std::collections::HashMap<Oid, Vec<String>>> {
+        commits
+            .iter()
+            .map(|info| {
+                let commit = self.repo.find_commit(info.oid)?;
+                Ok((info.oid, self.changed_paths_for_commit(&commit)?))
+            })
+            .collect()
+    }
+
+    fn changed_paths_for_commit(&self, commit: &git2::Commit<'_>) -> Result<Vec<String>> {
         let tree = commit.tree()?;
         let parent_count = commit.parent_count().max(1);
         let mut paths = Vec::new();

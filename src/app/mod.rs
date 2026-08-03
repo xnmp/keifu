@@ -1099,6 +1099,10 @@ pub struct App {
     /// OIDs that match the active filter itself, rather than merely being
     /// retained as ancestry needed to draw the filtered graph.
     pub commit_filter_matches: std::collections::HashSet<git2::Oid>,
+    /// Changed paths keyed by commit identity. Kept parallel to `CommitInfo`
+    /// so graph filtering can use path data without changing its stable
+    /// fixture-facing shape.
+    pub commit_changed_paths: std::collections::HashMap<git2::Oid, Vec<String>>,
 
     // Search state
     pub search_state: SearchState,

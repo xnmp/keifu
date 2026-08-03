@@ -16,7 +16,11 @@ struct CommitFilterQuery {
 impl CommitFilterQuery {
     fn parse(input: &str) -> Self {
         let mut query = Self::default();
-        for clause in input.split(';').map(str::trim).filter(|part| !part.is_empty()) {
+        for clause in input
+            .split(';')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
             let Some((field, value)) = clause.split_once('=') else {
                 query.text = clause.to_string();
                 continue;
@@ -32,24 +36,26 @@ impl CommitFilterQuery {
     }
 
     fn is_active(&self) -> bool {
-        !self.text.is_empty() || !self.message.is_empty() || !self.author.is_empty() || !self.file.is_empty()
+        !self.text.is_empty()
+            || !self.message.is_empty()
+            || !self.author.is_empty()
+            || !self.file.is_empty()
     }
 
-    fn matches(&self, commit: &crate::git::CommitInfo) -> bool {
+    fn matches(&self, commit: &crate::git::CommitInfo, changed_paths: &[String]) -> bool {
         let text = self.text.to_lowercase();
         let message = self.message.to_lowercase();
         let author = self.author.to_lowercase();
         (text.is_empty()
             || commit.message.to_lowercase().contains(&text)
-                || commit.author_name.to_lowercase().contains(&text)
-                || commit.author_email.to_lowercase().contains(&text)
-                || commit.short_id.to_lowercase().contains(&text))
+            || commit.author_name.to_lowercase().contains(&text)
+            || commit.author_email.to_lowercase().contains(&text)
+            || commit.short_id.to_lowercase().contains(&text))
             && (message.is_empty() || commit.full_message.to_lowercase().contains(&message))
             && (author.is_empty()
                 || commit.author_name.to_lowercase().contains(&author)
                 || commit.author_email.to_lowercase().contains(&author))
-            && (self.file.is_empty()
-                || commit.changed_paths.iter().any(|path| path.contains(&self.file)))
+            && (self.file.is_empty() || changed_paths.iter().any(|path| path.contains(&self.file)))
     }
 }
 
@@ -543,7 +549,13 @@ impl App {
         if self.commit_filter_matches.is_empty() {
             // Keeps the predicate useful to callers that change the query then
             // explicitly ask for a recomputation before the next graph rebuild.
-            CommitFilterQuery::parse(&self.commit_filter).matches(commit)
+            CommitFilterQuery::parse(&self.commit_filter).matches(
+                commit,
+                self.commit_changed_paths
+                    .get(&commit.oid)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            )
         } else {
             self.commit_filter_matches.contains(&commit.oid)
         }
@@ -561,7 +573,15 @@ impl App {
         self.commit_filter_matches = self
             .commits
             .iter()
-            .filter(|commit| query.matches(commit))
+            .filter(|commit| {
+                query.matches(
+                    commit,
+                    self.commit_changed_paths
+                        .get(&commit.oid)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                )
+            })
             .map(|commit| commit.oid)
             .collect();
         let mut retained = self.commit_filter_matches.clone();
@@ -573,8 +593,11 @@ impl App {
                 retained.insert(head);
             }
         }
-        let by_oid: std::collections::HashMap<_, _> =
-            self.commits.iter().map(|commit| (commit.oid, commit)).collect();
+        let by_oid: std::collections::HashMap<_, _> = self
+            .commits
+            .iter()
+            .map(|commit| (commit.oid, commit))
+            .collect();
         let mut pending: Vec<_> = retained.iter().copied().collect();
         while let Some(oid) = pending.pop() {
             if let Some(commit) = by_oid.get(&oid) {
@@ -593,19 +616,18 @@ impl App {
     }
 
     pub fn recompute_visible_commits(&mut self) {
-        self.visible_commit_indices = if self.commit_filter_matches.is_empty()
-            && !self.commit_filter.is_empty()
-        {
-            self.graph_layout
-                .nodes
-                .iter()
-                .enumerate()
-                .filter(|(_, node)| self.node_passes_commit_filter(node))
-                .map(|(idx, _)| idx)
-                .collect()
-        } else {
-            (0..self.graph_layout.nodes.len()).collect()
-        };
+        self.visible_commit_indices =
+            if self.commit_filter_matches.is_empty() && !self.commit_filter.is_empty() {
+                self.graph_layout
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, node)| self.node_passes_commit_filter(node))
+                    .map(|(idx, _)| idx)
+                    .collect()
+            } else {
+                (0..self.graph_layout.nodes.len()).collect()
+            };
 
         // Ensure selection is within visible range
         if !self.visible_commit_indices.is_empty() {

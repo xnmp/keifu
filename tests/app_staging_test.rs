@@ -56,7 +56,6 @@ fn make_commit(oid: Oid) -> CommitInfo {
         timestamp: Local::now(),
         message: "test".to_string(),
         full_message: "test".to_string(),
-        changed_paths: Vec::new(),
         parent_oids: Vec::new(),
     }
 }

@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 
 use common::{init_repo, Seed};
 use git2::{Oid, Repository, Signature};
-use keifu::{action::Action, git::GitRepository};
+use keifu::action::Action;
 
 fn commit_as(
     repo: &Repository,
@@ -26,43 +26,109 @@ fn commit_as(
     let signature = Signature::now(name, email).unwrap();
     let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
     let parents: Vec<_> = parent.iter().collect();
-    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-        .unwrap()
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+    )
+    .unwrap()
 }
 
 #[test]
 fn scoped_filters_match_observables_and_retain_ancestry_after_refresh() {
     let (_td, repo) = init_repo(Seed::Empty);
     let git = repo.repo();
-    commit_as(git, "src/parser.rs", "base", "Initial parser", "Alice Example", "alice@example.com");
-    commit_as(git, "src/parser.rs", "fixed", "Fix Parser Regression", "Alice Example", "alice@example.com");
-    commit_as(git, "docs/guide.md", "guide", "Fix parser notes", "Bob Example", "bob@example.com");
+    commit_as(
+        git,
+        "src/parser.rs",
+        "base",
+        "Initial parser",
+        "Alice Example",
+        "alice@example.com",
+    );
+    commit_as(
+        git,
+        "src/parser.rs",
+        "fixed",
+        "Fix Parser Regression",
+        "Alice Example",
+        "alice@example.com",
+    );
+    commit_as(
+        git,
+        "docs/guide.md",
+        "guide",
+        "Fix parser notes",
+        "Bob Example",
+        "bob@example.com",
+    );
     let mut app = keifu::app::App::from_repo(repo).unwrap();
 
     app.handle_action(Action::StartCommitFilter).unwrap();
     for c in "message=fix parser; author=ALICE@EXAMPLE.COM; file=src/parser.rs".chars() {
         app.handle_action(Action::CommitFilterChar(c)).unwrap();
     }
-    let messages: Vec<_> = app.visible_commit_indices.iter().filter_map(|&i| app.graph_layout.nodes[i].commit.as_ref()).map(|c| c.message.as_str()).collect();
+    let messages: Vec<_> = app
+        .visible_commit_indices
+        .iter()
+        .filter_map(|&i| app.graph_layout.nodes[i].commit.as_ref())
+        .map(|c| c.message.as_str())
+        .collect();
     assert!(messages.contains(&"Fix Parser Regression"));
     assert!(messages.contains(&"Initial parser"));
     assert!(!messages.contains(&"Fix parser notes"));
-    let selected = app.graph_nav.selected_node(&app.graph_layout).unwrap().commit.as_ref().unwrap().oid;
+    let selected = app
+        .graph_nav
+        .selected_node(&app.graph_layout)
+        .unwrap()
+        .commit
+        .as_ref()
+        .unwrap()
+        .oid;
     app.refresh(true).unwrap();
-    assert_eq!(app.graph_nav.selected_node(&app.graph_layout).unwrap().commit.as_ref().unwrap().oid, selected);
+    assert_eq!(
+        app.graph_nav
+            .selected_node(&app.graph_layout)
+            .unwrap()
+            .commit
+            .as_ref()
+            .unwrap()
+            .oid,
+        selected
+    );
 }
 
 #[test]
 fn path_is_case_sensitive_while_author_name_is_case_insensitive() {
     let (_td, repo) = init_repo(Seed::Empty);
     let git = repo.repo();
-    commit_as(git, "src/Parser.rs", "one", "Refactor code", "Ada Lovelace", "ada@example.com");
+    commit_as(
+        git,
+        "src/Parser.rs",
+        "one",
+        "Refactor code",
+        "Ada Lovelace",
+        "ada@example.com",
+    );
     let mut app = keifu::app::App::from_repo(repo).unwrap();
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "author=LOVELACE; file=src/parser.rs".chars() { app.handle_action(Action::CommitFilterChar(c)).unwrap(); }
+    for c in "author=LOVELACE; file=src/parser.rs".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
     assert!(app.visible_commit_indices.is_empty());
     app.handle_action(Action::Cancel).unwrap();
     app.handle_action(Action::StartCommitFilter).unwrap();
-    for c in "author=LOVELACE; file=Parser.rs".chars() { app.handle_action(Action::CommitFilterChar(c)).unwrap(); }
-    assert_eq!(app.visible_commit_indices.iter().filter(|&&i| app.graph_layout.nodes[i].commit.is_some()).count(), 1);
+    for c in "author=LOVELACE; file=Parser.rs".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+    assert_eq!(
+        app.visible_commit_indices
+            .iter()
+            .filter(|&&i| app.graph_layout.nodes[i].commit.is_some())
+            .count(),
+        1
+    );
 }
