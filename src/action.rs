@@ -37,6 +37,8 @@ pub enum Action {
     Fetch,
     Pull,
     Push,
+    /// Request cancellation of the active fetch, pull, or push operation.
+    CancelNetworkOperation,
     Merge,
     Rebase,
 

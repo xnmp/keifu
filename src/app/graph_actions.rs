@@ -14,6 +14,10 @@ impl App {
         }
         // Panel navigation works from any panel
         match action {
+            Action::CancelNetworkOperation => {
+                self.cancel_network_operation();
+                return Ok(());
+            }
             Action::PanelLeft => {
                 self.editing_commit_message = false;
                 // Cycle only through visible panels (#116).
@@ -92,7 +96,7 @@ impl App {
                 // Esc first clears a pending mark / active comparison; only quit
                 // when there's nothing to dismiss.
                 if !self.clear_compare() {
-                    self.should_quit = true;
+                    self.request_lifecycle_aware_quit();
                 }
             }
             Action::MarkForCompare => {

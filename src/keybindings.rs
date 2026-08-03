@@ -6,6 +6,7 @@ use crossterm::event::{
 
 use crate::action::Action;
 use crate::app::{AppMode, FocusedPanel};
+use crate::network::NETWORK_CANCELLATION_SUPPORTED;
 
 /// Map a raw mouse event to an `Action`, passing coordinates through. All
 /// hit-testing (which panel / row / chip / menu the point lands on) happens in
@@ -118,6 +119,37 @@ pub fn map_key_to_action(
         AppMode::FileHistory { .. } => map_picker_mode(key),
         AppMode::CommandPalette { .. } => map_command_palette_mode(key),
     }
+}
+
+/// Map the contextual cancellation key advertised by the active network job.
+/// This is separate from the ordinary mode map so it cannot override text
+/// editing contexts or acquire a normal-mode binding when no job is running.
+pub fn map_active_network_key(
+    key: KeyEvent,
+    mode: &AppMode,
+    focused_panel: FocusedPanel,
+    editing_commit: bool,
+    files_filter_active: bool,
+    commit_filter_active: bool,
+    network_busy: bool,
+) -> Option<Action> {
+    if !NETWORK_CANCELLATION_SUPPORTED
+        || !network_busy
+        || !matches!(mode, AppMode::Normal)
+        || is_text_editing_context(
+            mode,
+            focused_panel,
+            editing_commit,
+            files_filter_active,
+            commit_filter_active,
+        )
+    {
+        return None;
+    }
+    (key.kind != KeyEventKind::Release
+        && key.modifiers == KeyModifiers::NONE
+        && key.code == KeyCode::Char('x'))
+    .then_some(Action::CancelNetworkOperation)
 }
 
 /// True when a keystroke matches the CapsLock signature: an uppercase letter
@@ -1146,6 +1178,24 @@ fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(unix))]
+    #[test]
+    fn active_network_x_is_not_advertised_as_cancellation_without_group_signaling() {
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(
+            map_active_network_key(
+                key,
+                &AppMode::Normal,
+                FocusedPanel::Graph,
+                false,
+                false,
+                false,
+                true,
+            ),
+            None
+        );
+    }
 
     #[test]
     fn compose_maps_ctrl_e_to_external_edit() {

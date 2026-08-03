@@ -32,7 +32,10 @@ use crate::{
         OperationState, StageStatus, WorkingTreeStatus,
     },
     graph_nav::GraphNav,
-    network::{NetworkManager, PushSpec},
+    network::{
+        CancellationReason, NetworkFailure, NetworkManager, NetworkOperation, NetworkStatus,
+        PushSpec,
+    },
     rebase_plan::{RebaseAction, RebasePlan},
     search::{fuzzy_search_branches, FuzzySearchResult},
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
@@ -1113,6 +1116,10 @@ pub struct App {
 
     // Flags
     pub should_quit: bool,
+    /// A quit request is waiting for the owned network transport or local pull
+    /// integration to finish. `should_quit` stays false until that lifecycle
+    /// reaches its terminal state.
+    pub shutdown_after_network: bool,
     pub pending_refresh: bool,
     pub diff_viewport_height: u16,
     pub diff_viewport_width: u16,
@@ -1126,11 +1133,9 @@ pub struct App {
     // Status message with auto-clear
     pub message: Option<String>,
     pub message_time: Option<std::time::Instant>,
-    /// Whether the current message is a network-progress message ("Pulling…")
-    /// that should stay visible for the whole in-flight op, versus a plain
-    /// transient status message that strictly obeys the 5s timeout. Progress
-    /// messages are cleared on op completion so they can never be resurrected
-    /// by a later, unrelated network op.
+    /// Legacy sticky-message discriminator. Active network progress now renders
+    /// directly from `NetworkStatus`; retaining this keeps the plain-message
+    /// visibility rule and old state fixtures stable.
     pub message_sticky: bool,
 
     // Once-per-episode latches for periodically-retried refresh errors (see
@@ -1506,19 +1511,100 @@ impl App {
         }
     }
 
+    fn repository_mutation_during_pull_integration(&self, action: &Action) -> bool {
+        if !self.network.is_integrating() {
+            return false;
+        }
+        if matches!(
+            action,
+            Action::Checkout
+                | Action::CreateBranch
+                | Action::DeleteBranch
+                | Action::ConfirmDeleteBranchAndRemote
+                | Action::Merge
+                | Action::Rebase
+                | Action::UndoLastOp
+                | Action::RestoreFile
+                | Action::ToggleStage
+                | Action::StageAll
+                | Action::UnstageAll
+                | Action::AddToGitignore
+                | Action::ArchiveFile
+                | Action::TrashFile
+                | Action::UndoLastFileOp
+                | Action::AcceptOurs
+                | Action::AcceptTheirs
+                | Action::ContinueOperation
+                | Action::AbortOperation
+                | Action::CommitChanges
+                | Action::AmendCommit
+                | Action::StashStaged
+                | Action::StageHunk
+                | Action::UnstageHunk
+                | Action::DiscardHunk
+        ) {
+            return true;
+        }
+
+        match (&self.mode, action) {
+            (
+                AppMode::Confirm {
+                    action: confirm_action,
+                    ..
+                },
+                Action::Confirm | Action::ConfirmDeleteBranchAndRemote,
+            ) => matches!(
+                confirm_action,
+                ConfirmAction::Checkout { .. }
+                    | ConfirmAction::Undo
+                    | ConfirmAction::DeleteBranch(_)
+                    | ConfirmAction::DeleteBranchWithRemote { .. }
+                    | ConfirmAction::Merge { .. }
+                    | ConfirmAction::Rebase { .. }
+                    | ConfirmAction::CherryPick(_)
+                    | ConfirmAction::Revert(_)
+                    | ConfirmAction::ResetSoft(_)
+                    | ConfirmAction::ResetMixed(_)
+                    | ConfirmAction::ResetHard(_)
+                    | ConfirmAction::TrashFile(_)
+                    | ConfirmAction::RestoreFile(_)
+                    | ConfirmAction::StashDrop(_)
+                    | ConfirmAction::DeleteTag(_)
+                    | ConfirmAction::AbortOperation(_)
+                    | ConfirmAction::DiscardHunk { .. }
+            ),
+            (
+                AppMode::Input {
+                    action: input_action,
+                    ..
+                },
+                Action::Confirm,
+            ) => matches!(
+                input_action,
+                InputAction::CreateBranch
+                    | InputAction::AddTag
+                    | InputAction::RenameBranch { .. }
+                    | InputAction::BranchFromStash { .. }
+                    | InputAction::StashPush { .. }
+            ),
+            (
+                AppMode::BranchPicker { .. } | AppMode::CommitMenu { .. },
+                Action::Confirm | Action::MenuSelect,
+            ) => true,
+            _ => false,
+        }
+    }
+
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         if matches!(action, Action::ForceQuit) {
-            // The issue worker owns a private clipboard-image copy. Let it
-            // finish so normal cleanup runs and `gh` cannot outlive Keifu to
-            // create an issue after the UI has exited.
-            if self.issue_create_in_flight {
-                self.toast(
-                    crate::toast::ToastKind::Info,
-                    "Issue submission in progress; wait before quitting",
-                );
-                return Ok(());
-            }
-            self.should_quit = true;
+            self.request_lifecycle_aware_quit();
+            return Ok(());
+        }
+        if self.repository_mutation_during_pull_integration(&action) {
+            self.toast(
+                crate::toast::ToastKind::Info,
+                "Pull integration in progress; wait before changing the repository",
+            );
             return Ok(());
         }
         if matches!(action, Action::ToggleLayout) {

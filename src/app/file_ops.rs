@@ -17,7 +17,7 @@ impl App {
 
         match action {
             Action::Quit => {
-                self.should_quit = true;
+                self.request_lifecycle_aware_quit();
             }
             Action::MoveUp => {
                 self.move_file_selection(-1);

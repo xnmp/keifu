@@ -313,12 +313,90 @@ falls through to its usual quit/cancel meaning; info/success toasts never
 intercept Esc.
 
 **Status bar** stays reserved for state a user should be able to glance at any
-time: sticky network progress (`set_progress_message()` marks a message
-sticky; it persists for the whole in-flight op and is explicitly cleared on
-completion — a plain, non-sticky message instead self-expires after 5s and is
-never resurrected by later background activity, fixing an earlier "stale
-message re-flashes when a silent auto-fetch runs" bug), merge-conflict
-guidance, latched periodic errors, and the chips described below.
+time: network progress derived directly from the active `NetworkStatus`,
+merge-conflict guidance, latched periodic errors, and the chips described
+below. Plain messages self-expire after 5s and are never resurrected by later
+background activity, fixing an earlier "stale message re-flashes when a silent
+auto-fetch runs" bug.
+
+### Cancellable network jobs (2026-08-02, #34)
+
+Fetch, pull, and push remain Git CLI subprocesses: libgit2 networking stays
+disabled to avoid reintroducing the `openssl-sys` dependency. `NetworkManager`
+owns the one active job's operation, phase, latest monotonic progress snapshot,
+inactivity deadline, and cancellation token. Git runs with `--progress` and
+bounded HTTP low-speed configuration; parsed byte/object/ref advancement starts
+a fresh 60-second inactivity window. The main loop requests cancellation after
+a quiet window, while the contextual `x` binding requests it immediately.
+
+Running/cancelling/integrating state renders directly from `NetworkStatus` in
+the status bar (`Fetching…`/`Pulling…`/`Pushing…` with `x cancel`, then either
+`Cancelling…` or non-cancellable `Integrating pull…`). It is not mirrored into
+the transient message clock.
+
+On Unix, every network Git command starts in a dedicated process group.
+Cancellation sends SIGINT to the group and allows two seconds for Git's
+lockfile and ref-transaction handlers to unwind, then escalates to SIGTERM for
+two seconds and finally SIGKILL with a one-second reap bound. Group signaling
+includes ordinary `git-remote-*`, SSH, credential, and hook children instead of
+orphaning them when only the direct Git PID exits. Before signaling, the runner
+also snapshots Git's process-group members and their descendant PIDs, pairing
+each PID with its kernel birth identity while Git runs and while its pipes
+drain. Group membership remains observable after the direct Git child exits,
+and the retained PID/birth pair remains an ownership handle after a helper
+calls `setsid` and is reparented. Existence checks and every signal revalidate
+that birth identity; a recycled PID or process-group ID is ignored rather than
+targeting its new owner. Each scan is capped at 200 ms; if the platform command
+cannot complete, cancellation falls back to the already-retained identities
+instead of wedging before the first signal.
+Direct-child reaping uses the same polling deadline and a testable wait seam; if
+SIGKILL cannot make the child observable as exited, an eventual reaper thread
+owns it while the worker returns a terminal error.
+The cancellation path does not synchronously join pipe readers, so an unrelated
+inherited descriptor cannot hold the UI worker busy after owned processes die.
+Normal Git exit also drains stdout/stderr through channels with a one-second
+shared deadline; a detached helper retaining a descriptor therefore produces a
+terminal error instead of wedging the network slot. If cancellation arrives
+during that drain, the still-owned Git process group is terminated and reaped
+before the cancellation outcome releases the slot.
+
+On non-Unix targets, the standard library provides no equivalent safe
+process-group signaling primitive. Those builds do not advertise the `x`
+binding and reject manual/inactivity cancellation instead of force-killing the
+direct Git child; HTTP low-speed bounds still terminate stalled HTTP transport.
+This is an explicit integrity tradeoff, covered by platform-gated tests, until
+a native group/job-object implementation exists.
+
+`git pull` is split at the durable-state boundary. Its fetch/ref transaction is
+cancellable. The worker then requests an integration barrier; the event loop
+sets `NetworkPhase::Integrating` and gates checkout/reset/commit/stage and other
+repository mutations before acknowledging it. The worker revalidates the
+starting symbolic/detached HEAD identity and OID after that acknowledgement,
+then runs local `merge --ff-only`, merge, or rebase to completion even if a
+cancellation arrives. This prevents integrating into a branch changed during
+fetch and prevents escalation from interrupting index/worktree writes or
+creating a half-started merge/rebase. Fetch ref writes remain atomic under
+Git's transaction machinery. If cancellation wins the race before the barrier
+acknowledgement, the manager returns that cancellation reason to the worker so
+the normal cancellation toast is preserved. The job remains busy through
+transfer and local integration; only its terminal result clears the slot and
+emits the outcome toast. Regression tests cover prepared ref cancellation, a
+HEAD change at the barrier, the real worker/manager/App checkout gate, clean
+repository state/no stale locks, bounded child waiting, detached-helper
+ownership, and successful
+subsequent network operations.
+
+Quit is part of the same ownership lifecycle wherever shutdown has a bounded
+completion path. On Unix, normal quit and ForceQuit set a deferred-shutdown
+latch for cancellable or already-cancelling transport work, then wait for the
+owned process tree to be reaped. On every platform, non-cancellable pull
+integration defers exit until its durable repository mutation finishes. The
+event loop polls all completion receivers and promotes the latch to
+`should_quit` only after `NetworkManager` releases the busy slot, so dropping
+`App` cannot orphan an owned Git helper or leave a merge/rebase mutating the
+repository after the UI exits. A running non-Unix transport cannot be ended by
+keifu's integrity-safe cancellation path, so Quit and ForceQuit exit immediately
+instead of creating an unbounded wait.
 
 **Episode latching.** A background poll that fails on every tick (e.g. the
 working tree is mid-churn) must not spam a fresh error every tick — but a

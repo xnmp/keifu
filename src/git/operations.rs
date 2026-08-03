@@ -1,14 +1,922 @@
 //! Git operations (checkout, merge, rebase, branch operations)
 
-use std::io::Write;
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Oid, Repository, Status, StatusOptions};
 
 use super::askpass::{self, Credentials};
 use super::repository::OperationState;
+use crate::network::{
+    CancellationReason, CancellationToken, NetworkFailure, NetworkProgress,
+    PullIntegrationAcknowledgement,
+};
+
+const NETWORK_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const NETWORK_INTERRUPT_GRACE: Duration = Duration::from_secs(2);
+const NETWORK_TERMINATE_GRACE: Duration = Duration::from_secs(2);
+const NETWORK_KILL_REAP_GRACE: Duration = Duration::from_secs(1);
+const NETWORK_DESCENDANT_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(200);
+#[cfg(unix)]
+const NETWORK_DESCENDANT_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const NETWORK_PIPE_DRAIN_GRACE: Duration = Duration::from_secs(1);
+const HTTP_LOW_SPEED_BYTES_PER_SECOND: &str = "1";
+const HTTP_LOW_SPEED_SECONDS: &str = "60";
+
+/// Worker-side control for a cancellable Git network subprocess.
+#[derive(Clone)]
+pub(crate) struct NetworkCommandControl {
+    cancellation: CancellationToken,
+    progress_tx: Sender<NetworkProgress>,
+    integration_tx: Option<Sender<PullIntegrationAcknowledgement>>,
+    progress: Arc<Mutex<NetworkProgress>>,
+}
+
+impl NetworkCommandControl {
+    #[cfg(test)]
+    pub(crate) fn new(
+        cancellation: CancellationToken,
+        progress_tx: Sender<NetworkProgress>,
+    ) -> Self {
+        Self {
+            cancellation,
+            progress_tx,
+            integration_tx: None,
+            progress: Arc::new(Mutex::new(NetworkProgress::default())),
+        }
+    }
+
+    pub(crate) fn with_integration(
+        cancellation: CancellationToken,
+        progress_tx: Sender<NetworkProgress>,
+        integration_tx: Sender<PullIntegrationAcknowledgement>,
+    ) -> Self {
+        Self {
+            cancellation,
+            progress_tx,
+            integration_tx: Some(integration_tx),
+            progress: Arc::new(Mutex::new(NetworkProgress::default())),
+        }
+    }
+
+    fn cancellation_reason(&self) -> Option<CancellationReason> {
+        self.cancellation.reason()
+    }
+
+    fn report_delta(&self, bytes: u64, objects: u64, refs: u64) {
+        if bytes == 0 && objects == 0 && refs == 0 {
+            return;
+        }
+        let snapshot = {
+            let mut progress = self
+                .progress
+                .lock()
+                .expect("network progress mutex poisoned");
+            progress.bytes = progress.bytes.saturating_add(bytes);
+            progress.objects = progress.objects.saturating_add(objects);
+            progress.refs = progress.refs.saturating_add(refs);
+            *progress
+        };
+        let _ = self.progress_tx.send(snapshot);
+    }
+
+    /// Synchronize the worker's durable pull-integration boundary with the App
+    /// event loop. The manager enters `Integrating` before acknowledging, so
+    /// repository-mutating actions are gated before this method returns.
+    pub(crate) fn begin_pull_integration(&self) -> Result<(), NetworkFailure> {
+        let Some(integration_tx) = &self.integration_tx else {
+            return Ok(());
+        };
+        let (acknowledge_tx, acknowledge_rx) = std::sync::mpsc::channel();
+        integration_tx.send(acknowledge_tx).map_err(|_| {
+            NetworkFailure::Failed("Pull integration manager disconnected".to_string())
+        })?;
+        acknowledge_rx
+            .recv()
+            .map_err(|_| {
+                NetworkFailure::Failed("Pull integration was not acknowledged".to_string())
+            })?
+            .map_err(NetworkFailure::Cancelled)
+    }
+}
+
+/// Parses Git's forced progress stream. Counters are accumulated across phases
+/// (counting/receiving/resolving/writing), so snapshots never move backwards.
+#[derive(Default)]
+struct GitProgressParser {
+    pending: Vec<u8>,
+    object_positions: HashMap<String, u64>,
+    byte_positions: HashMap<String, u64>,
+}
+
+impl GitProgressParser {
+    fn feed(&mut self, bytes: &[u8], control: &NetworkCommandControl) {
+        self.pending.extend_from_slice(bytes);
+        while let Some(pos) = self.pending.iter().position(|b| matches!(b, b'\r' | b'\n')) {
+            let line = String::from_utf8_lossy(&self.pending[..pos]).into_owned();
+            self.pending.drain(..=pos);
+            self.observe_line(&line, control);
+        }
+    }
+
+    fn finish(&mut self, control: &NetworkCommandControl) {
+        if !self.pending.is_empty() {
+            let line = String::from_utf8_lossy(&self.pending).into_owned();
+            self.pending.clear();
+            self.observe_line(&line, control);
+        }
+    }
+
+    fn observe_line(&mut self, line: &str, control: &NetworkCommandControl) {
+        let refs = u64::from(
+            line.contains(" -> ") || line.contains("[new branch]") || line.contains("[new tag]"),
+        );
+        // Git may prefix server-side progress with `remote:` and localizes the
+        // human-readable phase name. The stable transport signal is the
+        // `(current/total)` counter, so parse the final colon-delimited segment
+        // without relying on English labels. Keep the final phase segment as
+        // the monotonic-counter key so a new phase starting at zero does not
+        // erase progress accumulated by an earlier one.
+        let (phase, rest) = line
+            .rsplit_once(':')
+            .map(|(phase, rest)| (phase.rsplit(':').next().unwrap_or(phase).trim(), rest))
+            .unwrap_or(("transport", line));
+
+        let objects = parse_progress_position(rest)
+            .map(|position| advancing_delta(&mut self.object_positions, phase, position))
+            .unwrap_or(0);
+        let transferred = parse_progress_bytes(rest)
+            .map(|position| advancing_delta(&mut self.byte_positions, phase, position))
+            .unwrap_or(0);
+        control.report_delta(transferred, objects, refs);
+    }
+}
+
+fn advancing_delta(positions: &mut HashMap<String, u64>, phase: &str, next: u64) -> u64 {
+    let previous = positions.insert(phase.to_string(), next).unwrap_or(0);
+    next.saturating_sub(previous)
+}
+
+fn parse_progress_position(text: &str) -> Option<u64> {
+    let open = text.find('(')?;
+    let slash = text[open + 1..].find('/')? + open + 1;
+    text[open + 1..slash].trim().parse().ok()
+}
+
+fn parse_progress_bytes(text: &str) -> Option<u64> {
+    let after_count = text.rsplit_once(')')?.1.trim_start_matches(',').trim();
+    let mut parts = after_count.split_whitespace();
+    let value: f64 = parts.next()?.parse().ok()?;
+    let multiplier = match parts.next()? {
+        "bytes" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((value * multiplier) as u64)
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group: i32, signal: i32) -> std::io::Result<()> {
+    // SAFETY: `process_group` is the positive PID returned by the Child API,
+    // negated only for POSIX process-group signaling. No pointers are involved.
+    let result = unsafe { libc::kill(-process_group, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+/// Kernel-assigned process birth identity paired with a PID. A PID can be
+/// reused, but these values cannot match across two births of that PID.
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProcessBirth {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    ProcStartTicks(u64),
+    #[cfg(target_vendor = "apple")]
+    AppleStartTime { seconds: u64, microseconds: u64 },
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    PsStartTime(String),
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn current_process_birth(process: i32) -> std::io::Result<Option<ProcessBirth>> {
+    let stat = match std::fs::read_to_string(format!("/proc/{process}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // The parenthesized comm field may itself contain spaces or parentheses;
+    // fields after its final ')' begin with state (field 3). Start time is 22.
+    let after_comm = stat.rsplit_once(')').map(|(_, rest)| rest).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid /proc stat")
+    })?;
+    let start_ticks = after_comm
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing process start time",
+            )
+        })?
+        .parse()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    Ok(Some(ProcessBirth::ProcStartTicks(start_ticks)))
+}
+
+#[cfg(target_vendor = "apple")]
+fn current_process_birth(process: i32) -> std::io::Result<Option<ProcessBirth>> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: proc_pidinfo writes at most the supplied proc_bsdinfo buffer.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            process,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
+        )
+    };
+    if read == 0 {
+        // SAFETY: signal 0 only distinguishes a vanished PID from an
+        // identity-query failure; it does not deliver a signal.
+        let exists = unsafe { libc::kill(process, 0) };
+        if exists != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Ok(None);
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "process birth identity is not inspectable",
+        ));
+    }
+    if read as usize != std::mem::size_of::<libc::proc_bsdinfo>() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "incomplete process identity",
+        ));
+    }
+    // SAFETY: proc_pidinfo reported a complete initialized structure.
+    let info = unsafe { info.assume_init() };
+    Ok(Some(ProcessBirth::AppleStartTime {
+        seconds: info.pbi_start_tvsec,
+        microseconds: info.pbi_start_tvusec,
+    }))
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
+))]
+fn current_process_birth(process: i32) -> std::io::Result<Option<ProcessBirth>> {
+    let output = Command::new("ps")
+        .args(["-p", &process.to_string(), "-o", "lstart="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let start = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!start.is_empty()).then_some(ProcessBirth::PsStartTime(start)))
+}
+
+#[cfg(unix)]
+type OwnedProcesses = HashMap<i32, ProcessBirth>;
+
+#[cfg(unix)]
+trait ProcessControl {
+    fn birth(&self, process: i32) -> std::io::Result<Option<ProcessBirth>>;
+    fn group(&self, process: i32) -> std::io::Result<Option<i32>>;
+    fn signal_process(&self, process: i32, signal: i32) -> std::io::Result<()>;
+    fn signal_group(&self, process_group: i32, signal: i32) -> std::io::Result<()>;
+}
+
+#[cfg(unix)]
+struct SystemProcessControl;
+
+#[cfg(unix)]
+impl ProcessControl for SystemProcessControl {
+    fn birth(&self, process: i32) -> std::io::Result<Option<ProcessBirth>> {
+        current_process_birth(process)
+    }
+
+    fn group(&self, process: i32) -> std::io::Result<Option<i32>> {
+        // SAFETY: getpgid reads kernel process metadata only.
+        let group = unsafe { libc::getpgid(process) };
+        if group >= 0 {
+            return Ok(Some(group));
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(None),
+            _ => Err(error),
+        }
+    }
+
+    fn signal_process(&self, process: i32, signal: i32) -> std::io::Result<()> {
+        // SAFETY: the caller revalidated the process birth immediately before
+        // signaling; no pointers are involved.
+        let result = unsafe { libc::kill(process, signal) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    fn signal_group(&self, process_group: i32, signal: i32) -> std::io::Result<()> {
+        signal_process_group(process_group, signal)
+    }
+}
+
+#[cfg(unix)]
+trait ProcessTableSnapshot: Send + 'static {
+    fn try_snapshot(&mut self) -> std::io::Result<Option<Vec<u8>>>;
+    fn terminate(self);
+}
+
+#[cfg(unix)]
+struct PsProcessTableSnapshot {
+    process_list: Child,
+    output_rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    exited: bool,
+}
+
+#[cfg(unix)]
+impl ProcessTableSnapshot for PsProcessTableSnapshot {
+    fn try_snapshot(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        if !self.exited {
+            match self.process_list.try_wait()? {
+                Some(_) => self.exited = true,
+                None => return Ok(None),
+            }
+        }
+        match self.output_rx.try_recv() {
+            Ok(result) => result.map(Some),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "process-table reader disconnected",
+            )),
+        }
+    }
+
+    fn terminate(mut self) {
+        let _ = self.process_list.kill();
+        thread::spawn(move || {
+            let _ = self.process_list.wait();
+        });
+    }
+}
+
+#[cfg(unix)]
+fn start_process_table_snapshot() -> std::io::Result<PsProcessTableSnapshot> {
+    let mut process_list = Command::new("ps")
+        .args(["-e", "-o", "pid=,ppid=,pgid="])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let Some(mut stdout) = process_list.stdout.take() else {
+        let _ = process_list.kill();
+        thread::spawn(move || {
+            let _ = process_list.wait();
+        });
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "ps stdout was not captured",
+        ));
+    };
+    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout.read_to_end(&mut output).map(|_| output);
+        let _ = output_tx.send(result);
+    });
+    Ok(PsProcessTableSnapshot {
+        process_list,
+        output_rx,
+        exited: false,
+    })
+}
+
+#[cfg(all(unix, test))]
+fn descendant_processes_from_snapshot<S: ProcessTableSnapshot>(
+    root: i32,
+    snapshot: S,
+    timeout: Duration,
+) -> OwnedProcesses {
+    let Some(group_birth) = current_process_birth(root).ok().flatten() else {
+        return OwnedProcesses::default();
+    };
+    let owned = HashMap::from([(root, group_birth.clone())]);
+    owned_processes_from_snapshot(root, &group_birth, owned, snapshot, timeout)
+}
+
+#[cfg(unix)]
+fn owned_processes_from_snapshot<S: ProcessTableSnapshot>(
+    process_group: i32,
+    process_group_birth: &ProcessBirth,
+    owned: OwnedProcesses,
+    mut snapshot: S,
+    timeout: Duration,
+) -> OwnedProcesses {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match snapshot.try_snapshot() {
+            Ok(Some(output)) => {
+                return parse_owned_processes(
+                    process_group,
+                    process_group_birth,
+                    owned,
+                    &output,
+                    &SystemProcessControl,
+                )
+            }
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+            }
+            Ok(None) | Err(_) => {
+                snapshot.terminate();
+                return owned;
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn parse_owned_processes<C: ProcessControl>(
+    process_group: i32,
+    process_group_birth: &ProcessBirth,
+    mut owned: OwnedProcesses,
+    output: &[u8],
+    control: &C,
+) -> OwnedProcesses {
+    let processes: Vec<(i32, i32, i32)> = String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((
+                fields.next()?.parse().ok()?,
+                fields.next()?.parse().ok()?,
+                fields.next()?.parse().ok()?,
+            ))
+        })
+        .collect();
+    // Discard stale PID slots before using them as ancestry roots. A reused PID
+    // must never cause its replacement (or replacement's children) to become
+    // part of this network operation.
+    owned.retain(|process, birth| control.birth(*process).ok().flatten().as_ref() == Some(birth));
+    let group_has_member = processes
+        .iter()
+        .any(|(_, _, group)| *group == process_group);
+    // POSIX does not reuse a PGID while that group has members. After Git (the
+    // group leader) exits, an absent leader therefore still identifies the
+    // original group. If the PID slot has been reused, its changed birth
+    // identity rejects the group before any member is adopted.
+    let group_is_owned = group_has_member
+        && match control.birth(process_group) {
+            Ok(Some(current)) => current == *process_group_birth,
+            Ok(None) => true,
+            Err(_) => false,
+        };
+    let mut candidates: HashSet<i32> = owned.keys().copied().collect();
+    // Group membership survives direct-child exit and reparenting. Seed the
+    // retained set from Git's dedicated process group before expanding by
+    // ancestry, but only while a birth-validated member anchors that group.
+    if group_is_owned {
+        candidates.extend(
+            processes
+                .iter()
+                .filter_map(|(pid, _, group)| (*group == process_group).then_some(*pid)),
+        );
+    }
+    loop {
+        let before = candidates.len();
+        for (pid, parent, _) in &processes {
+            if candidates.contains(parent) {
+                candidates.insert(*pid);
+            }
+        }
+        if candidates.len() == before {
+            break;
+        }
+    }
+    for process in candidates {
+        if owned.contains_key(&process) {
+            continue;
+        }
+        if let Ok(Some(birth)) = control.birth(process) {
+            owned.insert(process, birth);
+        }
+    }
+    owned
+}
+
+#[cfg(unix)]
+struct NetworkProcessTracker {
+    process_group: i32,
+    process_group_birth: ProcessBirth,
+    owned_processes: OwnedProcesses,
+    next_refresh: Instant,
+}
+
+#[cfg(unix)]
+impl NetworkProcessTracker {
+    fn new(child: &Child) -> Result<Self, NetworkFailure> {
+        let root = i32::try_from(child.id())
+            .map_err(|_| NetworkFailure::Failed("Invalid git process identifier".to_string()))?;
+        let birth = current_process_birth(root)
+            .map_err(|error| {
+                NetworkFailure::Failed(format!("Failed to identify git process: {error}"))
+            })?
+            .ok_or_else(|| {
+                NetworkFailure::Failed(
+                    "Git process exited before ownership was recorded".to_string(),
+                )
+            })?;
+        Ok(Self {
+            process_group: root,
+            process_group_birth: birth.clone(),
+            owned_processes: HashMap::from([(root, birth)]),
+            next_refresh: Instant::now(),
+        })
+    }
+
+    fn refresh_if_due(&mut self) {
+        if Instant::now() < self.next_refresh {
+            return;
+        }
+        self.refresh();
+        self.next_refresh = Instant::now() + NETWORK_DESCENDANT_REFRESH_INTERVAL;
+    }
+
+    fn refresh(&mut self) {
+        let Ok(snapshot) = start_process_table_snapshot() else {
+            return;
+        };
+        self.owned_processes = owned_processes_from_snapshot(
+            self.process_group,
+            &self.process_group_birth,
+            std::mem::take(&mut self.owned_processes),
+            snapshot,
+            NETWORK_DESCENDANT_DISCOVERY_TIMEOUT,
+        );
+    }
+
+    fn terminate(mut self, child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+        // Expand from every process observed while Git was alive. A helper may
+        // have detached and been reparented after the direct child exited, so
+        // its PID plus kernel birth identity—not Git's now-dead PID—is the
+        // durable ownership handle.
+        self.refresh();
+        terminate_network_process_with_owned(child, subcommand, self.owned_processes)
+    }
+}
+
+#[cfg(not(unix))]
+struct NetworkProcessTracker;
+
+#[cfg(not(unix))]
+impl NetworkProcessTracker {
+    fn new(_child: &Child) -> Result<Self, NetworkFailure> {
+        Ok(Self)
+    }
+
+    fn refresh_if_due(&mut self) {}
+
+    fn terminate(self, child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+        terminate_network_process(child, subcommand)
+    }
+}
+
+#[cfg(unix)]
+trait DirectChildReaper: Send + 'static {
+    fn try_reap(&mut self) -> std::io::Result<bool>;
+    fn reap_blocking(&mut self);
+}
+
+#[cfg(unix)]
+impl DirectChildReaper for Child {
+    fn try_reap(&mut self) -> std::io::Result<bool> {
+        self.try_wait().map(|status| status.is_some())
+    }
+
+    fn reap_blocking(&mut self) {
+        let _ = self.wait();
+    }
+}
+
+/// Reap until `deadline`, then transfer ownership to an eventual reaper. This
+/// keeps cancellation terminal even if the platform's child wait wedges after
+/// the final signal.
+#[cfg(unix)]
+fn reap_direct_child_until<R: DirectChildReaper>(
+    mut child: R,
+    deadline: Instant,
+    subcommand: &str,
+) -> Result<bool, NetworkFailure> {
+    loop {
+        match child.try_reap() {
+            Ok(true) => return Ok(true),
+            Ok(false) if Instant::now() < deadline => {
+                thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+            }
+            Ok(false) => {
+                thread::spawn(move || child.reap_blocking());
+                return Ok(false);
+            }
+            Err(error) => {
+                return Err(NetworkFailure::Failed(format!(
+                    "Failed to wait for git {subcommand}: {error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_owned_processes(
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    deadline: Instant,
+    subcommand: &str,
+) -> Result<bool, NetworkFailure> {
+    loop {
+        let group_exists =
+            owned_group_exists_with(process_group, owned_processes, &SystemProcessControl)
+                .map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} process group: {error}"
+                    ))
+                })?;
+        let owned_exists =
+            owned_processes_exist_with(owned_processes, Some(process_group), &SystemProcessControl)
+                .map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} helper: {error}"
+                    ))
+                })?;
+        if !group_exists && !owned_exists {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    }
+}
+
+#[cfg(unix)]
+fn identity_matches<C: ProcessControl>(
+    process: i32,
+    expected: &ProcessBirth,
+    control: &C,
+) -> std::io::Result<bool> {
+    control
+        .birth(process)
+        .map(|current| current.as_ref() == Some(expected))
+}
+
+#[cfg(unix)]
+fn owned_group_exists_with<C: ProcessControl>(
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    control: &C,
+) -> std::io::Result<bool> {
+    for (process, birth) in owned_processes {
+        if identity_matches(*process, birth, control)?
+            && control.group(*process)? == Some(process_group)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn owned_processes_exist_with<C: ProcessControl>(
+    owned_processes: &OwnedProcesses,
+    excluded: Option<i32>,
+    control: &C,
+) -> std::io::Result<bool> {
+    for (process, birth) in owned_processes {
+        if Some(*process) != excluded && identity_matches(*process, birth, control)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn signal_network_processes(
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    signal: i32,
+) -> std::io::Result<()> {
+    signal_network_processes_with(
+        process_group,
+        owned_processes,
+        signal,
+        &SystemProcessControl,
+    )
+}
+
+#[cfg(unix)]
+fn signal_network_processes_with<C: ProcessControl>(
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    signal: i32,
+    control: &C,
+) -> std::io::Result<()> {
+    // Never signal a raw process-group ID after its original members vanish;
+    // PGIDs are PID slots and can be reused too.
+    if owned_group_exists_with(process_group, owned_processes, control)? {
+        control.signal_group(process_group, signal)?;
+    }
+    for (process, birth) in owned_processes {
+        if identity_matches(*process, birth, control)? {
+            control.signal_process(*process, signal)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn wait_for_network_process_group(
+    child: &mut Child,
+    process_group: i32,
+    owned_processes: &OwnedProcesses,
+    direct_child_reaped: &mut bool,
+    grace: Duration,
+    subcommand: &str,
+) -> Result<bool, NetworkFailure> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if !*direct_child_reaped {
+            match child.try_wait() {
+                Ok(Some(_)) => *direct_child_reaped = true,
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(NetworkFailure::Failed(format!(
+                        "Failed to wait for git {subcommand}: {error}"
+                    )))
+                }
+            }
+        }
+        let group_exists =
+            owned_group_exists_with(process_group, owned_processes, &SystemProcessControl)
+                .map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} process group: {error}"
+                    ))
+                })?;
+        let excluded = (*direct_child_reaped).then_some(process_group);
+        let owned_exists =
+            owned_processes_exist_with(owned_processes, excluded, &SystemProcessControl).map_err(
+                |error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to inspect git {subcommand} helper: {error}"
+                    ))
+                },
+            )?;
+        if *direct_child_reaped && !group_exists && !owned_exists {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    }
+}
+
+/// Stop the complete Git transport process group without jumping directly to
+/// SIGKILL. Git receives SIGINT first so its lockfile/ref transaction handlers
+/// can abort cleanly; SIGTERM and SIGKILL are bounded fallbacks for wedged or
+/// signal-ignoring helpers. Pull integration is deliberately outside this
+/// runner, so escalation cannot interrupt index/worktree mutation.
+#[cfg(all(unix, test))]
+fn terminate_network_process(child: Child, subcommand: &str) -> Result<(), NetworkFailure> {
+    terminate_network_process_with_snapshot(
+        child,
+        subcommand,
+        start_process_table_snapshot().ok(),
+        NETWORK_DESCENDANT_DISCOVERY_TIMEOUT,
+    )
+}
+
+#[cfg(all(unix, test))]
+fn terminate_network_process_with_snapshot<S: ProcessTableSnapshot>(
+    child: Child,
+    subcommand: &str,
+    snapshot: Option<S>,
+    discovery_timeout: Duration,
+) -> Result<(), NetworkFailure> {
+    let process_group = i32::try_from(child.id()).map_err(|_| {
+        NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
+    })?;
+    // Snapshot the full descendant tree before signaling. This retains explicit
+    // ownership of helpers that called setsid()/setpgid() and escaped Git's
+    // process group while remaining descendants of the launched command.
+    let owned_processes = snapshot
+        .map(|snapshot| {
+            descendant_processes_from_snapshot(process_group, snapshot, discovery_timeout)
+        })
+        .unwrap_or_else(|| {
+            current_process_birth(process_group)
+                .ok()
+                .flatten()
+                .map(|birth| HashMap::from([(process_group, birth)]))
+                .unwrap_or_default()
+        });
+    terminate_network_process_with_owned(child, subcommand, owned_processes)
+}
+
+#[cfg(unix)]
+fn terminate_network_process_with_owned(
+    mut child: Child,
+    subcommand: &str,
+    owned_processes: OwnedProcesses,
+) -> Result<(), NetworkFailure> {
+    let process_group = i32::try_from(child.id()).map_err(|_| {
+        NetworkFailure::Failed(format!("Invalid git {subcommand} process identifier"))
+    })?;
+    let mut direct_child_reaped = false;
+
+    signal_network_processes(process_group, &owned_processes, libc::SIGINT).map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to interrupt git {subcommand}: {error}"))
+    })?;
+    if wait_for_network_process_group(
+        &mut child,
+        process_group,
+        &owned_processes,
+        &mut direct_child_reaped,
+        NETWORK_INTERRUPT_GRACE,
+        subcommand,
+    )? {
+        return Ok(());
+    }
+
+    signal_network_processes(process_group, &owned_processes, libc::SIGTERM).map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to terminate git {subcommand}: {error}"))
+    })?;
+    if wait_for_network_process_group(
+        &mut child,
+        process_group,
+        &owned_processes,
+        &mut direct_child_reaped,
+        NETWORK_TERMINATE_GRACE,
+        subcommand,
+    )? {
+        return Ok(());
+    }
+
+    signal_network_processes(process_group, &owned_processes, libc::SIGKILL).map_err(|error| {
+        NetworkFailure::Failed(format!("Failed to kill git {subcommand}: {error}"))
+    })?;
+    let final_deadline = Instant::now() + NETWORK_KILL_REAP_GRACE;
+    if !reap_direct_child_until(child, final_deadline, subcommand)? {
+        return Err(NetworkFailure::Failed(format!(
+            "git {subcommand} direct child did not exit within the cancellation deadline"
+        )));
+    }
+    if !wait_for_owned_processes(process_group, &owned_processes, final_deadline, subcommand)? {
+        return Err(NetworkFailure::Failed(format!(
+            "git {subcommand} process tree did not exit within the cancellation deadline"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_network_process(mut child: Child, _subcommand: &str) -> Result<(), NetworkFailure> {
+    // Cancellation tokens are rejected on these platforms because std does
+    // not expose a portable soft-signal/process-group API. This function is
+    // therefore only the cleanup path for an unexpected `try_wait` error: wait
+    // naturally rather than risking repository state with a direct force-kill.
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
 
 /// Attach the askpass shim + credential env vars to `cmd` when `creds` is set,
 /// so a retried HTTPS git op authenticates without a terminal prompt. A no-op
@@ -74,6 +982,220 @@ fn run_git_creds(
         );
     }
     Ok(output)
+}
+
+/// Run a Git network command with forced progress, bounded HTTP low-speed
+/// handling, and cooperative cancellation. Pipe readers run independently so
+/// a verbose Git child can never deadlock on a full stdout/stderr buffer.
+fn run_network_git_output(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<std::process::Output, NetworkFailure> {
+    run_network_git_output_with_drain_notice(repo_path, args, creds, control, None)
+}
+
+fn run_network_git_output_with_drain_notice(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+    drain_started: Option<&Sender<()>>,
+) -> Result<std::process::Output, NetworkFailure> {
+    let subcommand = args.first().copied().unwrap_or("");
+    let mut cmd = Command::new("git");
+    cmd.args([
+        "-c",
+        &format!("http.lowSpeedLimit={HTTP_LOW_SPEED_BYTES_PER_SECOND}"),
+        "-c",
+        &format!("http.lowSpeedTime={HTTP_LOW_SPEED_SECONDS}"),
+    ])
+    .args(args)
+    .current_dir(repo_path)
+    .env("GIT_TERMINAL_PROMPT", "0")
+    .env("GIT_EDITOR", "true")
+    .env("GIT_SEQUENCE_EDITOR", "true")
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // A dedicated process group lets cancellation reach Git transport
+        // helpers as well as the direct `git` child, without touching keifu's
+        // own process group.
+        cmd.process_group(0);
+    }
+    apply_credentials(&mut cmd, creds).map_err(|e| NetworkFailure::Failed(e.to_string()))?;
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| NetworkFailure::Failed(format!("Failed to execute git {subcommand}: {e}")))?;
+    let mut process_tracker = NetworkProcessTracker::new(&child)?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| NetworkFailure::Failed("Failed to capture git stdout".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| NetworkFailure::Failed("Failed to capture git stderr".to_string()))?;
+
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout.read_to_end(&mut output).map(|_| output);
+        let _ = stdout_tx.send(result);
+    });
+    let progress_control = control.clone();
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut parser = GitProgressParser::default();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            match stderr.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    output.extend_from_slice(&chunk[..read]);
+                    parser.feed(&chunk[..read], &progress_control);
+                }
+                Err(error) => {
+                    let _ = stderr_tx.send(Err(error));
+                    return;
+                }
+            }
+        }
+        parser.finish(&progress_control);
+        let _ = stderr_tx.send(Ok(output));
+    });
+
+    let status = loop {
+        process_tracker.refresh_if_due();
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = process_tracker.terminate(child, subcommand);
+                return Err(NetworkFailure::Failed(format!(
+                    "Failed to wait for git {subcommand}: {error}"
+                )));
+            }
+        }
+        if let Some(reason) = control.cancellation_reason() {
+            process_tracker.terminate(child, subcommand)?;
+            // Helpers spawned by Git (git-remote-https, ssh, credential
+            // helpers) can move into another process group. The termination
+            // helper snapshots and signals those owned descendants explicitly.
+            // Readers remain detached here so an unrelated inherited
+            // descriptor can never hold the UI busy after owned processes die.
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    };
+
+    if let Some(drain_started) = drain_started {
+        let _ = drain_started.send(());
+    }
+    let drain_deadline = Instant::now() + NETWORK_PIPE_DRAIN_GRACE;
+    let stdout = match collect_network_pipe(
+        &stdout_rx,
+        drain_deadline,
+        control,
+        &mut process_tracker,
+        subcommand,
+        "stdout",
+    ) {
+        Ok(output) => output,
+        Err(NetworkFailure::Cancelled(reason)) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        Err(error) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(error);
+        }
+    };
+    let stderr = match collect_network_pipe(
+        &stderr_rx,
+        drain_deadline,
+        control,
+        &mut process_tracker,
+        subcommand,
+        "stderr",
+    ) {
+        Ok(output) => output,
+        Err(NetworkFailure::Cancelled(reason)) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        Err(error) => {
+            process_tracker.terminate(child, subcommand)?;
+            return Err(error);
+        }
+    };
+
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn collect_network_pipe(
+    receiver: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    deadline: Instant,
+    control: &NetworkCommandControl,
+    process_tracker: &mut NetworkProcessTracker,
+    subcommand: &str,
+    stream: &str,
+) -> Result<Vec<u8>, NetworkFailure> {
+    loop {
+        process_tracker.refresh_if_due();
+        match receiver.try_recv() {
+            Ok(result) => {
+                return result.map_err(|error| {
+                    NetworkFailure::Failed(format!(
+                        "Failed to read git {subcommand} {stream}: {error}"
+                    ))
+                })
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(NetworkFailure::Failed(format!(
+                    "git {subcommand} {stream} reader exited unexpectedly"
+                )))
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if let Some(reason) = control.cancellation_reason() {
+            return Err(NetworkFailure::Cancelled(reason));
+        }
+        if Instant::now() >= deadline {
+            return Err(NetworkFailure::Failed(format!(
+                "git {subcommand} {stream} pipe did not close within the drain deadline"
+            )));
+        }
+        thread::sleep(NETWORK_CHILD_POLL_INTERVAL);
+    }
+}
+
+fn run_network_git_checked(
+    repo_path: &str,
+    args: &[&str],
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    let output = run_network_git_output(repo_path, args, creds, control)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(NetworkFailure::Failed(format!(
+        "git {} failed: {}",
+        args.first().unwrap_or(&""),
+        stderr.trim()
+    )))
 }
 
 /// Count unmerged (conflicted) paths in the repo at `repo_path`.
@@ -638,6 +1760,20 @@ pub fn fetch_remote(repo_path: &str, remote: &str, creds: Option<&Credentials>) 
     Ok(())
 }
 
+pub(crate) fn fetch_remote_controlled(
+    repo_path: &str,
+    remote: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["fetch", "--progress", "--prune", remote],
+        creds,
+        control,
+    )
+}
+
 /// Fetch from the `origin` remote (thin wrapper over [`fetch_remote`]).
 pub fn fetch_origin(repo_path: &str) -> Result<()> {
     fetch_remote(repo_path, "origin", None)
@@ -685,6 +1821,34 @@ pub fn fetch_all(repo_path: &str, creds: Option<&Credentials>) -> Result<()> {
     }
 }
 
+pub(crate) fn fetch_all_controlled(
+    repo_path: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    let remotes = list_remotes(repo_path).map_err(|e| NetworkFailure::Failed(e.to_string()))?;
+    let mut failures = Vec::new();
+    for remote in remotes {
+        match fetch_remote_controlled(repo_path, &remote, creds, control) {
+            Ok(()) => {}
+            Err(NetworkFailure::Failed(error)) => {
+                failures.push(format!("{remote}: {}", error.trim()));
+            }
+            Err(NetworkFailure::Cancelled(reason)) => {
+                return Err(NetworkFailure::Cancelled(reason));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(NetworkFailure::Failed(format!(
+            "fetch failed for {}",
+            failures.join("; for ")
+        )))
+    }
+}
+
 /// How a pull reconciles divergent branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PullMode {
@@ -704,6 +1868,29 @@ impl PullMode {
             PullMode::Rebase => "--rebase",
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PullHeadSnapshot {
+    reference: Option<String>,
+    target: Option<Oid>,
+    detached: bool,
+}
+
+fn pull_head_snapshot(repo_path: &str) -> Result<PullHeadSnapshot, NetworkFailure> {
+    let repo = Repository::open(repo_path)
+        .map_err(|error| NetworkFailure::Failed(format!("Failed to inspect pull HEAD: {error}")))?;
+    let detached = repo
+        .head_detached()
+        .map_err(|error| NetworkFailure::Failed(format!("Failed to inspect pull HEAD: {error}")))?;
+    let head = repo.head().ok();
+    Ok(PullHeadSnapshot {
+        reference: head
+            .as_ref()
+            .and_then(|reference| reference.name().map(str::to_string)),
+        target: head.as_ref().and_then(|reference| reference.target()),
+        detached,
+    })
 }
 
 /// Fetch and integrate from a remote (`git pull`) with an explicit `mode`.
@@ -735,6 +1922,55 @@ pub fn pull(
         }
     }
     run_git_allow_conflict_creds(repo_path, &args, creds)
+}
+
+pub(crate) fn pull_controlled(
+    repo_path: &str,
+    remote: Option<&str>,
+    branch: Option<&str>,
+    mode: PullMode,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<OpOutcome, NetworkFailure> {
+    let starting_head = pull_head_snapshot(repo_path)?;
+    // Keep the cancellable boundary around network transfer only. `git pull`
+    // combines fetch with durable index/worktree integration; interrupting that
+    // combined command can leave a half-started merge/rebase or stale locks.
+    // Fetch updates refs transactionally, then the local integration command is
+    // allowed to finish once started even if cancellation arrives meanwhile.
+    let mut fetch_args = vec!["fetch", "--progress"];
+    if let Some(remote) = remote {
+        fetch_args.push(remote);
+        if let Some(branch) = branch {
+            fetch_args.push(branch);
+        }
+    }
+    let output = run_network_git_output(repo_path, &fetch_args, creds, control)?;
+    if !output.status.success() {
+        return Err(NetworkFailure::Failed(format!(
+            "git pull failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    if let Some(reason) = control.cancellation_reason() {
+        return Err(NetworkFailure::Cancelled(reason));
+    }
+    control.begin_pull_integration()?;
+    let current_head = pull_head_snapshot(repo_path)?;
+    if current_head != starting_head {
+        return Err(NetworkFailure::Failed(
+            "Pull stopped because HEAD changed while fetching; retry on the intended branch"
+                .to_string(),
+        ));
+    }
+
+    let integration_args: &[&str] = match mode {
+        PullMode::FfOnly => &["merge", "--ff-only", "FETCH_HEAD"],
+        PullMode::Merge => &["merge", "--no-edit", "FETCH_HEAD"],
+        PullMode::Rebase => &["rebase", "FETCH_HEAD"],
+    };
+    run_git_allow_conflict_creds(repo_path, integration_args, None)
+        .map_err(|error| NetworkFailure::Failed(format!("git pull failed: {error}")))
 }
 
 /// Whether a `git pull --ff-only` failure is due to divergent branches (offer
@@ -971,6 +2207,14 @@ pub fn push_current(repo_path: &str, creds: Option<&Credentials>) -> Result<()> 
     Ok(())
 }
 
+pub(crate) fn push_current_controlled(
+    repo_path: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(repo_path, &["push", "--progress"], creds, control)
+}
+
 /// Publish `branch` to `remote`, setting it as the branch's upstream
 /// (`git push -u <remote> <branch>`).
 pub fn push_set_upstream(
@@ -983,6 +2227,21 @@ pub fn push_set_upstream(
     Ok(())
 }
 
+pub(crate) fn push_set_upstream_controlled(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["push", "--progress", "-u", remote, branch],
+        creds,
+        control,
+    )
+}
+
 /// Push HEAD to an explicit `remote` **without** changing the branch's upstream
 /// tracking (`git push <remote> HEAD`). Used when the user picks a remote other
 /// than the configured upstream from the push remote-picker.
@@ -993,6 +2252,20 @@ pub fn push_head_to_remote(
 ) -> Result<()> {
     run_git_creds(repo_path, &["push", remote, "HEAD"], creds)?;
     Ok(())
+}
+
+pub(crate) fn push_head_to_remote_controlled(
+    repo_path: &str,
+    remote: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["push", "--progress", remote, "HEAD"],
+        creds,
+        control,
+    )
 }
 
 /// Push current branch to origin (thin wrapper; `git push origin HEAD`).
@@ -1013,6 +2286,21 @@ pub fn push_delete(
 ) -> Result<()> {
     run_git_creds(repo_path, &["push", remote, "--delete", branch], creds)?;
     Ok(())
+}
+
+pub(crate) fn push_delete_controlled(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    creds: Option<&Credentials>,
+    control: &NetworkCommandControl,
+) -> Result<(), NetworkFailure> {
+    run_network_git_checked(
+        repo_path,
+        &["push", "--progress", remote, "--delete", branch],
+        creds,
+        control,
+    )
 }
 
 /// Resolve a conflicted path by taking "our" side (stage 2) and staging it.
@@ -1379,8 +2667,490 @@ pub fn file_history(repo_path: &str, path: &str, limit: usize) -> Result<Vec<Oid
 mod tests {
     use super::{
         extract_auth_url, humanize_git_error, is_dirty_worktree_pull_error,
-        is_divergent_pull_error, is_https_auth_failure, url_host, AuthUrl, OpOutcome, PullMode,
+        is_divergent_pull_error, is_https_auth_failure, run_network_git_output,
+        run_network_git_output_with_drain_notice, terminate_network_process, url_host, AuthUrl,
+        GitProgressParser, NetworkCommandControl, OpOutcome, PullMode,
     };
+    use crate::network::{CancellationReason, CancellationToken, NetworkFailure};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn progress_parser_counts_remote_prefixed_and_localized_progress() {
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let control = NetworkCommandControl::new(CancellationToken::default(), progress_tx);
+        let mut parser = GitProgressParser::default();
+
+        parser.feed(b"remote: Counting objects: 50% (500/1000)\r", &control);
+        parser.feed(
+            b"Entfernte Quelle: Empfange Objekte: 25% (250/1000), 2.00 MiB | 1.00 MiB/s\r",
+            &control,
+        );
+
+        let snapshots: Vec<_> = progress_rx.try_iter().collect();
+        let final_progress = snapshots.last().expect("progress snapshot");
+        assert_eq!(final_progress.objects, 750);
+        assert_eq!(final_progress.bytes, 2 * 1024 * 1024);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_git_child_cancellation_returns_without_waiting_for_inherited_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let helper = tmp.path().join("remote-helper");
+        let config_log = tmp.path().join("config.log");
+        let helper_pid_log = tmp.path().join("helper.pid");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 git config --get http.lowSpeedLimit > \"{}\"\n\
+                 git config --get http.lowSpeedTime >> \"{}\"\n\
+                 setsid sh -c 'printf \"%s\" \"$$\" > \"{}\"; trap \"\" INT TERM; sleep 8' &\n\
+                 printf 'remote: Counting objects: 50%% (500/1000)\\r' >&2\n\
+                 wait\n",
+                config_log.display(),
+                config_log.display(),
+                helper_pid_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let repo = repo.to_string_lossy().into_owned();
+        let remote = format!("ext::{}", helper.display());
+        let worker = std::thread::spawn(move || {
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            run_network_git_output(
+                &repo,
+                &[
+                    "-c",
+                    "protocol.ext.allow=always",
+                    "fetch",
+                    "--progress",
+                    &remote,
+                ],
+                None,
+                &control,
+            )
+        });
+
+        let progress = progress_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("real Git helper should report measurable progress");
+        assert_eq!(progress.objects, 500);
+        wait_for_marker(&helper_pid_log);
+        assert!(cancellation.request(CancellationReason::User));
+        let cancelled_at = Instant::now();
+        assert_eq!(
+            worker.join().expect("network worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(6),
+            "bounded cancellation must stop the Git process group before final escalation"
+        );
+        assert_eq!(std::fs::read_to_string(config_log).unwrap(), "1\n60\n");
+        let helper_pid = std::fs::read_to_string(helper_pid_log).unwrap();
+        assert!(
+            !Command::new("kill")
+                .args(["-0", helper_pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "the transport helper must not survive cancellation"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn normal_git_exit_does_not_wait_forever_for_a_helper_owned_stderr_pipe() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let helper = tmp.path().join("remote-helper");
+        let helper_pid_log = tmp.path().join("helper.pid");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 setsid sh -c 'exec </dev/null >/dev/null; printf \"%s\" \"$$\" > \"{}\"; sleep 2' &\n\
+                 exit 1\n",
+                helper_pid_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let control = NetworkCommandControl::new(CancellationToken::default(), progress_tx);
+        let remote = format!("ext::{}", helper.display());
+        let started = Instant::now();
+        let result = run_network_git_output(
+            repo.to_str().unwrap(),
+            &[
+                "-c",
+                "protocol.ext.allow=always",
+                "fetch",
+                "--progress",
+                &remote,
+            ],
+            None,
+            &control,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(NetworkFailure::Failed(ref error))
+                    if error.contains("stderr pipe did not close within the drain deadline")
+            ),
+            "unexpected result: {result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "reader collection exceeded its deadline"
+        );
+        wait_for_marker(&helper_pid_log);
+        let helper_pid = std::fs::read_to_string(&helper_pid_log).unwrap();
+        let helper_deadline = Instant::now() + Duration::from_secs(3);
+        while Command::new("kill")
+            .args(["-0", helper_pid.trim()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            assert!(
+                Instant::now() < helper_deadline,
+                "finite inherited-pipe helper did not exit"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn drain_time_cancellation_reaps_the_exited_git_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::thread;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let helper = tmp.path().join("remote-helper");
+        let helper_pid_log = tmp.path().join("helper.pid");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 sh -c 'exec </dev/null >/dev/null; trap \"exit 0\" INT TERM; printf \"%s\" \"$$\" > \"{}\"; sleep 8' &\n\
+                 exit 1\n",
+                helper_pid_log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let (drain_tx, drain_rx) = mpsc::channel();
+        let remote = format!("ext::{}", helper.display());
+        let repo = repo.to_string_lossy().into_owned();
+        let worker = thread::spawn(move || {
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            run_network_git_output_with_drain_notice(
+                &repo,
+                &[
+                    "-c",
+                    "protocol.ext.allow=always",
+                    "fetch",
+                    "--progress",
+                    &remote,
+                ],
+                None,
+                &control,
+                Some(&drain_tx),
+            )
+        });
+
+        drain_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Git should exit and enter pipe draining");
+        wait_for_marker(&helper_pid_log);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("network worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        let helper_pid = std::fs::read_to_string(&helper_pid_log).unwrap();
+        assert!(
+            !Command::new("kill")
+                .args(["-0", helper_pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "drain-time cancellation must reap the pipe-owning helper"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_escalation_has_a_direct_child_reap_deadline() {
+        use std::os::unix::process::CommandExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("direct-child-ready");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "trap '' INT TERM; printf ready > \"{}\"; sleep 8",
+                marker.display()
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let child = command.spawn().unwrap();
+        wait_for_marker(&marker);
+
+        let started = Instant::now();
+        terminate_network_process(child, "test-child").unwrap();
+
+        assert!(
+            started.elapsed()
+                < super::NETWORK_INTERRUPT_GRACE
+                    + super::NETWORK_TERMINATE_GRACE
+                    + super::NETWORK_KILL_REAP_GRACE
+                    + Duration::from_secs(1),
+            "direct-child reaping must not exceed the documented escalation deadline"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wedged_direct_child_wait_is_detached_at_the_reap_deadline() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        struct WedgedReaper {
+            eventual_reap_started: Arc<AtomicBool>,
+        }
+
+        impl super::DirectChildReaper for WedgedReaper {
+            fn try_reap(&mut self) -> std::io::Result<bool> {
+                Ok(false)
+            }
+
+            fn reap_blocking(&mut self) {
+                self.eventual_reap_started.store(true, Ordering::Release);
+                thread::sleep(Duration::from_millis(250));
+            }
+        }
+
+        let eventual_reap_started = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let reaped = super::reap_direct_child_until(
+            WedgedReaper {
+                eventual_reap_started: eventual_reap_started.clone(),
+            },
+            Instant::now() + Duration::from_millis(40),
+            "test-child",
+        )
+        .unwrap();
+
+        assert!(!reaped);
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "terminal cancellation must not block on the eventual child reaper"
+        );
+        let observation_deadline = Instant::now() + Duration::from_millis(100);
+        while !eventual_reap_started.load(Ordering::Acquire) {
+            assert!(
+                Instant::now() < observation_deadline,
+                "the detached reaper never took ownership"
+            );
+            thread::yield_now();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reused_retained_pid_is_neither_owned_nor_signalled() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        fn birth(value: u64) -> super::ProcessBirth {
+            super::ProcessBirth::ProcStartTicks(value)
+        }
+        #[cfg(target_vendor = "apple")]
+        fn birth(value: u64) -> super::ProcessBirth {
+            super::ProcessBirth::AppleStartTime {
+                seconds: value,
+                microseconds: 0,
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+        fn birth(value: u64) -> super::ProcessBirth {
+            super::ProcessBirth::PsStartTime(value.to_string())
+        }
+
+        struct FakeProcessControl {
+            births: HashMap<i32, super::ProcessBirth>,
+            groups: HashMap<i32, i32>,
+            signals: Mutex<Vec<(bool, i32, i32)>>,
+        }
+
+        impl super::ProcessControl for FakeProcessControl {
+            fn birth(&self, process: i32) -> std::io::Result<Option<super::ProcessBirth>> {
+                Ok(self.births.get(&process).cloned())
+            }
+
+            fn group(&self, process: i32) -> std::io::Result<Option<i32>> {
+                Ok(self.groups.get(&process).copied())
+            }
+
+            fn signal_process(&self, process: i32, signal: i32) -> std::io::Result<()> {
+                self.signals.lock().unwrap().push((false, process, signal));
+                Ok(())
+            }
+
+            fn signal_group(&self, group: i32, signal: i32) -> std::io::Result<()> {
+                self.signals.lock().unwrap().push((true, group, signal));
+                Ok(())
+            }
+        }
+
+        let original_birth = birth(100);
+        let retained = HashMap::from([(41, original_birth.clone())]);
+        let control = FakeProcessControl {
+            // PID 41 now names a different process; PID 42 is its child in the
+            // new process table and must not be adopted through stale ancestry.
+            births: HashMap::from([(41, birth(200)), (42, birth(300))]),
+            groups: HashMap::from([(41, 41), (42, 41)]),
+            signals: Mutex::new(Vec::new()),
+        };
+
+        let refreshed = super::parse_owned_processes(
+            41,
+            &original_birth,
+            retained.clone(),
+            b"41 1 41\n42 41 41\n",
+            &control,
+        );
+        assert!(refreshed.is_empty(), "reused ancestry was retained");
+        assert!(!super::owned_processes_exist_with(&retained, None, &control).unwrap());
+
+        super::signal_network_processes_with(41, &retained, libc::SIGTERM, &control).unwrap();
+        assert!(
+            control.signals.lock().unwrap().is_empty(),
+            "a reused PID or process-group ID was signalled"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_proceeds_when_process_enumeration_misses_its_deadline() {
+        use std::os::unix::process::CommandExt;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct PendingSnapshot {
+            attempts: Arc<AtomicUsize>,
+            terminated: Arc<AtomicBool>,
+        }
+
+        impl super::ProcessTableSnapshot for PendingSnapshot {
+            fn try_snapshot(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Ok(None)
+            }
+
+            fn terminate(self) {
+                self.terminated.store(true, Ordering::Release);
+            }
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let terminated = Arc::new(AtomicBool::new(false));
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("enumeration-timeout-child-ready");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "trap 'exit 0' INT; printf ready > \"{}\"; sleep 8",
+                marker.display()
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let child = command.spawn().unwrap();
+        wait_for_marker(&marker);
+
+        let started = Instant::now();
+        super::terminate_network_process_with_snapshot(
+            child,
+            "test-child",
+            Some(PendingSnapshot {
+                attempts: attempts.clone(),
+                terminated: terminated.clone(),
+            }),
+            Duration::from_millis(40),
+        )
+        .unwrap();
+
+        assert!(attempts.load(Ordering::Relaxed) >= 2);
+        assert!(terminated.load(Ordering::Acquire));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cancellation must continue when process enumeration never completes"
+        );
+    }
 
     #[test]
     fn https_auth_failure_detected_but_not_ssh() {
@@ -1525,7 +3295,7 @@ mod tests {
         assert_eq!(humanize_git_error("some unexpected failure"), None);
     }
 
-    use super::{fetch_all, fetch_remote};
+    use super::{fetch_all, fetch_remote, fetch_remote_controlled, pull_controlled};
     use crate::test_support::git;
     use git2::{BranchType, Repository};
     use std::process::Command;
@@ -1570,6 +3340,320 @@ mod tests {
         git(dst, &["add", "b.txt"]);
         git(dst, &["commit", "-qm", "advance"]);
         git(dst, &["push", "-q", "origin", branch]);
+    }
+
+    #[cfg(unix)]
+    fn setup_advanced_remote(
+        tmp: &tempfile::TempDir,
+    ) -> (std::path::PathBuf, std::path::PathBuf, git2::Oid, git2::Oid) {
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        let other = tmp.path().join("other");
+        init_bare(&remote);
+        init_repo_with_commit(&local);
+        git(
+            &local,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&local, &["push", "-qu", "origin", "master"]);
+        let old_oid = Repository::open(&local)
+            .unwrap()
+            .refname_to_id("refs/remotes/origin/master")
+            .unwrap();
+
+        assert!(Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&remote)
+            .arg(&other)
+            .status()
+            .unwrap()
+            .success());
+        git(&other, &["config", "user.email", "t@t.com"]);
+        git(&other, &["config", "user.name", "t"]);
+        std::fs::write(other.join("a.txt"), "advanced").unwrap();
+        git(&other, &["add", "a.txt"]);
+        git(&other, &["commit", "-qm", "advance"]);
+        git(&other, &["push", "-q", "origin", "master"]);
+        let new_oid = Repository::open(&other)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        (remote, local, old_oid, new_oid)
+    }
+
+    #[cfg(unix)]
+    fn install_blocking_reference_hook(
+        local: &std::path::Path,
+        marker: &std::path::Path,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let hook = local.join(".git/hooks/reference-transaction");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = prepared ]; then\n\
+                   printf ready > \"{}\"\n\
+                   trap '' INT TERM\n\
+                   sleep 8\n\
+                 fi\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+        hook
+    }
+
+    #[cfg(unix)]
+    fn wait_for_marker(marker: &std::path::Path) {
+        for _ in 0..250 {
+            if marker.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("timed out waiting for Git reference transaction hook");
+    }
+
+    #[cfg(unix)]
+    fn lock_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        fn visit(path: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(path) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, found);
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "lock")
+                {
+                    found.push(path);
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        visit(root, &mut found);
+        found
+    }
+
+    #[cfg(unix)]
+    fn fresh_control() -> NetworkCommandControl {
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        NetworkCommandControl::new(CancellationToken::default(), progress_tx)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_fetch_preserves_refs_locks_and_allows_a_subsequent_fetch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, old_oid, new_oid) = setup_advanced_remote(&tmp);
+        let marker = tmp.path().join("fetch-prepared");
+        let hook = install_blocking_reference_hook(&local, &marker);
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            let (progress_tx, _progress_rx) = mpsc::channel();
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            fetch_remote_controlled(&local_for_worker, "origin", None, &control)
+        });
+
+        wait_for_marker(&marker);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("fetch worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(
+            repo.refname_to_id("refs/remotes/origin/master").unwrap(),
+            old_oid,
+            "a cancelled prepared transaction must not publish a partial ref update"
+        );
+        assert!(
+            lock_files(&local.join(".git")).is_empty(),
+            "cancellation must not leave stale Git lock files"
+        );
+
+        std::fs::remove_file(hook).unwrap();
+        fetch_remote_controlled(local.to_str().unwrap(), "origin", None, &fresh_control())
+            .expect("a later controlled fetch must succeed");
+        assert_eq!(
+            Repository::open(&local)
+                .unwrap()
+                .refname_to_id("refs/remotes/origin/master")
+                .unwrap(),
+            new_oid
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_pull_transfer_leaves_head_clean_and_a_later_pull_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, old_oid, new_oid) = setup_advanced_remote(&tmp);
+        let marker = tmp.path().join("pull-fetch-prepared");
+        let hook = install_blocking_reference_hook(&local, &marker);
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            let (progress_tx, _progress_rx) = mpsc::channel();
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            pull_controlled(
+                &local_for_worker,
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &control,
+            )
+        });
+
+        wait_for_marker(&marker);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("pull worker panicked"),
+            Err(NetworkFailure::Cancelled(CancellationReason::User))
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(repo.head().unwrap().target(), Some(old_oid));
+        assert_eq!(std::fs::read_to_string(local.join("a.txt")).unwrap(), "a");
+        assert!(
+            lock_files(&local.join(".git")).is_empty(),
+            "cancelled pull transfer must not leave stale Git lock files"
+        );
+
+        std::fs::remove_file(hook).unwrap();
+        assert_eq!(
+            pull_controlled(
+                local.to_str().unwrap(),
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &fresh_control(),
+            )
+            .expect("a later controlled pull must succeed"),
+            OpOutcome::Completed
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(repo.head().unwrap().target(), Some(new_oid));
+        assert_eq!(
+            std::fs::read_to_string(local.join("a.txt")).unwrap(),
+            "advanced"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_pull_integration_waits_for_clean_completion() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, _old_oid, new_oid) = setup_advanced_remote(&tmp);
+        let marker = tmp.path().join("post-merge-running");
+        let hook = local.join(".git/hooks/post-merge");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\n\
+                 printf ready > \"{}\"\n\
+                 sleep 1\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+
+        let cancellation = CancellationToken::default();
+        let cancellation_for_worker = cancellation.clone();
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            let (progress_tx, _progress_rx) = mpsc::channel();
+            let control = NetworkCommandControl::new(cancellation_for_worker, progress_tx);
+            pull_controlled(
+                &local_for_worker,
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &control,
+            )
+        });
+
+        wait_for_marker(&marker);
+        assert!(cancellation.request(CancellationReason::User));
+        assert_eq!(
+            worker.join().expect("pull worker panicked"),
+            Ok(OpOutcome::Completed),
+            "once index/worktree integration starts, cancellation must wait for its clean exit"
+        );
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(repo.head().unwrap().target(), Some(new_oid));
+        assert_eq!(
+            std::fs::read_to_string(local.join("a.txt")).unwrap(),
+            "advanced"
+        );
+        assert!(lock_files(&local.join(".git")).is_empty());
+        fetch_remote_controlled(local.to_str().unwrap(), "origin", None, &fresh_control())
+            .expect("a subsequent controlled network operation must succeed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pull_revalidates_head_after_integration_gate_acknowledgement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_remote, local, old_oid, _new_oid) = setup_advanced_remote(&tmp);
+        let cancellation = CancellationToken::default();
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let (integration_tx, integration_rx) = mpsc::channel();
+        let control =
+            NetworkCommandControl::with_integration(cancellation, progress_tx, integration_tx);
+        let local_for_worker = local.to_string_lossy().into_owned();
+        let worker = std::thread::spawn(move || {
+            pull_controlled(
+                &local_for_worker,
+                Some("origin"),
+                Some("master"),
+                PullMode::FfOnly,
+                None,
+                &control,
+            )
+        });
+
+        let acknowledge = integration_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("pull should request its integration lifecycle gate");
+        git(&local, &["checkout", "-qb", "other"]);
+        acknowledge.send(Ok(())).unwrap();
+
+        let error = worker
+            .join()
+            .expect("pull worker panicked")
+            .expect_err("changed HEAD must stop integration");
+        assert!(error.to_string().contains("HEAD changed while fetching"));
+        let repo = Repository::open(&local).unwrap();
+        assert_eq!(repo.head().unwrap().shorthand(), Some("other"));
+        assert_eq!(repo.head().unwrap().target(), Some(old_oid));
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(std::fs::read_to_string(local.join("a.txt")).unwrap(), "a");
+        assert!(lock_files(&local.join(".git")).is_empty());
     }
 
     /// #91: `fetch_all` fetches remotes independently — a broken remote must not
