@@ -47,15 +47,8 @@ fn stage_file_records_a_tracked_file_deletion() {
     let tree_id = index.write_tree().expect("write initial tree");
     let tree = repo.find_tree(tree_id).expect("read initial tree");
     let signature = Signature::now("Keifu Test", "test@keifu.invalid").expect("signature");
-    repo.commit(
-        Some("HEAD"),
-        &signature,
-        &signature,
-        "initial",
-        &tree,
-        &[],
-    )
-    .expect("create initial commit");
+    repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+        .expect("create initial commit");
     drop(tree);
     fs::remove_file(tracked_path).expect("delete tracked file");
 
