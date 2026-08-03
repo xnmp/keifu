@@ -134,7 +134,7 @@ impl<'a> GraphViewWidget<'a> {
         let graph_width = effective_graph_width(needed, app.graph_width_cap);
         let inner_width = width.saturating_sub(2) as usize;
         let selected_branch_name = app.selected_branch_name();
-        let has_filter = !app.commit_filter.is_empty();
+        let has_filter = app.commit_filter_is_active();
         let current_selected = app.graph_nav.graph_list_state.selected();
         let now = Local::now();
         let remotes = &app.remotes;

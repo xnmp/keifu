@@ -294,13 +294,15 @@ treats `TeeDown` as a down-spoke (its stem is the SECONDARY stroke, like a
 the tip dot. The mirror orientation (band on the *lower* endpoint row) has no
 junction cell and keeps the old fallback.
 
-**Uncommitted connector survives the commit filter (2026-07-19).** The synthetic
-uncommitted-changes node always passes the commit filter, and its connector is
-wired to HEAD at graph-build time. If HEAD's own message missed the filter it
-was hidden, orphaning the connector into a dangling grey stub beneath the top
-marker. `node_passes_commit_filter` now also keeps the HEAD row whenever an
-uncommitted node exists (`has_uncommitted_node`, O(1) — the uncommitted node is
-always at index 0), so the connector always terminates at the star.
+**Commit-filter topology and navigation (2026-08-04, #126).** A filter builds
+the graph from direct matches plus their loaded parent closure, keeping retained
+ancestors visible but dimmed so merge edges remain valid. The synthetic
+uncommitted row also retains HEAD *after* that closure is formed; walking from
+HEAD would otherwise restore all loaded history. Rendering includes that
+topology, while `filter_navigation_indices` contains only direct matches so
+arrow/branch navigation never stops on dimmed ancestry. Changed-path metadata
+is loaded only after a non-empty `file=` clause appears and is memoized by OID;
+unreadable shallow/grafted commits are skipped rather than failing refresh.
 
 ## Toasts vs. Status Bar (2026-07-20)
 

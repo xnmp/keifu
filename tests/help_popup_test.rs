@@ -41,7 +41,7 @@ fn help_popup_displays_current_global_and_filter_shortcuts() {
 
     for (key, description) in [
         ("l", "Pull (fetch + integrate)"),
-        ("Ctrl+Shift+F", "Filter commits (message/author/file)"),
+        ("Ctrl+Shift+F", "Filter commits (message/author/file/hash)"),
         ("/", "Filter files"),
     ] {
         assert!(

@@ -230,6 +230,7 @@ impl App {
             help_viewport_rows: 0,
             commit_filter: String::new(),
             commit_filter_active: false,
+            filter_navigation_indices: Vec::new(),
             visible_commit_indices: Vec::new(),
             commit_filter_matches: std::collections::HashSet::new(),
             commit_changed_paths: std::collections::HashMap::new(),

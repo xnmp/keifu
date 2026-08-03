@@ -401,7 +401,6 @@ impl App {
             &stashes,
             self.merged.hide,
         )?;
-        self.commit_changed_paths = self.repo.changed_paths_by_commit(&self.commits)?;
         // The whole history is loaded once the walk yields fewer than the limit.
         self.all_commits_loaded = self.commits.len() < self.commit_load_limit;
         let tags = self.repo.get_tags();

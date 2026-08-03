@@ -230,12 +230,14 @@ impl GitRepository {
     pub fn changed_paths_by_commit(
         &self,
         commits: &[CommitInfo],
-    ) -> Result<std::collections::HashMap<Oid, Vec<String>>> {
+    ) -> std::collections::HashMap<Oid, Vec<String>> {
         commits
             .iter()
-            .map(|info| {
-                let commit = self.repo.find_commit(info.oid)?;
-                Ok((info.oid, self.changed_paths_for_commit(&commit)?))
+            .filter_map(|info| {
+                let commit = self.repo.find_commit(info.oid).ok()?;
+                self.changed_paths_for_commit(&commit)
+                    .ok()
+                    .map(|paths| (info.oid, paths))
             })
             .collect()
     }

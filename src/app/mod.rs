@@ -1095,6 +1095,9 @@ pub struct App {
     // Commit filter (global Ctrl+Shift+F, displayed in the graph panel)
     pub commit_filter: String,
     pub commit_filter_active: bool,
+    /// Direct-match rows used for filter navigation. The rendered graph also
+    /// includes dimmed ancestry, which must not become a navigation stop.
+    pub filter_navigation_indices: Vec<usize>,
     pub visible_commit_indices: Vec<usize>,
     /// OIDs that match the active filter itself, rather than merely being
     /// retained as ancestry needed to draw the filtered graph.

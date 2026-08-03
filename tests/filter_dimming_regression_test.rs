@@ -203,6 +203,47 @@ fn path_is_case_sensitive_while_author_name_is_case_insensitive() {
 }
 
 #[test]
+fn changed_paths_are_loaded_only_for_file_queries_and_cached_by_commit() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    let git = repo.repo();
+    commit_as(
+        git,
+        "src/parser.rs",
+        "one",
+        "Fix parser",
+        "Ada Lovelace",
+        "ada@example.com",
+    );
+    let mut app = keifu::app::App::from_repo(repo).unwrap();
+
+    assert!(app.commit_changed_paths.is_empty());
+    app.handle_action(Action::StartCommitFilter).unwrap();
+    for c in "message=fix".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+    assert!(
+        app.commit_changed_paths.is_empty(),
+        "message-only filtering does not inspect commit trees"
+    );
+
+    app.handle_action(Action::InputClearLine).unwrap();
+    for c in "file=src".chars() {
+        app.handle_action(Action::CommitFilterChar(c)).unwrap();
+    }
+    let cached_oids: Vec<_> = app.commit_changed_paths.keys().copied().collect();
+    assert!(
+        !cached_oids.is_empty(),
+        "a populated file clause loads changed paths"
+    );
+    app.handle_action(Action::CommitFilterChar('/')).unwrap();
+    assert_eq!(
+        app.commit_changed_paths.len(),
+        cached_oids.len(),
+        "later file-query keystrokes reuse the immutable OID-keyed cache"
+    );
+}
+
+#[test]
 fn dirty_worktree_keeps_the_uncommitted_connector_without_restoring_unrelated_history() {
     let (_td, repo) = init_repo(Seed::Empty);
     let git = repo.repo();
