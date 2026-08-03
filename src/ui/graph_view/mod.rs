@@ -134,7 +134,7 @@ impl<'a> GraphViewWidget<'a> {
         let graph_width = effective_graph_width(needed, app.graph_width_cap);
         let inner_width = width.saturating_sub(2) as usize;
         let selected_branch_name = app.selected_branch_name();
-        let has_filter = !app.commit_filter.is_empty();
+        let has_filter = app.commit_filter_is_active();
         let current_selected = app.graph_nav.graph_list_state.selected();
         let now = Local::now();
         let remotes = &app.remotes;
@@ -246,6 +246,11 @@ impl<'a> GraphViewWidget<'a> {
                     is_selected,
                     is_marked,
                 },
+                has_filter
+                    && node
+                        .commit
+                        .as_ref()
+                        .is_none_or(|commit| !app.commit_filter_matches.contains(&commit.oid)),
             );
             items.push(ListItem::new(line));
             chip_hits.push(chips);
@@ -253,6 +258,8 @@ impl<'a> GraphViewWidget<'a> {
 
         let title = if !show_title {
             String::new()
+        } else if app.commit_filter_active && app.commit_filter.is_empty() {
+            " Commits: message=…; author=…; file=…_ ".to_string()
         } else if app.commit_filter_active {
             format!(" Commits: {}_ ", app.commit_filter)
         } else if has_filter {
@@ -284,6 +291,7 @@ fn render_graph_line<'a>(
     node: &GraphNode,
     ctx: &RowRenderCtx<'_>,
     flags: RowFlags,
+    filter_ancestor: bool,
 ) -> (Line<'a>, Vec<ChipHit>) {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -339,7 +347,7 @@ fn render_graph_line<'a>(
             left_width,
             ctx.graph_width,
             ctx.trace,
-            is_base_update,
+            is_base_update || filter_ancestor,
             ctx.merged_lane_oids,
             ctx.merged_exempt,
         );
@@ -368,8 +376,8 @@ fn render_graph_line<'a>(
         node,
         ctx,
         flags,
-        is_base_update,
-        is_merged_lane,
+        is_base_update || filter_ancestor,
+        is_merged_lane || filter_ancestor,
     )
 }
 
@@ -1054,6 +1062,7 @@ mod tests {
                 is_selected: false,
                 is_marked: false,
             },
+            false,
         );
         line
     }
@@ -1273,6 +1282,7 @@ mod tests {
                 is_selected: false,
                 is_marked: false,
             },
+            false,
         );
         let badge = merged_badge();
         let style = find_style(&line, &badge).expect("merged badge span emitted");

@@ -129,7 +129,7 @@ pub fn dim_pixel_specs_window(
     // boundary neighbours' oids/force-dim must be available too.
     let ext_start = win_start.saturating_sub(1);
     let ext_end = win_end.saturating_add(1);
-    let win_rows = if app.commit_filter.is_empty() {
+    let win_rows = if !app.commit_filter_is_active() {
         fold_rows_windowed(
             app.graph_layout.nodes.iter().enumerate(),
             ext_start,
@@ -165,7 +165,11 @@ pub fn dim_pixel_specs_window(
             r.node,
             app.metadata_columns.mute_base_merges,
             app.merged.base_update.value(),
-        );
+        ) || (app.commit_filter_is_active()
+            && r.node
+                .commit
+                .as_ref()
+                .is_none_or(|commit| !app.commit_filter_matches.contains(&commit.oid)));
     }
     // Merged-lane dim (#108), gated the same way the unicode path is: dim on and
     // hide off. `None` = feature off, so the core skips the merged-lane pass.

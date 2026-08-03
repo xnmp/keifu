@@ -224,6 +224,52 @@ impl GitRepository {
         Ok(commits)
     }
 
+    /// All paths touched by a commit, including both sides of a rename. Merge
+    /// commits compare against each parent so a path changed on either side is
+    /// discoverable by the graph filter.
+    pub fn changed_paths_by_commit(
+        &self,
+        commits: &[CommitInfo],
+    ) -> std::collections::HashMap<Oid, Vec<String>> {
+        commits
+            .iter()
+            .filter_map(|info| {
+                let commit = self.repo.find_commit(info.oid).ok()?;
+                self.changed_paths_for_commit(&commit)
+                    .ok()
+                    .map(|paths| (info.oid, paths))
+            })
+            .collect()
+    }
+
+    fn changed_paths_for_commit(&self, commit: &git2::Commit<'_>) -> Result<Vec<String>> {
+        let tree = commit.tree()?;
+        let parent_count = commit.parent_count().max(1);
+        let mut paths = Vec::new();
+        for parent_index in 0..parent_count {
+            let parent_tree = if commit.parent_count() == 0 {
+                None
+            } else {
+                Some(commit.parent(parent_index)?.tree()?)
+            };
+            let diff = self
+                .repo
+                .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+            for delta in diff.deltas() {
+                for path in [delta.old_file().path(), delta.new_file().path()]
+                    .into_iter()
+                    .flatten()
+                {
+                    let path = path.to_string_lossy().into_owned();
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+        Ok(paths)
+    }
+
     pub fn get_stashes(&mut self) -> Vec<StashInfo> {
         let mut raw_stashes = Vec::new();
         let _ = self.repo.stash_foreach(|index, message, oid| {

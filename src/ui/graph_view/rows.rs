@@ -12,7 +12,7 @@ use crate::git::graph::{CellType, GraphNode};
 /// source of the list's row ordering — used by the widget and by the pixel
 /// pre-pass so their rows stay aligned.
 pub fn visible_nodes(app: &App) -> Vec<(usize, &GraphNode)> {
-    if app.commit_filter.is_empty() {
+    if !app.commit_filter_is_active() {
         app.graph_layout.nodes.iter().enumerate().collect()
     } else {
         app.visible_commit_indices
