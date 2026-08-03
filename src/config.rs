@@ -180,8 +180,9 @@ impl Config {
         // Rewrite only entries whose parsed values changed so comments beside
         // untouched user entries stay exactly where they were.
         for (action, bindings) in &self.keymap {
-            let changed = doc["keymap"]
-                .get(action)
+            let changed = doc
+                .get("keymap")
+                .and_then(|keymap| keymap.get(action))
                 .and_then(|item| item.to_string().trim().parse::<toml::Value>().ok())
                 .as_ref()
                 != Some(bindings);
