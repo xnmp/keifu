@@ -1,4 +1,13 @@
-use keifu::config::Config;
+mod common;
+
+use common::{commit_file, init_repo, Seed};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use keifu::{
+    action::Action,
+    app::App,
+    config::Config,
+    keybindings::map_key_to_action_with_keymap,
+};
 
 /// The editor writes through the same config document path as the settings
 /// registry, so a saved keymap must leave neighboring user-authored TOML alone.
@@ -43,5 +52,31 @@ pull = ["F7"]
     assert_eq!(
         reloaded.keymap["pull"].as_array().unwrap()[0].as_str(),
         Some("Ctrl+Alt+P")
+    );
+}
+
+#[test]
+fn settings_opens_a_dedicated_keyboard_shortcuts_editor() {
+    let (_td, repo) = init_repo(Seed::Empty);
+    commit_file(repo.repo(), "a.txt", "a", "initial");
+    let mut app = App::from_repo(repo).unwrap();
+    app.handle_action(Action::OpenSettings).unwrap();
+
+    let action = map_key_to_action_with_keymap(
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        &app.mode,
+        app.focused_panel,
+        app.editing_commit_message,
+        false,
+        false,
+        &app.keymap,
+    )
+    .expect("Ctrl+K should open the keyboard-shortcuts editor from Settings");
+    app.handle_action(action).unwrap();
+
+    assert!(
+        format!("{:?}", app.mode).contains("KeymapEditor"),
+        "Settings should show the keyboard-shortcuts editor, got {:?}",
+        app.mode
     );
 }
