@@ -36,7 +36,6 @@ pull = ["F7"]
     .parse()
     .unwrap();
     config.apply_to_document(&mut document);
-    assert!(document.to_string().contains("[keymap]"));
     let saved = document.to_string();
 
     assert!(saved.contains("# Keep this comment."));
@@ -89,6 +88,10 @@ fn saving_first_keymap_entry_creates_the_keymap_table() {
     let mut document = "[refresh]\nauto_refresh = false\n".parse().unwrap();
 
     config.apply_to_document(&mut document);
+    assert!(
+        document.to_string().contains("[keymap]"),
+        "expected a [keymap] table header"
+    );
 
     assert_eq!(
         toml::from_str::<Config>(&document.to_string())
