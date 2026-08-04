@@ -131,6 +131,14 @@ pub enum Action {
 
     // Open the settings menu (Ctrl+,) from any panel
     OpenSettings,
+    /// Open the keyboard-shortcuts editor from Settings.
+    OpenKeymapEditor,
+    /// A raw normalized shortcut captured by the keyboard-shortcuts editor.
+    KeymapCapture(crate::keymap::KeyBinding),
+    /// Explicitly leave the selected public action without a shortcut.
+    KeymapClear,
+    /// Persist the keyboard-shortcuts editor's pending keymap.
+    KeymapSave,
 
     // Jump to the merge base / fork point of the selection vs main (or HEAD) (graph)
     JumpToMergeBase,

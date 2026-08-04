@@ -361,6 +361,13 @@ pub enum AppMode {
         editing: Option<String>,
         query: String,
     },
+    /// Editor for the public keyboard-shortcut registry. Pending changes stay
+    /// separate from Config so cancelling cannot affect the persisted keymap.
+    KeymapEditor {
+        selected: usize,
+        capturing: bool,
+        pending: toml::Table,
+    },
     /// A `--ff-only` pull failed on divergent branches: choose merge or rebase.
     /// The remote/branch to rerun with are held in `App.last_pull`.
     PullDivergence {
@@ -1593,6 +1600,10 @@ impl App {
             self.open_settings();
             return Ok(());
         }
+        if matches!(action, Action::OpenKeymapEditor) {
+            self.open_keymap_editor();
+            return Ok(());
+        }
         // Issue composers are global overlays. Preserve a live issue
         // list/detail underneath; opening a repo issue elsewhere prepares its
         // issue-list destination first.
@@ -1629,6 +1640,7 @@ impl App {
             AppMode::RebasePlan { .. } => self.handle_rebase_plan_action(action)?,
             AppMode::MetadataMenu { .. } => self.handle_metadata_menu_action(action),
             AppMode::Settings { .. } => self.handle_settings_action(action)?,
+            AppMode::KeymapEditor { .. } => self.handle_keymap_editor_action(action),
             AppMode::PullDivergence { .. } => self.handle_pull_divergence_action(action),
             AppMode::CiChecks => self.handle_ci_checks_action(action),
             AppMode::PrThread => self.handle_pr_thread_action(action),
@@ -2138,6 +2150,81 @@ impl App {
             editing: None,
             query: String::new(),
         };
+    }
+
+    fn open_keymap_editor(&mut self) {
+        self.mode = AppMode::KeymapEditor {
+            selected: 0,
+            capturing: false,
+            pending: self.config.keymap.clone(),
+        };
+    }
+
+    /// Keymap edits are provisional until Save, making Escape a real
+    /// cancellation boundary rather than a reconstruction of prior TOML.
+    fn handle_keymap_editor_action(&mut self, action: Action) {
+        let count = crate::keymap::binding_registry().len();
+        let (selected, capturing) = match &self.mode {
+            AppMode::KeymapEditor {
+                selected,
+                capturing,
+                ..
+            } => (*selected, *capturing),
+            _ => return,
+        };
+        match action {
+            Action::MoveUp if !capturing => {
+                if let AppMode::KeymapEditor { selected, .. } = &mut self.mode {
+                    *selected = (*selected + count - 1) % count;
+                }
+            }
+            Action::MoveDown if !capturing => {
+                if let AppMode::KeymapEditor { selected, .. } = &mut self.mode {
+                    *selected = (*selected + 1) % count;
+                }
+            }
+            Action::MenuSelect if !capturing => {
+                if let AppMode::KeymapEditor { capturing, .. } = &mut self.mode {
+                    *capturing = true;
+                }
+            }
+            Action::KeymapCapture(binding) if capturing => {
+                let id = crate::keymap::binding_registry()[selected].id;
+                if let AppMode::KeymapEditor {
+                    capturing, pending, ..
+                } = &mut self.mode
+                {
+                    *capturing = false;
+                    pending.insert(
+                        id.into(),
+                        toml::Value::Array(vec![toml::Value::String(binding.to_string())]),
+                    );
+                }
+            }
+            Action::KeymapClear if !capturing => {
+                let id = crate::keymap::binding_registry()[selected].id;
+                if let AppMode::KeymapEditor { pending, .. } = &mut self.mode {
+                    pending.insert(id.into(), toml::Value::Array(Vec::new()));
+                }
+            }
+            Action::KeymapSave if !capturing => {
+                let pending = match &self.mode {
+                    AppMode::KeymapEditor { pending, .. } => pending.clone(),
+                    _ => return,
+                };
+                self.config.keymap = pending;
+                self.keymap = crate::keymap::ResolvedKeymap::from_table(&self.config.keymap);
+                self.config.save();
+                self.open_settings();
+            }
+            Action::Cancel if capturing => {
+                if let AppMode::KeymapEditor { capturing, .. } = &mut self.mode {
+                    *capturing = false;
+                }
+            }
+            Action::Cancel => self.open_settings(),
+            _ => {}
+        }
     }
 
     /// Write one setting's new value to the live app state, persist it, and

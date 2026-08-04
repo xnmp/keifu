@@ -15,6 +15,7 @@ pub mod help_popup;
 pub mod issue_compose;
 pub mod issue_detail;
 pub mod issue_list;
+pub mod keymap_editor;
 pub mod metadata_menu;
 pub mod pr_compose;
 pub mod pr_thread;
@@ -756,6 +757,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let popup_area = centered_rect_fixed(52, height, area);
             frame.render_widget(
                 SettingsMenuWidget::new(&values, *selected, editing.as_deref(), query, &theme),
+                popup_area,
+            );
+            rendered_popup = Some(popup_area);
+        }
+        AppMode::KeymapEditor {
+            selected,
+            capturing,
+            pending,
+        } => {
+            use self::keymap_editor::KeymapEditorWidget;
+            let preview = crate::keymap::ResolvedKeymap::from_table(pending);
+            let height = area.height.saturating_sub(2).max(8);
+            let popup_area = centered_rect_fixed(76, height, area);
+            frame.render_widget(
+                KeymapEditorWidget::new(&preview, *selected, *capturing, &theme),
                 popup_area,
             );
             rendered_popup = Some(popup_area);

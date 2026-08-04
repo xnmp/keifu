@@ -175,6 +175,45 @@ impl Config {
         doc["ui"]["theme"] = value(self.ui.theme.clone());
         doc["ui"]["graph_renderer"] = value(self.ui.graph_renderer.as_str());
         doc["ui"]["squash_link_lines"] = value(self.ui.squash_link_lines);
+
+        // Keymap edits are made one action at a time by the settings surface.
+        // Rewrite only entries whose parsed values changed so comments beside
+        // untouched user entries stay exactly where they were.
+        for (action, bindings) in &self.keymap {
+            let Some(bindings) = bindings.as_array().and_then(|bindings| {
+                bindings
+                    .iter()
+                    .map(toml::Value::as_str)
+                    .collect::<Option<Vec<_>>>()
+            }) else {
+                // Invalid entries are reported by the keymap resolver. A save
+                // from an unrelated setting must not turn them into [] and
+                // silently change their meaning to an explicit unassignment.
+                continue;
+            };
+            let unchanged = doc
+                .get("keymap")
+                .and_then(|keymap| keymap.get(action))
+                .and_then(toml_edit::Item::as_array)
+                .is_some_and(|current| {
+                    current.len() == bindings.len()
+                        && current
+                            .iter()
+                            .map(toml_edit::Value::as_str)
+                            .eq(bindings.iter().map(|binding| Some(*binding)))
+                });
+            if unchanged {
+                continue;
+            }
+            if doc.get("keymap").is_none() {
+                doc["keymap"] = toml_edit::table();
+            }
+            let mut values = toml_edit::Array::default();
+            for binding in bindings {
+                values.push(binding);
+            }
+            doc["keymap"][action] = value(values);
+        }
     }
 }
 

@@ -221,6 +221,7 @@ fn mode_name(mode: &AppMode) -> &'static str {
         AppMode::RebasePlan { .. } => "rebase_plan",
         AppMode::MetadataMenu { .. } => "metadata_menu",
         AppMode::Settings { .. } => "settings",
+        AppMode::KeymapEditor { .. } => "keymap_editor",
         AppMode::PullDivergence { .. } => "pull_divergence",
         AppMode::CiChecks => "ci_checks",
         AppMode::PrThread => "pr_thread",

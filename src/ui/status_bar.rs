@@ -872,6 +872,35 @@ impl StatusBar {
                 hb.hint(" Enter ", key_style, "run ", desc_style, Action::MenuSelect);
                 hb.hint(" Esc ", key_style, "close", desc_style, Action::Cancel);
             }
+            AppMode::KeymapEditor { capturing, .. } => {
+                if *capturing {
+                    hb.hint(
+                        " Esc ",
+                        key_style,
+                        "cancel capture",
+                        desc_style,
+                        Action::Cancel,
+                    );
+                } else {
+                    hb.hint_static(" ↑/↓ ", key_style, "move ", desc_style);
+                    hb.hint(
+                        " Enter ",
+                        key_style,
+                        "capture ",
+                        desc_style,
+                        Action::MenuSelect,
+                    );
+                    hb.hint(
+                        " u ",
+                        key_style,
+                        "unassign ",
+                        desc_style,
+                        Action::KeymapClear,
+                    );
+                    hb.hint(" C-s ", key_style, "save ", desc_style, Action::KeymapSave);
+                    hb.hint(" Esc ", key_style, "discard ", desc_style, Action::Cancel);
+                }
+            }
         }
 
         // Mode label shown on the right (only for non-Normal modes).
@@ -884,6 +913,7 @@ impl StatusBar {
             AppMode::RebasePlan { .. } => Some(" REBASE PLAN "),
             AppMode::MetadataMenu { .. } => Some(" COLUMNS "),
             AppMode::Settings { .. } => Some(" SETTINGS "),
+            AppMode::KeymapEditor { .. } => Some(" SHORTCUTS "),
             AppMode::PullDivergence { .. } => Some(" PULL "),
             AppMode::CiChecks => Some(" CHECKS "),
             AppMode::PrThread => Some(" PR THREAD "),
