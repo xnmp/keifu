@@ -54,25 +54,29 @@ pull = ["F7"]
 #[test]
 fn saving_an_unchanged_binding_preserves_its_inline_comment() {
     let config: Config = toml::from_str("[keymap]\npull = [\"F7\"] # keep this note\n").unwrap();
-    let mut document = "[keymap]\npull = [\"F7\"] # keep this note\n".parse().unwrap();
+    let mut document = "[keymap]\npull = [\"F7\"] # keep this note\n"
+        .parse()
+        .unwrap();
 
     config.apply_to_document(&mut document);
 
-    assert!(document.to_string().contains("pull = [\"F7\"] # keep this note"));
+    assert!(document
+        .to_string()
+        .contains("pull = [\"F7\"] # keep this note"));
 }
 
 #[test]
 fn saving_settings_preserves_malformed_keymap_values() {
     let config: Config = toml::from_str("[keymap]\npull = \"l\" # malformed on purpose\n").unwrap();
-    let mut document = "[keymap]\npull = \"l\" # malformed on purpose\n".parse().unwrap();
+    let mut document = "[keymap]\npull = \"l\" # malformed on purpose\n"
+        .parse()
+        .unwrap();
 
     config.apply_to_document(&mut document);
 
-    assert!(
-        document
-            .to_string()
-            .contains("pull = \"l\" # malformed on purpose")
-    );
+    assert!(document
+        .to_string()
+        .contains("pull = \"l\" # malformed on purpose"));
 }
 
 #[test]
