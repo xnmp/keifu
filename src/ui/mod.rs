@@ -131,7 +131,14 @@ fn render_scrollbar(
     if !scrollbar_needed(content_length, viewport_length, area.height) {
         return;
     }
-    let mut state = ScrollbarState::new(content_length)
+    // Ratatui's content length is the number of reachable scroll positions,
+    // rather than the number of rendered rows. Our offsets stop when the final
+    // viewport is visible, so translate the row count into that same domain.
+    // This lets the final valid offset place the thumb at the end of the track.
+    let scroll_position_count = content_length
+        .saturating_sub(viewport_length)
+        .saturating_add(1);
+    let mut state = ScrollbarState::new(scroll_position_count)
         .viewport_content_length(viewport_length)
         .position(position);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -146,6 +153,26 @@ fn render_scrollbar(
             horizontal: 0,
         }),
         &mut state,
+    );
+}
+
+/// Renders the shared scrollbar for black-box regression tests.
+#[cfg(feature = "test-support")]
+pub fn render_scrollbar_for_test(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    content_length: usize,
+    viewport_length: usize,
+    position: usize,
+) {
+    render_scrollbar(
+        frame,
+        theme,
+        area,
+        content_length,
+        viewport_length,
+        position,
     );
 }
 
@@ -1402,6 +1429,34 @@ mod tests {
         let buf = term.backend().buffer();
         let painted = (0..8).any(|y| (0..10).any(|x| buf[(x, y)].symbol() != " "));
         assert!(!painted, "a pane whose content fits draws no scrollbar");
+    }
+
+    #[test]
+    fn scrollbar_thumb_reaches_track_bottom_at_last_scroll_position() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        // Eight rows in a six-row viewport can only scroll two rows. The final
+        // row of the track must therefore be part of the thumb at offset two.
+        let theme = Theme::dark();
+        let area = Rect::new(0, 0, 10, 8);
+        let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        term.draw(|frame| render_scrollbar(frame, &theme, area, 8, 6, 2))
+            .unwrap();
+
+        assert_eq!(
+            term.backend().buffer()[(area.width - 1, area.height - 2)].symbol(),
+            "█",
+            "the rendered thumb reaches the bottom when no further scroll is possible"
+        );
+
+        let mut top = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        top.draw(|frame| render_scrollbar(frame, &theme, area, 8, 6, 0))
+            .unwrap();
+        assert_ne!(
+            top.backend().buffer()[(area.width - 1, area.height - 2)].symbol(),
+            "█",
+            "the rendered thumb leaves track below it while further scrolling is possible"
+        );
     }
 
     #[test]
