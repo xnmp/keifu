@@ -131,7 +131,14 @@ fn render_scrollbar(
     if !scrollbar_needed(content_length, viewport_length, area.height) {
         return;
     }
-    let mut state = ScrollbarState::new(content_length)
+    // Ratatui's content length is the number of reachable scroll positions,
+    // rather than the number of rendered rows. Our offsets stop when the final
+    // viewport is visible, so translate the row count into that same domain.
+    // This lets the final valid offset place the thumb at the end of the track.
+    let scroll_position_count = content_length
+        .saturating_sub(viewport_length)
+        .saturating_add(1);
+    let mut state = ScrollbarState::new(scroll_position_count)
         .viewport_content_length(viewport_length)
         .position(position);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
