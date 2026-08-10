@@ -31,6 +31,7 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Merged-lane dimming yields to the selected trace.** A selected merged branch must keep its complete path, including its merge arc into the trunk, visible in both Unicode and pixel graph renderers; unrelated merged work remains dimmed.
 - **Settings go through the pure registry** in `src/settings.rs` (no `App` dependency). State-only settings persist via `UiState` to `state.toml`; config-file settings rewrite only touched keys through `toml_edit` so user comments survive.
 - **Panel-title visibility is one shared UI-state preference with three render owners.** The graph, files, and commit-detail widgets each keep their border and content when titles are off; a live or applied graph filter remains visible so users can understand and clear the narrowed commit list.
+- **Scrollbar state follows offset bounds, not rendered-row count.** Ratatui treats `ScrollbarState::content_length` as the number of reachable scroll positions; the shared renderer converts a pane's row count and viewport length so a clamped final offset draws the thumb at the bottom of its track.
 - **Launch layouts are session-only.** `--bare` and `--scm` select a layout on
   `App` at startup without writing visibility preferences to `state.toml`; the
   default invocation keeps the complete layout.
