@@ -128,7 +128,7 @@ fn copy_to_clipboard(text: &str) -> Result<ClipboardOutcome> {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(text.as_bytes());
             }
-            if child.wait().is_ok() {
+            if child.wait().is_ok_and(|status| status.success()) {
                 return Ok(ClipboardOutcome {
                     via_osc52: false,
                     truncated: false,
