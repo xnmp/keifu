@@ -1428,6 +1428,15 @@ mod tests {
             "█",
             "the rendered thumb reaches the bottom when no further scroll is possible"
         );
+
+        let mut top = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        top.draw(|frame| render_scrollbar(frame, &theme, area, 8, 6, 0))
+            .unwrap();
+        assert_ne!(
+            top.backend().buffer()[(area.width - 1, area.height - 2)].symbol(),
+            "█",
+            "the rendered thumb leaves track below it while further scrolling is possible"
+        );
     }
 
     #[test]
