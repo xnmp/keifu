@@ -156,6 +156,26 @@ fn render_scrollbar(
     );
 }
 
+/// Renders the shared scrollbar for black-box regression tests.
+#[cfg(feature = "test-support")]
+pub fn render_scrollbar_for_test(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    content_length: usize,
+    viewport_length: usize,
+    position: usize,
+) {
+    render_scrollbar(
+        frame,
+        theme,
+        area,
+        content_length,
+        viewport_length,
+        position,
+    );
+}
+
 /// Render the main UI
 pub fn draw(frame: &mut Frame, app: &mut App) {
     // Per-stage draw timings (`draw.*` ops): slow stages (>10ms) log live and
