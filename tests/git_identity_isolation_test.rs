@@ -1,7 +1,7 @@
 //! Regression coverage for the friendly missing-Git-identity error.
 //!
-//! This is deliberately its own integration-test binary: the environment
-//! overrides below are process-global, but this binary has no sibling tests.
+//! This is deliberately its own one-test integration-test binary: the
+//! environment overrides below are process-global.
 
 use std::fs;
 use std::path::Path;
@@ -12,7 +12,7 @@ mod common;
 use common::{commit_file, git_cli, init_repo, repo_path, Seed};
 
 #[test]
-fn identity_regression_is_not_in_parallel_git_operations_binary() {
+fn commit_without_configured_user_maps_to_friendly_error() {
     let git_operations_source = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/git_operations_test.rs"),
     )
@@ -22,10 +22,7 @@ fn identity_regression_is_not_in_parallel_git_operations_binary() {
         !git_operations_source.contains("fn commit_without_configured_user_maps_to_friendly_error"),
         "the identity regression must stay out of the parallel git_operations_test binary"
     );
-}
 
-#[test]
-fn commit_without_configured_user_maps_to_friendly_error() {
     let (td, git_repo) = init_repo(Seed::Empty);
     let repo = git_repo.repo();
     let path = repo_path(&git_repo);
