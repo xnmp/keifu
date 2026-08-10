@@ -38,6 +38,9 @@ Constraints whose violation has caused real bugs — the code shows *what*, this
 - **Pixel graph cell geometry is mutable at runtime.** On terminal resize, derive it from `crossterm::terminal::window_size()` and rebuild the `ratatui_image::Picker` as well as clearing pixel protocol caches: the picker embeds its own font metrics, so changing only `PixelGraphState.font_size` leaves fixed-size image protocols stale.
 - **Squash-merge connector identity is its endpoint pair, not a branch name.** Local and remote refs can alias the same tip and target; resolve them through `SquashMergeLine::from_branch_targets` so the graph draws one connector.
 - **Clipboard uses shell tools with an OSC 52 fallback** — no clipboard crate (avoids openssl-sys build breakage).
+  A shell clipboard command counts only after it exits successfully; a non-zero
+  exit (such as `xclip` without an X server on Wayland) must fall through to
+  the next backend or OSC 52 instead of showing a false success toast.
 - **The full-screen issue list owns mouse hit-testing.** Its content rect must be recorded as the active popup so list-row clicks use the widget's window offset rather than assuming row zero. Issue Detail has no clickable rows.
 - **Graph filters rebuild topology, not just list rows.** `Ctrl+Shift+F` accepts semicolon-separated `message=`, `author=`, and `file=` clauses; direct matches are ANDed and their loaded ancestors remain visible, dimmed, so parent and merge edges stay valid.
 - **The command palette derives contextual commit operations from the Enter-menu availability builder.** Keep `available_commit_menu_items` as the shared source so unavailable actions never appear as palette dead ends and both routes preserve the same confirmation/prompt flow. Contextual rows capture and revalidate their commit/stash/branch target; branch/tag prompts retain the validated commit OID through final confirmation, and reset retains it through its submenu.
