@@ -8,6 +8,7 @@ mod unix {
         env, fs,
         os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
+        sync::Mutex,
     };
 
     use keifu::{
@@ -17,6 +18,8 @@ mod unix {
     };
 
     use super::common::{commit_file, init_repo, Seed};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvRestore {
         name: &'static str,
@@ -65,6 +68,7 @@ mod unix {
 
     #[test]
     fn failed_xclip_falls_through_to_wl_copy_for_selected_commit_hash() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
         let (tempdir, repo) = init_repo(Seed::Empty);
         commit_file(repo.repo(), "base.txt", "base", "base commit");
         let commit = commit_file(repo.repo(), "commit.txt", "contents", "clipboard target");
@@ -103,6 +107,39 @@ mod unix {
                     && !toast.text.contains("via OSC 52")
             }),
             "successful fallback command produces the normal copy-success toast"
+        );
+    }
+
+    #[test]
+    fn all_failed_clipboard_commands_report_osc52_copy_feedback() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let (tempdir, repo) = init_repo(Seed::Empty);
+        commit_file(repo.repo(), "base.txt", "base", "base commit");
+        let commit = commit_file(repo.repo(), "commit.txt", "contents", "clipboard target");
+        let commands_dir = tempdir.path().join("clipboard-commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        for command in ["xclip", "xsel", "wl-copy", "pbcopy"] {
+            write_command(&commands_dir.join(command), "#!/bin/sh\nexit 1\n");
+        }
+
+        let _path = EnvRestore::set("PATH", PathBuf::from(&commands_dir));
+        let mut app = App::from_repo(repo).unwrap();
+        let commit_node = app
+            .graph_layout
+            .nodes
+            .iter()
+            .position(|node| node.commit.as_ref().is_some_and(|node| node.oid == commit))
+            .expect("the committed hash is visible in the graph");
+        app.graph_nav.graph_list_state.select(Some(commit_node));
+
+        select_copy_hash(&mut app);
+
+        assert!(
+            app.toasts.visible().iter().any(|toast| {
+                toast.kind == ToastKind::Success && toast.text.contains("via OSC 52")
+            }),
+            "when every clipboard command fails, the selected hash action reports OSC 52 fallback success"
         );
     }
 }
