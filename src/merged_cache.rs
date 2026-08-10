@@ -76,10 +76,10 @@ struct OnDisk {
 }
 
 impl MergedCache {
-    /// The cache directory: `<config>/keifu/merged_cache`. `None` when the
-    /// platform has no config dir. Does not create it.
+    /// The cache directory: `<Keifu config root>/merged_cache`. `None` when
+    /// the platform has no config dir. Does not create it.
     fn cache_dir() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("keifu").join("merged_cache"))
+        crate::config::keifu_config_dir().map(|path| path.join("merged_cache"))
     }
 
     /// The per-repo cache file path. Keyed by a stable hash of the repository

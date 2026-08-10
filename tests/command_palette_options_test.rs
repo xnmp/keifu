@@ -79,7 +79,7 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
     // throwaway directory. This integration-test binary contains only this test,
     // so changing its process environment cannot race a sibling test.
     let config_home = tempfile::tempdir().unwrap();
-    std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+    std::env::set_var("KEIFU_CONFIG_DIR", config_home.path());
 
     let (_repo_dir, git_repo) = init_repo(Seed::TrackedFile);
     let path = repo_path(&git_repo).to_string();
@@ -309,5 +309,5 @@ fn palette_checkout_picker_and_registry_settings_are_observable_and_persisted() 
         "screen was:\n{persisted_renderer}"
     );
 
-    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("KEIFU_CONFIG_DIR");
 }
