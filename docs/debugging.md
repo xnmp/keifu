@@ -67,11 +67,11 @@ identical to a human at the terminal.
   `x`/`y` are screen coordinates (0-based).
 - `dump` — renders the current state to plain text. Without `width`/`height`
   the real terminal size is used (falling back to sane bounds when headless).
-- `state` — mode, focused panel, selection, HEAD, async operation status:
+- `state` — mode, focused panel, selection, HEAD/upstream, async operation status:
   `mode`, `focused_panel` (`graph`/`files`/`commit_detail`), `selected_index`,
-  `selected_commit` (short id), `selected_branches`, `head`, `node_count`,
-  `commit_count`, `editing_commit_message`, `is_fetching`, `is_pushing`,
-  `is_pulling`.
+  `selected_commit` (short id), `selected_branches`, `head`, `head_upstream`,
+  `node_count`, `commit_count`, `editing_commit_message`, `is_fetching`,
+  `is_pushing`, `is_pulling`.
 
 For performance questions, use the log instead (see above).
 

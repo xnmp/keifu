@@ -418,7 +418,7 @@ pub enum AppMode {
         all_branches: Vec<String>,
     },
     BranchPicker {
-        branches: Vec<String>,
+        branches: Vec<crate::palette::CheckoutBranch>,
         selected: usize,
     },
     BranchDeletePicker {
@@ -1052,6 +1052,9 @@ pub struct App {
     /// Contextual rows and their selection identity for the currently open
     /// command palette. Cleared when the palette closes.
     pub(crate) command_palette_snapshot: Option<crate::palette::ContextualPaletteSnapshot>,
+    /// Fuzzy query for the checkout picker. Kept on `App` so extending the
+    /// picker preserves the established `AppMode::BranchPicker` shape.
+    pub(crate) checkout_picker_query: String,
     /// Commit identity captured when a contextual branch/tag prompt opens.
     /// Normal keyboard prompts leave this `None` and retain their historical
     /// current-selection behavior.
@@ -1590,6 +1593,10 @@ impl App {
             self.open_command_palette();
             return Ok(());
         }
+        if matches!(action, Action::OpenCheckoutPicker) {
+            self.open_checkout_branch_picker();
+            return Ok(());
+        }
         // Branch quick search opens from any panel in Normal mode.
         if matches!(action, Action::Search) {
             self.open_branch_search();
@@ -1664,6 +1671,15 @@ impl App {
             AppMode::CommandPalette { .. } => self.handle_command_palette_action(action)?,
         }
         Ok(())
+    }
+
+    /// Production event-loop dispatch: surface action failures as red toasts
+    /// and consume the error so the UI remains interactive. Keyboard, mouse,
+    /// debug-server input, and observable tests all share this exact seam.
+    pub fn dispatch_action(&mut self, action: Action) {
+        if let Err(error) = self.handle_action(action) {
+            self.show_error(error.to_string());
+        }
     }
 
     /// Report a one-shot error as a red toast (#116): visible without blocking

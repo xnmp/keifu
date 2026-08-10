@@ -255,15 +255,17 @@ impl<'a> Widget for OptionsDialog<'a> {
 /// Branch picker dialog (shown when selecting from multiple branches on a commit)
 pub struct BranchPickerWidget<'a> {
     branches: &'a [String],
+    query: Option<&'a str>,
     selected: usize,
     theme: &'a Theme,
     title: &'a str,
 }
 
 impl<'a> BranchPickerWidget<'a> {
-    pub fn new(branches: &'a [String], selected: usize, theme: &'a Theme) -> Self {
+    pub fn new(branches: &'a [String], query: &'a str, selected: usize, theme: &'a Theme) -> Self {
         Self {
             branches,
+            query: Some(query),
             selected,
             theme,
             title: " Checkout Branch ",
@@ -278,6 +280,7 @@ impl<'a> BranchPickerWidget<'a> {
     ) -> Self {
         Self {
             branches,
+            query: None,
             selected,
             theme,
             title,
@@ -294,12 +297,38 @@ impl<'a> Widget for BranchPickerWidget<'a> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        for (i, branch) in self.branches.iter().enumerate() {
-            if i as u16 >= inner.height {
-                break;
-            }
+        let row_offset = if let Some(query) = self.query {
+            let line = Line::from(vec![
+                Span::styled("› ", Style::default().fg(self.theme.help_key)),
+                Span::styled(query, Style::default().fg(self.theme.text_primary)),
+                Span::styled("▏", Style::default().fg(self.theme.help_key)),
+            ]);
+            buf.set_line(inner.x, inner.y, &line, inner.width);
+            1
+        } else {
+            0
+        };
 
-            let y = inner.y + i as u16;
+        if self.branches.is_empty() && self.query.is_some() && inner.height > row_offset {
+            buf.set_string(
+                inner.x,
+                inner.y + row_offset,
+                "  No matching branches",
+                Style::default().fg(self.theme.text_muted),
+            );
+            return;
+        }
+
+        let visible_rows = inner.height.saturating_sub(row_offset) as usize;
+        let first = self.selected.saturating_sub(visible_rows.saturating_sub(1));
+        for (i, branch) in self
+            .branches
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(visible_rows)
+        {
+            let y = inner.y + row_offset + (i - first) as u16;
             let is_selected = i == self.selected;
             let style = if is_selected {
                 self.theme.list_selection_style()

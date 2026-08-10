@@ -126,9 +126,7 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
                         app.commit_filter_active,
                         &app.keymap,
                     ) {
-                        if let Err(e) = app.handle_action(action) {
-                            app.show_error(format!("{}", e));
-                        }
+                        app.dispatch_action(action);
                     }
                 }
                 json!({"ok": true})
@@ -153,9 +151,7 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
                 modifiers: KeyModifiers::NONE,
             };
             if let Some(action) = map_mouse_to_action(event) {
-                if let Err(e) = app.handle_action(action) {
-                    app.show_error(format!("{}", e));
-                }
+                app.dispatch_action(action);
             }
             json!({"ok": true})
         }
@@ -258,6 +254,11 @@ fn state_json(app: &App) -> Value {
     let selected_branches = selected_node
         .map(|node| node.branch_names.clone())
         .unwrap_or_default();
+    let head_upstream = app
+        .branches
+        .iter()
+        .find(|branch| branch.is_head && !branch.is_remote)
+        .and_then(|branch| branch.upstream.clone());
 
     json!({
         "ok": true,
@@ -267,6 +268,7 @@ fn state_json(app: &App) -> Value {
         "selected_commit": selected_commit,
         "selected_branches": selected_branches,
         "head": app.head_name,
+        "head_upstream": head_upstream,
         "node_count": app.graph_layout.nodes.len(),
         "commit_count": app.commits.len(),
         "editing_commit_message": app.editing_commit_message,

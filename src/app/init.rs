@@ -199,6 +199,7 @@ impl App {
             graph_generation: 0,
             graph_nav,
             command_palette_snapshot: None,
+            checkout_picker_query: String::new(),
             input_commit_target: None,
             reset_commit_target: None,
             // A hidden files pane must not hold startup focus (#116) — the

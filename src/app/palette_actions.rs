@@ -106,6 +106,36 @@ impl App {
             });
         }
 
+        // Toggle/cycle settings are projected directly from the pure registry,
+        // so their value, mutation, and persistence cannot drift from Ctrl+,.
+        // Numeric editors and Theme are intentionally left in the full settings
+        // menu; palette rows cover boolean toggles plus Graph renderer.
+        for (idx, descriptor) in crate::settings::descriptors().into_iter().enumerate() {
+            let verb = match descriptor.kind {
+                crate::settings::SettingKind::Bool => "Toggle",
+                crate::settings::SettingKind::Enum { .. }
+                    if descriptor.label == "Graph renderer" =>
+                {
+                    "Cycle"
+                }
+                _ => continue,
+            };
+            let value = crate::settings::format_value(descriptor.kind, descriptor.get(self));
+            let hint = match descriptor.note {
+                Some(note) => format!("{value} · {note}"),
+                None => value,
+            };
+            let label = format!("{verb} {}", descriptor.label);
+            out.push(Candidate {
+                kind: PaletteKind::Setting,
+                match_text: label.clone(),
+                label,
+                hint: Some(hint),
+                action: PaletteAction::ToggleSetting(idx),
+                order: idx,
+            });
+        }
+
         // Branches — "Checkout <name>", remote branches marked with the cloud
         // glyph (same convention as the graph chips). Match on the bare name.
         for b in &self.branches {
@@ -244,6 +274,16 @@ impl App {
                     message: format!("Checkout branch '{name}'?"),
                     action: ConfirmAction::Checkout { name, is_remote },
                 };
+            }
+            PaletteAction::ToggleSetting(index) => {
+                let descriptors = crate::settings::descriptors();
+                if let Some(descriptor) = descriptors.get(index) {
+                    let current = descriptor.get(self);
+                    let next = crate::settings::cycle_value(&descriptor.kind, current);
+                    self.commit_setting(descriptor, next)?;
+                }
+                // Keep the palette open so the updated value is immediately
+                // visible and another cycle is one Enter press away.
             }
             PaletteAction::JumpToCommit(idx) => {
                 self.mode = AppMode::Normal;

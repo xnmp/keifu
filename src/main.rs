@@ -131,9 +131,7 @@ fn handle_input_event(
             app.commit_filter_active,
             &app.keymap,
         ) {
-            if let Err(e) = app.handle_action(action) {
-                app.show_error(format!("{}", e));
-            }
+            app.dispatch_action(action);
             // External-editor pop-out: the compose handler set a pending
             // request; main.rs owns the terminal, so it runs here (real
             // input path only — never for debug-injected keys).
@@ -144,9 +142,7 @@ fn handle_input_event(
         }
     } else if let Some(mouse) = get_mouse_event(&event) {
         if let Some(action) = map_mouse_to_action(mouse) {
-            if let Err(e) = app.handle_action(action) {
-                app.show_error(format!("{}", e));
-            }
+            app.dispatch_action(action);
         }
     } else if let Some(text) = get_paste_event(&event) {
         // Bracketed paste: routed by mode (credential prompt, other

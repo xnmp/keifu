@@ -515,11 +515,32 @@ impl App {
         if self.block_if_op_in_progress("checkout") {
             return Ok(());
         }
-        let branches: Vec<String> = self
-            .selected_node_branches()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let selected_oid = self
+            .selected_commit_node()
+            .and_then(|node| node.commit.as_ref())
+            .map(|commit| commit.oid);
+        let mut branches = Vec::new();
+        for name in self.selected_node_branches() {
+            let before = branches.len();
+            branches.extend(
+                self.branches
+                    .iter()
+                    .filter(|branch| branch.name == name)
+                    .filter(|branch| selected_oid.is_none_or(|oid| branch.tip_oid == oid))
+                    .map(|branch| crate::palette::CheckoutBranch {
+                        name: branch.name.clone(),
+                        is_remote: branch.is_remote,
+                    }),
+            );
+            if branches.len() == before {
+                // Synthetic/legacy graph labels may not have a current
+                // BranchInfo. Preserve the remotes-aware fallback for them.
+                branches.push(crate::palette::CheckoutBranch {
+                    name: name.to_string(),
+                    is_remote: self.split_remote_ref(name).is_some(),
+                });
+            }
+        }
 
         match branches.len() {
             0 => {
@@ -531,12 +552,11 @@ impl App {
                 }
             }
             1 => {
-                // A graph label is a raw name; resolve remoteness via the
-                // remotes()-aware splitter rather than an "origin/" guess.
-                let is_remote = self.split_remote_ref(&branches[0]).is_some();
-                self.checkout_branch_by_name(&branches[0], is_remote)?;
+                let branch = &branches[0];
+                self.checkout_branch_by_name(&branch.name, branch.is_remote)?;
             }
             _ => {
+                self.checkout_picker_query.clear();
                 self.mode = AppMode::BranchPicker {
                     branches,
                     selected: 0,

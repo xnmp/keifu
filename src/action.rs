@@ -27,6 +27,8 @@ pub enum Action {
 
     // Git operations
     Checkout,
+    /// Open the searchable all-branches checkout picker.
+    OpenCheckoutPicker,
     CreateBranch,
     DeleteBranch,
     /// Secondary confirm in a delete-branch dialog: also delete the branch's
