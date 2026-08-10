@@ -1405,6 +1405,25 @@ mod tests {
     }
 
     #[test]
+    fn scrollbar_thumb_reaches_track_bottom_at_last_scroll_position() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        // Eight rows in a six-row viewport can only scroll two rows. The final
+        // row of the track must therefore be part of the thumb at offset two.
+        let theme = Theme::dark();
+        let area = Rect::new(0, 0, 10, 8);
+        let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        term.draw(|frame| render_scrollbar(frame, &theme, area, 8, 6, 2))
+            .unwrap();
+
+        assert_eq!(
+            term.backend().buffer()[(area.width - 1, area.height - 2)].symbol(),
+            "█",
+            "the rendered thumb reaches the bottom when no further scroll is possible"
+        );
+    }
+
+    #[test]
     fn truncate_str_measures_display_width() {
         use unicode_width::UnicodeWidthStr;
 
