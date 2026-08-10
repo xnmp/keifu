@@ -179,6 +179,9 @@ fn debug_state_reports_the_checked_out_branch_upstream() {
     let state = request(port, r#"{"cmd":"state"}"#);
     assert_eq!(state["head"], "main");
     assert_eq!(state["head_upstream"], "origin/main");
-    assert_eq!(request(port, r#"{"cmd":"keys","keys":"<c-q>"}"#)["ok"], true);
+    assert_eq!(
+        request(port, r#"{"cmd":"keys","keys":"<c-q>"}"#)["ok"],
+        true
+    );
     app.wait();
 }
