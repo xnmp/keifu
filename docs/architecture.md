@@ -414,6 +414,12 @@ display, fuzzy filtering) stays unit-testable without a TUI.
   value(...)`) rather than re-serializing — so comments and keys the menu
   doesn't know about survive a save. `App::settings_snapshot` is the read-side
   loop.
+- **All config-owned files share one root.** `config::keifu_config_dir()`
+  resolves `KEIFU_CONFIG_DIR` when explicitly set, otherwise the platform's
+  conventional Keifu config directory. `config.toml`, `state.toml`, and the
+  merged-branch cache all use that resolver, so integration tests and portable
+  launches can isolate persistence without platform-specific home-directory
+  environment overrides.
 - **Clamping / sentinels are in the kind, not a projection.** `clamp_int`
   bounds an `Int` to its `min`/`max` (e.g. graph split ratio 20-80); a
   `zero_label` (e.g. "uncapped" for the graph width cap) shows a friendly token
