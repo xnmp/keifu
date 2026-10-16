@@ -1,0 +1,426 @@
+{
+  "before-unicode": {
+    "startup_to_ready_ms": 2062.4792460002936,
+    "perf": {
+      "draw": {
+        "count": 118,
+        "average_ms": 7.49,
+        "maximum_ms": 41.91
+      },
+      "draw.detail_layout": {
+        "count": 165,
+        "average_ms": 0.01,
+        "maximum_ms": 0.31
+      },
+      "draw.dump": {
+        "count": 51,
+        "average_ms": 0.92,
+        "maximum_ms": 2.43
+      },
+      "draw.graph_widget": {
+        "count": 165,
+        "average_ms": 2.65,
+        "maximum_ms": 22.49
+      },
+      "draw.overlay": {
+        "count": 165,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "draw.panels": {
+        "count": 165,
+        "average_ms": 0.06,
+        "maximum_ms": 0.92
+      },
+      "draw.pixel_pass": {
+        "count": 165,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "draw.prep": {
+        "count": 169,
+        "average_ms": 2.72,
+        "maximum_ms": 21.68
+      },
+      "refresh": {
+        "count": 7,
+        "average_ms": 15.19,
+        "maximum_ms": 19.77
+      },
+      "startup.app_new_total": {
+        "count": 1,
+        "average_ms": 15.88,
+        "maximum_ms": 15.88
+      },
+      "startup.branches": {
+        "count": 1,
+        "average_ms": 0.23,
+        "maximum_ms": 0.23
+      },
+      "startup.build_graph": {
+        "count": 1,
+        "average_ms": 0.74,
+        "maximum_ms": 0.74
+      },
+      "startup.classify_merged": {
+        "count": 1,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "startup.commits": {
+        "count": 1,
+        "average_ms": 14.46,
+        "maximum_ms": 14.46
+      },
+      "startup.stashes": {
+        "count": 1,
+        "average_ms": 0.11,
+        "maximum_ms": 0.11
+      },
+      "startup.tags": {
+        "count": 1,
+        "average_ms": 0.08,
+        "maximum_ms": 0.08
+      },
+      "startup.working_tree_status": {
+        "count": 1,
+        "average_ms": 0.19,
+        "maximum_ms": 0.19
+      }
+    },
+    "screen_sha256": {
+      "bottom.txt": "60600a1d85193a56b8dfa65d6e06e18820afec3b80d7b422c2bfe68ff3d5fb3e",
+      "diff-small.txt": "154c38ca7998f2d1536fc7bbf79b120853ed83a858676e283b7d94e64137f5f8",
+      "diff.txt": "dbda33f20a99a5059131ce05077bc6c18102d22ac300413db9173930db2259f8",
+      "files.txt": "c0d09da612ba3c0668a7d7fb31ca10195abb6286d9c824c7662493ffb528ebca",
+      "filtered.txt": "c6d3c6afb2308aa34b713946c4216d643cd123e7529f58bd6e8787e940fde474",
+      "help.txt": "8c2202044a2ed438b3b57a9d3c36995c34a0e2faf7944c3abee24a32ed970d52",
+      "mouse-after.txt": "d8c6fffd70682197336a4e6d5820d5fbc4027712e3cb0a3144ad4ee05a0b77fd",
+      "mouse-before.txt": "9ba203a7e0fdd61b9893e30f465e01d4bc83e1f9cef698c935507a0890c8ab58",
+      "moved.txt": "149969e097ce8c259de0ee1a6c3c19b90ea972d244b2c04035bc2626da07afdb",
+      "startup.txt": "fc39e5304f0a5bc5f47057d55d7d38df8ea62b3df14428eed20e8a4ea0354026",
+      "top.txt": "4ac03629f54164600383064a5ab0924b81e7a6b25b89202e592b67b933f80429"
+    },
+    "raw_artifacts": "/tmp/keifu-perf/live-before-unicode",
+    "kitty_protocol_emitted": false,
+    "scenario_passed": true
+  },
+  "after-unicode": {
+    "startup_to_ready_ms": 2057.582695997553,
+    "perf": {
+      "draw": {
+        "count": 120,
+        "average_ms": 1.86,
+        "maximum_ms": 5.4
+      },
+      "draw.detail_layout": {
+        "count": 166,
+        "average_ms": 0.02,
+        "maximum_ms": 0.26
+      },
+      "draw.dump": {
+        "count": 51,
+        "average_ms": 0.54,
+        "maximum_ms": 0.88
+      },
+      "draw.graph_widget": {
+        "count": 166,
+        "average_ms": 0.29,
+        "maximum_ms": 0.52
+      },
+      "draw.overlay": {
+        "count": 166,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "draw.panels": {
+        "count": 166,
+        "average_ms": 0.06,
+        "maximum_ms": 0.74
+      },
+      "draw.pixel_pass": {
+        "count": 166,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "draw.prep": {
+        "count": 171,
+        "average_ms": 0.95,
+        "maximum_ms": 4.77
+      },
+      "refresh": {
+        "count": 7,
+        "average_ms": 16.64,
+        "maximum_ms": 31.32
+      },
+      "startup.app_new_total": {
+        "count": 1,
+        "average_ms": 12.49,
+        "maximum_ms": 12.49
+      },
+      "startup.branches": {
+        "count": 1,
+        "average_ms": 0.18,
+        "maximum_ms": 0.18
+      },
+      "startup.build_graph": {
+        "count": 1,
+        "average_ms": 0.46,
+        "maximum_ms": 0.46
+      },
+      "startup.classify_merged": {
+        "count": 1,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "startup.commits": {
+        "count": 1,
+        "average_ms": 11.55,
+        "maximum_ms": 11.55
+      },
+      "startup.stashes": {
+        "count": 1,
+        "average_ms": 0.06,
+        "maximum_ms": 0.06
+      },
+      "startup.tags": {
+        "count": 1,
+        "average_ms": 0.06,
+        "maximum_ms": 0.06
+      },
+      "startup.working_tree_status": {
+        "count": 1,
+        "average_ms": 0.13,
+        "maximum_ms": 0.13
+      }
+    },
+    "screen_sha256": {
+      "bottom.txt": "60600a1d85193a56b8dfa65d6e06e18820afec3b80d7b422c2bfe68ff3d5fb3e",
+      "diff-small.txt": "154c38ca7998f2d1536fc7bbf79b120853ed83a858676e283b7d94e64137f5f8",
+      "diff.txt": "dbda33f20a99a5059131ce05077bc6c18102d22ac300413db9173930db2259f8",
+      "files.txt": "c0d09da612ba3c0668a7d7fb31ca10195abb6286d9c824c7662493ffb528ebca",
+      "filtered.txt": "c6d3c6afb2308aa34b713946c4216d643cd123e7529f58bd6e8787e940fde474",
+      "help.txt": "8c2202044a2ed438b3b57a9d3c36995c34a0e2faf7944c3abee24a32ed970d52",
+      "mouse-after.txt": "d8c6fffd70682197336a4e6d5820d5fbc4027712e3cb0a3144ad4ee05a0b77fd",
+      "mouse-before.txt": "40daa6929081c033b6e20cb051cfd41c694843df13841bfefd165a3ebd278f2d",
+      "moved.txt": "149969e097ce8c259de0ee1a6c3c19b90ea972d244b2c04035bc2626da07afdb",
+      "startup.txt": "fc39e5304f0a5bc5f47057d55d7d38df8ea62b3df14428eed20e8a4ea0354026",
+      "top.txt": "4ac03629f54164600383064a5ab0924b81e7a6b25b89202e592b67b933f80429"
+    },
+    "raw_artifacts": "/tmp/keifu-perf/live-after-unicode",
+    "kitty_protocol_emitted": false,
+    "scenario_passed": true
+  },
+  "before-pixel": {
+    "startup_to_ready_ms": 2058.482049003942,
+    "perf": {
+      "draw": {
+        "count": 118,
+        "average_ms": 7.08,
+        "maximum_ms": 29.43
+      },
+      "draw.detail_layout": {
+        "count": 165,
+        "average_ms": 0.01,
+        "maximum_ms": 0.16
+      },
+      "draw.dump": {
+        "count": 51,
+        "average_ms": 1.27,
+        "maximum_ms": 4.64
+      },
+      "draw.graph_widget": {
+        "count": 165,
+        "average_ms": 2.18,
+        "maximum_ms": 10.08
+      },
+      "draw.overlay": {
+        "count": 165,
+        "average_ms": 0.02,
+        "maximum_ms": 0.04
+      },
+      "draw.panels": {
+        "count": 165,
+        "average_ms": 0.06,
+        "maximum_ms": 0.75
+      },
+      "draw.pixel_pass": {
+        "count": 165,
+        "average_ms": 0.14,
+        "maximum_ms": 2.45
+      },
+      "draw.prep": {
+        "count": 169,
+        "average_ms": 2.78,
+        "maximum_ms": 18.65
+      },
+      "refresh": {
+        "count": 7,
+        "average_ms": 18.23,
+        "maximum_ms": 24.83
+      },
+      "startup.app_new_total": {
+        "count": 1,
+        "average_ms": 13.88,
+        "maximum_ms": 13.88
+      },
+      "startup.branches": {
+        "count": 1,
+        "average_ms": 0.23,
+        "maximum_ms": 0.23
+      },
+      "startup.build_graph": {
+        "count": 1,
+        "average_ms": 0.55,
+        "maximum_ms": 0.55
+      },
+      "startup.classify_merged": {
+        "count": 1,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "startup.commits": {
+        "count": 1,
+        "average_ms": 12.72,
+        "maximum_ms": 12.72
+      },
+      "startup.stashes": {
+        "count": 1,
+        "average_ms": 0.09,
+        "maximum_ms": 0.09
+      },
+      "startup.tags": {
+        "count": 1,
+        "average_ms": 0.08,
+        "maximum_ms": 0.08
+      },
+      "startup.working_tree_status": {
+        "count": 1,
+        "average_ms": 0.19,
+        "maximum_ms": 0.19
+      }
+    },
+    "screen_sha256": {
+      "bottom.txt": "1535dca1bad7b2c9b98645db1d357c5d0c195a89b9e99620e98adacc94801cb4",
+      "diff-small.txt": "154c38ca7998f2d1536fc7bbf79b120853ed83a858676e283b7d94e64137f5f8",
+      "diff.txt": "dbda33f20a99a5059131ce05077bc6c18102d22ac300413db9173930db2259f8",
+      "files.txt": "7b52a682190ff243094f3df7977f6db0e6531cdbba11baf6dccc50208523c452",
+      "filtered.txt": "6ba863ce90fdc21926d07e4d57a7e92893e8640068311b2f104a7f38d76c5c32",
+      "help.txt": "b5c55bdf44a3ab430af27d0528be13c6d5a7e18899b37dc3750ec079dabf83a1",
+      "mouse-after.txt": "a545e11b6ccf1343608b2b21e6d9c8496f67a46fb46378759d56aee8feafd846",
+      "mouse-before.txt": "e7346358ef457c0db37f18b51029d3b3c92804481fd8ad4fd21bde2d0ade4322",
+      "moved.txt": "50b8137308b4dea25b2218c9bb39f738ee870b84944f98b49c17c5005fdf1cbf",
+      "startup.txt": "6cc3dca3edec907dfeaaa420373a041cca149a09acb72790d40ef423f7873af0",
+      "top.txt": "f7b80725652bf4f3e8e3e50ef29ae1cdb640dade97cf24496e0ef0fb6fdbb231"
+    },
+    "raw_artifacts": "/tmp/keifu-perf/live-before-pixel",
+    "kitty_protocol_emitted": true,
+    "scenario_passed": true
+  },
+  "after-pixel": {
+    "startup_to_ready_ms": 2059.2445849906653,
+    "perf": {
+      "draw": {
+        "count": 120,
+        "average_ms": 2.1,
+        "maximum_ms": 8.03
+      },
+      "draw.detail_layout": {
+        "count": 166,
+        "average_ms": 0.02,
+        "maximum_ms": 0.14
+      },
+      "draw.dump": {
+        "count": 51,
+        "average_ms": 0.53,
+        "maximum_ms": 1.15
+      },
+      "draw.graph_widget": {
+        "count": 166,
+        "average_ms": 0.22,
+        "maximum_ms": 0.51
+      },
+      "draw.overlay": {
+        "count": 166,
+        "average_ms": 0.02,
+        "maximum_ms": 0.05
+      },
+      "draw.panels": {
+        "count": 166,
+        "average_ms": 0.06,
+        "maximum_ms": 0.87
+      },
+      "draw.pixel_pass": {
+        "count": 166,
+        "average_ms": 0.11,
+        "maximum_ms": 1.89
+      },
+      "draw.prep": {
+        "count": 171,
+        "average_ms": 1.01,
+        "maximum_ms": 7.3
+      },
+      "refresh": {
+        "count": 7,
+        "average_ms": 14.33,
+        "maximum_ms": 27.91
+      },
+      "startup.app_new_total": {
+        "count": 1,
+        "average_ms": 12.63,
+        "maximum_ms": 12.63
+      },
+      "startup.branches": {
+        "count": 1,
+        "average_ms": 0.2,
+        "maximum_ms": 0.2
+      },
+      "startup.build_graph": {
+        "count": 1,
+        "average_ms": 0.45,
+        "maximum_ms": 0.45
+      },
+      "startup.classify_merged": {
+        "count": 1,
+        "average_ms": 0.0,
+        "maximum_ms": 0.0
+      },
+      "startup.commits": {
+        "count": 1,
+        "average_ms": 11.62,
+        "maximum_ms": 11.62
+      },
+      "startup.stashes": {
+        "count": 1,
+        "average_ms": 0.07,
+        "maximum_ms": 0.07
+      },
+      "startup.tags": {
+        "count": 1,
+        "average_ms": 0.06,
+        "maximum_ms": 0.06
+      },
+      "startup.working_tree_status": {
+        "count": 1,
+        "average_ms": 0.19,
+        "maximum_ms": 0.19
+      }
+    },
+    "screen_sha256": {
+      "bottom.txt": "033817f0e2e5af7a0729c0eb30eff149ab7b912b6de5b8596f5370e2355dc591",
+      "diff-small.txt": "154c38ca7998f2d1536fc7bbf79b120853ed83a858676e283b7d94e64137f5f8",
+      "diff.txt": "dbda33f20a99a5059131ce05077bc6c18102d22ac300413db9173930db2259f8",
+      "files.txt": "3c04c86ac430b7596b38b4410ff1787b053db3c92832cc0f77548996cf12eeb1",
+      "filtered.txt": "7ce7dd91dc5fcaa06ba6357bc4760a33ab1855940001ee628fe6d32705812f45",
+      "help.txt": "0fbb920908bdcd5e90a127275e382c9737395827f33aa93a8d748a6194dec0d2",
+      "mouse-after.txt": "faaf96f5841c25cce3d3ce45ec410a0422ec9c19a641e898885fc6ba1d10ddbc",
+      "mouse-before.txt": "da11a6fab2a01c29f97136f303b1eb9d720151e2cf52678d2c1c18b89b129b10",
+      "moved.txt": "8574f0ac05b003309b35087516e2ffe417320c8357c673988bbb0373570e8ce9",
+      "startup.txt": "6eb36a7dbb4d1a8700b9f3c75378e0f06f5445b489affa440fa6941ce5bef1bf",
+      "top.txt": "f2f5bd7444ba987e41daab56428b110145e2f747e28805e4a5d5cb2dc739be30"
+    },
+    "raw_artifacts": "/tmp/keifu-perf/live-after-pixel",
+    "kitty_protocol_emitted": true,
+    "scenario_passed": true
+  }
+}

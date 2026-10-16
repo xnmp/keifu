@@ -1,0 +1,35 @@
+╭ Commits ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ╭─●          [feature-2]  merged Feature 2                                                  2y    Feature   5f789a2 █
+│ │ │ ●───╮    [feature-1]  merged Feature 1                                                  2y    Feature   9442dd7 ║
+│ │ │ │ ●─┼─╮  [feature-0]  merged Feature 0                                                  2y    Feature   f2682b1 ║
+│ ⭐ ┼─┼─┼─╯─╯  [main] Commit 03000: update parser                                              2y    Perf      69f3145 ║
+│ ● │ │ │      Commit 02999: update parser                                                     2y    Perf      3bcaad4 ║
+│ ● │ │ │      Commit 02998: update parser                                                     2y    Perf      94b5cc7 ║
+│ ● │ │ │      Commit 02997: update parser                                                     2y    Perf      b06d24a ║
+│ ● │ │ │      Commit 02996: update parser                                                     2y    Perf      bf82e8b ║
+│ ● │ │ │      Commit 02995: update parser                                                     2y    Perf      a3fcb17 ║
+│ ● │ │ │      Commit 02994: update parser                                                     2y    Perf      3c5f800 ║
+│ ● │ │ │      Commit 02993: update parser                                                     2y    Perf      a7db238 ║
+│ ● │ │ │      Commit 02992: update parser                                                     2y    Perf      430e117 ║
+│ ● │ │ │      Commit 02991: update parser                                                     2y    Perf      9701b6c ║
+│ ● │ │ │      Commit 02990: update parser                                                     2y    Perf      891cba5 ║
+│ ● │ │ │      Commit 02989: update parser                                                     2y    Perf      ebb295a ║
+│ ● │ │ │      Commit 02988: update parser                                                     2y    Perf      b999749 ║
+│ ● │ │ │      Commit 02987: update parser                                                     2y    Perf      e9fe58c ║
+│ ● │ │ │      Commit 02986: update parser                                                     2y    Perf      48de8b8 ║
+│ ● │ │ │      Commit 02985: update parser                                                     2y    Perf      f205df1 ║
+│ ● │ │ │      Commit 02984: update parser                                                     2y    Perf      766242d ║
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ Changed Files ───────────────────────────────────────────╮╭ Commit Detail ───────────────────────────────────────────╮
+│ Loading...                                               ││ Author: Feature <feature@example.com>                    │
+│                                                          ││ Date:   2023-11-15 10:20:00                              │
+│                                                          ││                                                          │
+│                                                          ││ Feature 0                                                │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+ repo   main   ↑↓ move  Enter actions  <> width  ←→ panels  B branches  ? help

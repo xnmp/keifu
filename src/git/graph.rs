@@ -181,6 +181,7 @@ pub struct GraphLayout {
 fn head_first_parent_line(
     commits: &[CommitInfo],
     oid_to_row: &HashMap<Oid, usize>,
+    children: &HashMap<Oid, Vec<Oid>>,
     head_oid: Option<Oid>,
 ) -> HashSet<Oid> {
     let mut line = HashSet::new();
@@ -205,10 +206,14 @@ fn head_first_parent_line(
     // HEAD shares its lane instead of displacing it).
     let mut cur = head;
     loop {
-        let child = commits
-            .iter()
-            .find(|c| c.parent_oids.first() == Some(&cur) && !line.contains(&c.oid))
-            .map(|c| c.oid);
+        let child = children
+            .get(&cur)
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|oid| {
+                !line.contains(oid) && commits[oid_to_row[oid]].parent_oids.first() == Some(&cur)
+            });
         match child {
             Some(ch) => {
                 line.insert(ch);
@@ -299,25 +304,6 @@ pub fn build_graph(
         .map(|(i, c)| (c.oid, i))
         .collect();
 
-    // HEAD's first-parent line is pinned to lane 0 (leftmost), so the
-    // checked-out work is anchored at the far left. When HEAD is unknown or not
-    // loaded this is empty and lane assignment keeps its historical behaviour.
-    // `head_commit_oid` (not the branch-derived `head_oid` above) is used so a
-    // detached HEAD is anchored too.
-    let head_line = head_first_parent_line(commits, &oid_to_row, head_commit_oid);
-    // Whether lane 0 is reserved for HEAD's line. When true, only commits on
-    // `head_line` may occupy lane 0; every other tip shifts one lane right.
-    let head_line_reserved = !head_line.is_empty();
-
-    // Lowest free lane a commit may take. Lane 0 is off-limits unless the commit
-    // is on HEAD's line (or nothing is reserved). Returns None when every
-    // eligible lane is occupied and a new one must be pushed.
-    let eligible_empty_lane = |lanes: &[Option<Oid>], zero_ok: bool| -> Option<usize> {
-        lanes.iter().enumerate().find_map(|(i, l)| {
-            (l.is_none() && (zero_ok || !head_line_reserved || i != 0)).then_some(i)
-        })
-    };
-
     // Detect fork points (commits with multiple children)
     // parent_oid -> list of child commits
     // Check ALL parents, not just first parent, to detect fork points like
@@ -333,6 +319,26 @@ pub fn build_graph(
             }
         }
     }
+
+    // HEAD's first-parent line is pinned to lane 0 (leftmost), so the
+    // checked-out work is anchored at the far left. When HEAD is unknown or not
+    // loaded this is empty and lane assignment keeps its historical behaviour.
+    // `head_commit_oid` (not the branch-derived `head_oid` above) is used so a
+    // detached HEAD is anchored too.
+    let head_line = head_first_parent_line(commits, &oid_to_row, &parent_children, head_commit_oid);
+    // Whether lane 0 is reserved for HEAD's line. When true, only commits on
+    // `head_line` may occupy lane 0; every other tip shifts one lane right.
+    let head_line_reserved = !head_line.is_empty();
+
+    // Lowest free lane a commit may take. Lane 0 is off-limits unless the commit
+    // is on HEAD's line (or nothing is reserved). Returns None when every
+    // eligible lane is occupied and a new one must be pushed.
+    let eligible_empty_lane = |lanes: &[Option<Oid>], zero_ok: bool| -> Option<usize> {
+        lanes.iter().enumerate().find_map(|(i, l)| {
+            (l.is_none() && (zero_ok || !head_line_reserved || i != 0)).then_some(i)
+        })
+    };
+
     // Fork points: commits with 2+ children
     let fork_points: std::collections::HashSet<Oid> = parent_children
         .iter()
@@ -1426,6 +1432,22 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
         .filter_map(|(i, n)| n.commit.as_ref().map(|c| (c.oid, i)))
         .collect();
 
+    // Index descendants once. Scanning every row at each step made a walk
+    // from an old selection quadratic in the loaded history. Preserve row
+    // order and the lane key so forks, reused lanes, and cycle guards retain
+    // the same semantics as the traversal below.
+    let mut children: HashMap<(Oid, usize), Vec<Oid>> = HashMap::new();
+    for node in &layout.nodes {
+        if let Some(c) = &node.commit {
+            if let Some(parent) = c.parent_oids.first() {
+                children
+                    .entry((*parent, node.lane))
+                    .or_default()
+                    .push(c.oid);
+            }
+        }
+    }
+
     set.insert(sel);
 
     // DOWN: follow the first parent (which inherits the commit's lane) as long
@@ -1452,11 +1474,12 @@ pub fn lineage_oids(layout: &GraphLayout, selected_full_idx: usize) -> HashSet<O
     let mut cur = sel;
     while let Some(&cur_row) = oid_row.get(&cur) {
         let cur_lane = layout.nodes[cur_row].lane;
-        let child = layout.nodes.iter().find_map(|n| {
-            let c = n.commit.as_ref()?;
-            let first_parent = c.parent_oids.first()?;
-            (*first_parent == cur && n.lane == cur_lane && !set.contains(&c.oid)).then_some(c.oid)
-        });
+        let child = children
+            .get(&(cur, cur_lane))
+            .into_iter()
+            .flatten()
+            .find(|oid| !set.contains(oid))
+            .copied();
         match child {
             Some(ch) => {
                 set.insert(ch);

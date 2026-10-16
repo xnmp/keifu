@@ -46,19 +46,20 @@ pub use pixel_dim::{build_pixel_base_specs, dim_pixel_specs_window};
 use row::{is_base_update_row, render_graph_line_tail, RowFlags, RowRenderCtx};
 
 use rows::visible_row_window;
-pub use rows::{visible_nodes, visible_rows, RenderRow};
+pub use rows::{visible_nodes, visible_row_indices, visible_rows, RenderRow};
 
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
 pub struct GraphViewWidget<'a> {
     items: Vec<ListItem<'a>>,
     selected_in_filtered: Option<usize>,
+    window_start: usize,
     is_focused: bool,
     title: String,
     theme: &'a Theme,
     /// Clickable chip regions per rendered row (indexed by filtered row
     /// position), for mouse hit-testing. Consumed by the caller before render.
-    pub chip_hits: Vec<Vec<ChipHit>>,
+    pub chip_hits: crate::mouse::GraphChipRows,
 }
 
 /// Set `dim` on every pixel cell whose edge touches a merged-lane commit (issue
@@ -198,35 +199,29 @@ impl<'a> GraphViewWidget<'a> {
         // In pixel mode, connector rows are folded into their commit row so the
         // list items match the pixel specs one-for-one (same filtered index
         // space). In Unicode mode connectors remain their own rows.
-        let rows = visible_rows(app, pixel_mode);
-
-        // Only the rows the list can actually draw are worth the (per-row
-        // non-trivial) `render_graph_line` cost. Every list item is exactly one
-        // line tall, so ratatui's scroll math is unaffected by keeping the item
-        // count at `rows.len()` while filling out-of-window rows with cheap blank
-        // placeholders. See `visible_row_window` for why the window is correct.
-        let n = rows.len();
+        let folded = pixel_mode.then(|| visible_row_indices(app, true));
+        let rows = folded
+            .as_deref()
+            .or_else(|| has_filter.then_some(app.visible_commit_indices.as_slice()));
+        // Materialize only the final viewport. Unfiltered Unicode rows use
+        // their graph index directly, with no whole-history mapping allocation.
+        let n = rows.map_or(app.graph_layout.nodes.len(), |rows| rows.len());
         let offset = app.graph_nav.graph_list_state.offset();
-        let selected_pos =
-            current_selected.and_then(|sel| rows.iter().position(|r| r.full_idx == sel));
+        let selected_pos = current_selected.and_then(|sel| {
+            rows.map_or((sel < n).then_some(sel), |rows| {
+                rows.binary_search(&sel).ok()
+            })
+        });
         let (win_start, win_end) =
             visible_row_window(n, offset, viewport_height as usize, selected_pos);
 
         let mut selected_in_filtered = None;
-        let mut items: Vec<ListItem> = Vec::with_capacity(n);
-        let mut chip_hits: Vec<Vec<ChipHit>> = Vec::with_capacity(n);
+        let mut items: Vec<ListItem> = Vec::with_capacity(win_end - win_start);
+        let mut chip_hits: Vec<Vec<ChipHit>> = Vec::with_capacity(win_end - win_start);
 
-        for (filtered_pos, row) in rows.into_iter().enumerate() {
-            // Out-of-window rows are never drawn: emit a blank one-line item so
-            // the list keeps its full length (offset/selection indices, the
-            // scrollbar, and `graph_chip_hits`' row alignment all stay intact)
-            // without paying to build a line the user cannot see.
-            if filtered_pos < win_start || filtered_pos >= win_end {
-                items.push(ListItem::new(""));
-                chip_hits.push(Vec::new());
-                continue;
-            }
-            let (full_idx, node) = (row.full_idx, row.node);
+        for (filtered_pos, index) in (win_start..win_end).enumerate() {
+            let full_idx = rows.map_or(index, |rows| rows[index]);
+            let node = &app.graph_layout.nodes[full_idx];
             let is_selected = current_selected == Some(full_idx);
             if is_selected {
                 selected_in_filtered = Some(filtered_pos);
@@ -247,6 +242,7 @@ impl<'a> GraphViewWidget<'a> {
                     is_marked,
                 },
                 has_filter
+                    && !app.commit_paths_are_loading()
                     && node
                         .commit
                         .as_ref()
@@ -258,6 +254,8 @@ impl<'a> GraphViewWidget<'a> {
 
         let title = if !show_title {
             String::new()
+        } else if app.commit_paths_are_loading() && has_filter {
+            format!(" Commits [{}] · indexing paths… ", app.commit_filter)
         } else if app.commit_filter_active && app.commit_filter.is_empty() {
             " Commits: message=…; author=…; file=…_ ".to_string()
         } else if app.commit_filter_active {
@@ -273,10 +271,15 @@ impl<'a> GraphViewWidget<'a> {
         Self {
             items,
             selected_in_filtered,
+            window_start: win_start,
             is_focused: app.focused_panel == crate::app::FocusedPanel::Graph,
             title,
             theme,
-            chip_hits,
+            chip_hits: crate::mouse::GraphChipRows {
+                start: win_start,
+                total: n,
+                rows: chip_hits,
+            },
         }
     }
 }
@@ -576,11 +579,11 @@ impl<'a> StatefulWidget for GraphViewWidget<'a> {
         // scrolls incrementally instead of being re-derived from row 0, which
         // pinned the selection to the bottom edge. Ratatui clamps a stale
         // offset if the item count shrank.
-        let mut filtered_state = ListState::default().with_offset(state.offset());
+        let mut filtered_state = ListState::default();
         filtered_state.select(self.selected_in_filtered);
         StatefulWidget::render(list, area, buf, &mut filtered_state);
         // Propagate scroll offset back to the original state
-        *state.offset_mut() = *filtered_state.offset_mut();
+        *state.offset_mut() = self.window_start + filtered_state.offset();
     }
 }
 

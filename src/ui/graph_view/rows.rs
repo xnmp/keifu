@@ -22,6 +22,42 @@ pub fn visible_nodes(app: &App) -> Vec<(usize, &GraphNode)> {
     }
 }
 
+/// Logical row mapping without materializing connector geometry. Rendering,
+/// avatar placement and hit testing all use this same folded index space.
+pub fn visible_row_indices(app: &App, fold_connectors: bool) -> std::borrow::Cow<'_, [usize]> {
+    if fold_connectors {
+        if let Some((generation, rows)) = &app.graph_folded_rows {
+            if *generation == app.graph_generation {
+                return std::borrow::Cow::Borrowed(rows);
+            }
+        }
+    } else if app.commit_filter_is_active() {
+        return std::borrow::Cow::Borrowed(&app.visible_commit_indices);
+    }
+    let nodes = &app.graph_layout.nodes;
+    let indices: Box<dyn DoubleEndedIterator<Item = usize> + '_> = if app.commit_filter_is_active()
+    {
+        Box::new(app.visible_commit_indices.iter().copied())
+    } else {
+        Box::new(0..nodes.len())
+    };
+    if !fold_connectors {
+        return std::borrow::Cow::Owned(indices.collect());
+    }
+    let mut rows = Vec::new();
+    let mut trailing = Vec::new();
+    for i in indices {
+        if nodes[i].is_connector() {
+            trailing.push(i);
+        } else {
+            trailing.clear();
+            rows.push(i);
+        }
+    }
+    rows.extend(trailing);
+    std::borrow::Cow::Owned(rows)
+}
+
 /// One rendered graph row: a node plus, when connectors are folded (pixel mode),
 /// the cells of any preceding connector row(s) collapsed into it as an
 /// `underlay`. `full_idx` is the row's index into `graph_layout.nodes` (used to
@@ -197,33 +233,88 @@ pub(super) fn adjacent_cells(rows: &[RenderRow], i: usize, above: bool) -> Optio
 /// Every list item is one line tall, so ratatui draws exactly the window
 /// `[final_offset, final_offset + viewport)`, where `final_offset` is `offset`
 /// clamped so the selection stays visible — always within
-/// `[min(offset, selected), max(offset + viewport, selected + 1))`. Building that
-/// span (plus a small margin for scroll-adjust and folding slack) is sufficient
-/// to render an identical frame; everything else is off-screen. Returns
-/// `[0, n)` degenerately for tiny graphs so nothing is ever clipped.
+/// the one-line List's scroll adjustment. A jump must cost only one viewport,
+/// never all rows between the previous offset and the new selection.
 pub(super) fn visible_row_window(
     n: usize,
     offset: usize,
     viewport: usize,
     selected_pos: Option<usize>,
 ) -> (usize, usize) {
-    const MARGIN: usize = 8;
-    let lo = selected_pos.map_or(offset, |s| s.min(offset));
-    let hi = selected_pos.map_or(offset + viewport, |s| (s + 1).max(offset + viewport));
-    let start = lo.saturating_sub(MARGIN);
-    let end = hi.saturating_add(MARGIN).min(n);
-    (start.min(end), end)
+    if n == 0 || viewport == 0 {
+        return (0, 0);
+    }
+    let mut start = offset.min(n - 1);
+    if let Some(selected) = selected_pos.map(|s| s.min(n - 1)) {
+        if selected < start {
+            start = selected;
+        } else if selected >= start.saturating_add(viewport) {
+            start = selected + 1 - viewport;
+        }
+    }
+    (start, start.saturating_add(viewport).min(n))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn virtual_window_matches_ratatui_scroll_and_is_bounded_on_jumps() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, ListState, StatefulWidget},
+        };
+        for n in [1, 7, 50, 2000] {
+            for height in [1, 5, 30] {
+                for offset in [0, n / 2, n - 1, n + 20] {
+                    for selected in [None, Some(0), Some(n / 2), Some(n - 1)] {
+                        let mut state = ListState::default()
+                            .with_offset(offset)
+                            .with_selected(selected);
+                        let area = Rect::new(0, 0, 10, height);
+                        List::new(vec!["row"; n]).render(
+                            area,
+                            &mut Buffer::empty(area),
+                            &mut state,
+                        );
+                        let (start, end) = visible_row_window(n, offset, height as usize, selected);
+                        assert_eq!(
+                            start,
+                            state.offset(),
+                            "n={n} height={height} offset={offset} selected={selected:?}"
+                        );
+                        assert!(end - start <= height as usize);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lightweight_row_mapping_matches_full_folding_including_trailing_connectors() {
+        let mut app = App::test_fixture();
+        app.graph_layout.nodes = vec![
+            connector_node(vec![CellType::Pipe(0)]),
+            commit_row(vec![CellType::Commit(0)]),
+            connector_node(vec![CellType::Pipe(0)]),
+            connector_node(vec![CellType::Pipe(0)]),
+        ];
+        for fold in [false, true] {
+            let expected: Vec<_> = visible_rows(&app, fold)
+                .iter()
+                .map(|r| r.full_idx)
+                .collect();
+            assert_eq!(visible_row_indices(&app, fold), expected);
+        }
+    }
+
     // ── visible_row_window (viewport slice for lazy row building) ─────
     //
     // Contract: whatever rows ratatui may draw for a given scroll offset and
-    // selection must lie inside the window, so the placeholder rows outside it
-    // are never visible. ratatui draws `[final_offset, final_offset + viewport)`
+    // selection must lie inside the window, so slicing away other rows
+    // preserves the visible result. ratatui draws `[final_offset, final_offset + viewport)`
     // where `final_offset` is `offset` clamped so the selection stays visible.
 
     /// Every row ratatui could draw after scrolling to `selected` must be inside

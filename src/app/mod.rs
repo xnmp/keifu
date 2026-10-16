@@ -38,7 +38,9 @@ use crate::{
     workspace::{add_to_gitignore, archive_path, remove_from_gitignore, unarchive_path},
 };
 
+mod background_work;
 mod branch_picker_actions;
+pub use background_work::BackgroundWork;
 mod ci_checks_actions;
 mod commit_editor_actions;
 mod commit_menu_actions;
@@ -1045,7 +1047,9 @@ pub struct App {
     pub graph_layout: GraphLayout,
     /// Bumped every time `graph_layout` is reassigned. Lets the pixel pre-pass
     /// reuse a cached `RowSpec` list without diffing the layout.
+    pub(crate) repository_shallow_boundary: Option<Vec<u8>>,
     pub graph_generation: u64,
+    pub(crate) graph_folded_rows: Option<(u64, Vec<usize>)>,
 
     // UI state
     pub graph_nav: GraphNav,
@@ -1346,7 +1350,10 @@ pub struct App {
     pub popup_rect: Option<ratatui::layout::Rect>,
     /// Clickable chip regions per graph row (indexed by filtered row position),
     /// recorded each frame for badge/branch-chip clicks.
-    pub graph_chip_hits: Vec<Vec<crate::mouse::ChipHit>>,
+    pub graph_chip_hits: crate::mouse::GraphChipRows,
+    pub background: BackgroundWork,
+    pub(crate) commit_history_key: Option<refresh::CommitHistoryKey>,
+    pub(crate) graph_cache_key: Option<refresh::GraphCacheKey>,
     /// Clickable status-bar key hints: each hint's absolute cell rect paired with
     /// the `Action` pressing its key would dispatch. Rebuilt every frame by the
     /// status bar so a click reflects the current mode/panel's hints.
@@ -1925,6 +1932,8 @@ impl App {
         let Some(base) = crate::git::merged::base_branch(&self.branches) else {
             // No base branch to measure against → nothing can be merged.
             self.merged.branches.clear();
+            self.merged.squash_targets.clear();
+            self.merged.classify.cancel();
             return;
         };
         let input = crate::merged_branch_fetch::ClassifyInput {
@@ -1933,6 +1942,7 @@ impl App {
             base_name: base.name.clone(),
             base_tip: base.tip_oid,
             gh_merged: self.merged.pr_branches.clone(),
+            shallow: self.repository_shallow_boundary.clone(),
         };
         self.merged.classify.maybe_start(input);
     }
@@ -2048,6 +2058,10 @@ impl App {
         // is irrelevant, so skip re-laying-out on every resize.
         let width_matters = wrap && source.layout_width != width;
         if source.layout_wrap == wrap && !width_matters {
+            return;
+        }
+        if self.background.threaded {
+            self.request_diff_relayout(wrap, width);
             return;
         }
         let (lines, hunks) = crate::ui::file_diff_view::layout_diff_rows(

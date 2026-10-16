@@ -12,8 +12,6 @@
 //! (issue #65); the local patch-id fallback still classifies branches meanwhile.
 
 use std::collections::HashSet;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -101,6 +99,7 @@ pub struct ClassifyInput {
     pub base_name: String,
     pub base_tip: Oid,
     pub gh_merged: HashSet<String>,
+    pub shallow: Option<Vec<u8>>,
 }
 
 impl ClassifyInput {
@@ -117,6 +116,7 @@ impl ClassifyInput {
     /// classifies identically).
     pub fn signature(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.shallow.hash(&mut h);
         self.base_name.hash(&mut h);
         self.base_tip.hash(&mut h);
         // Order-independent over branches and gh names (XOR of per-item hashes),
@@ -128,6 +128,8 @@ impl ClassifyInput {
             b.tip_oid.hash(&mut bh);
             b.is_remote.hash(&mut bh);
             b.is_head.hash(&mut bh);
+            b.ahead.hash(&mut bh);
+            b.behind.hash(&mut bh);
             branch_acc ^= bh.finish();
         }
         branch_acc.hash(&mut h);
@@ -152,7 +154,7 @@ impl ClassifyInput {
 pub type MergedClassification = (HashSet<String>, HashMap<String, Oid>);
 
 pub struct MergedClassifier {
-    receiver: Option<Receiver<MergedClassification>>,
+    task: crate::background::LatestTask<MergedClassification>,
     /// Signature of the input currently in flight or last completed. A new
     /// request with the same signature is a no-op.
     last_signature: Option<u64>,
@@ -173,51 +175,42 @@ impl Default for MergedClassifier {
 impl MergedClassifier {
     pub fn new() -> Self {
         Self {
-            receiver: None,
+            task: Default::default(),
             last_signature: None,
             last_gh_merged: None,
         }
     }
 
-    /// Spawn a classification when the inputs changed and none is in flight.
+    /// Schedule the latest changed inputs on one bounded worker.
     /// Idempotent for unchanged inputs (the signature guard), so it's safe to
     /// call on every refresh.
     pub fn maybe_start(&mut self, input: ClassifyInput) {
-        if self.receiver.is_some() {
-            return;
-        }
         let sig = input.signature();
         if self.last_signature == Some(sig) {
             return;
         }
         self.last_signature = Some(sig);
         self.last_gh_merged = Some(input.gh_merged.clone());
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(classify(&input));
-        });
-        self.receiver = Some(rx);
+        self.task.submit(true, move || classify(&input));
     }
 
     /// Poll for a completed classification. Returns the merged-branch-name set
     /// and squash-target map on completion, else `None`.
     pub fn poll(&mut self) -> Option<MergedClassification> {
-        let rx = self.receiver.as_ref()?;
-        match rx.try_recv() {
-            Ok(result) => {
-                self.receiver = None;
-                Some(result)
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                // Worker died; allow a future maybe_start with the same inputs to
-                // retry by clearing the remembered signature.
-                self.receiver = None;
+        match self.task.take()? {
+            Ok(result) => Some(result),
+            Err(_) => {
                 self.last_signature = None;
                 self.last_gh_merged = None;
                 None
             }
         }
+    }
+
+    pub fn cancel(&mut self) {
+        self.task.cancel();
+        self.last_signature = None;
+        self.last_gh_merged = None;
     }
 
     /// Fingerprint of the input whose result is currently reflected (in flight or
@@ -244,24 +237,99 @@ impl MergedClassifier {
     }
 }
 
-/// Open the repo by path and run the pure classifier. An unopenable repo yields
-/// an empty result (the feature is silently absent, like the gh path).
-fn classify(input: &ClassifyInput) -> MergedClassification {
-    let Ok(repo) = Repository::open(&input.repo_path) else {
-        return (HashSet::new(), HashMap::new());
-    };
-    crate::git::merged::classify_merged_branches_with_targets(
+/// Open failures remain failures: never persist an unavailable repository as
+/// an authoritative empty classification, and allow the same inputs to retry.
+fn classify(input: &ClassifyInput) -> Result<MergedClassification, String> {
+    let repo = Repository::open(&input.repo_path).map_err(|e| e.to_string())?;
+    Ok(crate::git::merged::classify_merged_branches_with_targets(
         &repo,
         &input.branches,
         input.base_tip,
         &input.base_name,
         &input.gh_merged,
-    )
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn classification_fixture() -> (tempfile::TempDir, ClassifyInput) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("repo");
+        let repo = Repository::init(&path).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let root = repo.commit(None, &sig, &sig, "root", &tree, &[]).unwrap();
+        let root = repo.find_commit(root).unwrap();
+        let feature = repo
+            .commit(None, &sig, &sig, "feature", &tree, &[&root])
+            .unwrap();
+        let feature_commit = repo.find_commit(feature).unwrap();
+        let tip = repo
+            .commit(None, &sig, &sig, "merge", &tree, &[&root, &feature_commit])
+            .unwrap();
+        let branch = |name: &str, tip_oid, is_head| BranchInfo {
+            name: name.into(),
+            tip_oid,
+            is_head,
+            is_remote: false,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+        };
+        let input = ClassifyInput {
+            repo_path: path.to_string_lossy().into_owned(),
+            branches: vec![branch("main", tip, true), branch("feature", feature, false)],
+            base_name: "main".into(),
+            base_tip: tip,
+            gh_merged: HashSet::new(),
+            shallow: None,
+        };
+        (dir, input)
+    }
+
+    #[test]
+    fn tracking_configuration_changes_both_verdict_and_cache_identity() {
+        let (_dir, mut input) = classification_fixture();
+        let before = input.signature();
+        assert!(classify(&input).unwrap().0.contains("feature"));
+        input.branches[1].upstream = Some("origin/feature".into());
+        input.branches[1].behind = 1;
+        assert_ne!(before, input.signature());
+        assert!(!classify(&input).unwrap().0.contains("feature"));
+    }
+
+    #[test]
+    fn failed_open_does_not_seal_the_signature_and_same_input_can_retry() {
+        let (dir, input) = classification_fixture();
+        let path = std::path::Path::new(&input.repo_path);
+        let moved = dir.path().join("unavailable");
+        std::fs::rename(path, &moved).unwrap();
+        let mut classifier = MergedClassifier::new();
+        classifier.maybe_start(input.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while classifier.last_signature().is_some() {
+            assert!(
+                classifier.poll().is_none(),
+                "failure must not become an empty success"
+            );
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        std::fs::rename(moved, path).unwrap();
+        classifier.maybe_start(input);
+        loop {
+            if let Some((merged, _)) = classifier.poll() {
+                assert!(merged.contains("feature"));
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 
     #[test]
     fn parses_merged_head_refs() {

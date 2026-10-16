@@ -111,7 +111,7 @@ impl App {
         // fetch completes. `merged_cache_hit` is `Some` only on an exact hit —
         // the signal to prime rather than kick the classifier (see below).
         let (merged_branches, squash_targets, merged_cache_hit) = if ui_state.hide_merged_branches {
-            Self::init_merged_from_cache(&repo_path, &branches)
+            Self::init_merged_from_cache(&repo_path, &branches, repo.shallow_boundary())
         } else {
             (
                 std::collections::HashSet::new(),
@@ -184,6 +184,7 @@ impl App {
         // The last phase!() leaves a restart nobody reads; acknowledge it.
         let _ = phase_started;
         perf.record("startup.app_new_total", now.elapsed());
+        let repository_shallow_boundary = repo.shallow_boundary();
         let mut app = Self {
             mode: AppMode::Normal,
             repo,
@@ -196,7 +197,9 @@ impl App {
             branches,
             remotes,
             graph_layout,
+            repository_shallow_boundary,
             graph_generation: 0,
+            graph_folded_rows: None,
             graph_nav,
             command_palette_snapshot: None,
             input_commit_target: None,
@@ -320,7 +323,10 @@ impl App {
             files_view_offset: 0,
             menu_anchor: None,
             popup_rect: None,
-            graph_chip_hits: Vec::new(),
+            graph_chip_hits: Default::default(),
+            background: Default::default(),
+            commit_history_key: None,
+            graph_cache_key: None,
             status_hints: Vec::new(),
             graph_split_ratio: crate::mouse::clamp_split_ratio(ui_state.graph_split_ratio as i32),
             dragging_divider: false,
@@ -366,7 +372,11 @@ impl App {
     /// classifier to reconcile; the brief flash of a few soon-to-hide branches is
     /// the accepted tradeoff over a startup that freezes on the O(branches ×
     /// git-scan) classification.
-    fn init_merged_from_cache(repo_path: &str, branches: &[BranchInfo]) -> MergedSeed {
+    fn init_merged_from_cache(
+        repo_path: &str,
+        branches: &[BranchInfo],
+        shallow: Option<Vec<u8>>,
+    ) -> MergedSeed {
         use std::collections::{HashMap, HashSet};
         let Some(cache) = crate::merged_cache::MergedCache::load(repo_path) else {
             // Cold cache: empty first frame; the caller kicks the classifier.
@@ -386,6 +396,7 @@ impl App {
             base_name: base.name.clone(),
             base_tip: base.tip_oid,
             gh_merged: cache.gh_merged.clone(),
+            shallow,
         };
         if input.signature() == cache.signature {
             (
@@ -462,6 +473,7 @@ impl App {
         let mut app = result?;
         app.terminal_bg = terminal_bg;
         app.launch_mode = launch_mode;
+        app.background.threaded = true;
         Ok(app)
     }
 }

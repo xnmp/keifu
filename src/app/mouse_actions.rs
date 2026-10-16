@@ -130,9 +130,9 @@ impl App {
     /// `graph_layout.nodes`, matching what the widget rendered.
     pub(crate) fn graph_row_full_idx(&self, list_idx: usize) -> Option<usize> {
         let fold = self.pixel_graph.is_some();
-        crate::ui::graph_view::visible_rows(self, fold)
+        crate::ui::graph_view::visible_row_indices(self, fold)
             .get(list_idx)
-            .map(|r| r.full_idx)
+            .copied()
     }
 
     /// Select the commit at `full_idx` (a node index), as clicking a row does.

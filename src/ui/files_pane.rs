@@ -15,7 +15,7 @@ use crate::git::StageStatus;
 use super::{render_placeholder_block, theme::Theme, MIN_WIDGET_HEIGHT, MIN_WIDGET_WIDTH};
 
 pub struct FilesPaneWidget<'a> {
-    items: Vec<FilesPaneItem>,
+    items: &'a [FilesPaneItem],
     is_focused: bool,
     is_uncommitted: bool,
     is_loading: bool,
@@ -24,9 +24,9 @@ pub struct FilesPaneWidget<'a> {
 }
 
 impl<'a> FilesPaneWidget<'a> {
-    pub fn new(app: &App, theme: &'a Theme, show_title: bool) -> Self {
+    pub fn new(app: &'a App, theme: &'a Theme, show_title: bool) -> Self {
         Self {
-            items: app.display_items().to_vec(),
+            items: app.display_items(),
             is_focused: app.focused_panel == FocusedPanel::Files,
             is_uncommitted: app.is_uncommitted_selected(),
             is_loading: app.is_diff_loading(),
@@ -146,7 +146,7 @@ impl<'a> StatefulWidget for FilesPaneWidget<'a> {
                     // Under a folder header the folder is already shown above,
                     // so just the file name is displayed; otherwise (root-level
                     // files, or grouping disabled) show the full repo-relative path.
-                    let path_str = if is_under_folder_header(&self.items, idx) {
+                    let path_str = if is_under_folder_header(self.items, idx) {
                         file.path
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())

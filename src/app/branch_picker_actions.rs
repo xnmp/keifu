@@ -138,7 +138,7 @@ impl App {
     /// invalidates the cache, while repeated picker opens over an unchanged
     /// repo reuse the previous result. Attribution walks history per branch, so
     /// this is deliberately called on picker open, not on every refresh.
-    fn ensure_branch_authors(&mut self) {
+    pub(crate) fn ensure_branch_authors(&mut self) {
         let mut key: Vec<(String, git2::Oid)> = self
             .branches
             .iter()
@@ -146,8 +146,29 @@ impl App {
             .collect();
         key.sort();
         if key != self.branch_authors_key {
-            self.branch_authors = crate::git::branch_authors(self.repo.repo(), &self.branches);
+            self.branch_authors.clear();
             self.branch_authors_key = key;
+            let branches = self.branches.clone();
+            let path = self.repo.path.clone();
+            self.background
+                .authors
+                .submit_cancellable(self.background.threaded, move |cancel| {
+                    let repo = git2::Repository::open(path).map_err(|e| e.to_string())?;
+                    crate::git::branch::branch_authors_while(&repo, &branches, || {
+                        !cancel.is_cancelled()
+                    })
+                    .ok_or_else(|| "Author request superseded".to_string())
+                });
+            if !self.background.threaded {
+                match self.background.authors.take() {
+                    Some(Ok(authors)) => self.branch_authors = authors,
+                    Some(Err(message)) => {
+                        self.branch_authors_key.clear();
+                        self.toast(crate::toast::ToastKind::Error, message);
+                    }
+                    None => {}
+                }
+            }
         }
     }
 
@@ -188,6 +209,18 @@ impl App {
         let filter = filter.clone();
         let selected = *selected;
         let all_branches = all_branches.clone();
+
+        // An author query cannot authorize bulk visibility changes until its
+        // current attribution has arrived.
+        if filter.starts_with('@')
+            && self.background.authors.is_pending()
+            && matches!(
+                action,
+                Action::Confirm | Action::MenuSelect | Action::SelectAll | Action::SelectNone
+            )
+        {
+            return Ok(());
+        }
 
         // Compute filtered list for navigation. A filter beginning with `@`
         // matches the branch author; any other filter matches the name.

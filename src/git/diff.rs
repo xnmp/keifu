@@ -391,11 +391,16 @@ impl CommitDiffInfo {
     }
 
     fn scan_diff(diff: &Diff) -> Result<DiffScan> {
-        let _ = diff.stats()?;
         let mut files = Vec::with_capacity(diff.deltas().len());
         let mut all_paths = HashSet::new();
 
-        for (delta_idx, delta) in diff.deltas().enumerate() {
+        for delta_idx in 0..diff.deltas().len() {
+            // Loading a patch resolves binary flags as well as line counts.
+            // Calling diff.stats() first discarded those counts and generated
+            // every patch twice. Read the delta AFTER patch loading so binary
+            // and .gitattributes classification remain accurate.
+            let patch = Patch::from_diff(diff, delta_idx)?;
+            let delta = diff.get_delta(delta_idx).expect("index within delta count");
             let is_conflicted = delta.status() == Delta::Conflicted;
             let Some((kind, path, is_binary)) = Self::diff_entry(delta) else {
                 continue;
@@ -407,7 +412,13 @@ impl CommitDiffInfo {
             let (insertions, deletions) = if is_binary {
                 (0, 0)
             } else {
-                Self::line_stats_for_delta(diff, delta_idx)?
+                match patch {
+                    Some(patch) => {
+                        let (_, insertions, deletions) = patch.line_stats()?;
+                        (insertions, deletions)
+                    }
+                    None => (0, 0),
+                }
             };
             files.push(FileDiffInfo {
                 path: path_buf,

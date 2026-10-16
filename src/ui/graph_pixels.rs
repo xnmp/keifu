@@ -695,10 +695,10 @@ fn dist_to_segment(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32) -> f32 
 
 /// Stroke a line segment of half-width `half` (full width ≈ `2*half`).
 fn draw_segment(c: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, half: f32, color: [u8; 3]) {
-    let minx = (x0.min(x1) - half - 1.0).floor() as i64;
-    let maxx = (x0.max(x1) + half + 1.0).ceil() as i64;
-    let miny = (y0.min(y1) - half - 1.0).floor() as i64;
-    let maxy = (y0.max(y1) + half + 1.0).ceil() as i64;
+    let minx = ((x0.min(x1) - half - 1.0).floor() as i64).max(0);
+    let maxx = ((x0.max(x1) + half + 1.0).ceil() as i64).min(c.w as i64 - 1);
+    let miny = ((y0.min(y1) - half - 1.0).floor() as i64).max(0);
+    let maxy = ((y0.max(y1) + half + 1.0).ceil() as i64).min(c.h as i64 - 1);
     for y in miny..=maxy {
         for x in minx..=maxx {
             let d = dist_to_segment(x as f32 + 0.5, y as f32 + 0.5, x0, y0, x1, y1);
@@ -709,10 +709,10 @@ fn draw_segment(c: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, half: f32, c
 }
 
 fn fill_disc(c: &mut Canvas, cx: f32, cy: f32, r: f32, color: [u8; 3]) {
-    let minx = (cx - r - 1.0).floor() as i64;
-    let maxx = (cx + r + 1.0).ceil() as i64;
-    let miny = (cy - r - 1.0).floor() as i64;
-    let maxy = (cy + r + 1.0).ceil() as i64;
+    let minx = ((cx - r - 1.0).floor() as i64).max(0);
+    let maxx = ((cx + r + 1.0).ceil() as i64).min(c.w as i64 - 1);
+    let miny = ((cy - r - 1.0).floor() as i64).max(0);
+    let maxy = ((cy + r + 1.0).ceil() as i64).min(c.h as i64 - 1);
     for y in miny..=maxy {
         for x in minx..=maxx {
             let dx = x as f32 + 0.5 - cx;
@@ -747,10 +747,10 @@ fn fill_star(c: &mut Canvas, cx: f32, cy: f32, r_outer: f32, color: [u8; 3]) {
         }
         inside
     };
-    let minx = (cx - r_outer - 1.0).floor() as i64;
-    let maxx = (cx + r_outer + 1.0).ceil() as i64;
-    let miny = (cy - r_outer - 1.0).floor() as i64;
-    let maxy = (cy + r_outer + 1.0).ceil() as i64;
+    let minx = ((cx - r_outer - 1.0).floor() as i64).max(0);
+    let maxx = ((cx + r_outer + 1.0).ceil() as i64).min(c.w as i64 - 1);
+    let miny = ((cy - r_outer - 1.0).floor() as i64).max(0);
+    let maxy = ((cy + r_outer + 1.0).ceil() as i64).min(c.h as i64 - 1);
     const SS: u32 = 4;
     for y in miny..=maxy {
         for x in minx..=maxx {
@@ -772,10 +772,10 @@ fn fill_star(c: &mut Canvas, cx: f32, cy: f32, r_outer: f32, color: [u8; 3]) {
 /// Stroke a circle of radius `r` with half-width `half`.
 fn stroke_circle(c: &mut Canvas, cx: f32, cy: f32, r: f32, half: f32, color: [u8; 3]) {
     let outer = r + half + 1.0;
-    let minx = (cx - outer).floor() as i64;
-    let maxx = (cx + outer).ceil() as i64;
-    let miny = (cy - outer).floor() as i64;
-    let maxy = (cy + outer).ceil() as i64;
+    let minx = ((cx - outer).floor() as i64).max(0);
+    let maxx = ((cx + outer).ceil() as i64).min(c.w as i64 - 1);
+    let miny = ((cy - outer).floor() as i64).max(0);
+    let maxy = ((cy + outer).ceil() as i64).min(c.h as i64 - 1);
     for y in miny..=maxy {
         for x in minx..=maxx {
             let dx = x as f32 + 0.5 - cx;

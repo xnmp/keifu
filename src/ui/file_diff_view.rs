@@ -96,6 +96,7 @@ struct WordEmphasis {
 fn compute_word_emphasis(
     deletions: &[&DiffLineContent],
     additions: &[&DiffLineContent],
+    keep_going: &impl Fn() -> bool,
 ) -> WordEmphasis {
     let mut old_spans = Vec::with_capacity(deletions.len());
     let mut new_spans = Vec::with_capacity(additions.len());
@@ -103,9 +104,16 @@ fn compute_word_emphasis(
     let max_len = deletions.len().max(additions.len());
 
     for i in 0..max_len {
+        if !keep_going() {
+            break;
+        }
         match (deletions.get(i), additions.get(i)) {
             (Some(del), Some(add)) => {
-                let diff = TextDiff::from_words(&del.content, &add.content);
+                // Emphasis is decoration. Bound worst-case word matching on
+                // generated/minified lines while preserving every byte of text.
+                let diff = TextDiff::configure()
+                    .timeout(std::time::Duration::from_millis(5))
+                    .diff_words(&del.content, &add.content);
                 let mut old_s = Vec::new();
                 let mut new_s = Vec::new();
                 for change in diff.iter_all_changes() {
@@ -521,26 +529,38 @@ pub fn layout_diff_rows(
     wrap: bool,
     avail_width: usize,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
-    if !wrap {
-        return (
-            rows.iter().map(DiffRow::to_line).collect(),
-            hunk_src_positions.to_vec(),
-        );
-    }
+    layout_diff_rows_while(rows, hunk_src_positions, wrap, avail_width, || true)
+        .expect("uncancelled layout")
+}
 
+pub(crate) fn layout_diff_rows_while(
+    rows: &[DiffRow],
+    hunk_src_positions: &[usize],
+    wrap: bool,
+    avail_width: usize,
+    keep_going: impl Fn() -> bool,
+) -> Option<(Vec<Line<'static>>, Vec<usize>)> {
     let mut lines = Vec::new();
     let mut counts = Vec::with_capacity(rows.len());
     for row in rows {
-        let wrapped = row.wrap(avail_width);
-        counts.push(wrapped.len());
-        lines.extend(wrapped);
+        if !keep_going() {
+            return None;
+        }
+        if wrap {
+            let wrapped = row.wrap(avail_width);
+            counts.push(wrapped.len());
+            lines.extend(wrapped);
+        } else {
+            counts.push(1);
+            lines.push(row.to_line());
+        }
     }
     let starts = source_row_starts(&counts);
     let hunk_positions = hunk_src_positions
         .iter()
         .map(|&p| starts.get(p).copied().unwrap_or(0))
         .collect();
-    (lines, hunk_positions)
+    Some((lines, hunk_positions))
 }
 
 /// A diff row for a git conflict-marker line: the marker text as a single
@@ -637,27 +657,48 @@ pub fn build_highlighted_lines(
     content: &FileDiffContent,
     ui_theme: &Theme,
 ) -> (Vec<DiffRow>, Vec<usize>) {
+    build_highlighted_lines_while(content, ui_theme, || true).expect("unconditional highlighting")
+}
+
+pub(crate) fn build_highlighted_lines_while(
+    content: &FileDiffContent,
+    ui_theme: &Theme,
+    keep_going: impl Fn() -> bool,
+) -> Option<(Vec<DiffRow>, Vec<usize>)> {
     if content.is_binary {
-        return (
+        return Some((
             vec![DiffRow::plain(vec![Span::styled(
                 "(Binary file - no diff available)",
                 Style::default().fg(ui_theme.text_muted),
             )])],
             Vec::new(),
-        );
+        ));
     }
 
     if content.hunks.is_empty() {
-        return (
+        return Some((
             vec![DiffRow::plain(vec![Span::styled(
                 "(No textual changes)",
                 Style::default().fg(ui_theme.text_muted),
             )])],
             Vec::new(),
-        );
+        ));
     }
 
     let syntax = determine_syntax(&content.path);
+    // Stateful regex highlighting on minified input can dominate the entire
+    // file-open time. Use plain syntax for the whole file if any line exceeds
+    // the budget, preserving consistent parser state and complete diff text.
+    let syntax = if content
+        .hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .any(|l| l.content.len() > 16 * 1024)
+    {
+        SYNTAX_SET.find_syntax_plain_text()
+    } else {
+        syntax
+    };
     let syntect_theme = THEME_SET
         .themes
         .get(ui_theme.syntect_theme)
@@ -688,6 +729,9 @@ pub fn build_highlighted_lines(
         let groups = group_diff_lines(&hunk.lines);
 
         for group in &groups {
+            if !keep_going() {
+                return None;
+            }
             match group {
                 LineGroup::Context(dl) => {
                     // Advance both highlight states even for marker lines so
@@ -706,10 +750,13 @@ pub fn build_highlighted_lines(
                     deletions,
                     additions,
                 } => {
-                    let emp = compute_word_emphasis(deletions, additions);
+                    let emp = compute_word_emphasis(deletions, additions, &keep_going);
                     let dark_fg = ui_theme.syntax_use_dark_colors;
 
                     for (i, dl) in deletions.iter().enumerate() {
+                        if !keep_going() {
+                            return None;
+                        }
                         let syn = highlight_line_owned(&mut old_hl, &dl.content);
                         let row = if crate::conflict::is_conflict_marker(&dl.content) {
                             make_conflict_marker_line(dl, ui_theme)
@@ -736,6 +783,9 @@ pub fn build_highlighted_lines(
                     }
 
                     for (i, dl) in additions.iter().enumerate() {
+                        if !keep_going() {
+                            return None;
+                        }
                         let syn = highlight_line_owned(&mut new_hl, &dl.content);
                         let row = if crate::conflict::is_conflict_marker(&dl.content) {
                             make_conflict_marker_line(dl, ui_theme)
@@ -771,7 +821,7 @@ pub fn build_highlighted_lines(
         }
     }
 
-    (rows, hunk_positions)
+    Some((rows, hunk_positions))
 }
 
 // --- Widget (renders pre-computed lines) ---

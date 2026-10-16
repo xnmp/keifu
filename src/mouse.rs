@@ -9,6 +9,25 @@ use ratatui::layout::Rect;
 /// Window within which a second click on the same cell counts as a double-click.
 pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
+/// Hit regions for the rendered window, with logical row count kept separately
+/// for scrolling. Offscreen rows need neither allocations nor hit targets.
+#[derive(Debug, Default)]
+pub struct GraphChipRows {
+    pub start: usize,
+    pub total: usize,
+    pub rows: Vec<Vec<ChipHit>>,
+}
+
+impl GraphChipRows {
+    pub fn get(&self, index: usize) -> Option<&Vec<ChipHit>> {
+        self.rows.get(index.checked_sub(self.start)?)
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Whether `(col, row)` falls inside `rect`.
 pub fn point_in(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height

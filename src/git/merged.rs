@@ -118,7 +118,66 @@ fn squash_target_from_fork(
     branch_tip: Oid,
     base_tip: Oid,
 ) -> Option<Oid> {
-    let branch_patch = combined_patch_id(repo, fork, branch_tip)?;
+    squash_target_from_fork_cached(
+        repo,
+        fork,
+        branch_tip,
+        base_tip,
+        &mut ClassificationCache::default(),
+    )
+}
+
+/// Scoped to one classification snapshot: caches immutable Git evidence, not
+/// branch-name decisions. Shared by aliases and fixed-point rounds, then freed.
+#[derive(Default)]
+struct ClassificationCache {
+    patches: HashMap<Oid, Option<Oid>>,
+    combined: HashMap<(Oid, Oid), Option<Oid>>,
+    squash: HashMap<(Oid, Oid), Option<Oid>>,
+    ancestry: HashMap<(Oid, Oid), bool>,
+    containment: HashMap<(Oid, Oid), bool>,
+}
+
+impl ClassificationCache {
+    fn squash_target(&mut self, repo: &Repository, branch: Oid, base: Oid) -> Option<Oid> {
+        if let Some(result) = self.squash.get(&(branch, base)) {
+            return *result;
+        }
+        let result = repo.merge_base(branch, base).ok().and_then(|fork| {
+            (fork != branch)
+                .then(|| squash_target_from_fork_cached(repo, fork, branch, base, self))
+                .flatten()
+        });
+        self.squash.insert((branch, base), result);
+        result
+    }
+
+    fn ancestor(&mut self, repo: &Repository, branch: Oid, base: Oid) -> bool {
+        *self
+            .ancestry
+            .entry((branch, base))
+            .or_insert_with(|| is_ancestor_merged(repo, branch, base))
+    }
+
+    fn contained(&mut self, repo: &Repository, branch: Oid, base: Oid) -> bool {
+        *self
+            .containment
+            .entry((branch, base))
+            .or_insert_with(|| branch_content_in_base(repo, branch, base))
+    }
+}
+
+fn squash_target_from_fork_cached(
+    repo: &Repository,
+    fork: Oid,
+    branch_tip: Oid,
+    base_tip: Oid,
+    cache: &mut ClassificationCache,
+) -> Option<Oid> {
+    let branch_patch = (*cache
+        .combined
+        .entry((fork, branch_tip))
+        .or_insert_with(|| combined_patch_id(repo, fork, branch_tip)))?;
 
     // Walk the base from its tip back toward (but not past) the fork point,
     // comparing each single-parent commit's patch-id with the branch's.
@@ -128,27 +187,23 @@ fn squash_target_from_fork(
     let _ = walk.hide(fork);
 
     for oid in walk.filter_map(Result::ok).take(SQUASH_SCAN_LIMIT) {
-        let Ok(commit) = repo.find_commit(oid) else {
-            continue;
-        };
-        // Only an ordinary (single-parent) commit can carry the branch's diff as
-        // a squash; merge commits have their own combined diff and are skipped.
-        if commit.parent_count() != 1 {
-            continue;
-        }
-        let Ok(parent) = commit.parent(0) else {
-            continue;
-        };
-        let pid = tree_diff_patch_id(
-            repo,
-            parent.tree().ok().as_ref(),
-            commit.tree().ok().as_ref(),
-        );
+        let pid = *cache.patches.entry(oid).or_insert_with(|| {
+            let commit = repo.find_commit(oid).ok()?;
+            if commit.parent_count() != 1 {
+                return None;
+            }
+            let parent = commit.parent(0).ok()?;
+            tree_diff_patch_id(
+                repo,
+                parent.tree().ok().as_ref(),
+                commit.tree().ok().as_ref(),
+            )
+        });
         // A pid hit is a candidate, not proof (zero-context ids can collide) —
         // confirm the branch's work is exactly contained at this landing point,
         // and keep scanning past a collision in case the real squash sits
         // deeper in the walk.
-        if pid == Some(branch_patch) && branch_content_in_base(repo, branch_tip, oid) {
+        if pid == Some(branch_patch) && cache.contained(repo, branch_tip, oid) {
             return Some(oid);
         }
     }
@@ -388,6 +443,7 @@ fn gh_key(b: &BranchInfo) -> &str {
 ///    is what makes the (name-based) GitHub signal safe against name reuse. A
 ///    remote ref is matched against GitHub by its prefix-stripped name (see
 ///    [`gh_key`]).
+#[allow(clippy::too_many_arguments)]
 fn branch_is_merged(
     repo: &Repository,
     b: &BranchInfo,
@@ -396,6 +452,7 @@ fn branch_is_merged(
     trunk_line: &HashSet<Oid>,
     base_name: &str,
     gh_merged: &HashSet<String>,
+    cache: &mut ClassificationCache,
 ) -> bool {
     // The trunk's own remote counterpart (`origin/<base>`) is caught here: it is
     // always a base tip when distinct (see [`base_tips`]), so `base_tips` contains
@@ -462,16 +519,16 @@ fn branch_is_merged(
             // Only a concrete squash landing commit counts — both the ancestry
             // signal and `is_squash_merged`'s fully-contained shortcut are
             // exactly the "tip is an ancestor" reading that staleness fakes.
-            squash_merge_target(repo, b.tip_oid, t).is_some()
+            cache.squash_target(repo, b.tip_oid, t).is_some()
         } else {
-            is_ancestor_merged(repo, b.tip_oid, t) || is_squash_merged(repo, b.tip_oid, t)
+            cache.ancestor(repo, b.tip_oid, t) || cache.squash_target(repo, b.tip_oid, t).is_some()
         }
     });
     landed_in_git
         || (gh_merged.contains(gh_key(b))
             && base_tips
                 .iter()
-                .any(|&t| branch_content_in_base(repo, b.tip_oid, t)))
+                .any(|&t| cache.contained(repo, b.tip_oid, t)))
 }
 
 /// Plain-text trace of every decision [`classify_merged_branches`] makes, for
@@ -705,6 +762,7 @@ pub fn classify_merged_branches_with_targets(
     // Measure against the local trunk *and* its remote-tracking tip when the
     // local one lags (the post-fetch, pre-pull state) — see [`base_tips`].
     let mut tips = base_tips(branches, base_tip, base_name);
+    let mut cache = ClassificationCache::default();
     let trunk_line = trunk_first_parent_line(repo, &tips);
     let mut merged = HashSet::new();
     let mut targets = HashMap::new();
@@ -722,7 +780,16 @@ pub fn classify_merged_branches_with_targets(
         let mut grew = false;
         for b in branches {
             if merged.contains(&b.name)
-                || !branch_is_merged(repo, b, branches, &tips, &trunk_line, base_name, gh_merged)
+                || !branch_is_merged(
+                    repo,
+                    b,
+                    branches,
+                    &tips,
+                    &trunk_line,
+                    base_name,
+                    gh_merged,
+                    &mut cache,
+                )
             {
                 continue;
             }
@@ -732,7 +799,7 @@ pub fn classify_merged_branches_with_targets(
             // (ancestry merge, or a GitHub-only content match) stays out of the map.
             if let Some(target) = tips
                 .iter()
-                .find_map(|&t| squash_merge_target(repo, b.tip_oid, t))
+                .find_map(|&t| cache.squash_target(repo, b.tip_oid, t))
             {
                 targets.insert(b.name.clone(), target);
             }

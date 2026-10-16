@@ -189,6 +189,7 @@ impl App {
             Action::UnstageHunk => self.unstage_hunk_under_cursor()?,
             Action::DiscardHunk => self.prompt_discard_hunk_under_cursor()?,
             Action::Cancel | Action::Quit => {
+                self.background.file_diff.cancel();
                 // Return to normal with files panel focused, preserving file index
                 let flat_index = if let AppMode::FileDiff { file_index, .. } = &self.mode {
                     Some(*file_index)
@@ -212,6 +213,9 @@ impl App {
     /// or above the current scroll position (VSCode stages the hunk the cursor
     /// is in). Returns None when not in FileDiff mode.
     fn hunk_op_target(&self) -> Option<HunkOpTarget> {
+        if self.file_diff_is_loading() {
+            return None;
+        }
         let AppMode::FileDiff {
             content,
             hunk_positions,
@@ -412,7 +416,13 @@ impl App {
             ..
         } = &mut self.mode
         {
-            *so = scroll_offset.min(total_lines.saturating_sub(viewport));
+            // A pending request has only a one-row loading placeholder. Keep
+            // the requested scroll until delivery can clamp to the real rows.
+            *so = if self.background.file_diff.is_pending() {
+                scroll_offset
+            } else {
+                scroll_offset.min(total_lines.saturating_sub(viewport))
+            };
         }
         Ok(())
     }
@@ -424,45 +434,67 @@ impl App {
         file_list: Vec<FileDiffInfo>,
         file_path: &std::path::Path,
     ) -> Result<()> {
-        use crate::ui::file_diff_view::{build_highlighted_lines, layout_diff_rows};
-
-        // NOTE: Runs synchronously on the UI thread. For very large diffs (e.g. generated
-        // files, large refactors) this may briefly block input. If this becomes a problem,
-        // consider moving to a background task with a loading state, similar to commit diff summaries.
-        let content = self.load_file_diff_content(file_path, target)?;
-        let ui_theme = self.theme();
-        let (source_rows, hunk_src_positions) = build_highlighted_lines(&content, &ui_theme);
-
-        // Lay out for the current wrap state / pane width. `diff_viewport_width`
-        // reflects the previous frame (0 before the viewer has ever rendered);
-        // `ensure_diff_layout` re-wraps on the first render once it is known.
-        let wrap = self.diff_word_wrap;
+        let path = file_path.to_path_buf();
+        let repo_path = self.repo.path.clone();
+        let theme = self.theme();
         let width = self.diff_viewport_width as usize;
-        let (rendered_lines, hunk_positions) =
-            layout_diff_rows(&source_rows, &hunk_src_positions, wrap, width);
-        let total_lines = rendered_lines.len();
-        let max_line_width = rendered_lines.iter().map(|l| l.width()).max().unwrap_or(0);
-
-        // Source rows live beside the mode so re-wrapping doesn't bloat AppMode.
-        self.diff_source = Some(crate::ui::file_diff_view::DiffSource {
-            rows: source_rows,
-            hunk_positions: hunk_src_positions,
-            layout_wrap: wrap,
-            layout_width: width,
-        });
-
+        let wrap = self.diff_word_wrap;
+        self.diff_source = None;
         self.mode = AppMode::FileDiff {
             diff_target: target,
             file_index,
             file_list,
-            content,
-            rendered_lines,
-            hunk_positions,
+            content: FileDiffContent {
+                path: path.clone(),
+                kind: FileChangeKind::Modified,
+                is_binary: false,
+                hunks: Vec::new(),
+                total_additions: 0,
+                total_deletions: 0,
+            },
+            rendered_lines: vec![ratatui::text::Line::from("Loading diff…")],
+            hunk_positions: Vec::new(),
             scroll_offset: 0,
             horizontal_offset: 0,
-            max_line_width,
-            total_lines,
+            max_line_width: 0,
+            total_lines: 1,
         };
+        self.background
+            .file_diff
+            .submit_cancellable(self.background.threaded, move |cancel| {
+                let repo = git2::Repository::open(repo_path).map_err(|e| e.to_string())?;
+                let content = match target {
+                    DiffTarget::Commit(oid) => FileDiffContent::from_commit(&repo, oid, &path),
+                    DiffTarget::Range(old, new) => {
+                        FileDiffContent::from_range(&repo, old, new, &path)
+                    }
+                    DiffTarget::Uncommitted => FileDiffContent::from_working_tree(&repo, &path),
+                }
+                .map_err(|e| format!("Cannot load diff: {e}"))?;
+                let (rows, hunks) = crate::ui::file_diff_view::build_highlighted_lines_while(
+                    &content,
+                    &theme,
+                    || !cancel.is_cancelled(),
+                )
+                .ok_or_else(|| "Diff request superseded".to_string())?;
+                super::background_work::PreparedFileDiff {
+                    target,
+                    content,
+                    rows,
+                    hunks,
+                    lines: Vec::new(),
+                    display_hunks: Vec::new(),
+                    max_width: 0,
+                    width,
+                    wrap,
+                }
+                .layout(wrap, width, &cancel)
+            });
+        if !self.background.threaded {
+            if let Some(result) = self.background.file_diff.take() {
+                self.install_file_diff(result.map_err(anyhow::Error::msg)?);
+            }
+        }
         Ok(())
     }
 
@@ -473,35 +505,6 @@ impl App {
         } else {
             None
         }
-    }
-
-    fn load_file_diff_content(
-        &self,
-        file_path: &std::path::Path,
-        target: DiffTarget,
-    ) -> Result<FileDiffContent> {
-        let result = match target {
-            DiffTarget::Commit(oid) => {
-                FileDiffContent::from_commit(self.repo.repo(), oid, file_path)
-            }
-            DiffTarget::Range(old, new) => {
-                FileDiffContent::from_range(self.repo.repo(), old, new, file_path)
-            }
-            DiffTarget::Uncommitted => {
-                FileDiffContent::from_working_tree(self.repo.repo(), file_path)
-            }
-        };
-        // If diff fails (e.g. added file with no parent entry), return empty content
-        result.or_else(|_| {
-            Ok(FileDiffContent {
-                path: file_path.to_path_buf(),
-                kind: FileChangeKind::Added,
-                is_binary: false,
-                hunks: Vec::new(),
-                total_additions: 0,
-                total_deletions: 0,
-            })
-        })
     }
 
     /// Extract a file blob from a commit to a temp file, preserving the extension.

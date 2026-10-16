@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use git2::{BranchType, Oid, Repository};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchInfo {
     pub name: String,
     pub is_head: bool,
@@ -24,6 +24,11 @@ impl BranchInfo {
 
         // Get HEAD
         let head_oid = repo.head().ok().and_then(|r| r.target());
+        let head_name = repo
+            .head()
+            .ok()
+            .and_then(|r| r.shorthand().map(str::to_owned));
+        let mut tracking_counts = HashMap::new();
 
         // Local branches
         for branch_result in repo.branches(Some(BranchType::Local))? {
@@ -32,11 +37,7 @@ impl BranchInfo {
                 let reference = branch.get();
                 if let Some(oid) = reference.target() {
                     let is_head = head_oid.map(|h| h == oid).unwrap_or(false)
-                        && repo
-                            .head()
-                            .ok()
-                            .and_then(|h| h.shorthand().map(|s| s == name))
-                            .unwrap_or(false);
+                        && head_name.as_deref() == Some(name);
 
                     let upstream_branch = branch.upstream().ok();
                     let upstream = upstream_branch
@@ -47,7 +48,15 @@ impl BranchInfo {
                     let (ahead, behind) = upstream_branch
                         .as_ref()
                         .and_then(|u| u.get().target())
-                        .and_then(|up_oid| repo.graph_ahead_behind(oid, up_oid).ok())
+                        .and_then(|up_oid| {
+                            *tracking_counts.entry((oid, up_oid)).or_insert_with(|| {
+                                if oid == up_oid {
+                                    Some((0, 0))
+                                } else {
+                                    repo.graph_ahead_behind(oid, up_oid).ok()
+                                }
+                            })
+                        })
                         .unwrap_or((0, 0));
 
                     branches.push(BranchInfo {
@@ -181,15 +190,38 @@ pub fn split_remote_ref(remotes: &[String], refname: &str) -> Option<(String, St
 /// Never panics: any git error degrades to the tip author, and a commit
 /// without a readable author name degrades to an empty string.
 pub fn branch_authors(repo: &Repository, branches: &[BranchInfo]) -> HashMap<String, String> {
-    branches
+    branch_authors_while(repo, branches, || true).expect("uncancelled attribution")
+}
+
+pub(crate) fn branch_authors_while(
+    repo: &Repository,
+    branches: &[BranchInfo],
+    keep_going: impl Fn() -> bool,
+) -> Option<HashMap<String, String>> {
+    let mut tip_names: HashMap<Oid, HashSet<&str>> = HashMap::new();
+    for b in branches {
+        tip_names.entry(b.tip_oid).or_default().insert(&b.name);
+    }
+    let authors = branches
         .iter()
+        .take_while(|_| keep_going())
         .map(|b| {
             (
                 b.name.clone(),
-                branch_author(repo, b, branches).unwrap_or_default(),
+                if tip_names[&b.tip_oid].len() > 1 {
+                    // Another ref reaches the same tip: no commit can be
+                    // unique to this branch, so a history walk proves nothing.
+                    repo.find_commit(b.tip_oid)
+                        .ok()
+                        .and_then(|c| c.author().name().map(str::to_owned))
+                        .unwrap_or_default()
+                } else {
+                    branch_author(repo, b, branches).unwrap_or_default()
+                },
             )
         })
-        .collect()
+        .collect();
+    keep_going().then_some(authors)
 }
 
 /// Author name for a single branch, applying the oldest-unique-commit rule

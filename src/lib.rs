@@ -4,6 +4,7 @@ pub mod action;
 pub mod app;
 pub mod avatar;
 pub mod avatar_fetch;
+pub mod background;
 pub mod checks;
 pub mod clipboard_image;
 pub mod config;

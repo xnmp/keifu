@@ -80,8 +80,7 @@ pub fn build_pixel_base_specs(
 }
 
 /// Apply the two per-frame dim sources to the pixel specs in `[win_start,
-/// win_end)` only, returning a full-length spec list (rows outside the window
-/// are cheap empty placeholders). Dimming recolours/dims per cell but never
+/// win_end)` only, returning its origin and a bounded spec slice (including boundary neighbours). Dimming recolours/dims per cell but never
 /// changes a cell's geometry, so it can be layered onto the cached, undimmed
 /// `base` specs without rebuilding any curves.
 ///
@@ -108,7 +107,7 @@ pub fn dim_pixel_specs_window(
     trace: Option<&crate::app::TraceCache>,
     win_start: usize,
     win_end: usize,
-) -> Vec<crate::ui::graph_pixels::RowSpec> {
+) -> (usize, Vec<crate::ui::graph_pixels::RowSpec>) {
     // Lit edges and lane colors come from the frame cache (built once per
     // selection move, see `App::ensure_trace_cache`) instead of being
     // recomputed O(graph) on every redraw. With tracing off both are empty:
@@ -127,45 +126,52 @@ pub fn dim_pixel_specs_window(
     // Fetch one extra row on each side of the window: a window-edge row's
     // incoming curve tails restyle from the *neighbour's* dimmed cells, so the
     // boundary neighbours' oids/force-dim must be available too.
+    let win_start = win_start.min(base.len());
+    let win_end = win_end.max(win_start).min(base.len());
     let ext_start = win_start.saturating_sub(1);
-    let ext_end = win_end.saturating_add(1);
+    let ext_end = win_end.saturating_add(1).min(base.len());
+    let indices = super::visible_row_indices(app, true);
+    let node_start = ext_start.checked_sub(1).map_or(0, |i| indices[i] + 1);
+    let node_end = ext_end.checked_sub(1).map_or(0, |i| indices[i] + 1);
     let win_rows = if !app.commit_filter_is_active() {
         fold_rows_windowed(
-            app.graph_layout.nodes.iter().enumerate(),
-            ext_start,
-            ext_end,
+            app.graph_layout
+                .nodes
+                .iter()
+                .enumerate()
+                .skip(node_start)
+                .take(node_end.saturating_sub(node_start)),
+            0,
+            ext_end - ext_start,
         )
     } else {
+        let first = app
+            .visible_commit_indices
+            .partition_point(|&i| i < node_start);
+        let last = app
+            .visible_commit_indices
+            .partition_point(|&i| i < node_end);
         fold_rows_windowed(
-            app.visible_commit_indices
+            app.visible_commit_indices[first..last]
                 .iter()
                 .map(|&i| (i, &app.graph_layout.nodes[i])),
-            ext_start,
-            ext_end,
+            0,
+            ext_end - ext_start,
         )
     };
-    // Absolute-indexed sparse inputs the core expects: only windowed positions
-    // are filled; the rest are cheap defaults the core never reads (it touches
-    // `[win_start, win_end)` only). Two single allocations, no per-row work.
-    let mut row_oids: Vec<RowOids> = vec![RowOids::EMPTY; base.len()];
-    // Per-row base-update flag, via the same `is_base_update_row` predicate the
-    // unicode renderer uses, so pixel and unicode connectors dim on identical
-    // rows. Frame/scroll-varying, so it lives here, never in the cached base.
-    let mut force_dim: Vec<bool> = vec![false; base.len()];
+    let mut row_oids: Vec<RowOids> = vec![RowOids::EMPTY; ext_end - ext_start];
+    let mut force_dim = vec![false; ext_end - ext_start];
     for (k, r) in win_rows.iter().enumerate() {
-        let abs = ext_start + k;
-        if abs >= base.len() {
-            break;
-        }
-        row_oids[abs] = RowOids {
+        row_oids[k] = RowOids {
             cells: &r.node.cell_oids,
             underlay: &r.underlay_oids,
         };
-        force_dim[abs] = is_base_update_row(
+        force_dim[k] = is_base_update_row(
             r.node,
             app.metadata_columns.mute_base_merges,
             app.merged.base_update.value(),
         ) || (app.commit_filter_is_active()
+            && !app.commit_paths_are_loading()
             && r.node
                 .commit
                 .as_ref()
@@ -180,16 +186,19 @@ pub fn dim_pixel_specs_window(
         .selected_commit_node()
         .and_then(|n| n.commit.as_ref())
         .map(|c| c.oid);
-    dim_specs_window_core(
-        base,
-        &row_oids,
-        &force_dim,
-        lit,
-        lane_rgb,
-        merged_oids,
-        merged_exempt,
-        win_start,
-        win_end,
+    (
+        ext_start,
+        dim_specs_window_core(
+            &base[ext_start..ext_end],
+            &row_oids,
+            &force_dim,
+            lit,
+            lane_rgb,
+            merged_oids,
+            merged_exempt,
+            win_start - ext_start,
+            win_end - ext_start,
+        ),
     )
 }
 
@@ -213,10 +222,9 @@ impl RowOids<'_> {
 /// `[win_start, win_end)`, leaving empty placeholders elsewhere. Independent of
 /// `App`, so the windowing/placeholder contract is unit-testable directly.
 ///
-/// The full-length result keeps absolute row indexing valid for the overlay, but
-/// the (per-cell hashmap) dim work runs only for the window: out-of-window rows
-/// are bulk-filled with empty placeholders (`Default`, no heap), never
-/// per-element-branched over the whole graph (#73).
+/// Indexing is relative to the supplied base slice. Production passes only the
+/// viewport and its two boundary neighbours, so both allocation and cell work
+/// remain bounded by the viewport.
 ///
 /// Invariant: for any row inside the window the result is byte-identical to
 /// dimming that row over the full range — dimming is per-row (`apply_trace_dim`
@@ -494,6 +502,41 @@ mod tests {
         let mut n = merge_node("m");
         n.cells = cells;
         n
+    }
+
+    #[test]
+    fn viewport_dimming_matches_full_graph_with_connectors_and_filter() {
+        let mut app = App::test_fixture();
+        let mut nodes = Vec::new();
+        for i in 0..100 {
+            nodes.push(connector_node(vec![CellType::TeeRight(0)]));
+            let mut node = commit_row(vec![CellType::Commit(0)]);
+            node.commit.as_mut().unwrap().oid = oid(i);
+            nodes.push(node);
+        }
+        nodes.push(connector_node(vec![CellType::Pipe(0)]));
+        nodes.push(connector_node(vec![CellType::Pipe(0)]));
+        app.graph_layout.nodes = nodes;
+        for filtered in [false, true] {
+            app.commit_filter = if filtered {
+                "message=m".into()
+            } else {
+                String::new()
+            };
+            app.visible_commit_indices = (0..app.graph_layout.nodes.len())
+                .filter(|i| !filtered || i % 7 != 0)
+                .collect();
+            app.commit_filter_matches = (0..100).filter(|i| i % 3 == 0).map(oid).collect();
+            app.graph_folded_rows = None;
+            let base = build_pixel_base_specs(&app, &Theme::dark(), 10, 10);
+            let (_, full) = dim_pixel_specs_window(&app, &base, None, 0, base.len());
+            for start in [0, 1, 37, base.len() - 2, base.len()] {
+                let end = (start + 12).min(base.len());
+                let (origin, window) = dim_pixel_specs_window(&app, &base, None, start, end);
+                assert!(window.len() <= 14);
+                assert_eq!(&window[start - origin..end - origin], &full[start..end]);
+            }
+        }
     }
 
     #[test]

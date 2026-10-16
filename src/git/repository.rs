@@ -1,5 +1,6 @@
 //! Repository operation wrapper
 
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -10,7 +11,7 @@ use git2::Oid;
 
 use super::{BranchInfo, CommitDiffInfo, CommitInfo};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StashInfo {
     pub index: usize,
     pub message: String,
@@ -20,7 +21,7 @@ pub struct StashInfo {
 
 /// A tag pointing at a commit. Annotated tags are peeled to the commit they
 /// ultimately reference, so `target_oid` is always a commit OID.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagInfo {
     pub name: String,
     pub target_oid: Oid,
@@ -143,6 +144,14 @@ impl GitRepository {
         Ok(())
     }
 
+    pub(crate) fn shallow_boundary(&self) -> Option<Vec<u8>> {
+        let git_dir = self.repo.path();
+        let common = std::fs::read_to_string(git_dir.join("commondir"))
+            .map(|p| git_dir.join(p.trim_end_matches(['\r', '\n'])))
+            .unwrap_or_else(|_| git_dir.to_path_buf());
+        std::fs::read(common.join("shallow")).ok()
+    }
+
     /// Get commit history (newest first).
     ///
     /// Walks from the tips of the supplied `branches` — the caller decides
@@ -231,13 +240,28 @@ impl GitRepository {
         &self,
         commits: &[CommitInfo],
     ) -> std::collections::HashMap<Oid, Vec<String>> {
-        commits
-            .iter()
-            .filter_map(|info| {
-                let commit = self.repo.find_commit(info.oid).ok()?;
+        self.changed_paths_for_oids(commits.iter().map(|c| c.oid))
+    }
+
+    pub fn changed_paths_for_oids(
+        &self,
+        oids: impl IntoIterator<Item = Oid>,
+    ) -> std::collections::HashMap<Oid, Vec<String>> {
+        self.changed_paths_while(oids, || true)
+    }
+
+    pub(crate) fn changed_paths_while(
+        &self,
+        oids: impl IntoIterator<Item = Oid>,
+        mut keep_going: impl FnMut() -> bool,
+    ) -> std::collections::HashMap<Oid, Vec<String>> {
+        oids.into_iter()
+            .take_while(|_| keep_going())
+            .filter_map(|oid| {
+                let commit = self.repo.find_commit(oid).ok()?;
                 self.changed_paths_for_commit(&commit)
                     .ok()
-                    .map(|paths| (info.oid, paths))
+                    .map(|paths| (oid, paths))
             })
             .collect()
     }
@@ -246,6 +270,7 @@ impl GitRepository {
         let tree = commit.tree()?;
         let parent_count = commit.parent_count().max(1);
         let mut paths = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for parent_index in 0..parent_count {
             let parent_tree = if commit.parent_count() == 0 {
                 None
@@ -261,7 +286,7 @@ impl GitRepository {
                     .flatten()
                 {
                     let path = path.to_string_lossy().into_owned();
-                    if !paths.contains(&path) {
+                    if seen.insert(path.clone()) {
                         paths.push(path);
                     }
                 }
@@ -378,12 +403,21 @@ impl GitRepository {
     /// Number of paths currently in a conflicted (unmerged) state.
     pub fn conflicted_count(&self) -> usize {
         self.repo
-            .statuses(None)
-            .map(|statuses| {
-                statuses
-                    .iter()
-                    .filter(|e| e.status().contains(Status::CONFLICTED))
-                    .count()
+            .index()
+            .and_then(|index| {
+                // Conflicts are index stages; inspecting them must not walk
+                // every working-tree file a second time during each refresh.
+                let mut paths = std::collections::HashSet::new();
+                for conflict in index.conflicts()? {
+                    let conflict = conflict?;
+                    for entry in [conflict.ancestor, conflict.our, conflict.their]
+                        .into_iter()
+                        .flatten()
+                    {
+                        paths.insert(entry.path);
+                    }
+                }
+                Ok(paths.len())
             })
             .unwrap_or(0)
     }
@@ -407,6 +441,7 @@ impl GitRepository {
         let statuses = self.repo.statuses(Some(&mut opts))?;
         let workdir = self.repo.workdir().unwrap_or_else(|| self.repo.path());
         let mut file_paths: Vec<PathBuf> = Vec::new();
+        let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
         let mut has_collapsed_untracked_dirs = false;
 
         for entry in statuses.iter() {
@@ -436,6 +471,14 @@ impl GitRepository {
             let is_conflicted = status.contains(Status::CONFLICTED);
 
             if is_staged || has_worktree_changes || is_conflicted {
+                entry.path_bytes().hash(&mut fingerprint);
+                status.bits().hash(&mut fingerprint);
+                // Staging can change the index while leaving worktree mtimes
+                // untouched. Include both sides of its delta in the key.
+                if let Some(delta) = entry.head_to_index() {
+                    delta.old_file().id().as_bytes().hash(&mut fingerprint);
+                    delta.new_file().id().as_bytes().hash(&mut fingerprint);
+                }
                 let path = super::path_from_bytes(entry.path_bytes());
                 if status.intersects(Status::WT_NEW) {
                     let full_path = workdir.join(&path);
@@ -452,23 +495,42 @@ impl GitRepository {
         } else {
             file_paths.sort();
 
-            // Compute mtime hash from all changed files
-            let mtime_hash: u128 = file_paths
-                .iter()
-                .filter_map(|path| {
-                    let full_path = workdir.join(path);
-                    std::fs::symlink_metadata(&full_path)
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis())
-                })
-                .sum();
+            // Hash path-associated metadata, not the sum of millisecond mtimes
+            // (which loses precision and collides when two mtimes are swapped).
+            let mut metadata_complete = true;
+            for path in &file_paths {
+                path.hash(&mut fingerprint);
+                match std::fs::symlink_metadata(workdir.join(path)) {
+                    Ok(meta) => {
+                        meta.len().hash(&mut fingerprint);
+                        let modified = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok());
+                        metadata_complete &= modified.is_some();
+                        modified.hash(&mut fingerprint);
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            meta.ctime().hash(&mut fingerprint);
+                            meta.ctime_nsec().hash(&mut fingerprint);
+                            meta.ino().hash(&mut fingerprint);
+                            meta.mode().hash(&mut fingerprint);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        0u8.hash(&mut fingerprint)
+                    }
+                    Err(_) => metadata_complete = false,
+                }
+            }
+            let mtime_hash = fingerprint.finish() as u128;
 
             Ok(Some(WorkingTreeStatus {
                 file_paths,
                 mtime_hash,
                 has_collapsed_untracked_dirs,
+                metadata_complete,
             }))
         }
     }
@@ -479,8 +541,11 @@ impl GitRepository {
 pub struct WorkingTreeStatus {
     /// Sorted list of file paths with changes (used as cache key)
     pub file_paths: Vec<PathBuf>,
-    /// Sum of file mtimes in milliseconds (used as cache key for content changes)
+    /// Fingerprint of path, staging delta, size and high-resolution metadata.
+    /// Historical field name retained for callers; this is not a content hash.
     pub mtime_hash: u128,
+    /// False when metadata could not be read; never reuse an uncertain result.
+    pub metadata_complete: bool,
     /// True when untracked directories were collapsed to a single status entry.
     /// In that case the mtime hash is not precise enough to safely reuse the
     /// uncommitted diff cache across refreshes.
@@ -503,7 +568,7 @@ impl WorkingTreeStatus {
     }
 
     pub fn is_precise_cache_key(&self) -> bool {
-        !self.has_collapsed_untracked_dirs
+        self.metadata_complete && !self.has_collapsed_untracked_dirs
     }
 }
 

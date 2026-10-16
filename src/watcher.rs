@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use git2::Repository;
@@ -8,10 +12,12 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 const DEBOUNCE_MS: u64 = 50;
 const MAX_BATCH_WAIT_MS: u64 = 500;
 const MIN_REFRESH_INTERVAL_MS: u64 = 1000;
+const EVENT_QUEUE_CAPACITY: usize = 256;
 
 pub struct FsWatcher {
     _watcher: RecommendedWatcher,
     rx: Receiver<notify::Result<Event>>,
+    overflowed: Arc<AtomicBool>,
     repo: Option<Repository>,
     last_event_time: Option<Instant>,
     dirty_since: Option<Instant>,
@@ -61,8 +67,20 @@ impl FsWatcher {
     }
 
     pub fn new(repo_path: &Path) -> Option<Self> {
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok()?;
+        let (tx, rx) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let overflow_signal = Arc::clone(&overflowed);
+        let mut watcher = RecommendedWatcher::new(
+            move |event| {
+                if tx.try_send(event).is_err() {
+                    // Coalesce overflow into a conservative repository refresh;
+                    // never block notify's producer or silently lose a ref change.
+                    overflow_signal.store(true, Ordering::Release);
+                }
+            },
+            notify::Config::default(),
+        )
+        .ok()?;
         watcher.watch(repo_path, RecursiveMode::Recursive).ok()?;
 
         let repo = Repository::open(repo_path).ok();
@@ -74,6 +92,7 @@ impl FsWatcher {
         Some(Self {
             _watcher: watcher,
             rx,
+            overflowed,
             repo,
             last_event_time: None,
             dirty_since: None,
@@ -91,7 +110,17 @@ impl FsWatcher {
             return PollResult::Idle;
         }
 
-        loop {
+        if self.overflowed.swap(false, Ordering::AcqRel) {
+            self.dirty = true;
+            self.git_dirty = true;
+            self.last_event_time = Some(Instant::now());
+            self.dirty_since.get_or_insert_with(Instant::now);
+        }
+        let started = Instant::now();
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            if started.elapsed() >= Duration::from_millis(2) {
+                break;
+            }
             match self.rx.try_recv() {
                 Ok(Ok(event)) => {
                     let touches_git = self.touches_git_refs(&event);
@@ -194,6 +223,26 @@ pub enum PollResult {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn overflow_eventually_refreshes_refs_even_when_the_queue_lost_the_event() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let mut watcher = FsWatcher::new(dir.path()).unwrap();
+        watcher.overflowed.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let PollResult::Refresh { git_changed } = watcher.poll() {
+                assert!(git_changed);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "overflow lost repository invalidation"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn spawned_watcher_becomes_available() {

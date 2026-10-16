@@ -35,6 +35,7 @@ pub struct BranchFilterWidget<'a> {
     filter: &'a str,
     selected: usize,
     theme: &'a Theme,
+    loading_authors: bool,
 }
 
 impl<'a> BranchFilterWidget<'a> {
@@ -53,7 +54,13 @@ impl<'a> BranchFilterWidget<'a> {
             filter,
             selected,
             theme,
+            loading_authors: false,
         }
+    }
+
+    pub fn loading_authors(mut self, loading: bool) -> Self {
+        self.loading_authors = loading;
+        self
     }
 
     fn author_of(&self, branch: &str) -> &'a str {
@@ -75,7 +82,9 @@ impl<'a> Widget for BranchFilterWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let title = if self.filter.is_empty() {
+        let title = if self.loading_authors {
+            " Branch Filter · loading authors… ".to_string()
+        } else if self.filter.is_empty() {
             " Branch Filter ".to_string()
         } else {
             format!(" Branch Filter [{}] ", self.filter)

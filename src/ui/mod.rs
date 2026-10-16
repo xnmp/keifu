@@ -394,9 +394,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // selection visible, and a window computed from the pre-render offset
     // missed whole bands at the top/bottom on page jumps and G/g.
     let pixel_mode = !graph_area.is_empty() && app.pixel_graph.is_some();
+    if pixel_mode
+        && app
+            .graph_folded_rows
+            .as_ref()
+            .is_none_or(|(generation, _)| *generation != app.graph_generation)
+    {
+        let rows = graph_view::visible_row_indices(app, true).into_owned();
+        app.graph_folded_rows = Some((app.graph_generation, rows));
+    }
     let graph_viewport = graph_area.height.saturating_sub(2);
     if !graph_area.is_empty() {
-        let graph_widget = GraphViewWidget::new(
+        let mut graph_widget = GraphViewWidget::new(
             app,
             graph_area.width,
             &theme,
@@ -404,7 +413,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             graph_viewport,
             app.launch_mode != LaunchMode::Bare,
         );
-        app.graph_chip_hits = graph_widget.chip_hits.clone();
+        app.graph_chip_hits = std::mem::take(&mut graph_widget.chip_hits);
         frame.render_stateful_widget(
             graph_widget,
             graph_area,
@@ -421,7 +430,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // until the layout, filter, or width changes. `pixel_frame_dim` is `Some`
     // only while a dim source is active; the owned Vec lives until the overlay
     // below so `sync_frame` and `overlay_pixel_graph` see the same dimmed rows.
-    let mut pixel_frame_dim: Option<Vec<graph_pixels::RowSpec>> = None;
+    let mut pixel_frame_dim: Option<(usize, Vec<graph_pixels::RowSpec>)> = None;
     let pixel_active = if pixel_mode {
         let panel_available = graph_area
             .width
@@ -501,8 +510,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             // Disjoint field borrows: `specs` from pixel_specs_cache (or the
             // owned dim overlay), `pg` from pixel_graph.
             let base = &app.pixel_specs_cache.as_ref().unwrap().4;
-            let specs: &[graph_pixels::RowSpec] = pixel_frame_dim.as_deref().unwrap_or(base);
-            let windowed = &specs[win_start..win_end];
+            let (origin, specs) = pixel_frame_dim
+                .as_ref()
+                .map_or((0, base.as_slice()), |(origin, specs)| {
+                    (*origin, specs.as_slice())
+                });
+            let windowed = &specs[win_start - origin..win_end - origin];
             app.pixel_graph.as_mut().is_some_and(|pg| {
                 pg.sync_frame(windowed);
                 pg.is_active()
@@ -525,7 +538,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // `pixel_graph` borrow that transmits them doesn't overlap.
     stage!(app, "pixel_pass");
     if pixel_active && app.metadata_columns.avatars {
-        let reqs = build_avatar_reqs(app);
+        let reqs = build_avatar_reqs(app, graph_viewport as usize);
         if let Some(pg) = app.pixel_graph.as_mut() {
             pg.sync_avatars(&reqs);
         }
@@ -536,8 +549,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // specs. The on-screen rows the overlay reads are inside the window, so
         // the dim overlay always has real specs there.
         let base = app.pixel_specs_cache.as_ref().map(|c| c.4.as_slice());
-        if let Some(specs) = pixel_frame_dim.as_deref().or(base) {
-            overlay_pixel_graph(frame, app, graph_area, specs);
+        if let Some((origin, specs)) = pixel_frame_dim
+            .as_ref()
+            .map(|(origin, specs)| (*origin, specs.as_slice()))
+            .or_else(|| base.map(|specs| (0, specs)))
+        {
+            overlay_pixel_graph(frame, app, graph_area, origin, specs);
         }
         if app.metadata_columns.avatars {
             overlay_avatars(frame, app, graph_area);
@@ -581,7 +598,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame,
         &theme,
         graph_area,
-        app.graph_chip_hits.len(),
+        app.graph_chip_hits.total,
         graph_area.height.saturating_sub(2) as usize,
         app.graph_nav.graph_list_state.offset(),
     );
@@ -960,7 +977,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     filter,
                     *selected,
                     &theme,
-                ),
+                )
+                .loading_authors(app.background.authors.is_pending()),
                 popup_area,
             );
             rendered_popup = Some(popup_area);
@@ -1249,7 +1267,13 @@ pub(crate) fn truncate_str(s: &str, max: usize) -> String {
 /// the leading-space column so it lines up with the spaces emitted by
 /// `render_graph_line` in pixel mode. Images are transparent, so the list's
 /// selection highlight shows through.
-fn overlay_pixel_graph(frame: &mut Frame, app: &App, area: Rect, specs: &[graph_pixels::RowSpec]) {
+fn overlay_pixel_graph(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    origin: usize,
+    specs: &[graph_pixels::RowSpec],
+) {
     use ratatui_image::Image;
     if area.width < MIN_WIDGET_WIDTH || area.height < MIN_WIDGET_HEIGHT {
         return;
@@ -1270,7 +1294,7 @@ fn overlay_pixel_graph(frame: &mut Frame, app: &App, area: Rect, specs: &[graph_
     let offset = app.graph_nav.graph_list_state.offset();
     for row in 0..inner_h {
         let idx = offset + row as usize;
-        let Some(spec) = specs.get(idx) else {
+        let Some(spec) = idx.checked_sub(origin).and_then(|i| specs.get(i)) else {
             break;
         };
         let Some(proto) = pg.get(spec) else {
@@ -1288,13 +1312,19 @@ fn overlay_pixel_graph(frame: &mut Frame, app: &App, area: Rect, specs: &[graph_
 /// The avatars to prepare this frame: one per unique visible author email whose
 /// download has resolved (pending emails are skipped — nothing drawn yet). The
 /// fallback color is precomputed so a decode failure still yields a disc.
-fn build_avatar_reqs(app: &App) -> Vec<graph_pixels::AvatarReq> {
+fn build_avatar_reqs(app: &App, viewport: usize) -> Vec<graph_pixels::AvatarReq> {
     use crate::avatar_fetch::AvatarState;
     let dir = crate::avatar::cache_dir();
     let mut reqs = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for row in graph_view::visible_rows(app, true) {
-        let Some(commit) = &row.node.commit else {
+    let offset = app.graph_nav.graph_list_state.offset();
+    for idx in graph_view::visible_row_indices(app, true)
+        .iter()
+        .copied()
+        .skip(offset)
+        .take(viewport)
+    {
+        let Some(commit) = &app.graph_layout.nodes[idx].commit else {
             continue;
         };
         let email = &commit.author_email;
@@ -1338,14 +1368,14 @@ fn overlay_avatars(frame: &mut Frame, app: &App, area: Rect) {
     let needed = (app.graph_layout.max_lane + 1) * 2;
     let graph_width = graph_view::effective_graph_width(needed, app.graph_width_cap);
     let avatar_x = graph_view::avatar_overlay_x(inner_x, graph_width);
-    let rows = graph_view::visible_rows(app, true);
+    let rows = graph_view::visible_row_indices(app, true);
     let offset = app.graph_nav.graph_list_state.offset();
     for row in 0..inner_h {
         let idx = offset + row as usize;
-        let Some(rr) = rows.get(idx) else {
+        let Some(&full_idx) = rows.get(idx) else {
             break;
         };
-        let Some(commit) = &rr.node.commit else {
+        let Some(commit) = &app.graph_layout.nodes[full_idx].commit else {
             continue;
         };
         let Some(proto) = pg.get_avatar(&commit.author_email) else {

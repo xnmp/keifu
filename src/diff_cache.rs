@@ -52,6 +52,9 @@ pub struct DiffCacheEvents {
 
 /// Two-tier diff cache with async loading and debouncing.
 pub struct DiffCache {
+    // Keep ownership even when result receivers are invalidated. A refresh
+    // may discard a result, but must never create overlapping heavy jobs.
+    worker: Option<thread::JoinHandle<()>>,
     pub quick_diff_cache: Option<CommitDiffInfo>,
     pub quick_diff_target: Option<DiffTarget>,
     pub diff_cache: Option<CommitDiffInfo>,
@@ -88,6 +91,7 @@ impl Default for DiffCache {
 impl DiffCache {
     pub fn new() -> Self {
         Self {
+            worker: None,
             quick_diff_cache: None,
             quick_diff_target: None,
             diff_cache: None,
@@ -111,6 +115,7 @@ impl DiffCache {
 
     /// Clear all diff caches (for force refresh).
     pub fn clear_all(&mut self) {
+        self.selected_diff_target = None;
         self.quick_diff_cache = None;
         self.quick_diff_target = None;
         self.diff_cache = None;
@@ -355,7 +360,10 @@ impl DiffCache {
     }
 
     fn has_in_flight_diff(&self) -> bool {
-        self.diff_loading_oid.is_some()
+        self.worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+            || self.diff_loading_oid.is_some()
             || self.uncommitted_diff_loading
             || self.range_diff_loading.is_some()
     }
@@ -545,7 +553,7 @@ impl DiffCache {
                 self.uncommitted_diff_loading = true;
                 self.uncommitted_diff_receiver = Some(rx);
 
-                thread::spawn(move || {
+                self.worker = Some(thread::spawn(move || {
                     let repo = match GitRepository::open(&repo_path) {
                         Ok(r) => r,
                         Err(e) => {
@@ -557,7 +565,7 @@ impl DiffCache {
                     let diff =
                         CommitDiffInfo::from_working_tree(repo.repo()).map_err(|e| e.to_string());
                     let _ = tx.send((diff, status));
-                });
+                }));
             }
             DiffTarget::Commit(oid) => {
                 let (tx, rx) = mpsc::channel();
@@ -566,7 +574,7 @@ impl DiffCache {
                 self.diff_loading_oid = Some(oid);
                 self.diff_receiver = Some(rx);
 
-                thread::spawn(move || {
+                self.worker = Some(thread::spawn(move || {
                     let diff = git2::Repository::open(&repo_path)
                         .map_err(|e| e.to_string())
                         .and_then(|repo| {
@@ -574,7 +582,7 @@ impl DiffCache {
                         });
 
                     let _ = tx.send(DiffResult { oid, diff });
-                });
+                }));
             }
             DiffTarget::Range(old, new) => {
                 let (tx, rx) = mpsc::channel();
@@ -583,7 +591,7 @@ impl DiffCache {
                 self.range_diff_loading = Some((old, new));
                 self.range_diff_receiver = Some(rx);
 
-                thread::spawn(move || {
+                self.worker = Some(thread::spawn(move || {
                     let diff = git2::Repository::open(&repo_path)
                         .map_err(|e| e.to_string())
                         .and_then(|repo| {
@@ -594,7 +602,7 @@ impl DiffCache {
                         key: (old, new),
                         diff,
                     });
-                });
+                }));
             }
         }
 
@@ -655,6 +663,7 @@ mod tests {
         WorkingTreeStatus {
             file_paths: vec![PathBuf::from("a.txt")],
             mtime_hash: 100,
+            metadata_complete: true,
             has_collapsed_untracked_dirs: false,
         }
     }
@@ -663,6 +672,7 @@ mod tests {
         WorkingTreeStatus {
             file_paths: vec![PathBuf::from("b.txt")],
             mtime_hash: 200,
+            metadata_complete: true,
             has_collapsed_untracked_dirs: false,
         }
     }
@@ -671,6 +681,7 @@ mod tests {
         WorkingTreeStatus {
             file_paths: vec![PathBuf::from("a.txt")],
             mtime_hash: 100,
+            metadata_complete: true,
             has_collapsed_untracked_dirs: true,
         }
     }

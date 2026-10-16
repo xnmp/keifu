@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// Exact immutable inputs to a commit walk. Worktree changes and label-only
+/// changes do not invalidate history; shallow boundaries do.
+#[derive(PartialEq, Eq)]
+pub(crate) struct CommitHistoryKey {
+    tips: Vec<Oid>,
+    stashes: Vec<Oid>,
+    head: Option<Oid>,
+    limit: usize,
+    first_parent: bool,
+    shallow: Option<Vec<u8>>,
+}
+
+#[derive(PartialEq, Eq)]
+pub(crate) struct GraphCacheKey {
+    branches: Vec<BranchInfo>,
+    stashes: Vec<crate::git::repository::StashInfo>,
+    tags: Vec<crate::git::repository::TagInfo>,
+    uncommitted: Option<Option<usize>>,
+    filter: String,
+    squash: Vec<SquashMergeLine>,
+    remotes: Vec<String>,
+}
+
 /// The pre-rebuild selection, captured from the old graph so it can be
 /// re-resolved against the freshly-built layout (see `restore_selection`).
 struct SelectionSnapshot {
@@ -228,6 +251,7 @@ impl App {
     /// caches — those are the later phases' responsibility.
     fn reload_refs(&mut self, force: bool) -> Result<()> {
         self.maybe_reopen_repo(force);
+        self.reconcile_object_availability()?;
 
         // Get working tree status once and reuse. Report a failure once per
         // episode (latched) so a persistently-failing status query doesn't
@@ -258,7 +282,16 @@ impl App {
             super::rebase_plan_actions::reconcile_interactive_rebase_state(self.repo.repo().path());
         }
 
-        self.branches = self.repo.get_branches()?;
+        let branches = self.repo.get_branches()?;
+        if self.branches != branches {
+            self.background.authors.cancel();
+            self.branch_authors_key.clear();
+            self.branch_authors.clear();
+        }
+        self.branches = branches;
+        if matches!(self.mode, AppMode::BranchFilter { .. }) {
+            self.ensure_branch_authors();
+        }
         self.remotes = self.repo.remotes();
         // Re-run classification against the just-loaded branches (no-op when the
         // inputs are unchanged, per the classifier's signature guard).
@@ -267,6 +300,52 @@ impl App {
         // count as base-updates (issue #55); recompute (signature-guarded no-op
         // when unchanged).
         self.recompute_base_update_merges();
+        Ok(())
+    }
+
+    /// Shallow boundaries change parent semantics even for unchanged OIDs.
+    /// Invalidate all ancestry-derived views together before scheduling workers.
+    fn reconcile_object_availability(&mut self) -> Result<()> {
+        let boundary = self.repo.shallow_boundary();
+        if self.repository_shallow_boundary == boundary {
+            return Ok(());
+        }
+        // Cached libgit2 commit objects retain their old parentless boundary
+        // interpretation. Reopen even when a watcher did not mark refs dirty;
+        // retain the old identity on failure so the next refresh retries.
+        self.repo.reopen()?;
+        self.repository_shallow_boundary = boundary;
+        self.commit_history_key = None;
+        self.graph_cache_key = None;
+        self.background.paths.cancel();
+        self.background.path_key.clear();
+        self.commit_changed_paths.clear();
+        self.diff_cache.clear_all();
+        self.background.authors.cancel();
+        self.branch_authors_key.clear();
+        self.branch_authors.clear();
+        self.merged.classify.cancel();
+        self.merged.branches.clear();
+        self.merged.squash_targets.clear();
+        self.merged.base_update.reset(Default::default());
+        if let AppMode::FileDiff {
+            diff_target,
+            file_index,
+            file_list,
+            content,
+            ..
+        } = &self.mode
+        {
+            let request = (
+                *diff_target,
+                *file_index,
+                file_list.clone(),
+                content.path.clone(),
+            );
+            if let Err(error) = self.enter_file_diff(request.0, request.1, request.2, &request.3) {
+                self.report_refresh_error(error);
+            }
+        }
         Ok(())
     }
 
@@ -306,6 +385,13 @@ impl App {
     /// merged-classification delivery path so both re-point the cursor and
     /// invalidate diff caches identically.
     pub(crate) fn rebuild_and_restore(&mut self, force: bool) -> Result<()> {
+        if force {
+            self.commit_history_key = None;
+            self.graph_cache_key = None;
+            self.background.paths.cancel();
+            self.background.path_key.clear();
+            self.commit_changed_paths.clear();
+        }
         // Snapshot the pre-rebuild selection while the OLD graph is still live.
         let snapshot = self.capture_selection_snapshot();
         self.rebuild_graph()?;
@@ -395,17 +481,47 @@ impl App {
             .filter(|b| !self.pending_remote_deletions.contains(&b.name))
             .cloned()
             .collect();
-        self.commits = self.repo.get_commits(
-            self.commit_load_limit,
-            &visible_branches,
-            &stashes,
-            self.merged.hide,
-        )?;
+        let head_commit_oid = self.repo.head_oid();
+        let history_key = CommitHistoryKey {
+            tips: visible_branches.iter().map(|b| b.tip_oid).collect(),
+            stashes: stashes.iter().map(|s| s.oid).collect(),
+            head: head_commit_oid,
+            limit: self.commit_load_limit,
+            first_parent: self.merged.hide,
+            shallow: self.repo.shallow_boundary(),
+        };
+        let history_changed = self.commit_history_key.as_ref() != Some(&history_key);
+        if history_changed {
+            // A deepen/fetch can repair a missing parent without changing the
+            // displayed OIDs. Permit another attempt for previously unreadable paths.
+            self.background.path_key.clear();
+            self.commits = self.repo.get_commits(
+                self.commit_load_limit,
+                &visible_branches,
+                &stashes,
+                self.merged.hide,
+            )?;
+            self.commit_history_key = Some(history_key);
+        }
         // The whole history is loaded once the walk yields fewer than the limit.
         self.all_commits_loaded = self.commits.len() < self.commit_load_limit;
         let tags = self.repo.get_tags();
-        let head_commit_oid = self.repo.head_oid();
         let squash_lines = self.squash_merge_lines();
+        let graph_key = GraphCacheKey {
+            branches: visible_branches.clone(),
+            stashes: stashes.clone(),
+            tags: tags.clone(),
+            uncommitted: uncommitted_count,
+            filter: self.commit_filter.clone(),
+            squash: squash_lines.clone(),
+            remotes: self.remotes.clone(),
+        };
+        self.head_name = self.repo.head_name();
+        self.head_detached = self.repo.is_head_detached();
+        if !history_changed && self.graph_cache_key.as_ref() == Some(&graph_key) {
+            self.recompute_merged_lane_oids();
+            return Ok(());
+        }
         let graph_commits = self.filtered_graph_commits();
         self.graph_layout = build_graph(
             &graph_commits,
@@ -418,6 +534,7 @@ impl App {
         );
         // Invalidate the pixel-graph spec cache: the layout changed.
         self.graph_generation = self.graph_generation.wrapping_add(1);
+        self.graph_cache_key = Some(graph_key);
         self.head_name = self.repo.head_name();
         self.head_detached = self.repo.is_head_detached();
 

@@ -32,6 +32,9 @@ impl CommitFilterQuery {
                 _ => query.text = clause.to_string(),
             }
         }
+        query.text = query.text.to_lowercase();
+        query.message = query.message.to_lowercase();
+        query.author = query.author.to_lowercase();
         query
     }
 
@@ -47,18 +50,22 @@ impl CommitFilterQuery {
     }
 
     fn matches(&self, commit: &crate::git::CommitInfo, changed_paths: &[String]) -> bool {
-        let text = self.text.to_lowercase();
-        let message = self.message.to_lowercase();
-        let author = self.author.to_lowercase();
+        let text = &self.text;
+        let message = &self.message;
+        let author = &self.author;
         (text.is_empty()
-            || commit.message.to_lowercase().contains(&text)
-            || commit.author_name.to_lowercase().contains(&text)
-            || commit.author_email.to_lowercase().contains(&text)
-            || commit.short_id.to_lowercase().contains(&text))
-            && (message.is_empty() || commit.full_message.to_lowercase().contains(&message))
+            || commit.message.to_lowercase().contains(text.as_str())
+            || commit.author_name.to_lowercase().contains(text.as_str())
+            || commit.author_email.to_lowercase().contains(text.as_str())
+            || commit.short_id.to_lowercase().contains(text.as_str()))
+            && (message.is_empty()
+                || commit
+                    .full_message
+                    .to_lowercase()
+                    .contains(message.as_str()))
             && (author.is_empty()
-                || commit.author_name.to_lowercase().contains(&author)
-                || commit.author_email.to_lowercase().contains(&author))
+                || commit.author_name.to_lowercase().contains(author.as_str())
+                || commit.author_email.to_lowercase().contains(author.as_str()))
             && (self.file.is_empty() || changed_paths.iter().any(|path| path.contains(&self.file)))
     }
 }
@@ -66,6 +73,10 @@ impl CommitFilterQuery {
 impl App {
     pub fn commit_filter_is_active(&self) -> bool {
         CommitFilterQuery::parse(&self.commit_filter).is_active()
+    }
+
+    pub(crate) fn commit_filter_needs_paths(&self) -> bool {
+        CommitFilterQuery::parse(&self.commit_filter).requires_paths()
     }
 
     fn load_missing_changed_paths(&mut self, query: &CommitFilterQuery) {
@@ -76,14 +87,27 @@ impl App {
             .commits
             .iter()
             .filter(|commit| !self.commit_changed_paths.contains_key(&commit.oid))
-            .cloned()
+            .map(|c| c.oid)
             .collect();
         if !missing.is_empty() {
             // A shallow/grafted history can contain an unreadable parent. Path
             // filtering remains useful for every readable commit rather than
             // turning that one Git error into a failed graph refresh.
-            self.commit_changed_paths
-                .extend(self.repo.changed_paths_by_commit(&missing));
+            if self.background.threaded {
+                if self.background.path_key != missing {
+                    self.background.path_key = missing.clone();
+                    let path = self.repo.path.clone();
+                    self.background
+                        .paths
+                        .submit_cancellable(true, move |cancel| {
+                            let repo = GitRepository::open(path).map_err(|e| e.to_string())?;
+                            Ok(repo.changed_paths_while(missing, || !cancel.is_cancelled()))
+                        });
+                }
+            } else {
+                self.commit_changed_paths
+                    .extend(self.repo.changed_paths_for_oids(missing));
+            }
         }
     }
 
@@ -579,9 +603,13 @@ impl App {
     }
 
     pub fn node_passes_commit_filter(&self, node: &crate::git::graph::GraphNode) -> bool {
-        if !self.commit_filter_is_active() {
+        if !self.commit_filter_is_active() || self.commit_paths_are_loading() {
             return true;
         }
+        self.node_matches_commit_filter(node)
+    }
+
+    fn node_matches_commit_filter(&self, node: &crate::git::graph::GraphNode) -> bool {
         // The working-tree row is a usable staging entry point, not dimmed
         // ancestry. Keep it in the navigation set while a graph filter is
         // applied so users can return to uncommitted changes without clearing
@@ -598,13 +626,20 @@ impl App {
     /// Retain every direct match plus its loaded parents. The graph builder sees
     /// this closure rather than isolated matches, which keeps merge and parent
     /// edges valid while allowing the renderer to dim the retained ancestors.
-    pub(crate) fn filtered_graph_commits(&mut self) -> Vec<crate::git::CommitInfo> {
+    pub(crate) fn filtered_graph_commits(
+        &mut self,
+    ) -> std::borrow::Cow<'_, [crate::git::CommitInfo]> {
         let query = CommitFilterQuery::parse(&self.commit_filter);
         if !query.is_active() {
             self.commit_filter_matches.clear();
-            return self.commits.clone();
+            return std::borrow::Cow::Borrowed(&self.commits);
         }
         self.refresh_commit_filter_matches();
+        if query.requires_paths() && self.commit_paths_are_loading() {
+            // Keep the graph navigable until the index for this query is ready;
+            // partial matches would make the selection jump as results arrive.
+            return std::borrow::Cow::Borrowed(&self.commits);
+        }
         let mut retained = self.commit_filter_matches.clone();
         let by_oid: std::collections::HashMap<_, _> = self
             .commits
@@ -631,22 +666,26 @@ impl App {
                 retained.insert(head);
             }
         }
-        self.commits
-            .iter()
-            .filter(|commit| retained.contains(&commit.oid))
-            .cloned()
-            .collect()
+        std::borrow::Cow::Owned(
+            self.commits
+                .iter()
+                .filter(|commit| retained.contains(&commit.oid))
+                .cloned()
+                .collect(),
+        )
     }
 
     pub fn recompute_visible_commits(&mut self) {
+        self.graph_folded_rows = None;
         self.refresh_commit_filter_matches();
         self.visible_commit_indices = (0..self.graph_layout.nodes.len()).collect();
         self.filter_navigation_indices = if self.commit_filter_is_active() {
+            let pending = self.commit_paths_are_loading();
             self.graph_layout
                 .nodes
                 .iter()
                 .enumerate()
-                .filter(|(_, node)| self.node_passes_commit_filter(node))
+                .filter(|(_, node)| pending || self.node_matches_commit_filter(node))
                 .map(|(idx, _)| idx)
                 .collect()
         } else {

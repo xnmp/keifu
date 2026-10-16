@@ -123,6 +123,7 @@ fn make_uncommitted_app() -> App {
     let wts = WorkingTreeStatus {
         file_paths: vec![PathBuf::from("tracked.txt")],
         mtime_hash: 1,
+        metadata_complete: true,
         has_collapsed_untracked_dirs: false,
     };
     make_base_app(node, DiffTarget::Uncommitted, Some(wts))
@@ -948,4 +949,34 @@ fn clicking_a_status_bar_hint_opens_help() {
         matches!(app.mode, AppMode::Help),
         "an empty-cell click dispatched nothing"
     );
+}
+
+#[test]
+fn async_reopen_preserves_later_hunk_and_stages_the_visible_change() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let mut app = open_two_hunk_diff(tempdir.path());
+    app.background.threaded = true;
+    app.diff_viewport_height = 3;
+    target_hunk(&mut app, 1);
+    app.handle_action(Action::DiscardHunk).unwrap();
+    app.handle_action(Action::Cancel).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.file_diff_is_loading() {
+        app.poll_background_work();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let AppMode::FileDiff {
+        scroll_offset,
+        hunk_positions,
+        ..
+    } = &app.mode
+    else {
+        panic!("diff closed")
+    };
+    assert!(*scroll_offset >= hunk_positions[1]);
+    app.handle_action(Action::StageHunk).unwrap();
+    let staged = git_out(&app.repo_path, &["diff", "--cached"]);
+    assert!(staged.contains("+BOTTOM"), "{staged}");
+    assert!(!staged.contains("+TOP"), "{staged}");
 }
