@@ -82,7 +82,10 @@ impl<'a> Widget for CommandPaletteWidget<'a> {
             };
 
             let prefix = if is_selected { "▸ " } else { "  " };
-            let tag = format!("{:<7}", item.kind.tag());
+            // Eight columns leaves a real gap even for the longest tag
+            // ("setting", seven columns) instead of visually joining it to
+            // the action label.
+            let tag = format!("{:<8}", item.kind.tag());
             let hint = item.hint.clone().unwrap_or_default();
 
             // Truncate the label to whatever space is left after prefix, tag,

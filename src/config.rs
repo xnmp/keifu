@@ -4,6 +4,18 @@ use std::fs;
 
 use serde::{Deserialize, Serialize};
 
+/// Directory containing Keifu's config, state, and cache files.
+///
+/// `KEIFU_CONFIG_DIR` provides an explicit, platform-independent root for
+/// isolated test processes and portable/embedded launches. Without it, Keifu
+/// keeps using the operating system's conventional config directory.
+pub fn keifu_config_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("KEIFU_CONFIG_DIR")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::config_dir().map(|path| path.join("keifu")))
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -115,7 +127,7 @@ where
 
 impl Config {
     fn config_path() -> Option<std::path::PathBuf> {
-        dirs::config_dir().map(|p| p.join("keifu/config.toml"))
+        keifu_config_dir().map(|path| path.join("config.toml"))
     }
 
     /// Load config from ~/.config/keifu/config.toml
@@ -413,7 +425,7 @@ impl Default for UiState {
 
 impl UiState {
     fn state_path() -> Option<std::path::PathBuf> {
-        dirs::config_dir().map(|p| p.join("keifu/state.toml"))
+        keifu_config_dir().map(|path| path.join("state.toml"))
     }
 
     pub fn load() -> Self {

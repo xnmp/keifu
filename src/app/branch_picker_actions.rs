@@ -3,39 +3,103 @@
 use super::*;
 
 impl App {
+    /// Current fuzzy checkout-picker query, empty when the full list is shown.
+    pub fn checkout_picker_query(&self) -> &str {
+        &self.checkout_picker_query
+    }
+
+    /// Open the searchable checkout picker over every known local and remote
+    /// branch. Each row retains the `BranchInfo` remote bit so a local branch
+    /// whose name resembles a remote ref is still checked out as local.
+    pub(crate) fn open_checkout_branch_picker(&mut self) {
+        let mut branches: Vec<crate::palette::CheckoutBranch> = self
+            .branches
+            .iter()
+            .map(|branch| crate::palette::CheckoutBranch {
+                name: branch.name.clone(),
+                is_remote: branch.is_remote,
+            })
+            .collect();
+        branches.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.is_remote.cmp(&b.is_remote))
+        });
+        self.checkout_picker_query.clear();
+        self.mode = AppMode::BranchPicker {
+            branches,
+            selected: 0,
+        };
+    }
+
     pub(crate) fn handle_branch_picker_action(&mut self, action: Action) -> Result<()> {
         let AppMode::BranchPicker { branches, selected } = &self.mode else {
             return Ok(());
         };
         let branches = branches.clone();
+        let query = self.checkout_picker_query.clone();
         let selected = *selected;
+        let filtered = crate::palette::filter_checkout_branches(&branches, &query);
 
         match action {
             Action::MoveUp => {
-                let new = cyclic_prev(selected, branches.len());
+                if filtered.is_empty() {
+                    return Ok(());
+                }
+                let new = cyclic_prev(selected, filtered.len());
                 self.mode = AppMode::BranchPicker {
                     branches,
                     selected: new,
                 };
             }
             Action::MoveDown => {
-                let new = cyclic_next(selected, branches.len());
+                if filtered.is_empty() {
+                    return Ok(());
+                }
+                let new = cyclic_next(selected, filtered.len());
                 self.mode = AppMode::BranchPicker {
                     branches,
                     selected: new,
                 };
             }
             Action::MenuSelect | Action::Confirm => {
-                if let Some(branch_name) = branches.get(selected) {
-                    let name = branch_name.clone();
+                if let Some(branch) = filtered.get(selected) {
+                    let name = branch.name.clone();
+                    let is_remote = branch.is_remote;
                     self.mode = AppMode::Normal;
-                    // Picker entries are raw graph labels; resolve remoteness
-                    // via the remotes()-aware splitter.
-                    let is_remote = self.split_remote_ref(&name).is_some();
                     self.checkout_branch_by_name(&name, is_remote)?;
                 }
             }
+            Action::InputChar(c) => {
+                self.checkout_picker_query.push(c);
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: 0,
+                };
+            }
+            Action::InputBackspace => {
+                self.checkout_picker_query.pop();
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: 0,
+                };
+            }
+            Action::InputBackspaceWord => {
+                crate::text_editor::pop_word(&mut self.checkout_picker_query);
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: 0,
+                };
+            }
+            Action::InputClearLine => {
+                self.checkout_picker_query.clear();
+                self.mode = AppMode::BranchPicker {
+                    branches,
+                    selected: 0,
+                };
+            }
             Action::Cancel | Action::Quit => {
+                self.checkout_picker_query.clear();
                 self.mode = AppMode::Normal;
             }
             _ => {}

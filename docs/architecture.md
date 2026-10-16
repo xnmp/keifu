@@ -414,6 +414,12 @@ display, fuzzy filtering) stays unit-testable without a TUI.
   value(...)`) rather than re-serializing — so comments and keys the menu
   doesn't know about survive a save. `App::settings_snapshot` is the read-side
   loop.
+- **All config-owned files share one root.** `config::keifu_config_dir()`
+  resolves `KEIFU_CONFIG_DIR` when explicitly set, otherwise the platform's
+  conventional Keifu config directory. `config.toml`, `state.toml`, and the
+  merged-branch cache all use that resolver, so integration tests and portable
+  launches can isolate persistence without platform-specific home-directory
+  environment overrides.
 - **Clamping / sentinels are in the kind, not a projection.** `clamp_int`
   bounds an `Int` to its `min`/`max` (e.g. graph split ratio 20-80); a
   `zero_label` (e.g. "uncapped" for the graph width cap) shows a friendly token
@@ -423,6 +429,24 @@ display, fuzzy filtering) stays unit-testable without a TUI.
   graphics-protocol detection) is constructed once in `main.rs` before the
   event loop starts; changing the config value takes effect only on the next
   launch.
+
+## Command Palette Projections (2026-08-02)
+
+The command palette projects setting actions from `settings::descriptors()`;
+it does not define a second collection of setting accessors. Boolean settings
+and Graph renderer are exposed, their current descriptor-formatted value is
+rendered beside the action, and selection calls the same `commit_setting` path
+as the full settings menu. This means newly registered boolean controls (for
+example status-bar visibility) become palette actions without another dispatch
+mapping.
+
+The all-branches checkout command opens `AppMode::BranchPicker` with a fuzzy
+query. Picker rows retain their authoritative local/remote bit; a local branch
+whose name resembles a remote ref therefore cannot collide with or be treated
+as the remote row. Handler navigation, rendering, and mouse row counts all use
+`palette::filter_checkout_branches`, so `selected` always indexes the filtered
+list. Selection still routes through `checkout_branch_by_name`, retaining the
+configured-remotes-aware local/tracking-branch behavior.
 
 ## Merged-Branch Classification (2026-07-20)
 
