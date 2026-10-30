@@ -125,6 +125,7 @@ fn make_uncommitted_app() -> App {
         mtime_hash: 1,
         metadata_complete: true,
         has_collapsed_untracked_dirs: false,
+        ..Default::default()
     };
     make_base_app(node, DiffTarget::Uncommitted, Some(wts))
 }
@@ -979,4 +980,190 @@ fn async_reopen_preserves_later_hunk_and_stages_the_visible_change() {
     let staged = git_out(&app.repo_path, &["diff", "--cached"]);
     assert!(staged.contains("+BOTTOM"), "{staged}");
     assert!(!staged.contains("+TOP"), "{staged}");
+}
+
+// ── Incremental refresh after stage/unstage (#200) ──────────────────
+
+/// (path, stage status, kind) rows of a quick working-tree list, in order.
+fn quick_rows(diff: &CommitDiffInfo) -> Vec<(PathBuf, Option<StageStatus>, FileChangeKind)> {
+    diff.files
+        .iter()
+        .map(|f| (f.path.clone(), f.stage_status, f.kind))
+        .collect()
+}
+
+/// The incrementally maintained snapshot must be indistinguishable from a
+/// full rescan of the same on-disk state.
+fn assert_matches_full_rescan(app: &App) {
+    let fresh_status = app.repo.get_working_tree_status().unwrap();
+    assert_eq!(app.working_tree_status, fresh_status);
+    let fresh_quick = CommitDiffInfo::quick_file_list_for_working_tree(app.repo.repo()).unwrap();
+    let quick = app
+        .diff_cache
+        .quick_diff_cache
+        .as_ref()
+        .expect("quick uncommitted diff cached");
+    assert_eq!(quick_rows(quick), quick_rows(&fresh_quick));
+    assert_eq!(
+        quick
+            .staged_files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<Vec<_>>(),
+        fresh_quick
+            .staged_files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn perf_count(app: &App, op: &str) -> u64 {
+    app.perf
+        .ops()
+        .find(|(name, _)| *name == op)
+        .map_or(0, |(_, agg)| agg.count)
+}
+
+fn select_uncommitted_file(app: &mut App, section: &str, path: &str) {
+    app.focused_panel = FocusedPanel::Files;
+    app.files_pane.file_selection = FileSelection {
+        section: Some(section.to_string()),
+        path: Some(path.into()),
+    };
+    app.sync_file_list_cache();
+    assert_eq!(selected_file_path(app), path);
+}
+
+#[test]
+fn toggle_stage_incremental_refresh_matches_full_rescan() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    for name in ["f1.txt", "f10.txt", "f2.txt", "gone.txt"] {
+        commit_file(&repo, name, "v1\n", name);
+    }
+    fs::create_dir(tempdir.path().join("f1")).unwrap();
+    // `f1.txt` must not be confused with its prefix siblings `f10.txt` and
+    // `f1/inner.txt` when only its own rows are rescanned.
+    fs::write(tempdir.path().join("f1.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("f10.txt"), "v2\n").unwrap();
+    fs::write(tempdir.path().join("f1/inner.txt"), "new\n").unwrap();
+    fs::write(tempdir.path().join("f2.txt"), "v2\n").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "f2.txt").unwrap();
+    fs::write(tempdir.path().join("f2.txt"), "v3\n").unwrap();
+    fs::remove_file(tempdir.path().join("gone.txt")).unwrap();
+    fs::write(tempdir.path().join("untracked.txt"), "u\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    assert_matches_full_rescan(&app);
+    let full_refreshes_before = perf_count(&app, "refresh");
+
+    for (section, path) in [
+        ("Unstaged Changes", "f1.txt"),
+        ("Unstaged Changes", "gone.txt"),
+        ("Unstaged Changes", "untracked.txt"),
+        ("Staged Changes", "f1.txt"),
+    ] {
+        select_uncommitted_file(&mut app, section, path);
+        app.handle_action(Action::ToggleStage).unwrap();
+        assert_matches_full_rescan(&app);
+    }
+    assert_eq!(
+        perf_count(&app, "refresh"),
+        full_refreshes_before,
+        "stage/unstage must not rescan the whole working tree"
+    );
+    assert_eq!(perf_count(&app, "refresh.index_paths"), 4);
+
+    let quick = app.diff_cache.quick_diff_cache.as_ref().unwrap();
+    let statuses_of = |path: &str| {
+        quick
+            .files
+            .iter()
+            .filter(|f| f.path == Path::new(path))
+            .map(|f| f.stage_status)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(statuses_of("f1.txt"), vec![Some(StageStatus::Unstaged)]);
+    assert_eq!(statuses_of("f10.txt"), vec![Some(StageStatus::Unstaged)]);
+    assert_eq!(
+        statuses_of("f1/inner.txt"),
+        vec![Some(StageStatus::Untracked)]
+    );
+    assert_eq!(statuses_of("gone.txt"), vec![Some(StageStatus::Staged)]);
+    assert_eq!(
+        statuses_of("untracked.txt"),
+        vec![Some(StageStatus::Staged)]
+    );
+    assert_eq!(
+        statuses_of("f2.txt"),
+        vec![Some(StageStatus::Staged), Some(StageStatus::Unstaged)],
+        "an untouched partially staged file keeps both rows"
+    );
+}
+
+#[test]
+fn unstaging_a_change_reverted_in_the_worktree_removes_it_and_the_uncommitted_node() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(tempdir.path()).unwrap();
+    commit_file(&repo, "a.txt", "v1\n", "initial");
+    fs::write(tempdir.path().join("a.txt"), "v2\n").unwrap();
+    stage_file(tempdir.path().to_str().unwrap(), "a.txt").unwrap();
+    // The worktree matches HEAD again, so unstaging leaves nothing changed.
+    fs::write(tempdir.path().join("a.txt"), "v1\n").unwrap();
+
+    let mut app = make_test_app(tempdir.path());
+    assert!(app.graph_layout.nodes[0].is_uncommitted);
+    select_uncommitted_file(&mut app, "Staged Changes", "a.txt");
+
+    app.handle_action(Action::ToggleStage).unwrap();
+
+    assert_eq!(app.working_tree_status, None);
+    assert_matches_full_rescan(&app);
+    assert!(
+        !app.graph_layout.nodes.iter().any(|n| n.is_uncommitted),
+        "the uncommitted row disappears once no changes remain"
+    );
+}
+
+/// Run git with an identity and config isolated from the invoking user's.
+fn isolated_git(dir: &Path, args: &[&str]) {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .expect("run git");
+}
+
+#[test]
+fn staging_a_conflicted_file_updates_the_conflict_count() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let dir = tempdir.path();
+    isolated_git(dir, &["init", "-q", "-b", "main"]);
+    fs::write(dir.join("c.txt"), "base\n").unwrap();
+    isolated_git(dir, &["add", "c.txt"]);
+    isolated_git(dir, &["commit", "-qm", "base"]);
+    isolated_git(dir, &["checkout", "-qb", "side"]);
+    fs::write(dir.join("c.txt"), "side\n").unwrap();
+    isolated_git(dir, &["commit", "-qam", "side"]);
+    isolated_git(dir, &["checkout", "-q", "main"]);
+    fs::write(dir.join("c.txt"), "main\n").unwrap();
+    isolated_git(dir, &["commit", "-qam", "main"]);
+    isolated_git(dir, &["merge", "-q", "side"]);
+
+    let mut app = make_test_app(dir);
+    assert_eq!(app.conflict_count, 1);
+    fs::write(dir.join("c.txt"), "resolved\n").unwrap();
+    select_uncommitted_file(&mut app, "Merge Changes", "c.txt");
+
+    app.handle_action(Action::ToggleStage).unwrap();
+
+    assert_eq!(app.conflict_count, 0);
+    assert_matches_full_rescan(&app);
 }

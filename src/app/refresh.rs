@@ -96,6 +96,57 @@ impl App {
     /// After the file list reshuffles, selects the next file in the same
     /// section. Falls back to previous in section, then to any file.
     pub fn refresh_after_file_op(&mut self) -> Result<()> {
+        self.refresh_preserving_file_selection(|app| {
+            app.refresh(false)?;
+            app.diff_cache.set_quick_uncommitted(app.repo.repo());
+            Ok(())
+        })
+    }
+
+    /// Refresh after staging or unstaging exactly `paths`.
+    ///
+    /// Only the index changed, and only for those paths, so this rescans just
+    /// them instead of walking the whole working tree twice (status + quick
+    /// diff) — on large repositories the full walk made every `s`/`a` keypress
+    /// visibly lag. Falls back to [`Self::refresh_after_file_op`]'s full reload
+    /// when the incremental update cannot be trusted.
+    pub fn refresh_after_index_change(&mut self, paths: &[String]) -> Result<()> {
+        self.refresh_preserving_file_selection(|app| app.reload_index_paths(paths))
+    }
+
+    fn reload_index_paths(&mut self, paths: &[String]) -> Result<()> {
+        let started = std::time::Instant::now();
+        let status = match self
+            .repo
+            .working_tree_status_after_index_change(self.working_tree_status.as_ref(), paths)
+        {
+            Ok(Some(status)) => status,
+            // Not incrementally derivable, or the scoped scan failed: a full
+            // refresh reports any persistent status error through its latch.
+            Ok(None) | Err(_) => {
+                self.refresh(false)?;
+                self.diff_cache.set_quick_uncommitted(self.repo.repo());
+                return Ok(());
+            }
+        };
+        self.working_tree_status = status;
+        // Staging a conflicted path resolves it, which can also end the
+        // conflict guidance for the in-progress operation.
+        self.op_state = self.repo.operation_state();
+        self.conflict_count = self.repo.conflicted_count();
+        self.rebuild_and_restore(false)?;
+        self.diff_cache
+            .refresh_quick_uncommitted_paths(self.repo.repo(), paths);
+        self.perf.record("refresh.index_paths", started.elapsed());
+        Ok(())
+    }
+
+    /// Run `reload`, then keep the files-pane cursor on the next file in the
+    /// section the acted-on file left (falling back to the previous one).
+    fn refresh_preserving_file_selection(
+        &mut self,
+        reload: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
         // Snapshot the current items and selection BEFORE the refresh.
         // Use files_pane_items() directly — the cache might be stale.
         let old_items = self.files_pane_items();
@@ -128,9 +179,8 @@ impl App {
             })
             .collect();
 
-        self.refresh(false)?;
-        // Recompute quick diff for the new staging state
-        self.diff_cache.set_quick_uncommitted(self.repo.repo());
+        // Reload git state, including the quick diff for the new staging state
+        reload(self)?;
         // Reclassify the existing full diff's staging status in place
         // (avoids a redundant async reload — line counts don't change).
         // Then seal the cache key so poll() won't trigger a reload.

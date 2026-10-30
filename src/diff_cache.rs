@@ -244,6 +244,20 @@ impl DiffCache {
         self.quick_diff_cache = CommitDiffInfo::quick_file_list_for_working_tree(repo).ok();
     }
 
+    /// Update the quick uncommitted diff after an index-only change to exactly
+    /// `paths`, rescanning only those paths when a quick uncommitted list is
+    /// already cached; otherwise (or if the scoped scan fails) rebuild it.
+    pub fn refresh_quick_uncommitted_paths(&mut self, repo: &git2::Repository, paths: &[String]) {
+        if self.quick_diff_target == Some(DiffTarget::Uncommitted) {
+            if let Some(quick) = self.quick_diff_cache.as_mut() {
+                if quick.refresh_working_tree_paths(repo, paths).is_ok() {
+                    return;
+                }
+            }
+        }
+        self.set_quick_uncommitted(repo);
+    }
+
     /// Reclassify the cached full uncommitted diff's staging status using the
     /// quick diff as the source of truth. This avoids a redundant async reload
     /// after stage/unstage operations where line counts don't change.
@@ -665,6 +679,7 @@ mod tests {
             mtime_hash: 100,
             metadata_complete: true,
             has_collapsed_untracked_dirs: false,
+            ..Default::default()
         }
     }
 
@@ -674,6 +689,7 @@ mod tests {
             mtime_hash: 200,
             metadata_complete: true,
             has_collapsed_untracked_dirs: false,
+            ..Default::default()
         }
     }
 
@@ -683,6 +699,7 @@ mod tests {
             mtime_hash: 100,
             metadata_complete: true,
             has_collapsed_untracked_dirs: true,
+            ..Default::default()
         }
     }
 

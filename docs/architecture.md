@@ -27,6 +27,18 @@
 2. The UI calls `cached_diff_or_quick()` which returns the full diff if available, otherwise the quick cache
 3. When line stats are still loading, file entries show "..." instead of +X/-Y
 
+**Update (2026-10-30, #200):** Files-pane stage/unstage (`s`/`a`) refreshes
+through `App::refresh_after_index_change` instead of the generic file-op
+refresh. Staging changes only the index entries of the acted-on paths, so it
+rescans just those paths (libgit2 literal pathspec) and splices the results
+into `WorkingTreeStatus` (which keeps per-path fingerprint `entries` for this)
+and the quick uncommitted list; every other row carries over. Two full
+working-tree walks per keypress made staging lag by ~0.5s on an 80k-file repo;
+the scoped refresh is bounded by index reload. It falls back to the full
+refresh when there is no previous snapshot, a touched path is a directory, or
+the snapshot contains collapsed untracked directories. Stage-all, unstage-all,
+and the other file ops still change arbitrary paths and keep the full refresh.
+
 ## Clipboard via Shell Commands (2026-03-25)
 
 **Decision:** Use shell commands (`xclip`, `xsel`, `wl-copy`, `pbcopy`) for clipboard instead of a Rust crate.
