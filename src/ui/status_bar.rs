@@ -795,7 +795,7 @@ impl StatusBar {
             }
             AppMode::IssueCompose { purpose } => {
                 hb.hint(
-                    " Ctrl+S ",
+                    " Ctrl+S/Ctrl+Enter ",
                     key_style,
                     if matches!(purpose, IssueComposePurpose::EditIssue { .. }) {
                         "save "

@@ -15,12 +15,14 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::pr_compose::text_area as compose_text_area;
 use super::theme::Theme;
 use crate::app::{IssueClipboardAttachment, IssueComposePurpose, IssueCreateTarget};
+use crate::keymap::ResolvedKeymap;
 use crate::text_editor::TextEditor;
 
 pub struct IssueComposeWidget<'a> {
     editor: &'a TextEditor,
     purpose: IssueComposePurpose,
     attachment: &'a IssueClipboardAttachment,
+    keymap: &'a ResolvedKeymap,
     theme: &'a Theme,
 }
 
@@ -29,12 +31,14 @@ impl<'a> IssueComposeWidget<'a> {
         editor: &'a TextEditor,
         purpose: IssueComposePurpose,
         attachment: &'a IssueClipboardAttachment,
+        keymap: &'a ResolvedKeymap,
         theme: &'a Theme,
     ) -> Self {
         Self {
             editor,
             purpose,
             attachment,
+            keymap,
             theme,
         }
     }
@@ -77,14 +81,36 @@ fn checkbox_label(has_image: bool, uploader_available: bool, selected: bool) -> 
     }
 }
 
-fn compose_hint(purpose: IssueComposePurpose) -> &'static str {
-    match purpose {
-        IssueComposePurpose::NewIssue { .. } => {
-            " Tab toggle image   Ctrl+S submit   Ctrl+E editor   Esc cancel "
-        }
-        IssueComposePurpose::EditIssue { .. } => " Ctrl+S save   Ctrl+E editor   Esc cancel ",
-        IssueComposePurpose::Comment { .. } => " Ctrl+S submit   Ctrl+E editor   Esc cancel ",
+/// Effective shortcut label for a compose control: the user's configured
+/// bindings when the keymap overrides `id`, otherwise the compose defaults.
+/// (Registry defaults can't be shown directly: `cancel` also lists `q`, which
+/// types a letter in an editor rather than cancelling.)
+fn compose_key(keymap: &ResolvedKeymap, id: &str, compose_default: &str) -> String {
+    if keymap.is_overridden(id) {
+        keymap.display_bindings(id)
+    } else {
+        compose_default.to_string()
     }
+}
+
+/// Bottom-row hint, most important control first so a narrow popup truncates
+/// the least essential ones. Submit lists every binding (Ctrl+S and
+/// Ctrl+Enter by default) so neither shortcut is a hidden feature.
+fn compose_hint(purpose: IssueComposePurpose, keymap: &ResolvedKeymap) -> String {
+    let submit = compose_key(keymap, "submit-compose", "Ctrl+S / Ctrl+Enter");
+    let cancel = compose_key(keymap, "cancel", "Esc");
+    let editor = compose_key(keymap, "external-edit", "Ctrl+E");
+    let verb = match purpose {
+        IssueComposePurpose::EditIssue { .. } => "save",
+        IssueComposePurpose::NewIssue { .. } | IssueComposePurpose::Comment { .. } => "submit",
+    };
+    let mut hint = format!(" {submit} {verb}  {cancel} cancel  {editor} editor");
+    if purpose.is_new_issue() {
+        let toggle = compose_key(keymap, "toggle-issue-clipboard-image", "Tab");
+        hint.push_str(&format!("  {toggle} image"));
+    }
+    hint.push(' ');
+    hint
 }
 
 /// Editor rectangle used by both rendering and cursor placement. New issues
@@ -328,12 +354,12 @@ impl<'a> Widget for IssueComposeWidget<'a> {
         }
 
         // Hint (bottom row).
-        let hint = compose_hint(self.purpose);
+        let hint = compose_hint(self.purpose, self.keymap);
         let fy = inner.y + inner.height - 1;
         buf.set_string(
             inner.x,
             fy,
-            super::truncate_str(hint, inner.width as usize),
+            super::truncate_str(&hint, inner.width as usize),
             Style::default().fg(self.theme.text_muted),
         );
     }
@@ -381,20 +407,65 @@ mod tests {
 
     #[test]
     fn compose_hints_expose_submit_and_cancel_controls() {
+        let keymap = ResolvedKeymap::default();
         assert_eq!(
-            compose_hint(IssueComposePurpose::NewIssue {
+            compose_hint(
+                IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::CurrentRepository,
+                },
+                &keymap
+            ),
+            " Ctrl+S / Ctrl+Enter submit  Esc cancel  Ctrl+E editor  Tab image "
+        );
+        assert_eq!(
+            compose_hint(IssueComposePurpose::EditIssue { number: 1 }, &keymap),
+            " Ctrl+S / Ctrl+Enter save  Esc cancel  Ctrl+E editor "
+        );
+        assert_eq!(
+            compose_hint(IssueComposePurpose::Comment { number: 1 }, &keymap),
+            " Ctrl+S / Ctrl+Enter submit  Esc cancel  Ctrl+E editor "
+        );
+    }
+
+    #[test]
+    fn compose_hints_follow_remapped_shortcuts() {
+        let table = "submit-compose = [\"Ctrl+Enter\"]\ncancel = [\"F10\"]\nexternal-edit = []"
+            .parse::<toml::Table>()
+            .unwrap();
+        let keymap = ResolvedKeymap::from_table(&table);
+        assert_eq!(
+            compose_hint(
+                IssueComposePurpose::NewIssue {
+                    target: IssueCreateTarget::Keifu,
+                },
+                &keymap
+            ),
+            " Ctrl+Enter submit  F10 cancel  Unassigned editor  Tab image "
+        );
+    }
+
+    #[test]
+    fn rendered_new_issue_hint_keeps_ctrl_enter_visible_in_a_narrow_popup() {
+        let editor = TextEditor::from_text("");
+        let attachment = IssueClipboardAttachment::default();
+        let keymap = ResolvedKeymap::default();
+        let theme = Theme::dark();
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        IssueComposeWidget::new(
+            &editor,
+            IssueComposePurpose::NewIssue {
                 target: IssueCreateTarget::CurrentRepository,
-            }),
-            " Tab toggle image   Ctrl+S submit   Ctrl+E editor   Esc cancel "
-        );
-        assert_eq!(
-            compose_hint(IssueComposePurpose::EditIssue { number: 1 }),
-            " Ctrl+S save   Ctrl+E editor   Esc cancel "
-        );
-        assert_eq!(
-            compose_hint(IssueComposePurpose::Comment { number: 1 }),
-            " Ctrl+S submit   Ctrl+E editor   Esc cancel "
-        );
+            },
+            &attachment,
+            &keymap,
+            &theme,
+        )
+        .render(area, &mut buf);
+        let hint_row: String = (0..area.width)
+            .map(|x| buf[(x, area.height - 2)].symbol().to_string())
+            .collect();
+        assert!(hint_row.contains("Ctrl+Enter submit"), "{hint_row:?}");
     }
 
     #[test]

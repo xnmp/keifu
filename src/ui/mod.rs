@@ -1095,6 +1095,7 @@ fn draw_issue_screen(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect
                     &app.issue_editor,
                     *purpose,
                     &app.issue_clipboard_attachment,
+                    &app.keymap,
                     theme,
                 ),
                 popup_area,
