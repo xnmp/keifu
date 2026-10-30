@@ -298,7 +298,48 @@ impl CommitDiffInfo {
     pub fn quick_file_list_for_working_tree(repo: &Repository) -> Result<Self> {
         // Flush cached ignore rules so .gitignore edits take effect immediately
         let _ = repo.clear_ignore_rules();
+        Self::quick_working_tree_rows(repo, &[])
+    }
 
+    /// Re-derive this quick working-tree list after an index-only change
+    /// (stage/unstage) to exactly `paths`: their rows are rescanned with a
+    /// literal pathspec and every other row is kept as-is, so the cost scales
+    /// with the touched paths rather than the size of the working tree.
+    pub fn refresh_working_tree_paths(
+        &mut self,
+        repo: &Repository,
+        paths: &[String],
+    ) -> Result<()> {
+        let fresh = Self::quick_working_tree_rows(repo, paths)?;
+        let touched = |file: &FileDiffInfo| {
+            paths
+                .iter()
+                .any(|p| file.path.starts_with(std::path::Path::new(p)))
+        };
+        let merge = |old: &[FileDiffInfo], new: Vec<FileDiffInfo>| {
+            let mut merged: Vec<FileDiffInfo> =
+                old.iter().filter(|f| !touched(f)).cloned().collect();
+            for file in new {
+                // Kept rows retain libgit2's order; slot each rescanned row
+                // before the first kept row whose path sorts after it.
+                let at = merged
+                    .iter()
+                    .position(|f| f.path > file.path)
+                    .unwrap_or(merged.len());
+                merged.insert(at, file);
+            }
+            merged
+        };
+        let staged_files = merge(&self.staged_files, fresh.staged_files);
+        let mut unstaged_files = merge(&self.unstaged_files, fresh.unstaged_files);
+        unstaged_files.sort_by_key(Self::unstaged_rank);
+        *self = Self::from_working_tree_rows(staged_files, unstaged_files);
+        Ok(())
+    }
+
+    /// Staged and unstaged rows for the working tree, optionally limited to a
+    /// literal `pathspec` (empty = everything).
+    fn quick_working_tree_rows(repo: &Repository, pathspec: &[String]) -> Result<Self> {
         let head_tree = match repo.head() {
             Ok(head) => Some(head.peel_to_tree()?),
             Err(err)
@@ -314,6 +355,12 @@ impl CommitDiffInfo {
         opts.context_lines(0);
         opts.include_untracked(true);
         opts.recurse_untracked_dirs(true);
+        if !pathspec.is_empty() {
+            opts.disable_pathspec_match(true);
+            for path in pathspec {
+                opts.pathspec(path);
+            }
+        }
 
         let staged_diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?;
         let unstaged_diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
@@ -368,18 +415,29 @@ impl CommitDiffInfo {
 
         // Sort: conflicts first (Merge Changes), then tracked modifications,
         // then untracked — matching the full diff's separate-scan ordering.
-        unstaged_files.sort_by_key(|f| match f.stage_status {
+        unstaged_files.sort_by_key(Self::unstaged_rank);
+
+        Ok(Self::from_working_tree_rows(staged_files, unstaged_files))
+    }
+
+    fn unstaged_rank(file: &FileDiffInfo) -> u8 {
+        match file.stage_status {
             Some(StageStatus::Conflicted) => 0,
             Some(StageStatus::Untracked) => 2,
             _ => 1,
-        });
+        }
+    }
 
+    fn from_working_tree_rows(
+        staged_files: Vec<FileDiffInfo>,
+        unstaged_files: Vec<FileDiffInfo>,
+    ) -> Self {
         // Merge for the flat files list
         let mut all_files = staged_files.clone();
         all_files.extend(unstaged_files.clone());
         let total_files = all_files.len();
 
-        Ok(Self {
+        Self {
             files: all_files,
             total_insertions: 0,
             total_deletions: 0,
@@ -387,7 +445,7 @@ impl CommitDiffInfo {
             truncated: false,
             staged_files,
             unstaged_files,
-        })
+        }
     }
 
     fn scan_diff(diff: &Diff) -> Result<DiffScan> {

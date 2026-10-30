@@ -210,12 +210,15 @@ impl App {
             .any(|f| !matches!(f.stage_status, Some(StageStatus::Staged)));
         let staging = any_unstaged;
 
-        for file in &files {
-            let path_str = file.path.to_string_lossy().to_string();
+        let paths: Vec<String> = files
+            .iter()
+            .map(|file| file.path.to_string_lossy().to_string())
+            .collect();
+        for path_str in &paths {
             if staging {
-                stage_file(&self.repo_path, &path_str)?;
+                stage_file(&self.repo_path, path_str)?;
             } else {
-                unstage_file(&self.repo_path, &path_str)?;
+                unstage_file(&self.repo_path, path_str)?;
             }
         }
 
@@ -227,7 +230,7 @@ impl App {
             });
         }
 
-        self.refresh_after_file_op()?;
+        self.refresh_after_index_change(&paths)?;
         Ok(())
     }
 

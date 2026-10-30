@@ -1,5 +1,6 @@
 //! Repository operation wrapper
 
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -433,16 +434,60 @@ impl GitRepository {
         // without restarting the application.
         let _ = self.repo.clear_ignore_rules();
 
+        let entries = self.scan_status_entries(&[])?;
+        Ok(WorkingTreeStatus::from_entries(entries))
+    }
+
+    /// Re-derive `previous` after an index-only change (stage/unstage) to
+    /// exactly `paths`, rescanning only those paths instead of the whole
+    /// working tree. Staging never touches other paths' index or worktree
+    /// state, so their entries carry over unchanged.
+    ///
+    /// Returns `Ok(None)` when an incremental update cannot be trusted and the
+    /// caller must fall back to a full [`Self::get_working_tree_status`]: no
+    /// previous snapshot, collapsed untracked directories (whose contents a
+    /// path-limited scan cannot reconcile), or a touched path that is a
+    /// directory. The inner `Option` is `None` when no changes remain.
+    pub fn working_tree_status_after_index_change(
+        &self,
+        previous: Option<&WorkingTreeStatus>,
+        paths: &[String],
+    ) -> Result<Option<Option<WorkingTreeStatus>>> {
+        let Some(previous) = previous else {
+            return Ok(None);
+        };
+        if self.repo.is_bare() || previous.has_collapsed_untracked_dirs || paths.is_empty() {
+            return Ok(None);
+        }
+        let workdir = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+        if paths.iter().any(|path| workdir.join(path).is_dir()) {
+            return Ok(None);
+        }
+
+        let mut entries = previous.entries.clone();
+        entries.retain(|entry_path, _| !paths.iter().any(|p| path_matches(entry_path, p)));
+        entries.extend(self.scan_status_entries(paths)?);
+        Ok(Some(WorkingTreeStatus::from_entries(entries)))
+    }
+
+    /// One status pass producing a fingerprint entry per changed path. An
+    /// empty `pathspec` scans the whole working tree; otherwise only those
+    /// exact paths (no glob matching) are visited.
+    fn scan_status_entries(&self, pathspec: &[String]) -> Result<BTreeMap<PathBuf, StatusEntry>> {
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(true)
             .include_ignored(false);
+        if !pathspec.is_empty() {
+            opts.disable_pathspec_match(true);
+            for path in pathspec {
+                opts.pathspec(path);
+            }
+        }
 
         let statuses = self.repo.statuses(Some(&mut opts))?;
         let workdir = self.repo.workdir().unwrap_or_else(|| self.repo.path());
-        let mut file_paths: Vec<PathBuf> = Vec::new();
-        let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
-        let mut has_collapsed_untracked_dirs = false;
+        let mut entries: BTreeMap<PathBuf, StatusEntry> = BTreeMap::new();
 
         for entry in statuses.iter() {
             let status = entry.status();
@@ -470,74 +515,98 @@ impl GitRepository {
             // uncommitted node (and its Merge Changes section) invisible.
             let is_conflicted = status.contains(Status::CONFLICTED);
 
-            if is_staged || has_worktree_changes || is_conflicted {
-                entry.path_bytes().hash(&mut fingerprint);
-                status.bits().hash(&mut fingerprint);
-                // Staging can change the index while leaving worktree mtimes
-                // untouched. Include both sides of its delta in the key.
-                if let Some(delta) = entry.head_to_index() {
-                    delta.old_file().id().as_bytes().hash(&mut fingerprint);
-                    delta.new_file().id().as_bytes().hash(&mut fingerprint);
-                }
-                let path = super::path_from_bytes(entry.path_bytes());
-                if status.intersects(Status::WT_NEW) {
-                    let full_path = workdir.join(&path);
-                    if CommitDiffInfo::is_plain_directory(&full_path) {
-                        has_collapsed_untracked_dirs = true;
-                    }
-                }
-                file_paths.push(path);
+            if !(is_staged || has_worktree_changes || is_conflicted) {
+                continue;
             }
-        }
 
-        if file_paths.is_empty() {
-            Ok(None)
-        } else {
-            file_paths.sort();
-
+            let path = super::path_from_bytes(entry.path_bytes());
+            let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+            path.hash(&mut fingerprint);
+            status.bits().hash(&mut fingerprint);
+            // Staging can change the index while leaving worktree mtimes
+            // untouched. Include both sides of its delta in the key.
+            if let Some(delta) = entry.head_to_index() {
+                delta.old_file().id().as_bytes().hash(&mut fingerprint);
+                delta.new_file().id().as_bytes().hash(&mut fingerprint);
+            }
+            let collapsed_dir = status.intersects(Status::WT_NEW)
+                && CommitDiffInfo::is_plain_directory(&workdir.join(&path));
             // Hash path-associated metadata, not the sum of millisecond mtimes
             // (which loses precision and collides when two mtimes are swapped).
-            let mut metadata_complete = true;
-            for path in &file_paths {
-                path.hash(&mut fingerprint);
-                match std::fs::symlink_metadata(workdir.join(path)) {
-                    Ok(meta) => {
-                        meta.len().hash(&mut fingerprint);
-                        let modified = meta
-                            .modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok());
-                        metadata_complete &= modified.is_some();
-                        modified.hash(&mut fingerprint);
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::MetadataExt;
-                            meta.ctime().hash(&mut fingerprint);
-                            meta.ctime_nsec().hash(&mut fingerprint);
-                            meta.ino().hash(&mut fingerprint);
-                            meta.mode().hash(&mut fingerprint);
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        0u8.hash(&mut fingerprint)
-                    }
-                    Err(_) => metadata_complete = false,
-                }
-            }
-            let mtime_hash = fingerprint.finish() as u128;
+            let metadata_complete = hash_path_metadata(&workdir.join(&path), &mut fingerprint);
 
-            Ok(Some(WorkingTreeStatus {
-                file_paths,
-                mtime_hash,
-                has_collapsed_untracked_dirs,
+            let new_entry = StatusEntry {
+                fingerprint: fingerprint.finish(),
                 metadata_complete,
-            }))
+                collapsed_dir,
+            };
+            entries
+                .entry(path)
+                .and_modify(|existing| existing.absorb(new_entry))
+                .or_insert(new_entry);
         }
+        Ok(entries)
+    }
+}
+
+/// Whether `entry_path` is `pathspec` or lies beneath it — the same literal
+/// matching libgit2 applies with `disable_pathspec_match`.
+fn path_matches(entry_path: &Path, pathspec: &str) -> bool {
+    entry_path.starts_with(Path::new(pathspec))
+}
+
+/// Feed size and high-resolution timestamps into `fingerprint`. Returns false
+/// when metadata could not be read (a missing file is a known state).
+fn hash_path_metadata(full_path: &Path, fingerprint: &mut impl Hasher) -> bool {
+    match std::fs::symlink_metadata(full_path) {
+        Ok(meta) => {
+            meta.len().hash(fingerprint);
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok());
+            modified.hash(fingerprint);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                meta.ctime().hash(fingerprint);
+                meta.ctime_nsec().hash(fingerprint);
+                meta.ino().hash(fingerprint);
+                meta.mode().hash(fingerprint);
+            }
+            modified.is_some()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            0u8.hash(fingerprint);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Per-path contribution to a [`WorkingTreeStatus`], kept so an index-only
+/// change can replace just the touched paths' entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusEntry {
+    fingerprint: u64,
+    metadata_complete: bool,
+    collapsed_dir: bool,
+}
+
+impl StatusEntry {
+    /// Fold a second status record for the same path into this one.
+    fn absorb(&mut self, other: StatusEntry) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.fingerprint.hash(&mut hasher);
+        other.fingerprint.hash(&mut hasher);
+        self.fingerprint = hasher.finish();
+        self.metadata_complete &= other.metadata_complete;
+        self.collapsed_dir |= other.collapsed_dir;
     }
 }
 
 /// Working tree status
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkingTreeStatus {
     /// Sorted list of file paths with changes (used as cache key)
     pub file_paths: Vec<PathBuf>,
@@ -550,9 +619,34 @@ pub struct WorkingTreeStatus {
     /// In that case the mtime hash is not precise enough to safely reuse the
     /// uncommitted diff cache across refreshes.
     pub has_collapsed_untracked_dirs: bool,
+    /// Per-path fingerprints the aggregate fields are derived from.
+    pub entries: BTreeMap<PathBuf, StatusEntry>,
 }
 
 impl WorkingTreeStatus {
+    /// Derive the aggregate snapshot from per-path entries; `None` when no
+    /// path has changes.
+    pub fn from_entries(entries: BTreeMap<PathBuf, StatusEntry>) -> Option<Self> {
+        if entries.is_empty() {
+            return None;
+        }
+        let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+        let mut metadata_complete = true;
+        let mut has_collapsed_untracked_dirs = false;
+        for entry in entries.values() {
+            entry.fingerprint.hash(&mut fingerprint);
+            metadata_complete &= entry.metadata_complete;
+            has_collapsed_untracked_dirs |= entry.collapsed_dir;
+        }
+        Some(Self {
+            file_paths: entries.keys().cloned().collect(),
+            mtime_hash: fingerprint.finish() as u128,
+            metadata_complete,
+            has_collapsed_untracked_dirs,
+            entries,
+        })
+    }
+
     pub fn file_count(&self) -> usize {
         self.file_paths.len()
     }
@@ -577,6 +671,72 @@ mod tests {
     use super::GitRepository;
     use crate::test_support::git;
     use std::process::Command;
+
+    #[test]
+    fn index_change_update_falls_back_when_a_partial_rescan_is_unsafe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q"]);
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        git(dir, &["add", "a.txt"]);
+        git(dir, &["commit", "-qm", "init"]);
+        let repo = GitRepository::open(dir).unwrap();
+        let paths = vec!["a.txt".to_string()];
+
+        // Nothing to start from.
+        assert_eq!(
+            repo.working_tree_status_after_index_change(None, &paths)
+                .unwrap(),
+            None
+        );
+
+        std::fs::write(dir.join("a.txt"), "b\n").unwrap();
+        let status = repo.get_working_tree_status().unwrap().unwrap();
+        // A touched directory would need a rescan of everything beneath it.
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        assert_eq!(
+            repo.working_tree_status_after_index_change(Some(&status), &["sub".to_string()])
+                .unwrap(),
+            None
+        );
+
+        // Collapsed untracked directories (a nested repository) cannot be
+        // reconciled from a path-limited scan.
+        git(&dir.join("sub"), &["init", "-q"]);
+        std::fs::write(dir.join("sub/inner.txt"), "x\n").unwrap();
+        let collapsed = repo.get_working_tree_status().unwrap().unwrap();
+        assert!(collapsed.has_collapsed_untracked_dirs);
+        assert_eq!(
+            repo.working_tree_status_after_index_change(Some(&collapsed), &paths)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn index_change_update_matches_a_full_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q"]);
+        for name in ["a.txt", "a.txt.bak", "b.txt"] {
+            std::fs::write(dir.join(name), "1\n").unwrap();
+        }
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "init"]);
+        for name in ["a.txt", "a.txt.bak", "b.txt"] {
+            std::fs::write(dir.join(name), "2\n").unwrap();
+        }
+        let repo = GitRepository::open(dir).unwrap();
+        let before = repo.get_working_tree_status().unwrap();
+
+        git(dir, &["add", "a.txt"]);
+        let incremental = repo
+            .working_tree_status_after_index_change(before.as_ref(), &["a.txt".to_string()])
+            .unwrap()
+            .expect("incremental update applies");
+        assert_eq!(incremental, repo.get_working_tree_status().unwrap());
+        assert_ne!(incremental, before, "staging changes the fingerprint");
+    }
 
     #[test]
     fn reopen_observes_remote_ref_created_after_open() {
